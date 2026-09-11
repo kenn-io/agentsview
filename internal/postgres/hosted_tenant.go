@@ -151,8 +151,12 @@ func checkHostedBinding(ctx context.Context, q hostedQuerier, schema, tenant str
 	return nil
 }
 func checkHostedInventory(ctx context.Context, q hostedQuerier, schema string) error {
-	expected := make(map[string]bool, len(hostedTables))
-	for _, t := range hostedTables {
+	extra, err := embeddingTables(ctx, q, schema)
+	if err != nil {
+		return err
+	}
+	expected := make(map[string]bool, len(hostedTables)+len(extra))
+	for _, t := range append(append([]HostedTable(nil), hostedTables...), extra...) {
 		expected[t.Name] = true
 	}
 	rows, err := q.QueryContext(ctx, `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind IN ('r','p','v','m','f')`, schema)
@@ -186,7 +190,11 @@ func checkHostedCatalog(ctx context.Context, q hostedQuerier, schema, tenant str
 	if err := checkHostedInventory(ctx, q, schema); err != nil {
 		return err
 	}
-	for _, table := range hostedTables {
+	extra, err := embeddingTables(ctx, q, schema)
+	if err != nil {
+		return err
+	}
+	for _, table := range append(append([]HostedTable(nil), hostedTables...), extra...) {
 		var good bool
 		err := q.QueryRowContext(ctx, `SELECT c.relkind='r' AND c.relrowsecurity AND c.relforcerowsecurity
    AND EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.attnotnull AND a.atttypid='text'::regtype)
@@ -227,7 +235,7 @@ func checkHostedCatalog(ctx context.Context, q hostedQuerier, schema, tenant str
 	if !immutable {
 		return fmt.Errorf("hosted binding immutability trigger missing")
 	}
-	return nil
+	return checkEmbeddingCatalog(ctx, q, schema, tenant, extra)
 }
 
 // CheckHostedTenant is a read-only startup gate for a permanently bound pool.

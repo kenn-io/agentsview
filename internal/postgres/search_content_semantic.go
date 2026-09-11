@@ -27,6 +27,10 @@ func (s *Store) searchContentSemanticPG(
 	if searcher == nil {
 		return db.ContentSearchPage{}, s.semanticUnavailableError()
 	}
+	searcher, err := db.BindVectorSearcher(ctx, searcher)
+	if err != nil {
+		return db.ContentSearchPage{}, err
+	}
 
 	k := max(f.Limit*4, db.SemanticOverfetchMin)
 	surviving, err := s.survivingVectorHitsPG(ctx, f, searcher, k)

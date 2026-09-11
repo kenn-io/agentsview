@@ -856,6 +856,10 @@ func (db *DB) searchContentSemantic(
 	if searcher == nil {
 		return ContentSearchPage{}, ErrSemanticUnavailable
 	}
+	searcher, err := BindVectorSearcher(ctx, searcher)
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
 
 	k := max(f.Limit*4, SemanticOverfetchMin)
 	hits, err := searcher.SemanticSearch(ctx, f.Pattern, k)
@@ -1059,6 +1063,10 @@ func (db *DB) searchContentHybrid(
 	}
 	if !db.HasFTS() {
 		return ContentSearchPage{}, errFTSUnavailable
+	}
+	searcher, err := BindVectorSearcher(ctx, searcher)
+	if err != nil {
+		return ContentSearchPage{}, err
 	}
 
 	k := max(f.Limit*4, SemanticOverfetchMin)

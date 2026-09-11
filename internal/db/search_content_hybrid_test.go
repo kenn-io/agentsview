@@ -10,6 +10,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type requestBindingSearcher struct {
+	bound     VectorSearcher
+	bindCalls int
+}
+
+func (s *requestBindingSearcher) BindVectorSearch(context.Context) (VectorSearcher, error) {
+	s.bindCalls++
+	return s.bound, nil
+}
+
+func (*requestBindingSearcher) SemanticSearch(context.Context, string, int) ([]VectorHit, error) {
+	return nil, errors.New("unbound semantic search")
+}
+
+func (*requestBindingSearcher) ResolveMessageUnits(context.Context, []MessageRef) ([]UnitRef, error) {
+	return nil, errors.New("unbound unit resolution")
+}
+
+func TestSearchContentHybridBindsOneSearcherForBothLegs(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS() {
+		t.Skip("fts5 not available")
+	}
+	seedSearchSession(t, d, "both", "proj", [][2]string{{"user", "needle in a haystack"}})
+	bound := &fakeVectorSearcher{
+		hits:  []VectorHit{{SessionID: "both", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0, Score: 0.9}},
+		units: []UnitRef{{DocKey: "user:both:0", SessionID: "both", OrdinalStart: 0, OrdinalEnd: 0}},
+	}
+	binder := &requestBindingSearcher{bound: bound}
+	d.SetVectorSearcher(binder)
+
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "needle", Mode: "hybrid", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, 1, binder.bindCalls)
+	assert.Equal(t, 1, bound.calls)
+}
+
 // TestSearchContentHybridNoSearcherUnavailable pins the same capability gate
 // as "semantic": hybrid needs a wired VectorSearcher regardless of FTS
 // availability, and reports ErrSemanticUnavailable when none is wired.

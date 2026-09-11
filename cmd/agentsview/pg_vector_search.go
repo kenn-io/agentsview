@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -147,17 +148,37 @@ var wirePGReadVectorSearchFn = wirePGReadVectorSearch
 // db.ErrSemanticUnavailable; a fingerprint miss records its reason inside
 // wirePGVectorSearch. Stores that are not *postgres.Store (test fakes
 // injected via openPGReadStore) are left untouched.
-func wirePGReadVectorSearch(cfg config.Config, store db.Store) {
-	pgStore, ok := store.(*postgres.Store)
-	if !ok {
+func wirePGReadVectorSearch(cfg config.Config, pgCfg config.PGConfig, store db.Store) {
+	var err error
+	switch pgStore := store.(type) {
+	case *postgres.Store:
+		err = wirePGVectorSearch(context.Background(), cfg, pgStore, "pg read")
+	case *postgres.HostedStore:
+		err = wireHostedPGVectorSearch(context.Background(), cfg, pgCfg, pgStore)
+	default:
 		return
 	}
-	if err := wirePGVectorSearch(
-		context.Background(), cfg, pgStore, "pg read",
-	); err != nil {
+	if err != nil {
 		log.Printf(
 			"warning: wiring PG semantic search: %v; "+
 				"continuing without semantic search", err,
 		)
 	}
+}
+
+func wireHostedPGVectorSearch(ctx context.Context, cfg config.Config, pgCfg config.PGConfig, store *postgres.HostedStore) error {
+	if cfg.ArchiveContent.UsageOnly() {
+		store.SetSemanticUnavailableReason("hosted semantic search is unavailable for usage-only archives")
+		return nil
+	}
+	embeddings, err := postgres.NewHostedEmbeddingStore(ctx, store.DB(), postgres.HostedEmbeddingOptions{Schema: pgCfg.Schema, Tenant: pgCfg.RawTenant})
+	if errors.Is(err, postgres.ErrHostedEmbeddingUnprovisioned) {
+		store.SetSemanticUnavailableReason("hosted embeddings are not provisioned")
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	store.SetVectorSearcher(newHostedEmbeddingSearcher(embeddings, newHostedEmbeddingResolver(cfg.HostedEmbeddings)))
+	return nil
 }

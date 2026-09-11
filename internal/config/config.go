@@ -71,6 +71,12 @@ type PGConfig struct {
 	RawAttemptSeconds int    `toml:"raw_attempt_seconds" json:"raw_attempt_seconds,omitempty"`
 	RawMaxAttempts    int    `toml:"raw_max_attempts" json:"raw_max_attempts,omitempty"`
 
+	HostedEmbeddingsEnabled        bool `toml:"hosted_embeddings_enabled" json:"hosted_embeddings_enabled,omitempty"`
+	HostedEmbeddingsPollSeconds    int  `toml:"hosted_embeddings_poll_seconds" json:"hosted_embeddings_poll_seconds,omitempty"`
+	HostedEmbeddingsAttemptSeconds int  `toml:"hosted_embeddings_attempt_seconds" json:"hosted_embeddings_attempt_seconds,omitempty"`
+	HostedEmbeddingsMaxAttempts    int  `toml:"hosted_embeddings_max_attempts" json:"hosted_embeddings_max_attempts,omitempty"`
+	HostedEmbeddingsConcurrency    int  `toml:"hosted_embeddings_concurrency" json:"hosted_embeddings_concurrency,omitempty"`
+
 	URL             string   `toml:"url" json:"url"`
 	Schema          string   `toml:"schema" json:"schema"`
 	MachineName     string   `toml:"machine_name" json:"machine_name"`
@@ -104,6 +110,7 @@ type ResolvedPGTarget struct {
 
 var pgConfigKeys = map[string]struct{}{
 	"raw_tenant": {}, "raw_derivation": {}, "raw_poll_seconds": {}, "raw_attempt_seconds": {}, "raw_max_attempts": {},
+	"hosted_embeddings_enabled": {}, "hosted_embeddings_poll_seconds": {}, "hosted_embeddings_attempt_seconds": {}, "hosted_embeddings_max_attempts": {}, "hosted_embeddings_concurrency": {},
 
 	"url":              {},
 	"schema":           {},
@@ -290,18 +297,25 @@ func (c VectorEmbeddingsConfig) Server(name string) (string, VectorEmbeddingsSer
 func normalizedEmbeddingsServers(
 	servers map[string]VectorEmbeddingsServerConfig, meta toml.MetaData,
 ) map[string]VectorEmbeddingsServerConfig {
+	return normalizedEmbeddingsServersAtPath(servers, meta, "vector", "embeddings", "servers")
+}
+
+func normalizedEmbeddingsServersAtPath(
+	servers map[string]VectorEmbeddingsServerConfig, meta toml.MetaData, path ...string,
+) map[string]VectorEmbeddingsServerConfig {
 	out := make(map[string]VectorEmbeddingsServerConfig, len(servers))
 	for name, s := range servers {
-		if !meta.IsDefined("vector", "embeddings", "servers", name, "batch_size") {
+		fieldPath := append(append([]string(nil), path...), name)
+		if !meta.IsDefined(append(fieldPath, "batch_size")...) {
 			s.BatchSize = 32
 		}
-		if !meta.IsDefined("vector", "embeddings", "servers", name, "concurrency") {
+		if !meta.IsDefined(append(fieldPath, "concurrency")...) {
 			s.Concurrency = 4
 		}
 		if s.Timeout == "" {
 			s.Timeout = "30s"
 		}
-		if !meta.IsDefined("vector", "embeddings", "servers", name, "max_retries") {
+		if !meta.IsDefined(append(fieldPath, "max_retries")...) {
 			s.MaxRetries = 3
 		}
 		out[name] = s
@@ -408,16 +422,15 @@ func (c VectorEmbeddingsConfig) validateServers() error {
 		}
 	}
 	for _, name := range sortedServerNames(c.Servers) {
-		if err := c.Servers[name].validate(name, c.ModelContextTokens); err != nil {
+		if err := c.Servers[name].validateFor("[vector.embeddings]", name, c.ModelContextTokens); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// validate checks one named server's transport settings.
-func (c VectorEmbeddingsServerConfig) validate(name string, modelContextTokens int) error {
-	section := fmt.Sprintf("[vector.embeddings.servers.%s]", name)
+func (c VectorEmbeddingsServerConfig) validateFor(parent, name string, modelContextTokens int) error {
+	section := fmt.Sprintf("%s.servers.%s]", strings.TrimSuffix(parent, "]"), name)
 	if c.Endpoint == "" {
 		return fmt.Errorf("%s endpoint is required", section)
 	}
@@ -721,6 +734,7 @@ type Config struct {
 	PG                   PGConfig               `json:"pg,omitempty" toml:"pg"`
 	DefaultPG            string                 `json:"default_pg,omitempty" toml:"default_pg"`
 	PGTargets            map[string]PGConfig    `json:"-" toml:"-"`
+	HostedEmbeddings     HostedEmbeddingsConfig `json:"hosted_embeddings,omitempty" toml:"hosted_embeddings"`
 	DuckDB               DuckDBConfig           `json:"duckdb,omitempty" toml:"duckdb"`
 	Vector               VectorConfig           `json:"vector,omitempty" toml:"vector"`
 	Recall               RecallConfig           `json:"recall,omitempty" toml:"recall"`
@@ -1497,6 +1511,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		ArchiveContent                 string                 `toml:"archive_content"`
 		DefaultPG                      string                 `toml:"default_pg"`
 		PG                             PGConfig               `toml:"pg"`
+		HostedEmbeddings               HostedEmbeddingsConfig `toml:"hosted_embeddings"`
 		DuckDB                         DuckDBConfig           `toml:"duckdb"`
 		Vector                         VectorConfig           `toml:"vector"`
 		Recall                         RecallConfig           `toml:"recall"`
@@ -1634,7 +1649,22 @@ func (c *Config) applyConfigTOML(data string) error {
 		if legacyPG.PushVectors != nil {
 			c.PG.PushVectors = legacyPG.PushVectors
 		}
+		c.PG.RawTenant = legacyPG.RawTenant
+		c.PG.RawDerivation = legacyPG.RawDerivation
+		c.PG.RawPollSeconds = legacyPG.RawPollSeconds
+		c.PG.RawAttemptSeconds = legacyPG.RawAttemptSeconds
+		c.PG.RawMaxAttempts = legacyPG.RawMaxAttempts
+		c.PG.HostedEmbeddingsEnabled = legacyPG.HostedEmbeddingsEnabled
+		c.PG.HostedEmbeddingsPollSeconds = legacyPG.HostedEmbeddingsPollSeconds
+		c.PG.HostedEmbeddingsAttemptSeconds = legacyPG.HostedEmbeddingsAttemptSeconds
+		c.PG.HostedEmbeddingsMaxAttempts = legacyPG.HostedEmbeddingsMaxAttempts
+		c.PG.HostedEmbeddingsConcurrency = legacyPG.HostedEmbeddingsConcurrency
 	}
+	profiles, err := normalizeHostedEmbeddingProfiles(file.HostedEmbeddings.Profiles, meta)
+	if err != nil {
+		return err
+	}
+	c.HostedEmbeddings.Profiles = profiles
 	// Merge duckdb field-by-field so env vars override only
 	// the fields they set, preserving config-file settings.
 	if file.DuckDB.Path != "" && c.DuckDB.Path == "" {

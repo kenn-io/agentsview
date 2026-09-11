@@ -26,6 +26,41 @@ type hybridFakeSearcher struct {
 	units []db.UnitRef
 }
 
+type hybridBindingSearcher struct {
+	bound     db.VectorSearcher
+	bindCalls int
+}
+
+func (s *hybridBindingSearcher) BindVectorSearch(context.Context) (db.VectorSearcher, error) {
+	s.bindCalls++
+	return s.bound, nil
+}
+
+func (*hybridBindingSearcher) SemanticSearch(context.Context, string, int) ([]db.VectorHit, error) {
+	return nil, fmt.Errorf("unbound semantic search")
+}
+
+func (*hybridBindingSearcher) ResolveMessageUnits(context.Context, []db.MessageRef) ([]db.UnitRef, error) {
+	return nil, fmt.Errorf("unbound unit resolution")
+}
+
+func TestPGHybridBindsOneSearcherForBothLegs(t *testing.T) {
+	bound := &hybridFakeSearcher{
+		hits:  []db.VectorHit{{SessionID: "both", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0, Score: 0.9}},
+		units: []db.UnitRef{{DocKey: "user:both:0", SessionID: "both", OrdinalStart: 0, OrdinalEnd: 0}},
+	}
+	binder := &hybridBindingSearcher{bound: bound}
+	store := setupContentSearch(t)
+	store.SetVectorSearcher(binder)
+	insertCSSession(t, store, "both", "proj", "claude", hybridStart, hybridEnd)
+	insertCSUnitMessage(t, store, "both", 0, "user", "needle in a haystack", false, false)
+
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "needle", Mode: "hybrid", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, 1, binder.bindCalls)
+}
+
 func (f *hybridFakeSearcher) SemanticSearch(
 	_ context.Context, _ string, limit int,
 ) ([]db.VectorHit, error) {

@@ -1484,6 +1484,25 @@ func TestEncoderRetryRateLimitsDisabledFailsFastOn429PastMaxRetries(t *testing.T
 	assert.Equal(t, int32(2), attempts.Load())
 }
 
+func TestEncoderReportsExhaustedDecodeFailureAsRetryable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":`)
+	}))
+	defer server.Close()
+
+	encode := NewEncoder(EncoderConfig{
+		Endpoint: server.URL, Model: "test", Dimension: 3,
+		Timeout: time.Second, MaxRetries: 1,
+	})
+	_, err := encode(t.Context(), []string{"hello"})
+	require.Error(t, err)
+	retryable, classified := FailureRetryable(err)
+	assert.True(t, classified)
+	assert.True(t, retryable)
+	assert.Contains(t, err.Error(), "decode response")
+}
+
 func TestEncoder500ExhaustsRetries(t *testing.T) {
 	var attempts atomic.Int32
 

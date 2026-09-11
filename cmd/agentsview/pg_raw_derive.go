@@ -79,6 +79,9 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 	if err := pg.ValidateRawDerivation(app.RequireAuth); err != nil {
 		return pgServeStartup{}, err
 	}
+	if err := pg.ValidateHostedEmbeddings(app.RequireAuth); err != nil {
+		return pgServeStartup{}, err
+	}
 	applyClassifierConfig(app)
 	store, err := postgres.NewHostedStore(pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
 	if err != nil {
@@ -86,6 +89,7 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	var runtime *pgRawRuntime
+	var embeddingRuntime *hostedEmbeddingRuntime
 	var closeUploads func() error
 	custody := &pgRawSyncCustody{dataDir: app.DataDir, tenant: pg.RawTenant, limits: rawsync.DefaultManifestLimits(), version: rawProcessingVersion()}
 	var once sync.Once
@@ -94,6 +98,9 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 			stop()
 			if runtime != nil {
 				runtime.Stop()
+			}
+			if embeddingRuntime != nil {
+				embeddingRuntime.Stop()
 			}
 			if closeUploads != nil {
 				if err := closeUploads(); err != nil {
@@ -115,6 +122,37 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 	store.SetCustomPricing(app.CustomModelPricing)
 	if err = postgres.CheckHostedRuntimeWritable(ctx, store.DB(), pg.Schema, app.ArchiveContent); err != nil {
 		return fail(err)
+	}
+	poll, attempt, maxAttempts, concurrency := pg.HostedEmbeddingWorkerBounds()
+	embeddings, embeddingErr := postgres.NewHostedEmbeddingStore(ctx, store.DB(), postgres.HostedEmbeddingOptions{Schema: pg.Schema, Tenant: pg.RawTenant, MaxAttempts: maxAttempts})
+	if embeddingErr != nil && !errors.Is(embeddingErr, postgres.ErrHostedEmbeddingUnprovisioned) {
+		return fail(embeddingErr)
+	}
+	if embeddings == nil {
+		store.SetSemanticUnavailableReason("hosted embeddings are not provisioned")
+		if pg.HostedEmbeddingsEnabled {
+			return fail(errors.New("hosted embeddings are enabled but not provisioned"))
+		}
+	} else if app.ArchiveContent.UsageOnly() {
+		if err = embeddings.CheckWritable(ctx); err != nil {
+			return fail(err)
+		}
+		if err = embeddings.ClearContent(ctx); err != nil {
+			return fail(err)
+		}
+		store.SetSemanticUnavailableReason("hosted semantic search is unavailable for usage-only archives")
+	} else {
+		resolver := newHostedEmbeddingResolver(app.HostedEmbeddings)
+		store.SetVectorSearcher(newHostedEmbeddingSearcher(embeddings, resolver))
+		if pg.HostedEmbeddingsEnabled {
+			if err = embeddings.CheckWritable(ctx); err != nil {
+				return fail(err)
+			}
+			embeddingRuntime = newHostedEmbeddingRuntime(ctx, embeddings, resolver, hostedEmbeddingRuntimeOptions{
+				PollInterval: time.Duration(poll) * time.Second, AttemptTimeout: time.Duration(attempt) * time.Second,
+				SourceConcurrency: concurrency, LeaseDuration: time.Minute, HeartbeatInterval: 10 * time.Second,
+			})
+		}
 	}
 	metadata, err := postgres.NewHostedRawIngestStore(store.DB(), pg.RawTenant, custody.version)
 	if err != nil {
@@ -182,8 +220,15 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 		opts = append(opts, server.WithBasePath(basePath))
 	}
 	startup := pgServeStartup{cfg: app, ctx: ctx, rtOpts: rtOpts, srv: server.New(app, store, nil, opts...), cleanup: cleanup}
-	if runtime != nil {
-		startup.startWorker = runtime.Start
+	if runtime != nil || embeddingRuntime != nil {
+		startup.startWorker = func() {
+			if runtime != nil {
+				runtime.Start()
+			}
+			if embeddingRuntime != nil {
+				embeddingRuntime.Start()
+			}
+		}
 	}
 	return startup, nil
 }

@@ -46,6 +46,10 @@ func (s *Store) searchContentHybridPG(
 	if searcher == nil {
 		return db.ContentSearchPage{}, s.semanticUnavailableError()
 	}
+	searcher, err := db.BindVectorSearcher(ctx, searcher)
+	if err != nil {
+		return db.ContentSearchPage{}, err
+	}
 
 	k := max(f.Limit*4, db.SemanticOverfetchMin)
 	vecLeg, err := s.hybridVectorLegPG(ctx, f, searcher, k)

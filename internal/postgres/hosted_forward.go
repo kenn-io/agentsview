@@ -2,13 +2,32 @@ package postgres
 
 import (
 	"context"
+	"io"
+	"time"
+
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
-	"io"
 )
 
-func (h *HostedStore) HasFTS() bool      { return h.physical.HasFTS() }
-func (h *HostedStore) HasSemantic() bool { return h.physical.HasSemantic() }
+type semanticAvailability interface {
+	SemanticAvailable(context.Context) (bool, error)
+}
+
+func (h *HostedStore) HasFTS() bool { return h.physical.HasFTS() }
+func (h *HostedStore) HasSemantic() bool {
+	searcher := h.physical.getVectorSearcher()
+	if searcher == nil {
+		return false
+	}
+	availability, ok := searcher.(semanticAvailability)
+	if !ok {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	available, err := availability.SemanticAvailable(ctx)
+	return err == nil && available
+}
 func (h *HostedStore) GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (db.Stats, error) {
 	return h.physical.GetStats(ctx, excludeOneShot, excludeAutomated)
 }

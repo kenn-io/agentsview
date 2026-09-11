@@ -83,7 +83,13 @@ var openPGReadStore = func(
 	pgCfg config.PGConfig,
 ) (db.Store, func(), error) {
 	applyClassifierConfig(cfg)
+	if strings.TrimSpace(pgCfg.URL) == "" {
+		return nil, nil, errors.New("selected PostgreSQL target has no usable url")
+	}
 	if err := pgCfg.ValidateRawDerivation(cfg.RequireAuth); err != nil {
+		return nil, nil, err
+	}
+	if err := pgCfg.ValidateHostedEmbeddings(cfg.RequireAuth); err != nil {
 		return nil, nil, err
 	}
 	if pgCfg.RawTenant != "" {
@@ -527,6 +533,6 @@ func newPGReadService(
 			priced.SetCustomPricing(cfg.CustomModelPricing)
 		}
 	}
-	wirePGReadVectorSearchFn(cfg, store)
+	wirePGReadVectorSearchFn(cfg, pgCfg, store)
 	return service.NewReadOnlyBackend(store), cleanup, nil
 }

@@ -10,10 +10,12 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/rawsync"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func hostedRuntimeConfig(t *testing.T) (config.Config, *sql.DB) {
@@ -64,6 +67,7 @@ func TestHostedRuntimePreparationOffRetainsPublicReads(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, pgRawSyncDataDirectory), []byte("occupied"), 0600))
 	startup, err := preparePGServeImpl(cfg, "")
 	require.NoError(t, err)
+	t.Cleanup(startup.cleanup)
 	require.Nil(t, startup.startWorker)
 	startup.cleanup()
 	startup.cleanup()
@@ -98,6 +102,101 @@ func TestHostedRuntimePreparationSandboxAndIdle(t *testing.T) {
 	// This cancellation joins the real empty queue/maintenance pass. Occupied
 	// custody proves startup and empty work have no repository dependency.
 	startup.cleanup()
+}
+
+func TestHostedEmbeddingRuntimeStartsAfterReadinessAndWorkerOffRetainsReads(t *testing.T) {
+	cfg, admin := hostedRuntimeConfig(t)
+	var calls atomic.Int32
+	encoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var request struct {
+			Input []string `json:"input"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+		data := make([]map[string]any, len(request.Input))
+		for i := range request.Input {
+			data[i] = map[string]any{"index": i, "embedding": []float32{1, 0, 0}}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
+	}))
+	defer encoder.Close()
+
+	cfg.HostedEmbeddings = hostedEmbeddingTestConfig(encoder.URL+"/v1", 1)
+	profile, err := cfg.HostedEmbeddings.Profile("current")
+	require.NoError(t, err)
+	recipe, err := hostedEmbeddingRecipe("current", profile)
+	require.NoError(t, err)
+	u, err := url.Parse(cfg.PG.URL)
+	require.NoError(t, err)
+	generation, err := postgres.ProvisionHostedEmbeddings(t.Context(), admin, cfg.PG.Schema, cfg.PG.RawTenant, recipe, "initial", u.User.Username())
+	require.NoError(t, err)
+	runtimeDB, err := postgres.OpenHosted(cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
+	require.NoError(t, err)
+	_, err = runtimeDB.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,message_count,user_message_count) VALUES('source','project','machine','codex','legacy',2,2);INSERT INTO messages(session_id,ordinal,role,content) VALUES('source',0,'user','needle'),('source',1,'user','second turn')`)
+	require.NoError(t, err)
+	require.NoError(t, runtimeDB.Close())
+
+	cfg.PG.HostedEmbeddingsEnabled = true
+	cfg.PG.HostedEmbeddingsPollSeconds = 1
+	startup, err := preparePGServeImpl(cfg, "")
+	require.NoError(t, err)
+	require.NotNil(t, startup.startWorker)
+	assert.Zero(t, calls.Load(), "runtime preparation must not contact the encoder before HTTP readiness")
+	startup.startWorker()
+	observerDB, err := postgres.OpenHosted(cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
+	require.NoError(t, err)
+	observer, err := postgres.NewHostedEmbeddingStore(t.Context(), observerDB, postgres.HostedEmbeddingOptions{Schema: cfg.PG.Schema, Tenant: cfg.PG.RawTenant})
+	require.NoError(t, err)
+	activated := assert.Eventually(t, func() bool {
+		active, activeErr := observer.Active(t.Context())
+		return activeErr == nil && active != nil && active.ID == generation.ID
+	}, 5*time.Second, 20*time.Millisecond)
+	if !activated {
+		status, statusErr := observer.Status(t.Context())
+		t.Logf("embedding calls=%d status=%+v status_err=%v", calls.Load(), status, statusErr)
+	}
+	require.True(t, activated)
+	startup.cleanup()
+	require.NoError(t, observerDB.Close())
+	buildCalls := calls.Load()
+	require.Positive(t, buildCalls)
+
+	cfg.PG.HostedEmbeddingsEnabled = false
+	readService, closeRead, err := newPGReadService(cfg, cfg.PG)
+	require.NoError(t, err)
+	result, err := readService.SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "needle", Mode: "semantic", Limit: 5})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotEmpty(t, result.Matches)
+	assert.Equal(t, "source", result.Matches[0].SessionID)
+	assert.Equal(t, 0, result.Matches[0].Ordinal)
+	closeRead()
+	assert.Equal(t, buildCalls+1, calls.Load(), "worker-off direct reads may encode only their query")
+
+	beforeUsageOnly := calls.Load()
+	cfg.ArchiveContent = config.ArchiveContentUsage
+	cfg.PG.HostedEmbeddingsEnabled = true
+	usageStartup, err := preparePGServeImpl(cfg, "")
+	require.NoError(t, err)
+	require.Nil(t, usageStartup.startWorker, "usage-only startup must disable the embedding worker")
+	usageDB, err := postgres.OpenHosted(cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
+	require.NoError(t, err)
+	usageStore, err := postgres.NewHostedEmbeddingStore(t.Context(), usageDB, postgres.HostedEmbeddingOptions{Schema: cfg.PG.Schema, Tenant: cfg.PG.RawTenant})
+	require.NoError(t, err)
+	active, err := usageStore.Active(t.Context())
+	require.NoError(t, err)
+	assert.Nil(t, active, "usage-only ClearContent must invalidate active serving until a complete rebuild")
+	status, err := usageStore.Status(t.Context())
+	require.NoError(t, err)
+	require.NotNil(t, status.Active, "usage-only cleanup preserves generation identity")
+	assert.False(t, status.ActiveAvailable)
+	var documents int
+	require.NoError(t, usageDB.QueryRowContext(t.Context(), `SELECT count(*) FROM hosted_embedding_documents`).Scan(&documents))
+	assert.Zero(t, documents)
+	require.NoError(t, usageDB.Close())
+	usageStartup.cleanup()
+	assert.Equal(t, beforeUsageOnly, calls.Load(), "usage-only startup must not call the encoder")
 }
 
 // This gate executes the actual hosted startup worker and parser child. It is

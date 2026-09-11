@@ -14,20 +14,20 @@ flowchart LR
     Watcher["Laptop watcher"] -->|"authenticated raw upload"| Custody["Immutable raw custody"]
     Custody --> Parser["Isolated server parsing"]
     Parser --> PostgreSQL["PostgreSQL projection"]
-    PostgreSQL -. "future consumer" .-> Embeddings["Server embeddings"]
+    PostgreSQL --> Embeddings["Server embeddings"]
 ```
 
-The server can now parse accepted generations directly into PostgreSQL. Enable
+The server parses accepted generations directly into PostgreSQL and can build
+hosted semantic-search generations from that projection. Enable
 `raw_derivation` on an explicitly provisioned hosted tenant to make uploaded
 sessions browsable. Hosted processing uses no SQLite archive intermediary;
 SQLite databases captured from providers remain valid source artifacts.
-Embedding work is durably queued, but its consumer is not implemented.
 
 Device enrollment and revocation remain operator-managed. The operator supplies
 each laptop with a server URL, device ID and credential. There is no public
 enrollment command or HTTP endpoint. The broader delivery work remains tracked
 in [issue #1352](https://github.com/kenn-io/agentsview/issues/1352), including
-embedding consumption, retention, garbage collection and disaster rebuilds.
+retention, garbage collection and disaster rebuilds.
 
 ## Provision a hosted instance
 
@@ -61,6 +61,11 @@ raw_derivation = true
 raw_poll_seconds = 5
 raw_attempt_seconds = 60
 raw_max_attempts = 5
+hosted_embeddings_enabled = true
+hosted_embeddings_poll_seconds = 5
+hosted_embeddings_attempt_seconds = 120
+hosted_embeddings_max_attempts = 5
+hosted_embeddings_concurrency = 1
 ```
 
 `cursor_secret` is a stable base64-encoded secret shared by restarts of this
@@ -157,6 +162,120 @@ rewrite the separate named owner target. `pg push` refuses a hosted-owned schema
 before mutation, even if the client omits its hosted configuration fields. Use a
 separate legacy schema for local pushes.
 
+## Hosted semantic search
+
+Hosted embeddings use global, named profiles. The semantic recipe determines
+the generation fingerprint: model, dimensions, chunking inputs, prefixes,
+suffix, dimension-request behavior and automated-session scope, together with
+the builder, chunker, encoding and corpus versions. Keep an old profile
+configured while its generation is active. Changing its semantic recipe makes
+that generation unavailable; add a new profile name for a model migration.
+
+Endpoints, credentials, selected server and transport tuning are replaceable.
+Changing those settings does not change the recipe fingerprint or require a
+rebuild, provided the replacement server implements the same semantic recipe.
+
+This two-profile configuration is ready for an initial build followed by a
+model migration:
+
+```toml
+[hosted_embeddings.profiles.current]
+include_automated = false
+
+[hosted_embeddings.profiles.current.embeddings]
+model = "embedding-model-a"
+dimension = 768
+max_input_chars = 8192
+default_server = "primary"
+query_prefix = "query: "
+document_prefix = "passage: "
+input_suffix = ""
+request_dimensions = false
+
+[hosted_embeddings.profiles.current.embeddings.servers.primary]
+endpoint = "https://embeddings.example.com/v1"
+api_key_env = "HOSTED_EMBEDDING_KEY_A"
+batch_size = 32
+concurrency = 1
+timeout = "30s"
+max_retries = 3
+
+[hosted_embeddings.profiles.next]
+include_automated = false
+
+[hosted_embeddings.profiles.next.embeddings]
+model = "embedding-model-b"
+dimension = 1024
+max_input_chars = 8192
+default_server = "primary"
+
+[hosted_embeddings.profiles.next.embeddings.servers.primary]
+endpoint = "https://embeddings.example.com/v1"
+api_key_env = "HOSTED_EMBEDDING_KEY_B"
+batch_size = 32
+concurrency = 1
+timeout = "30s"
+max_retries = 3
+```
+
+The selected API key environment variable is read only when the runtime creates
+that profile's encoder. Provisioning and status do not need provider
+credentials and never send an embedding request. A missing or empty selected
+key fails that work explicitly; AgentsView does not fall back to another
+profile or credential. Unused profile credentials and unused owner target URLs
+may remain unavailable to the runtime.
+
+Before provisioning embeddings, have the database administrator install
+pgvector in `public` or the bound tenant schema and grant the restricted role
+`USAGE` on that extension schema. Other extension layouts are unsupported. For
+the common `public` placement, run this as the owner after pgvector is installed:
+
+```sql
+GRANT USAGE ON SCHEMA public TO hosted_runtime;
+```
+
+Then provision and select the initial generation with the owner target. The
+runtime role must already exist and remain restricted as described above.
+
+```bash
+agentsview pg embeddings provision provision --profile current --runtime-role hosted_runtime --instance-key initial-current
+agentsview pg embeddings status hosted
+agentsview pg embeddings status hosted --json
+```
+
+The provision command creates and grants only the embedding objects, records
+the generation as desired, and returns immediately. It does not create roles,
+activate incomplete coverage or wait for the worker. Start `pg serve` with
+`hosted_embeddings_enabled = true`; encoding begins only after server readiness.
+`status` reports active and desired identity, backfill state, and separate
+ready, leased, retry, failed and complete counters without source IDs.
+
+To migrate, keep `current` configured, add `next`, and select a fresh instance:
+
+```bash
+agentsview pg embeddings rebuild provision --profile next --runtime-role hosted_runtime --instance-key migration-next
+agentsview pg embeddings status hosted --json
+```
+
+The active generation continues serving while the desired generation builds.
+Activation occurs only after complete coverage. Repeating the same incomplete
+instance key and recipe preserves its progress and leases. A completed rebuild
+requires a new instance key.
+
+Failed and exhausted requirements are durable. Raising
+`hosted_embeddings_max_attempts`, restarting, or selecting the same instance
+again does not reset them. After fixing provider or profile configuration,
+start a fresh rebuild with a new instance key. Set
+`hosted_embeddings_enabled = false` and restart to stop encoding while keeping
+a valid active generation available to HTTP, direct CLI and MCP searches.
+
+With `archive_content = "usage"`, writable hosted startup clears documents,
+chunks and reusable vector values from every generation before any worker could
+start. Generation identities remain, but semantic search stays unavailable
+until content retention is restored and a fresh generation completes. This
+explicit policy transition has a startup cost proportional to retained
+generation content.
+
 ## Isolation and processing limits
 
 Hosted parser activation requires Linux amd64 or arm64, a cgo-enabled build,
@@ -234,8 +353,8 @@ owned schema fails rather than exposing physical storage identities. This
 rollback does not convert the schema back to a `pg push` destination.
 
 Keep PostgreSQL metadata and the immutable raw repository together in backups.
-Automated retention, garbage collection, disaster rebuilds, enrollment UX,
-embedding consumption and migration cutover tooling remain outside this release.
+Automated retention, garbage collection, disaster rebuilds, enrollment UX and
+automatic migration cutover tooling remain outside this release.
 
 ## Laptop raw watch daemon
 

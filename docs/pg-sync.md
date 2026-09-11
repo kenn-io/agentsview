@@ -24,26 +24,33 @@ dashboard as well.
     provider artifacts in hosted custody through authenticated, resumable uploads.
     Explicitly provisioned tenants can enable `raw_derivation` to parse accepted
     sources directly into browsable PostgreSQL sessions, without a local SQLite
-    archive. Embedding consumption remains future work. Ordinary `pg push` and
-    read-only PostgreSQL serving keep their existing behavior; `pg push` refuses
-    a schema that has been adopted for hosted raw processing.
+    archive. The hosted runtime can also build and serve its own PostgreSQL
+    embedding generations. Ordinary `pg push` and read-only PostgreSQL serving
+    keep their existing behavior; `pg push` refuses a schema that has been
+    adopted for hosted raw processing.
 
 ## Hosted raw processing
 
 For uploads that the server parses itself, provision a schema and tenant with
 `agentsview pg hosted-provision <owner-target>`, then serve with a separate
-restricted runtime role. The selected PG target needs `raw_tenant`, an explicit
-schema and `raw_derivation = true`; the server also requires authentication, a
-stable cursor secret and a supported Linux/cgo sandbox. Runtime startup checks
-schema protections and grants but never runs hosted migrations.
+restricted runtime role. The selected PG target needs `raw_tenant` and an
+explicit schema. Enable `raw_derivation` for server parsing and
+`hosted_embeddings_enabled` for server embedding; either worker can run
+independently. The server also requires authentication and a stable cursor
+secret. Raw derivation additionally requires a supported Linux/cgo sandbox.
+Runtime startup checks schema protections and grants but never runs hosted
+migrations.
 
 See [Hosted Raw Sync](/docs/hosted-raw-sync/#provision-a-hosted-instance) for
 the configuration, least-privilege grants and platform limits. Use `agentsview
 pg raw-reparse <runtime-target> --run-id <id> --batch-size 64` for bounded
-parser-version rollouts. To stop the worker, set `raw_derivation = false` and
-keep `raw_tenant`, authentication and the cursor secret. This preserves hosted
-public reads and raw custody. It does not restore `pg push` access to the owned
-schema.
+parser-version rollouts. Hosted embedding preparation, two-profile migrations,
+status and recovery are covered under [Hosted semantic
+search](/docs/hosted-raw-sync/#hosted-semantic-search). To stop either worker,
+disable its own setting and keep `raw_tenant`, authentication and the cursor
+secret. Disabling embedding work preserves a valid active semantic generation.
+Disabling raw derivation preserves hosted public reads and raw custody. Neither
+change restores `pg push` access to the owned schema.
 
 ## Quick Start
 
@@ -66,8 +73,10 @@ For multiple PostgreSQL destinations, use named `[pg.NAME]` blocks and
 normalized case-insensitively, and `all`, `local`, plus the legacy `[pg]` field
 names `url`, `schema`, `machine_name`, `allow_insecure`, `projects`, and
 `exclude_projects`, `raw_tenant`, `raw_derivation`, `raw_poll_seconds`,
-`raw_attempt_seconds`, and `raw_max_attempts` are unavailable as `[pg.NAME]`
-names.
+`raw_attempt_seconds`, `raw_max_attempts`, `hosted_embeddings_enabled`,
+`hosted_embeddings_poll_seconds`, `hosted_embeddings_attempt_seconds`,
+`hosted_embeddings_max_attempts`, and `hosted_embeddings_concurrency` are
+unavailable as `[pg.NAME]` names.
 
 ### 2. Push Sessions
 

@@ -513,6 +513,9 @@ func preparePGServeImpl(appCfg config.Config, basePath string) (pgServeStartup, 
 	if err := pgCfg.ValidateRawDerivation(appCfg.RequireAuth); err != nil {
 		return pgServeStartup{}, err
 	}
+	if err := pgCfg.ValidateHostedEmbeddings(appCfg.RequireAuth); err != nil {
+		return pgServeStartup{}, err
+	}
 	if pgCfg.RawTenant != "" {
 		return prepareHostedPGServe(appCfg, pgCfg, basePath)
 	}

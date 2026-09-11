@@ -97,6 +97,22 @@ type VectorSearcher interface {
 	ResolveMessageUnits(ctx context.Context, refs []MessageRef) ([]UnitRef, error)
 }
 
+// VectorSearchBinder optionally binds a dynamic searcher to one consistent
+// request snapshot. Search flows call it once before any semantic or unit
+// resolution work and use the returned searcher for the whole request.
+type VectorSearchBinder interface {
+	BindVectorSearch(context.Context) (VectorSearcher, error)
+}
+
+// BindVectorSearcher returns a request-bound searcher when the implementation
+// supports snapshots, or the original searcher otherwise.
+func BindVectorSearcher(ctx context.Context, searcher VectorSearcher) (VectorSearcher, error) {
+	if binder, ok := searcher.(VectorSearchBinder); ok {
+		return binder.BindVectorSearch(ctx)
+	}
+	return searcher, nil
+}
+
 // RecallVectorHit is one semantic recall-entry match, ranked best first.
 type RecallVectorHit struct {
 	EntryID string

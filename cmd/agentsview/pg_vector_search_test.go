@@ -103,12 +103,14 @@ func TestNewPGReadServiceRunsVectorWiring(t *testing.T) {
 	stubPGReadStore(t, fakeStore)
 
 	var gotCfg config.Config
+	var gotPGCfg config.PGConfig
 	var gotStore db.Store
 	calls := 0
 	orig := wirePGReadVectorSearchFn
-	wirePGReadVectorSearchFn = func(cfg config.Config, store db.Store) {
+	wirePGReadVectorSearchFn = func(cfg config.Config, pgCfg config.PGConfig, store db.Store) {
 		calls++
 		gotCfg = cfg
+		gotPGCfg = pgCfg
 		gotStore = store
 	}
 	t.Cleanup(func() { wirePGReadVectorSearchFn = orig })
@@ -128,6 +130,8 @@ func TestNewPGReadServiceRunsVectorWiring(t *testing.T) {
 		"wiring must target the store the service serves reads from")
 	assert.True(t, gotCfg.Vector.Enabled,
 		"wiring must see the caller's vector config")
+	assert.Equal(t, "postgres://example.test/agentsview", gotPGCfg.URL,
+		"wiring must use the already selected PG target")
 }
 
 // TestWirePGReadVectorSearchIgnoresNonPGStore covers the CLI wiring guard for
@@ -140,6 +144,6 @@ func TestWirePGReadVectorSearchIgnoresNonPGStore(t *testing.T) {
 	cfg.Vector.Enabled = true
 
 	require.NotPanics(t, func() {
-		wirePGReadVectorSearch(cfg, fakeStore)
+		wirePGReadVectorSearch(cfg, config.PGConfig{}, fakeStore)
 	})
 }

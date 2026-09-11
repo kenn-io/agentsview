@@ -650,6 +650,7 @@ func newPGCommand() *cobra.Command {
 	cmd.AddCommand(newPGStatusCommand())
 	cmd.AddCommand(newPGServeCommand())
 	cmd.AddCommand(newPGVectorsCommand())
+	cmd.AddCommand(newPGEmbeddingsCommand())
 	cmd.AddCommand(newPGServiceCommand())
 	cmd.AddCommand(newPGHostedProvisionCommand())
 	cmd.AddCommand(newPGRawReparseCommand())

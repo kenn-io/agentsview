@@ -96,6 +96,27 @@ type HTTPStatusError struct {
 	RetryAfter *time.Duration
 }
 
+// encodeFailure preserves whether the encoder exhausted a failure that can
+// succeed on a later caller-owned attempt. Error and Unwrap keep the existing
+// observable error text and classifications intact.
+type encodeFailure struct {
+	err       error
+	retryable bool
+}
+
+func (e *encodeFailure) Error() string { return e.err.Error() }
+func (e *encodeFailure) Unwrap() error { return e.err }
+
+// FailureRetryable reports the retry disposition attached by the encoder
+// after its local retry budget is exhausted.
+func FailureRetryable(err error) (retryable, classified bool) {
+	failure, ok := errors.AsType[*encodeFailure](err)
+	if !ok {
+		return false, false
+	}
+	return failure.retryable, true
+}
+
 // InvalidEmbeddingError reports endpoint output that has the expected shape
 // but cannot participate in cosine distance. Index identifies the embedding
 // within the response batch; Component is -1 for a zero-norm vector.
@@ -527,7 +548,7 @@ func (ec *encoderClient) encode(ctx context.Context, texts []string) ([][]float3
 			}
 		}
 		if !retryable || nonRateLimitAttempts == maxAttempts {
-			return nil, lastErr
+			return nil, &encodeFailure{err: lastErr, retryable: retryable}
 		}
 		if err := sleepBackoff(ctx, nonRateLimitAttempts, err); err != nil {
 			return nil, err

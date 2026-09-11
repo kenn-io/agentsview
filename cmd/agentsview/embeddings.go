@@ -303,6 +303,16 @@ func newVectorEncoder(
 	if err != nil {
 		return nil, err
 	}
+	return newVectorEncoderWithResolvedKey(c, name, server, server.APIKey(), inputPrefix, retryRateLimits)
+}
+
+func newVectorEncoderWithResolvedKey(
+	c config.VectorEmbeddingsConfig,
+	name string,
+	server config.VectorEmbeddingsServerConfig,
+	apiKey, inputPrefix string,
+	retryRateLimits bool,
+) (kitvec.EncodeFunc, error) {
 	timeout, err := time.ParseDuration(server.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -310,7 +320,7 @@ func newVectorEncoder(
 	}
 	return vector.NewEncoder(vector.EncoderConfig{
 		Endpoint:          server.Endpoint,
-		APIKey:            server.APIKey(),
+		APIKey:            apiKey,
 		OllamaCPUFallback: server.OllamaCPUFallback,
 		Model:             c.Model,
 		Dimension:         c.Dimension,
