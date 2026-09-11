@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/constant"
+	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -204,7 +205,13 @@ func literalDuration(expr ast.Expr, timeImport string) (time.Duration, bool) {
 	if !ok {
 		return 0, false
 	}
-	value, err := types.Eval(token.NewFileSet(), nil, token.NoPos, expression)
+	timePackage, err := importer.Default().Import("time")
+	if err != nil {
+		return 0, false
+	}
+	pkg := types.NewPackage("", "fixture")
+	pkg.Scope().Insert(types.NewPkgName(token.NoPos, pkg, "time", timePackage))
+	value, err := types.Eval(token.NewFileSet(), pkg, token.NoPos, expression)
 	if err != nil || value.Value == nil {
 		return 0, false
 	}
@@ -238,8 +245,8 @@ func literalExpression(expr ast.Expr, timeImport string) (string, bool) {
 			return "", false
 		}
 		units := map[string]time.Duration{"Nanosecond": time.Nanosecond, "Microsecond": time.Microsecond, "Millisecond": time.Millisecond, "Second": time.Second, "Minute": time.Minute, "Hour": time.Hour}
-		unit, ok := units[expr.Sel.Name]
-		return strconv.FormatInt(int64(unit), 10), ok
+		_, ok = units[expr.Sel.Name]
+		return "time." + expr.Sel.Name, ok
 	case *ast.CallExpr:
 		selector, ok := expr.Fun.(*ast.SelectorExpr)
 		if !ok || selector.Sel.Name != "Duration" || len(expr.Args) != 1 || expr.Ellipsis.IsValid() {
@@ -250,7 +257,7 @@ func literalExpression(expr ast.Expr, timeImport string) (string, bool) {
 			return "", false
 		}
 		inner, ok := literalExpression(expr.Args[0], timeImport)
-		return "int64(" + inner + ")", ok
+		return "time.Duration(" + inner + ")", ok
 	}
 	return "", false
 }
