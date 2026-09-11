@@ -63,7 +63,8 @@ The v3 hour shape is:
 }
 ```
 
-Activity always contains exactly twelve consecutive five-minute buckets.
+Version 3 contains exactly twelve consecutive five-minute activity buckets.
+Version 4 declares the bucket duration explicitly and permits other resolutions.
 Activity separates interactive sessions, subagents, and automated sessions.
 Subagents take precedence over automation, so an automated child belongs only to
 the subagent category. Totals and all model, agent, and project breakdowns carry
@@ -122,7 +123,7 @@ ordered closed-hour documents, and a `digest` only when all 24 hours are
 present. `agentsview export hour H` is constructed by the same day reader and
 emits byte-for-byte the canonical hour element contained by `export day D`.
 
-## Joint bucket cells (version 3)
+## Joint bucket cells (version 4)
 
 Version 4 keeps version 3's accounting rules and adds a `joint` object to every
 hour. Independent project, model and agent breakdowns cannot answer a combined
@@ -131,6 +132,7 @@ without exporting session identifiers, titles, messages or tool content.
 
 ```sh
 agentsview export day --schema-version 4 2026-07-28
+agentsview export day --schema-version 4 --bucket 1m 2026-07-28
 agentsview export hour --schema-version 4 --project-key <project-key> 2026-07-28-13
 agentsview export digest --schema-version 4 --project-key <project-key> \
   --from 2026-07-01 --to 2026-07-28
@@ -141,6 +143,18 @@ from the project breakdowns or a session export's project map. No keys means the
 whole archive, including unattributed usage. An explicit key selects only that
 project; an unknown key produces an empty replacement, not an error. An empty
 key is invalid. Version 3 rejects project selection.
+
+`--bucket` selects the duration for both activity buckets and joint cells. It
+accepts any positive whole-minute duration that divides one hour, such as `1m`,
+`2m`, `5m`, `15m`, or `1h`. Five minutes is the default, not a fixed contract
+limit. Version 3 rejects explicit bucket selection and retains its original
+bytes. Invalid durations fail before the archive is opened.
+
+Every v4 hour, day and digest document carries `bucket_seconds`, including empty
+documents. Every hour in a day uses that duration. Bucket starts align to the
+UTC hour, and activity always includes `3600 / bucket_seconds` buckets; joint
+cells remain sparse. The five-minute inactivity gap cap is independent of bucket
+size. One-minute exports still use the same activity and accounting rules.
 
 The selected scope applies to the **whole hour**, including existing totals,
 breakdowns and per-device bucket maxima. The exporter chooses canonical usage
@@ -154,7 +168,7 @@ whole archive). `joint.cells` is a sparse array with these fields:
 
 | Field                         | Meaning                                                                                         |
 | ----------------------------- | ----------------------------------------------------------------------------------------------- |
-| `bucket_start`                | UTC start of a half-open five-minute bucket                                                     |
+| `bucket_start`                | UTC start of a half-open bucket lasting `bucket_seconds`                                        |
 | `project`, `project_key`      | Safe display label and canonical archive-scoped key; an empty key is unattributed               |
 | `agent`, `model`              | Producer agent and model; `unknown` when absent                                                 |
 | `automation`                  | `interactive`, `automated`, or `unknown` for observations without session classification        |
@@ -174,10 +188,19 @@ over an activity interval.
 
 Activity uses the same gap cap, model attribution, clipping and overlap removal
 as the Activity report. Agent-minutes are not measured human working time. A
-report edge inside a cell has five-minute precision; consumers must not prorate
-that cell and claim an exact instant-level result.
+report edge inside a cell has the declared bucket precision; consumers must not
+prorate that cell and claim an exact instant-level result.
 
 ### Concurrency and corrections
+
+Resolution is part of the hour's content identity, not a new publication period.
+Changing it replaces the complete cell set and activity buckets for the same
+hour and scope, including quiet hours. Consumers must remove the old resolution
+instead of adding both sets together, and screen digests with the same
+`--bucket` as their exports. Finer buckets do not require more frequent uploads.
+Consumers can roll up to aligned multiples of the stored duration, but cannot
+recover finer detail from coarse buckets or invent missing precision. Combining
+different resolutions requires a common aligned coarser grain.
 
 A model switch can create two cells for one session in the same bucket. Adding
 their maxima can overstate even a single device's peak. For selected cells in a
@@ -215,7 +238,8 @@ that period. It deliberately does not mean that an agent was observed idle for
 
 - `has_data: false`;
 - `idle_minutes: 0`;
-- twelve zero-valued five-minute buckets;
+- zero-valued activity buckets covering the complete hour (twelve at the default
+  five-minute resolution);
 - empty activity and usage breakdown arrays; and
 - zero first-seen counters.
 
@@ -320,11 +344,12 @@ independent concurrency peaks for each category. It retains the complete Claude
 snapshot selection and web-search charging introduced in version 2. Versions 1
 and 2 are no longer emitted.
 
-Version 4 adds scoped joint cells while version 3 remains the default.
+Version 4 adds scoped joint cells and selectable bucket duration while version 3
+remains the default.
 
-Integrations should request and require their intended `schema_version`, reject unknown
-fields, and verify the canonical content digest before accepting an hour. The
-new fields change hour and day digests, including quiet hours; refresh
+Integrations should request and require their intended `schema_version`, reject
+unknown fields, and verify the canonical content digest before accepting an
+hour. The new fields change hour and day digests, including quiet hours; refresh
 previously saved digests when updating. Adding, renaming, or removing a field,
 changing a type or accounting rule, or changing canonicalization requires a new
 schema version.

@@ -34,13 +34,15 @@ func scopeJointReporting(
 	}
 	keptEvents := make([]activity.ActivityEvent, 0, len(events))
 	for _, event := range events {
-		if selected(sessionByID[event.SessionID].Project) {
+		session, known := sessionByID[event.SessionID]
+		if len(keys) == 0 || known && selected(session.Project) {
 			keptEvents = append(keptEvents, event)
 		}
 	}
 	keptUsage := make([]activity.UsageRow, 0, len(usage))
 	for _, row := range usage {
-		if selected(sessionByID[row.SessionID].Project) {
+		session, known := sessionByID[row.SessionID]
+		if len(keys) == 0 || known && selected(session.Project) {
 			keptUsage = append(keptUsage, row)
 		}
 	}
@@ -58,12 +60,12 @@ type reportingCellState struct {
 }
 
 func jointReportingHour(
-	start time.Time, activityCells []activity.JointActivityCell, usage []activity.UsageRow,
+	start time.Time, bucket time.Duration, activityCells []activity.JointActivityCell, usage []activity.UsageRow,
 	sessions map[string]activity.SessionMeta, projects map[string]export.ProjectMapEntry,
 	projectKeys []string,
 ) (*export.ReportingJoint, error) {
 	states := make(map[reportingCellKey]*reportingCellState)
-	cellFor := func(bucket time.Time, project, agent, model, automation string) *reportingCellState {
+	cellFor := func(bucket time.Time, project, projectKey, agent, model, automation string) *reportingCellState {
 		if model == "" {
 			model = "unknown"
 		}
@@ -71,7 +73,7 @@ func jointReportingHour(
 			agent = "unknown"
 		}
 		key := reportingCellKey{bucket.UTC().Format(time.RFC3339),
-			export.ProjectKeyForEntry(projects[project]), agent, model, automation}
+			projectKey, agent, model, automation}
 		state := states[key]
 		label := export.SafeProjectDisplayLabel(project)
 		if state == nil {
@@ -90,7 +92,7 @@ func jointReportingHour(
 		if cell.IsAutomated {
 			automation = "automated"
 		}
-		state := cellFor(cell.BucketStart, cell.Project, cell.Agent, cell.Model, automation)
+		state := cellFor(cell.BucketStart, cell.Project, cell.ProjectKey, cell.Agent, cell.Model, automation)
 		state.cell.AgentMinutes += cell.AgentMinutes
 		state.cell.MaxAgents = cell.MaxAgents
 	}
@@ -102,7 +104,9 @@ func jointReportingHour(
 		}
 		session, known := sessions[row.SessionID]
 		agent, automation := row.Agent, "unknown"
+		projectKey := ""
 		if known {
+			projectKey = export.ProjectKeyForEntry(projects[session.Project])
 			automation = "interactive"
 			if session.IsAutomated {
 				automation = "automated"
@@ -111,7 +115,7 @@ func jointReportingHour(
 				agent = session.Agent
 			}
 		}
-		state := cellFor(at.UTC().Truncate(5*time.Minute), session.Project, agent, row.Model, automation)
+		state := cellFor(at.UTC().Truncate(bucket), session.Project, projectKey, agent, row.Model, automation)
 		if err := state.usage.add(row); err != nil {
 			return nil, fmt.Errorf("sum joint cell usage: %w", err)
 		}

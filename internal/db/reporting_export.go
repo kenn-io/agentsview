@@ -21,6 +21,7 @@ type ReportingExportOptions struct {
 	Now           time.Time
 	SchemaVersion int
 	ProjectKeys   []string
+	Bucket        string
 
 	// afterSnapshot is a deterministic test seam for proving that every source
 	// read uses the transaction established before this callback.
@@ -42,6 +43,10 @@ func (db *DB) ExportReportingDay(
 		)
 	}
 	if err := export.ValidateReportingProjectScope(schemaVersion, opts.ProjectKeys); err != nil {
+		return export.ReportingDay{}, err
+	}
+	bucket, err := export.ParseReportingBucket(schemaVersion, opts.Bucket)
+	if err != nil {
 		return export.ReportingDay{}, err
 	}
 	date, _, hourCount, complete, err := resolveReportingExportRange(opts)
@@ -70,17 +75,21 @@ func (db *DB) ExportReportingDay(
 	}
 
 	hours, err := db.reportingHoursFromSnapshot(
-		ctx, tx, date, hourCount, schemaVersion, opts.ProjectKeys,
+		ctx, tx, date, hourCount, schemaVersion, opts.ProjectKeys, bucket,
 	)
 	if err != nil {
 		return export.ReportingDay{}, err
 	}
-	day, _, err := export.FinalizeReportingDay(export.ReportingDay{
+	day := export.ReportingDay{
 		SchemaVersion: schemaVersion,
 		Date:          date.Format("2006-01-02"),
 		Complete:      complete,
 		Hours:         hours,
-	})
+	}
+	if schemaVersion == export.ReportingJointSchemaVersion {
+		day.BucketSeconds = int(bucket / time.Second)
+	}
+	day, _, err = export.FinalizeReportingDay(day)
 	if err != nil {
 		return export.ReportingDay{}, fmt.Errorf("finalize reporting date: %w", err)
 	}
@@ -92,7 +101,7 @@ func (db *DB) ExportReportingDay(
 
 func (db *DB) reportingHoursFromSnapshot(
 	ctx context.Context, tx *sql.Tx, date time.Time, hourCount, schemaVersion int,
-	projectKeys []string,
+	projectKeys []string, bucket time.Duration,
 ) ([]export.ReportingHour, error) {
 	hours := make([]export.ReportingHour, hourCount)
 	if hourCount == 0 {
@@ -100,15 +109,17 @@ func (db *DB) reportingHoursFromSnapshot(
 	}
 	end := date.Add(time.Duration(hourCount) * time.Hour)
 	query, err := activity.ResolveQuery(activity.QueryInput{
-		Preset:         "custom",
-		From:           date.Format(time.RFC3339),
-		To:             end.Format(time.RFC3339),
-		Timezone:       "UTC",
-		BucketOverride: "5m",
+		Preset:   "custom",
+		From:     date.Format(time.RFC3339),
+		To:       end.Format(time.RFC3339),
+		Timezone: "UTC",
 	}, end)
 	if err != nil {
 		return nil, fmt.Errorf("resolve reporting snapshot range: %w", err)
 	}
+	// Preserve the shared range and inactivity-gap policy. Export bucket sizes
+	// have their own validated complete-hour contract, separate from UI presets.
+	query.Bucket = activity.BucketSpec{Unit: activity.BucketMinute, NominalSeconds: int(bucket / time.Second)}
 	filter := AnalyticsFilter{
 		Timezone:         "UTC",
 		IncludeSubagents: true,
@@ -206,7 +217,7 @@ func (db *DB) reportingHoursFromSnapshot(
 			Loc:           time.UTC,
 			EffectiveEnd:  hourEnd,
 			GapCapSeconds: query.GapCapSeconds,
-			Bucket:        activity.BucketSpec{Unit: activity.BucketMinute, NominalSeconds: 300},
+			Bucket:        query.Bucket,
 		}, append([]activity.SessionMeta(nil), sessions...), candidates, activityUsage)
 		if aggregateErr != nil {
 			return nil, fmt.Errorf(
@@ -239,10 +250,11 @@ func (db *DB) reportingHoursFromSnapshot(
 			hour.Activity.Totals.ActiveMinutes > 0 ||
 			firstSeen[i].hasAny()
 		if !hour.HasData {
-			hour = quietReportingHour(hourStart, schemaVersion)
+			hour = quietReportingHour(hourStart, schemaVersion, bucket)
 		}
 		if schemaVersion == export.ReportingJointSchemaVersion {
-			hour.Joint, err = jointReportingHour(hourStart, report.JointActivity, usage, sessionByID, projects, projectKeys)
+			hour.BucketSeconds = int(bucket / time.Second)
+			hour.Joint, err = jointReportingHour(hourStart, bucket, report.JointActivity, usage, sessionByID, projects, projectKeys)
 			if err != nil {
 				return nil, err
 			}
@@ -1261,10 +1273,10 @@ func resolveReportingExportRange(
 	return
 }
 
-func quietReportingHour(start time.Time, schemaVersion int) export.ReportingHour {
-	buckets := make([]export.ReportingActivityBucket, 12)
+func quietReportingHour(start time.Time, schemaVersion int, duration time.Duration) export.ReportingHour {
+	buckets := make([]export.ReportingActivityBucket, int(time.Hour/duration))
 	for i := range buckets {
-		buckets[i].Start = start.Add(time.Duration(i) * 5 * time.Minute).
+		buckets[i].Start = start.Add(time.Duration(i) * duration).
 			Format(time.RFC3339)
 	}
 	return export.ReportingHour{

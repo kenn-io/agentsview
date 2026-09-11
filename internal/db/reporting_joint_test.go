@@ -205,3 +205,43 @@ func TestReportingJointUnpricedTokensRetainKnownSearchFees(t *testing.T) {
 	assert.Equal(t, int64(20_000), cell.Pricing.ComputedCost.Microdollars)
 	assert.Equal(t, int64(1), cell.Pricing.UnpricedRows)
 }
+
+func TestReportingJointStandaloneUsageDoesNotInheritEmptyLabelProject(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "empty-label", "", func(s *Session) {
+		s.StartedAt, s.EndedAt = Ptr("2026-07-28T09:00:00Z"), Ptr("2026-07-28T09:01:00Z")
+	})
+	insertMessages(t, d,
+		Message{SessionID: "empty-label", Ordinal: 0, Role: "user", Timestamp: "2026-07-28T09:00:00Z"},
+		Message{SessionID: "empty-label", Ordinal: 1, Role: "assistant", Timestamp: "2026-07-28T09:01:00Z"},
+	)
+	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+		OccurredAt: "2026-07-28T09:01:00Z", Model: "standalone", Kind: "usage",
+		InputTokens: 17, Charged: money.MustParseDollars("0.007"), DedupKey: "standalone",
+	}}))
+	opts := ReportingExportOptions{Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4}
+	all, err := d.ExportReportingDay(t.Context(), opts)
+	require.NoError(t, err)
+	require.Len(t, all.Hours[9].Joint.Cells, 2)
+	var sessionProjectKey string
+	for _, cell := range all.Hours[9].Joint.Cells {
+		if cell.Model == "standalone" {
+			assert.Empty(t, cell.ProjectKey, "standalone cost has no session project")
+			assert.Equal(t, int64(17), cell.Usage.InputTokens)
+			assert.Equal(t, int64(7_000), cell.Usage.Cost.Microdollars)
+		} else {
+			sessionProjectKey = cell.ProjectKey
+			assert.Equal(t, 1.0, cell.AgentMinutes)
+		}
+	}
+	require.NotEmpty(t, sessionProjectKey, "an empty label still has a real session project identity")
+	opts.ProjectKeys = []string{sessionProjectKey}
+	scoped, err := d.ExportReportingDay(t.Context(), opts)
+	require.NoError(t, err)
+	assert.Equal(t, 1.0, scoped.Hours[9].Activity.Totals.AgentMinutes)
+	assert.Zero(t, scoped.Hours[9].Usage.Totals.InputTokens)
+	assert.Zero(t, scoped.Hours[9].Usage.Totals.Cost.Microdollars)
+	require.Len(t, scoped.Hours[9].Joint.Cells, 1)
+	assert.Equal(t, sessionProjectKey, scoped.Hours[9].Joint.Cells[0].ProjectKey)
+}

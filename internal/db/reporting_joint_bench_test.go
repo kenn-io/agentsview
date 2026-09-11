@@ -16,8 +16,11 @@ import (
 // archive is fixed across iterations. It does not include process startup.
 func BenchmarkReportingJointDay(b *testing.B) {
 	for _, projects := range []int{4, 100} {
-		for _, version := range []int{3, 4} {
-			b.Run(fmt.Sprintf("projects-%d/v%d", projects, version), func(b *testing.B) {
+		for _, variant := range []struct {
+			version int
+			bucket  string
+		}{{3, ""}, {4, "5m"}, {4, "1m"}} {
+			b.Run(fmt.Sprintf("projects-%d/v%d/%s", projects, variant.version, variant.bucket), func(b *testing.B) {
 				d := testDB(b)
 				const sessions = 200
 				start := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
@@ -42,7 +45,7 @@ func BenchmarkReportingJointDay(b *testing.B) {
 							Model: fmt.Sprintf("model-%d", (i+1)%8), TokenUsage: jsontext.Value(`{"output_tokens":200}`)},
 					}))
 				}
-				opts := ReportingExportOptions{Date: start.Truncate(24 * time.Hour), Now: start.Add(24 * time.Hour), SchemaVersion: version}
+				opts := ReportingExportOptions{Date: start.Truncate(24 * time.Hour), Now: start.Add(24 * time.Hour), SchemaVersion: variant.version, Bucket: variant.bucket}
 				var day export.ReportingDay
 				var payload []byte
 				var err error
@@ -55,7 +58,7 @@ func BenchmarkReportingJointDay(b *testing.B) {
 				}
 				require.Equal(b, int64(60_000), day.Hours[12].Usage.Totals.OutputTokens)
 				b.ReportMetric(float64(len(payload)), "payload-bytes/op")
-				if version == 4 {
+				if variant.version == 4 {
 					require.NotEmpty(b, day.Hours[12].Joint.Cells)
 					b.ReportMetric(float64(len(day.Hours[12].Joint.Cells)), "cells/op")
 				}
