@@ -68,10 +68,14 @@ type activityReportBuildInputs struct {
 func (s *Server) humaActivityReport(
 	ctx context.Context, in *activityReportInput,
 ) (*huma.StreamResponse, error) {
+	machine, err := db.ResolveMachineFilter(ctx, s.db, in.Machine)
+	if err != nil {
+		return nil, serverError(err)
+	}
 	selection, err := resolveActivitySelection(activitySelectionInput{
 		Preset: in.Preset, Date: in.Date, From: in.From, To: in.To,
 		Timezone: in.Timezone, Bucket: in.Bucket, Project: in.Project,
-		GitBranch: in.GitBranch, Agent: in.Agent, Machine: in.Machine,
+		GitBranch: in.GitBranch, Agent: in.Agent, Machine: machine,
 		Automation: in.Automation,
 	}, time.Now())
 	if err != nil {

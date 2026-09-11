@@ -509,7 +509,9 @@
               current: isCurrentHighlight,
             }}
           >
-            {@html renderMarkdown(segment.content)}
+            {@html renderMarkdown(segment.content, {
+              renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,
+            })}
           </div>
         {/if}
       {/if}
@@ -778,7 +780,7 @@
     padding: 0.15em 0.4em;
   }
 
-  .markdown :global(pre) {
+  .markdown :global(pre:not(.unknown-xml-block)) {
     background: var(--code-bg);
     color: var(--code-text);
     border-radius: var(--radius-md);

@@ -1400,10 +1400,24 @@ const slowOpThreshold = 100 * time.Millisecond
 
 // InsertMessages batch-inserts messages for a session.
 func (db *DB) InsertMessages(msgs []Message) error {
+	return db.insertMessages(msgs, db.ToolResultImages())
+}
+
+// InsertMessagesWithToolResultImages inserts messages with the policy selected
+// by the sync engine.
+func (db *DB) InsertMessagesWithToolResultImages(
+	msgs []Message, policy config.ToolResultImages,
+) error {
+	return db.insertMessages(msgs, policy)
+}
+
+func (db *DB) insertMessages(
+	msgs []Message, policy config.ToolResultImages,
+) error {
 	if err := db.requireWritable(); err != nil {
 		return err
 	}
-	msgs, _ = db.ProjectToolResultImages(msgs)
+	msgs, _ = ProjectToolResultImages(msgs, policy)
 	rawMessages := msgs
 	msgs = db.messagesForStorage(msgs)
 	if len(rawMessages) == 0 {
@@ -1611,11 +1625,29 @@ func applyMessageTokenUsageUpdateTx(
 func (db *DB) WriteSessionIncremental(
 	sessionID string, msgs []Message, update IncrementalSessionUpdate,
 ) (bool, error) {
+	return db.writeSessionIncremental(
+		sessionID, msgs, update, db.ToolResultImages(),
+	)
+}
+
+// WriteSessionIncrementalWithToolResultImages writes an incremental update
+// with the policy selected by the sync engine.
+func (db *DB) WriteSessionIncrementalWithToolResultImages(
+	sessionID string, msgs []Message, update IncrementalSessionUpdate,
+	policy config.ToolResultImages,
+) (bool, error) {
+	return db.writeSessionIncremental(sessionID, msgs, update, policy)
+}
+
+func (db *DB) writeSessionIncremental(
+	sessionID string, msgs []Message, update IncrementalSessionUpdate,
+	policy config.ToolResultImages,
+) (bool, error) {
 	if err := db.requireWritable(); err != nil {
 		return false, err
 	}
-	msgs, _ = db.ProjectToolResultImages(msgs)
-	if db.ToolResultImages() == config.ToolResultImagesDrop {
+	msgs, _ = ProjectToolResultImages(msgs, policy)
+	if policy == config.ToolResultImagesDrop {
 		update.SubagentLinks = append([]ToolCallSubagentLink(nil), update.SubagentLinks...)
 		for i := range update.SubagentLinks {
 			content, _ := StripToolResultImages(update.SubagentLinks[i].ResultContent)
@@ -1674,7 +1706,7 @@ func (db *DB) WriteSessionIncremental(
 	}
 	for _, link := range update.SubagentLinks {
 		changed, err := applyToolCallSubagentLinkTx(
-			tx, sessionID, link, update.BlockedResultCategories,
+			tx, sessionID, link, update.BlockedResultCategories, policy,
 		)
 		if err != nil {
 			return false, err
@@ -1685,7 +1717,7 @@ func (db *DB) WriteSessionIncremental(
 	for _, resultUpdate := range update.ToolCallResultUpdates {
 		changed, inserted, err := applyToolCallResultUpdateTx(
 			tx, sessionID, resultUpdate,
-			update.BlockedResultCategories, db.ToolResultImages(),
+			update.BlockedResultCategories, policy,
 		)
 		if err != nil {
 			return false, err
@@ -1845,7 +1877,21 @@ type savedPin struct {
 func (db *DB) ReplaceSessionMessages(
 	sessionID string, msgs []Message,
 ) error {
-	msgs, _ = db.ProjectToolResultImages(msgs)
+	return db.replaceSessionMessages(sessionID, msgs, db.ToolResultImages())
+}
+
+// ReplaceSessionMessagesWithToolResultImages replaces messages with the
+// policy selected by the sync engine.
+func (db *DB) ReplaceSessionMessagesWithToolResultImages(
+	sessionID string, msgs []Message, policy config.ToolResultImages,
+) error {
+	return db.replaceSessionMessages(sessionID, msgs, policy)
+}
+
+func (db *DB) replaceSessionMessages(
+	sessionID string, msgs []Message, policy config.ToolResultImages,
+) error {
+	msgs, _ = ProjectToolResultImages(msgs, policy)
 	msgs = append([]Message(nil), msgs...)
 	_ = ValidateAndSanitize(nil, msgs, nil)
 	rawMessages := msgs
@@ -2054,40 +2100,82 @@ func bumpTranscriptRevision(
 	return nil
 }
 
-func sessionHasFTSTx(tx transactionQueries) (bool, error) {
+func sessionHasFTSTableTx(tx transactionQueries, table string) (bool, error) {
 	var ftsCount int
 	if err := tx.QueryRow(
 		`SELECT count(*) FROM sqlite_master
-		 WHERE type='table' AND name='messages_fts'`,
+		 WHERE type='table' AND name=?`, table,
 	).Scan(&ftsCount); err != nil {
-		return false, fmt.Errorf("probing fts table: %w", err)
+		return false, fmt.Errorf("probing fts table %s: %w", table, err)
 	}
 	return ftsCount > 0, nil
+}
+
+func sessionHasCurrentChineseFTSTx(
+	tx transactionQueries,
+) (bool, error) {
+	exists, err := sessionHasFTSTableTx(tx, "messages_chinese_fts")
+	if err != nil || !exists || !simpleFTSRuntimeConfig.available() {
+		return false, err
+	}
+	var storedFingerprint string
+	err = tx.QueryRow(
+		"SELECT CAST(value AS TEXT) FROM stats WHERE key = ?",
+		chineseFTSFingerprintStatsKey,
+	).Scan(&storedFingerprint)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf(
+			"reading Chinese fts fingerprint: %w", err,
+		)
+	}
+	return storedFingerprint == simpleFTSRuntimeConfig.fingerprint, nil
 }
 
 func deleteSessionMessageRowsTx(
 	tx transactionQueries, sessionID string,
 ) error {
-	hasFTS, err := sessionHasFTSTx(tx)
-	if err != nil {
-		return err
+	tables := []struct {
+		name       string
+		deleteName string
+		deleteDDL  string
+	}{
+		{"messages_fts", "messages_ad", messagesADTriggerDDL},
+		{"messages_chinese_fts", "messages_chinese_ad", messagesChineseADTriggerDDL},
+	}
+	active := tables[:0]
+	for _, table := range tables {
+		var exists bool
+		var err error
+		if table.name == "messages_chinese_fts" {
+			exists, err = sessionHasCurrentChineseFTSTx(tx)
+		} else {
+			exists, err = sessionHasFTSTableTx(tx, table.name)
+		}
+		if err != nil {
+			return err
+		}
+		if exists {
+			active = append(active, table)
+		}
 	}
 
-	if hasFTS {
+	for _, table := range active {
 		// Bulk-delete the FTS entries first so the later row delete
-		// does not re-tokenize large message blobs through messages_ad.
+		// does not re-tokenize large message blobs through delete triggers.
 		if _, err := tx.Exec(
-			`INSERT INTO messages_fts(messages_fts, rowid, content)
-			 SELECT 'delete', id, content
-			 FROM messages WHERE session_id = ?`,
+			`INSERT INTO `+table.name+`(`+table.name+`, rowid, content)
+			 SELECT 'delete', id, content FROM messages WHERE session_id = ?`,
 			sessionID,
 		); err != nil {
-			return fmt.Errorf("bulk-deleting fts entries: %w", err)
+			return fmt.Errorf("bulk-deleting %s entries: %w", table.name, err)
 		}
 		if _, err := tx.Exec(
-			"DROP TRIGGER IF EXISTS messages_ad",
+			"DROP TRIGGER IF EXISTS " + table.deleteName,
 		); err != nil {
-			return fmt.Errorf("dropping messages_ad trigger: %w", err)
+			return fmt.Errorf("dropping %s trigger: %w", table.deleteName, err)
 		}
 	}
 	if _, err := tx.Exec(
@@ -2095,9 +2183,9 @@ func deleteSessionMessageRowsTx(
 	); err != nil {
 		return fmt.Errorf("deleting old messages: %w", err)
 	}
-	if hasFTS {
-		if _, err := tx.Exec(messagesADTriggerDDL); err != nil {
-			return fmt.Errorf("restoring messages_ad trigger: %w", err)
+	for _, table := range active {
+		if _, err := tx.Exec(table.deleteDDL); err != nil {
+			return fmt.Errorf("restoring %s trigger: %w", table.deleteName, err)
 		}
 	}
 	return nil
@@ -2144,7 +2232,9 @@ func (db *DB) ReplaceSessionContent(
 	sessionID string, msgs []Message,
 	signals SessionSignalUpdate, findings []SecretFinding,
 ) error {
-	return db.replaceSessionContent(sessionID, msgs, signals, findings, nil, nil)
+	return db.replaceSessionContent(
+		sessionID, msgs, signals, findings, nil, nil, db.ToolResultImages(),
+	)
 }
 
 // ReplaceSessionContentWithCheckpoint replaces a session's content and
@@ -2156,15 +2246,43 @@ func (db *DB) ReplaceSessionContentWithCheckpoint(
 	signals SessionSignalUpdate, findings []SecretFinding,
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
 ) error {
-	return db.replaceSessionContent(sessionID, msgs, signals, findings, cp, blobs)
+	return db.replaceSessionContent(
+		sessionID, msgs, signals, findings, cp, blobs, db.ToolResultImages(),
+	)
+}
+
+// ReplaceSessionContentWithCheckpointAndToolResultImages replaces session
+// content with the policy selected by the sync engine.
+func (db *DB) ReplaceSessionContentWithCheckpointAndToolResultImages(
+	sessionID string, msgs []Message,
+	signals SessionSignalUpdate, findings []SecretFinding,
+	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
+	policy config.ToolResultImages,
+) error {
+	return db.replaceSessionContent(
+		sessionID, msgs, signals, findings, cp, blobs, policy,
+	)
+}
+
+// ReplaceSessionContentWithToolResultImages replaces session content with the
+// policy selected by the sync engine.
+func (db *DB) ReplaceSessionContentWithToolResultImages(
+	sessionID string, msgs []Message,
+	signals SessionSignalUpdate, findings []SecretFinding,
+	policy config.ToolResultImages,
+) error {
+	return db.replaceSessionContent(
+		sessionID, msgs, signals, findings, nil, nil, policy,
+	)
 }
 
 func (db *DB) replaceSessionContent(
 	sessionID string, msgs []Message,
 	signals SessionSignalUpdate, findings []SecretFinding,
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
+	policy config.ToolResultImages,
 ) error {
-	msgs, _ = db.ProjectToolResultImages(msgs)
+	msgs, _ = ProjectToolResultImages(msgs, policy)
 	if len(msgs) > 0 {
 		msgs = append([]Message(nil), msgs...)
 		_ = ValidateAndSanitize(nil, msgs, nil)
@@ -3208,7 +3326,7 @@ func (db *DB) SetToolCallSubagentSession(
 		tx, sessionID, ToolCallSubagentLink{
 			ToolUseID:         toolUseID,
 			SubagentSessionID: subagentSessionID,
-		}, nil,
+		}, nil, db.ToolResultImages(),
 	)
 	if err != nil {
 		return err
@@ -3236,6 +3354,7 @@ func (db *DB) SetToolCallSubagentSession(
 // loading content so repeated appends do not rescan the event history.
 func soleToolResultEventTx(
 	tx *sql.Tx, sessionID string, messageOrdinal, callIndex int,
+	imagePolicy config.ToolResultImages, summary string,
 ) ([]ToolResultEvent, error) {
 	var count int
 	var content sql.NullString
@@ -3267,12 +3386,15 @@ func soleToolResultEventTx(
 			sessionID, messageOrdinal, callIndex, err,
 		)
 	}
-	return []ToolResultEvent{{Content: content.String}}, nil
+	return []ToolResultEvent{{Content: projectToolResultEventForDedup(
+		content.String, summary, imagePolicy,
+	)}}, nil
 }
 
 func applyToolCallSubagentLinkTx(
 	tx *sql.Tx, sessionID string, link ToolCallSubagentLink,
 	blockedResultCategories map[string]bool,
+	imagePolicy config.ToolResultImages,
 ) (bool, error) {
 	var toolName, category, currentSubagent, currentResultContent string
 	var currentResultContentLen, messageOrdinal, callIndex int
@@ -3323,11 +3445,15 @@ func applyToolCallSubagentLinkTx(
 	if blockedResultCategories[category] {
 		resultContent = ""
 	} else {
+		resultContent = projectToolResultImageContent(resultContent, imagePolicy)
+		resultContentLen = ResolveResultContentLength(
+			resultContent, resultContentLen,
+		)
 		// A linked result carries no events of its own, but the call it
 		// targets may already have one stored. Re-storing a summary the
 		// event repeats would undo the dedup on every incremental pass.
 		sole, err := soleToolResultEventTx(
-			tx, sessionID, messageOrdinal, callIndex,
+			tx, sessionID, messageOrdinal, callIndex, imagePolicy, resultContent,
 		)
 		if err != nil {
 			return false, err
@@ -3524,6 +3650,7 @@ func applyToolCallResultUpdateTx(
 
 		sole, err := soleToolResultEventTx(
 			tx, sessionID, position.MessageOrdinal, position.CallIndex,
+			imagePolicy, summary,
 		)
 		if err != nil {
 			return false, nil, err

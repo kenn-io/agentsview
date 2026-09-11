@@ -93,32 +93,37 @@ The local archive has four separate maintenance paths:
   during future ingestion and full resyncs. `agentsview db strip --images`
   applies the same projection to existing rows, including parent, trashed, and
   source-missing sessions selected by its filters. It leaves provider
-  transcripts and standalone image files unchanged. The stored placeholder
-  records version `1`, readable text, media type, decoded byte size, and an
-  empty `sha256` field. Configure this policy in `config.toml` or under
-  **Settings > Archive content**, which writes the same key; the daemon
-  applies a change to its own ingestion after a restart. Already stored rows
-  keep the policy they were written under. The default `keep` policy preserves
-  the existing provider decoding behavior.
+  transcripts and standalone image files unchanged. The daemon exposes the
+  same work as `POST /api/v1/data/strip-images/preview` and
+  `POST /api/v1/data/strip-images`, both localhost-only and both taking the
+  same project and date selection; the apply takes the foreground archive
+  maintenance barrier and refuses with 409 while another maintenance pass
+  holds it, rather than queuing behind it. The stored placeholder records
+  version `1`, readable text, media type, decoded byte size, and an empty
+  `sha256` field. Configure this policy in `config.toml` or under **Settings >
+  Archive content**, which writes the same key; the daemon applies a change to
+  its own ingestion after a restart. Already stored rows keep the policy they
+  were written under. The default `keep` policy preserves the existing provider
+  decoding behavior.
 - [`archive_content`](/docs/configuration/#archive-content) followed by a daemon
   restart and `agentsview sync --full` applies a whole-archive storage policy.
   Unlike category filtering, the rebuild also projects orphaned and trashed
   sessions onto the policy, so dropped tool payloads or transcript text leave
   the archive entirely.
 - `agentsview db migrate --images` moves retained inline tool-result image
-  payloads from currently stored rows out of SQLite and into `{dataDir}/assets`.
-  Each payload is written as a content-addressed file named
-  `<sha256hex><ext>` before any row commits. An existing object must have the
-  expected byte count and SHA-256 digest. Missing or corrupt objects are
-  replaced while the source bytes remain available. A later keep-mode reparse
-  or full resync can restore inline bytes from provider source files. The inline
-  block is replaced with an `agentsview_image` placeholder whose `image_ref`
-  field holds the `asset://` reference. Only the four passive media types are
-  migrated (`image/png`, `image/jpeg`, `image/webp`, `image/gif`). SVG payloads
-  stay inline. A separate serving host needs the matching `{dataDir}/assets`
-  directory with the copied database content. After migration, back up
-  `{dataDir}/assets` together with the archive. Run `db compact` separately to
-  measure SQLite file-space reclamation.
+  payloads from currently stored rows out of SQLite and into
+  `{dataDir}/assets`. Each payload is written as a content-addressed file
+  named `<sha256hex><ext>` before any row commits. An existing object must
+  have the expected byte count and SHA-256 digest. Missing or corrupt objects
+  are replaced while the source bytes remain available. A later keep-mode
+  reparse or full resync can restore inline bytes from provider source files.
+  The inline block is replaced with an `agentsview_image` placeholder whose
+  `image_ref` field holds the `asset://` reference. Only the four passive
+  media types are migrated (`image/png`, `image/jpeg`, `image/webp`,
+  `image/gif`). SVG payloads stay inline. A separate serving host needs the
+  matching `{dataDir}/assets` directory with the copied database content.
+  After migration, back up `{dataDir}/assets` together with the archive. Run
+  `db compact` separately to measure SQLite file-space reclamation.
 - Transparent compression or deduplication of live tool-result payloads is a
   separate storage-format change and is not part of `db compact`.
 

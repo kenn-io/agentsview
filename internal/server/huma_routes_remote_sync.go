@@ -32,7 +32,7 @@ type remoteSyncTargetsOutput struct {
 }
 
 func (s *Server) humaRemoteSyncTargets(
-	_ context.Context,
+	ctx context.Context,
 	in *remoteSyncTargetsInput,
 ) (*remoteSyncTargetsOutput, error) {
 	requestHeader := make(http.Header)

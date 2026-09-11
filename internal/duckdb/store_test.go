@@ -781,8 +781,8 @@ func TestSearchGroupsMessagesAndIncludesNameMatches(t *testing.T) {
 
 // TestSearchOperatorTokenNoError mirrors the SQLite FTS 500 regression on the
 // DuckDB/ILIKE backend: a single token containing operator characters (hyphen,
-// colon), prepared the way the HTTP handler does, must match content and not
-// error. ILIKE has no FTS-operator hazard, but this pins backend parity.
+// colon, embedded quote), whether raw or explicitly quoted, must match content
+// and not error. ILIKE has no FTS-operator hazard, but this pins backend parity.
 func TestSearchOperatorTokenNoError(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
@@ -790,7 +790,7 @@ func TestSearchOperatorTokenNoError(t *testing.T) {
 	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session: syncSession(sessionID, "alpha", "first msg text", "2026-03-20T10:00:00.000Z", 2),
 		Messages: []db.Message{
-			syncMessage(sessionID, 0, "user", "hit error-401 from the api", "2026-03-20T10:00:00.000Z"),
+			syncMessage(sessionID, 0, "user", `hit error-401 from the api and say"hi`, "2026-03-20T10:00:00.000Z"),
 			syncMessage(sessionID, 1, "assistant", "returned status:500 to client", "2026-03-20T10:00:01.000Z"),
 		},
 		DataVersion:     1,
@@ -804,9 +804,9 @@ func TestSearchOperatorTokenNoError(t *testing.T) {
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
-	for _, raw := range []string{"error-401", "status:500"} {
+	for _, raw := range []string{"error-401", "status:500", `say"hi`, `"say""hi"`} {
 		page, err := store.Search(ctx, db.SearchFilter{
-			Query: db.PrepareFTSQuery(raw), Limit: 10,
+			Query: raw, Limit: 10,
 		})
 		require.NoError(t, err, "Search(%q)", raw)
 		require.Len(t, page.Results, 1, "results for %q", raw)

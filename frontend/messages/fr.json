@@ -1031,14 +1031,12 @@
   "activity_model": "Modèle",
   "activity_agent": "Agent",
   "activity_min_unit": " min",
-  "activity_int_auto_split": "int {int} / auto {auto}",
   "activity_breakdown": "Répartition",
   "activity_view_in_data": "Afficher {project} dans Données",
   "activity_breakdown_metric": "Métrique de répartition",
   "activity_agent_min": "Agent-min",
   "activity_cost": "Coût",
   "activity_none_lower": "aucune",
-  "activity_int_auto_short": "{int} int / {auto} auto",
   "activity_peak_label": "pic {count}",
   "activity_agent_min_value": "{value} agent-min",
   "activity_no_sessions_selected_range": "Aucune session active dans la plage horaire sélectionnée.",
@@ -1052,6 +1050,16 @@
       }
     }
   ],
+  "activity_subagents": "Sous-agents",
+  "activity_subagent": "Sous-agent",
+  "activity_interactive_peak": "Pic interactif",
+  "activity_subagent_peak": "Pic des sous-agents",
+  "activity_automated_peak": "Pic automatisé",
+  "activity_combined_peak": "Pic global",
+  "activity_peak_at": "pic {count} à {time}",
+  "activity_independent_scales": "Chaque piste a sa propre échelle.",
+  "activity_all_sessions_overlay": "Superposition globale",
+  "activity_class_split": "int {int} / sous-agents {sub} / auto {auto}",
   "activity_concurrency": "Simultanéité",
   "activity_overlay": "Superposition",
   "activity_overlay_metric": "Métrique de superposition de simultanéité",
@@ -1067,6 +1075,22 @@
   "activity_session": "Session",
   "activity_automated_session": "Session automatisée",
   "activity_auto": "Auto",
+  "activity_session_kind_split": [
+    {
+      "declarations": [
+        "input interactive",
+        "input subagents",
+        "input subagentsLabel",
+        "input automated",
+        "local subagentPlural = subagents: plural"
+      ],
+      "selectors": ["subagentPlural"],
+      "match": {
+        "subagentPlural=one": "{interactive} interactives / {subagentsLabel} sous-agent / {automated} automatisées",
+        "subagentPlural=other": "{interactive} interactives / {subagentsLabel} sous-agents / {automated} automatisées"
+      }
+    }
+  ],
   "activity_interactive_automated_split": "{interactive} interactives / {automated} automatisées",
   "activity_untimed_count": "{count} sans durée",
   "activity_peak_concurrency": "Pic de simultanéité",
@@ -2037,5 +2061,69 @@
   "settings_tool_result_images_keep": "Conserver",
   "settings_tool_result_images_drop": "Supprimer",
   "settings_tool_result_images_hint": "Les résultats déjà stockés gardent la règle appliquée lors de leur écriture, et revenir à Conserver ne restaure pas les données déjà supprimées. Lancez agentsview db strip --images pour traiter les lignes existantes.",
-  "settings_tool_result_images_restart_notice": "Redémarrez le démon AgentsView pour appliquer ce changement aux nouvelles sessions ingérées."
+  "settings_tool_result_images_restart_notice": "Redémarrez le démon AgentsView pour appliquer ce changement aux nouvelles sessions ingérées.",
+  "settings_tool_images_title": "Images des résultats d'outils",
+  "settings_tool_images_description": "Images intégrées stockées dans les résultats d'outils.",
+  "settings_search_keywords_tool_images": "images résultats outils suppression nettoyage charges octets stockage",
+  "settings_image_cleanup_intro": "Prévisualisez les résultats d'outils stockés qui contiennent encore des charges d'images intégrées, puis remplacez ces charges par des espaces réservés lisibles.",
+  "settings_image_cleanup_project_label": "Le projet contient",
+  "settings_image_cleanup_project_placeholder": "Tous les projets",
+  "settings_image_cleanup_before_label": "Terminé avant",
+  "settings_image_cleanup_before_placeholder": "AAAA-MM-JJ",
+  "settings_image_cleanup_preview": "Prévisualiser",
+  "settings_image_cleanup_previewing": "Prévisualisation…",
+  "settings_image_cleanup_preview_failed": "La prévisualisation a échoué.",
+  "settings_image_cleanup_unavailable": "La suppression des images ne s'applique qu'aux archives locales sur cette machine.",
+  "settings_image_cleanup_proxy_denied": "La suppression des images doit s'exécuter avec AgentsView ouvert directement sur cette machine, et non via un proxy ou un port redirigé.",
+  "settings_image_cleanup_read_only": "Cette archive est en lecture seule, les lignes stockées ne peuvent pas être modifiées.",
+  "settings_image_cleanup_empty": "Aucun résultat d'outil stocké dans cette sélection ne contient de charge d'image intégrée.",
+  "settings_image_cleanup_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} session sélectionnée",
+        "countPlural=other": "{countLabel} sessions sélectionnées"
+      }
+    }
+  ],
+  "settings_image_cleanup_payloads": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} charge d'image",
+        "countPlural=other": "{countLabel} charges d'images"
+      }
+    }
+  ],
+  "settings_image_cleanup_by_project": "Par projet",
+  "settings_image_cleanup_column_project": "Projet",
+  "settings_image_cleanup_column_sessions": "Sessions",
+  "settings_image_cleanup_column_payloads": "Charges",
+  "settings_image_cleanup_column_stored": "Stocké",
+  "settings_image_cleanup_column_decoded": "Décodé",
+  "settings_image_cleanup_apply": "Supprimer les charges d'images",
+  "settings_image_cleanup_applying": "Suppression…",
+  "settings_image_cleanup_apply_failed": "La suppression des images ne s'est pas terminée. Certaines sessions ont peut-être déjà été modifiées. Prévisualisez à nouveau avant de réessayer.",
+  "settings_image_cleanup_busy": "Une autre opération de maintenance des archives est déjà en cours. Réessayez une fois qu'elle sera terminée.",
+  "settings_image_cleanup_confirm_title": "Supprimer les charges d'images stockées ?",
+  "settings_image_cleanup_confirm_close": "Fermer",
+  "settings_image_cleanup_confirm_scope": "Le nettoyage couvre toutes les sessions correspondant à ces filtres au démarrage, de sorte que de nouveaux contenus correspondants peuvent s'y ajouter après cette prévisualisation.",
+  "settings_image_cleanup_confirm_body": "Ceci réécrit les résultats d'outils stockés sélectionnés en place et ne peut pas être annulé. Les transcriptions des fournisseurs et les fichiers image autonomes ne sont pas touchés.",
+  "settings_image_cleanup_confirm_action": "Supprimer",
+  "settings_image_cleanup_cancel": "Annuler",
+  "settings_image_cleanup_applied": "Suppression des images terminée.",
+  "settings_image_cleanup_changed": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} session modifiée",
+        "countPlural=other": "{countLabel} sessions modifiées"
+      }
+    }
+  ],
+  "settings_image_cleanup_compact_note": "La suppression des charges réécrit les lignes stockées. La taille du fichier d'archive reste inchangée jusqu'à ce que vous exécutiez agentsview db compact.",
+  "appearance_render_unknown_xml_blocks": "Afficher les blocs XML inconnus en texte préformaté"
 }

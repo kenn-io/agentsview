@@ -665,24 +665,88 @@ func TestBootstrapArtifactExportQueueOwnsConfiguredHostname(t *testing.T) {
 	assert.Equal(t, "existing-hostname", pending[0].SessionID)
 }
 
-func TestConfigureArtifactLocalMachineRequeuesExistingHostnameSession(t *testing.T) {
+func TestConfigureArtifactLocalMachineRequeuesExistingInstallationSession(t *testing.T) {
 	database := testDB(t)
 	require.NoError(t, database.UpsertSession(Session{
-		ID: "existing-hostname", Project: "project",
-		Machine: "workstation.example", Agent: "claude",
+		ID: "existing-installation", Project: "project",
+		Machine: "00000000-0000-4000-8000-000000000001", Agent: "claude",
 	}))
 	seedArtifactOrigin(t, database)
 	assert.Empty(t, artifactExportQueueIDs(t, database))
 
-	require.NoError(t, database.ConfigureArtifactLocalMachine("workstation.example"))
-
-	machine, err := database.ArtifactLocalMachineName(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, "workstation.example", machine)
+	require.NoError(t, database.ConfigureArtifactLocalMachine("00000000-0000-4000-8000-000000000001"))
 	pending, err := database.PendingArtifactExports(t.Context(), 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
-	assert.Equal(t, "existing-hostname", pending[0].SessionID)
+	assert.Equal(t, "existing-installation", pending[0].SessionID)
+}
+
+func TestArtifactQueueUsesAdoptedInstallationOwnership(t *testing.T) {
+	database := testDB(t)
+	seedArtifactOrigin(t, database)
+	require.NoError(t, database.SetSyncState("artifact_local_machine_name", "workstation.example"))
+	for _, session := range []struct{ id, machine string }{
+		{"hostname", "workstation.example"},
+		{"installation", "00000000-0000-4000-8000-000000000001"},
+		{"legacy", "local"},
+		{"foreign", "peer.example"},
+	} {
+		require.NoError(t, database.UpsertSession(Session{
+			ID: session.id, Project: "project", Machine: session.machine, Agent: "claude",
+		}))
+	}
+	_, err := database.EnsureInstallationIdentity(t.Context(), "00000000-0000-4000-8000-000000000001")
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertSession(Session{ID: "retired-key-peer", Project: "project", Machine: "workstation.example", Agent: "claude"}))
+	want := []string{"hostname", "installation", "legacy"}
+	assert.Equal(t, want, artifactExportQueueIDs(t, database), "inserts")
+	owned, err := database.ListOwnedSessionIDsForExport(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, want, owned)
+
+	for _, operation := range []struct {
+		name string
+		run  func() error
+	}{
+		{"bootstrap", database.BootstrapArtifactExportQueue},
+		{"requeue", database.RequeueAllArtifactExports},
+		{"origin", func() error { return database.AdoptArtifactOrigin("replacement-a1b2c3") }},
+		{"update", func() error {
+			for _, id := range []string{"hostname", "installation", "legacy", "foreign"} {
+				if err := database.RenameSession(id, new("renamed")); err != nil {
+					return err
+				}
+			}
+			return nil
+		}},
+		{"child rows", func() error {
+			for _, id := range []string{"hostname", "installation", "legacy", "foreign"} {
+				if err := database.ReplaceSessionUsageEvents(id, []UsageEvent{{
+					SessionID: id, Source: "event", Model: "model", DedupKey: id,
+				}}); err != nil {
+					return err
+				}
+			}
+			return nil
+		}},
+		{"delete", func() error {
+			for _, id := range []string{"hostname", "installation", "legacy", "foreign"} {
+				if err := database.DeleteSession(id); err != nil {
+					return err
+				}
+			}
+			return nil
+		}},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+				_, err := tx.Exec(`DELETE FROM artifact_export_queue`)
+				return err
+			}))
+			require.NoError(t, operation.run())
+			assert.Equal(t, want, artifactExportQueueIDs(t, database))
+		})
+	}
 }
 
 func TestEnsureArtifactOriginPublishesOriginWithBootstrapQueue(t *testing.T) {

@@ -111,7 +111,11 @@ func runSyncWorkerContext(
 	// pass itself succeeded. The parent also treats a missing result as a
 	// protocol failure, but the worker's own exit contract must not lie.
 	var encErr error
+	var emittedResult bool
 	emit := func(line workerLine) {
+		if line.Result != nil {
+			emittedResult = true
+		}
 		if err := json.MarshalEncode(enc, line); err != nil && encErr == nil {
 			encErr = err
 		}
@@ -134,6 +138,10 @@ func runSyncWorkerContext(
 		return fmt.Errorf("unknown sync-worker mode %q", mode)
 	}
 	if err != nil {
+		if !emittedResult {
+			result := resyncBuildResultFromStats(ctx, sync.SyncStats{Aborted: true}, err)
+			emit(workerLine{Result: &result})
+		}
 		return err
 	}
 	if encErr != nil {
@@ -376,7 +384,7 @@ func workerEngineConfig(cfg config.Config) sync.EngineConfig {
 		DisabledAgents:          cfg.DisabledAgents,
 		IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      cfg.ScanProtectedPaths,
-		Machine:                 cfg.LocalMachineName,
+		Machine:                 cfg.InstallationID,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
 		ToolResultImages:        cfg.ToolResultImages,
 		ArchiveContent:          cfg.ArchiveContent,

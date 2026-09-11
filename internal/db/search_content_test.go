@@ -653,14 +653,14 @@ func TestFTSSnippetCentersOnPhrase(t *testing.T) {
 
 	t.Run("phrase present centers on phrase", func(t *testing.T) {
 		f := ContentSearchFilter{Pattern: `"error handler"`, Mode: "fts"}
-		assert.Contains(t, f.ftsSnippet(body), "error handler",
+		assert.Contains(t, f.ftsSnippet(body, ""), "error handler",
 			"snippet did not center on the phrase")
 	})
 	t.Run("phrase absent falls back to first token", func(t *testing.T) {
 		// No contiguous "error handler" substring, so centering falls back to
 		// the first token "error", windowing its early occurrence.
 		f := ContentSearchFilter{Pattern: `"error nonexistent"`, Mode: "fts"}
-		assert.Contains(t, f.ftsSnippet(body), "error in the early",
+		assert.Contains(t, f.ftsSnippet(body, ""), "error in the early",
 			"fallback snippet not centered on first token")
 	})
 }

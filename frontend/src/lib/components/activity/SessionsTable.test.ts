@@ -24,6 +24,7 @@ function makeRow(overrides: Partial<ActivitySessionRow> = {}): ActivitySessionRo
     last_active: "2026-06-16T09:00:00Z",
     timing_quality: "high",
     is_automated: false,
+    is_subagent: false,
     ...overrides,
   };
 }
@@ -31,6 +32,9 @@ function makeRow(overrides: Partial<ActivitySessionRow> = {}): ActivitySessionRo
 function makeReport(rows: ActivitySessionRow[]): Report {
   return {
     peak: { agents: 0, at: null },
+    interactive_peak: { agents: 0, at: null },
+    subagent_peak: { agents: 0, at: null },
+    automated_peak: { agents: 0, at: null },
     totals: {
       active_minutes: 0,
       idle_minutes: 0,
@@ -243,10 +247,11 @@ describe("SessionsTable", () => {
     unmount(c);
   });
 
-  it("flags only automated sessions with an Auto badge", async () => {
+  it("labels subagents before automation and leaves interactive sessions unbadged", async () => {
     const report = makeReport([
       makeRow({ session_id: "human", title: "Human", is_automated: false }),
       makeRow({ session_id: "robot", title: "Robot", is_automated: true }),
+      makeRow({ session_id: "child", title: "Child", is_subagent: true, is_automated: true }),
     ]);
     const c = mount(SessionsTable, {
       target: document.body,
@@ -259,6 +264,9 @@ describe("SessionsTable", () => {
     const humanRow = document.querySelector('.session-row[data-session-id="human"]');
     expect(robotRow?.querySelector(".auto-badge")).toBeTruthy();
     expect(humanRow?.querySelector(".auto-badge")).toBeNull();
+    const child = document.querySelector('.session-row[data-session-id="child"]');
+    expect(child?.querySelector(".subagent-badge")?.textContent).toBe("Subagent");
+    expect(child?.querySelector(".auto-badge")).toBeNull();
 
     unmount(c);
   });

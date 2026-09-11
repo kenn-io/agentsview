@@ -394,6 +394,8 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 			SELECT key, value FROM old_db.pg_sync_state
 			WHERE key = 'pg_push_marker_id'
 			   OR key LIKE 'artifact\_%' ESCAPE '\'
+			   OR key LIKE 'machine\_label:%' ESCAPE '\'
+			   OR key LIKE 'machine\_alias:%' ESCAPE '\'
 			   OR key = ?`, subagentParentRepairQueueStateKey); err != nil {
 			return fmt.Errorf("copying sync state: %w", err)
 		}
@@ -508,9 +510,9 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 		INSERT OR IGNORE INTO main.artifact_export_queue(session_id)
 		SELECT id FROM main.sessions
 		WHERE (
-			machine = 'local' OR machine = (
+			machine = 'local' OR machine IN (
 				SELECT value FROM main.pg_sync_state
-				WHERE key = 'artifact_local_machine_name'
+				WHERE key IN ('artifact_local_machine_name', 'artifact_local_installation_id')
 			)
 		  )
 		  AND deleted_at IS NULL

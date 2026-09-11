@@ -234,6 +234,17 @@ pre {
   word-wrap: break-word;
 }
 
+/* Literal XML uses the active app theme, independently of code fences. */
+pre.unknown-xml-block {
+  background: var(--bg-inset);
+  color: var(--text-primary);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  margin: 0.5em 0;
+  overflow-x: auto;
+}
+
 /* Mark tag (search highlights) */
 mark {
   background: var(--accent-amber);

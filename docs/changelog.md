@@ -13,6 +13,10 @@ description: Release history for AgentsView
   files are gone remain in the archive. (#1677)
 - Browse and search Open Code Review sessions, including review comments,
   tools, thinking, recorded token usage, and resumed reviews. (#1660)
+- Search Chinese words and individual characters in SQLite message content
+  with an optional tokenizer sidecar. HTTP, CLI, and MCP search use word
+  segmentation; ASCII-only searches keep English stemming. Install with
+  `make install-chinese-fts`. (#1491)
 - Browse and search Tau sessions, including the active conversation branch,
   thinking, tools, session names, and recorded token usage. (#1661)
 - Configure session directories and alternate homes in `[agents.<id>]` tables
@@ -96,6 +100,19 @@ description: Release history for AgentsView
   from GenAI Prices when available, including Luna and Terra prices before
   the July 30 cut. Astra gains offline pricing at Bedrock rates. Full
   region-qualified catalog names retain their own pricing.
+
+- Keep local session history together across hostname changes. AgentsView saves
+  an installation ID in `telemetry-install-id`, reusing an existing ID even
+  with telemetry disabled. Upgrades move historical local sessions using
+  saved ownership; older archives keep historical keys until you select the local
+  ones with `db adopt-machine`.
+  Session IDs, messages, curation, and worktree rules stay intact, and old machine
+  filters and URLs keep working through recorded aliases. Display-name changes
+  take effect after a daemon restart and the next mirror push. PostgreSQL updates
+  incrementally; DuckDB rebuilds its mirror once when the default key changes.
+  If a local `session_sources` entry sets `machine` to a hostname, remove that
+  setting so new sessions use the installation ID.
+
 - Preserve nonempty tool output from legacy Cursor text transcripts. Existing
   archived sessions gain the output on their next sync when the source files
   are still available. (#1627)

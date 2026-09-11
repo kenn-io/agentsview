@@ -1107,7 +1107,7 @@ machine = "archivebox"
 		absoluteTestPath(t, "/sessions/duplicate"),
 		absoluteTestPath(t, "/sessions/archive"),
 	}, cfg.ResolveDirs(parser.AgentCopilot))
-	assert.Equal(t, cfg.LocalMachineName,
+	assert.Equal(t, cfg.InstallationID,
 		cfg.SourceMachines[parser.AgentCopilot][absoluteTestPath(t, "/sessions/local")])
 	assert.Equal(t, "archivebox",
 		cfg.SourceMachines[parser.AgentCopilot][absoluteTestPath(t, "/sessions/duplicate")])
@@ -1152,7 +1152,7 @@ machine = "archivebox"
 		absoluteTestPath(t, "/sessions/from-env"),
 		absoluteTestPath(t, "/sessions/from-archive"),
 	}, cfg.ResolveDirs(parser.AgentCopilot))
-	assert.Equal(t, cfg.LocalMachineName,
+	assert.Equal(t, cfg.InstallationID,
 		cfg.SourceMachines[parser.AgentCopilot][absoluteTestPath(t, "/sessions/from-env")])
 	assert.Equal(t, "archivebox",
 		cfg.SourceMachines[parser.AgentCopilot][absoluteTestPath(t, "/sessions/from-archive")])
@@ -1169,7 +1169,7 @@ func TestLoadFileSessionSourcesPreserveLegacyS3Roots(t *testing.T) {
 		"s3://session-archive/claude")
 }
 
-func TestLoadFileSessionSourceDefaultsMachineToHostname(t *testing.T) {
+func TestLoadFileSessionSourceDefaultsMachineToInstallationID(t *testing.T) {
 	cfg := loadMinimalWithConfig(t, map[string]any{
 		"session_sources": []map[string]any{{
 			"agent": "copilot",
@@ -1178,10 +1178,10 @@ func TestLoadFileSessionSourceDefaultsMachineToHostname(t *testing.T) {
 	})
 
 	require.NotEmpty(t, cfg.LocalMachineName)
-	assert.Equal(t, cfg.LocalMachineName,
+	assert.Equal(t, cfg.InstallationID,
 		cfg.SourceMachines[parser.AgentCopilot][absoluteTestPath(t, "/sessions/archive")])
 	require.Len(t, cfg.SessionSources, 1)
-	assert.Equal(t, cfg.LocalMachineName, cfg.SessionSources[0].Machine)
+	assert.Equal(t, cfg.InstallationID, cfg.SessionSources[0].Machine)
 }
 
 func TestLoadFileSessionSourceValidation(t *testing.T) {
@@ -2031,6 +2031,7 @@ require_auth = true
 
 func TestResolvePG_Defaults(t *testing.T) {
 	cfg := Config{
+		InstallationID: "installation-a",
 		PG: PGConfig{
 			URL: "postgres://localhost/test",
 		},
@@ -2039,7 +2040,7 @@ func TestResolvePG_Defaults(t *testing.T) {
 	require.NoError(t, err, "ResolvePG")
 
 	assert.Equal(t, "agentsview", resolved.Schema)
-	assert.NotEmpty(t, resolved.MachineName, "MachineName should default to hostname")
+	assert.Equal(t, "installation-a", resolved.MachineName)
 }
 
 func TestLoadResolvesLocalMachineNameFromHostname(t *testing.T) {
@@ -2050,6 +2051,89 @@ func TestLoadResolvesLocalMachineNameFromHostname(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, hostname, cfg.LocalMachineName)
+}
+
+func TestInstallationIDSurvivesHostnameChanges(t *testing.T) {
+	dir := setupTestEnv(t)
+	const id = "0123456789abcdef0123456789abcdef"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "telemetry-install-id"), []byte(id), 0o600))
+	for _, hostname := range []string{"local", "host-a.local", "host-a.example", "host-b.example"} {
+		cfg, err := Default()
+		require.NoError(t, err)
+		cfg.DataDir = dir
+		cfg.LocalMachineName = hostname
+		localDir := filepath.Join(dir, "claude")
+		cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentClaude: {localDir}}
+		cfg.sessionSourceConfigs = []sessionSourceConfig{
+			{Agent: "copilot", Dir: filepath.Join(dir, "copilot")},
+			{Agent: "codex", Dir: filepath.Join(dir, "codex"), Machine: new("host-c.example")},
+		}
+		// Each fresh config represents a process starting on a different network.
+		require.NoError(t, finishLoadedConfig(&cfg))
+		assert.Equal(t, hostname, cfg.LocalMachineName)
+		assert.Equal(t, id, cfg.SourceMachines[parser.AgentClaude][localDir])
+		require.Len(t, cfg.SessionSources, 2)
+		assert.Equal(t, id, cfg.SessionSources[0].Machine)
+		assert.Equal(t, "host-c.example", cfg.SessionSources[1].Machine)
+		cfg.PG.URL = "postgres://localhost/test"
+		pg, err := cfg.ResolvePG()
+		require.NoError(t, err)
+		assert.Equal(t, id, pg.MachineName)
+		duck, err := cfg.ResolveDuckDB()
+		require.NoError(t, err)
+		assert.Equal(t, id, duck.MachineName)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, configFileName))
+	require.NoError(t, err)
+	cfg, err := LoadReadOnly()
+	require.NoError(t, err)
+	assert.Equal(t, id, cfg.InstallationID)
+	after, err := os.ReadFile(filepath.Join(dir, configFileName))
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+}
+
+func TestLoadConfiguredLocalMachineName(t *testing.T) {
+	dir := setupTestEnv(t)
+	writeConfig(t, dir, map[string]any{
+		"local_machine_name": "host-a.example",
+		"cursor_secret":      "existing-secret",
+	})
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+	assert.Equal(t, "host-a.example", cfg.LocalMachineName)
+	assert.Equal(t, "existing-secret", cfg.CursorSecret)
+}
+
+func TestLoadRejectsInvalidLocalMachineName(t *testing.T) {
+	for _, name := range []string{"", "  "} {
+		t.Run(name, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			writeConfig(t, dir, map[string]any{"local_machine_name": name})
+			_, err := LoadMinimal()
+			require.ErrorContains(t, err, "local_machine_name")
+		})
+	}
+}
+
+func TestSavedMachineNamePreservesSymlinkedCodexMetadata(t *testing.T) {
+	skipIfNotUnix(t)
+	dir := setupTestEnv(t)
+	writeConfig(t, dir, map[string]any{"local_machine_name": "host-a.example"})
+	root := filepath.Join(dir, "archive", "sessions")
+	home := filepath.Join(dir, "profile")
+	require.NoError(t, os.MkdirAll(root, 0o700))
+	require.NoError(t, os.MkdirAll(home, 0o700))
+	alias := filepath.Join(home, "sessions")
+	require.NoError(t, os.Symlink(root, alias))
+	cfg, err := Default()
+	require.NoError(t, err)
+	cfg.DataDir = dir
+	cfg.LocalMachineName = "host-b.example"
+	cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentCodex: {alias}}
+	require.NoError(t, finishLoadedConfig(&cfg))
+	assert.Equal(t, cfg.InstallationID, cfg.SourceMachines[parser.AgentCodex][root])
+	assert.Contains(t, cfg.ProviderMetadata[parser.AgentCodex][root], home)
 }
 
 func TestResolvePG_ExpandsEnvVars(t *testing.T) {
@@ -2192,13 +2276,13 @@ func TestDuckDBConfig_LoadsFileAndEnv(t *testing.T) {
 
 func TestResolveDuckDB_Defaults(t *testing.T) {
 	dir := canonicalTempDir(t)
-	cfg := Config{DataDir: dir}
+	cfg := Config{DataDir: dir, InstallationID: "installation-a"}
 
 	resolved, err := cfg.ResolveDuckDB()
 	require.NoError(t, err, "ResolveDuckDB")
 
 	assert.Equal(t, filepath.Join(dir, "sessions.duckdb"), resolved.Path)
-	assert.NotEmpty(t, resolved.MachineName, "MachineName should default to hostname")
+	assert.Equal(t, "installation-a", resolved.MachineName)
 }
 
 func TestResolveDuckDB_ExpandsEnvVars(t *testing.T) {
@@ -2688,7 +2772,7 @@ func TestValidateArtifactOriginID(t *testing.T) {
 		origin  string
 		wantErr bool
 	}{
-		{"valid", "wesm-studio-m4", false},
+		{"valid", "host-a", false},
 		{"valid single word", "origin1", false},
 		{"empty", "", true},
 		{"reserved local", "local", true},

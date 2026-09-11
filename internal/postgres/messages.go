@@ -345,6 +345,7 @@ func (s *Store) Search(
 	// user query behaves identically across backends. An explicit exact phrase
 	// (user-supplied leading quote) collapses to a single term, preserving the
 	// exact-phrase opt-in.
+	f.Query = db.PrepareFTSQuery(f.Query)
 	plainTerm := db.StripFTSQuotes(f.Query)
 	terms := db.FTSTerms(f.Query)
 	if plainTerm == "" || len(terms) == 0 {

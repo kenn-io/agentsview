@@ -91,6 +91,7 @@ func seedUsageSession(
 	t *testing.T, d *db.DB, id, project, agent string, outputTokens int,
 ) {
 	t.Helper()
+	recordFixtureInstallation(t, d)
 	require.NoError(t, d.UpsertSession(db.Session{
 		ID:                   id,
 		Project:              project,
@@ -371,6 +372,10 @@ func registerSQLiteDaemonRuntimeWithEngine(
 		cfg.DataDir = dataDir
 		cfg.DBPath = sessionsDBPath(dataDir)
 	}
+	fixture, err := db.Open(cfg.DBPath)
+	require.NoError(t, err)
+	recordFixtureInstallation(t, fixture)
+	require.NoError(t, fixture.Close())
 	database, err := openDB(cfg)
 	require.NoError(t, err)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -395,6 +400,15 @@ func registerSQLiteDaemonRuntimeWithEngine(
 		RemoveDaemonRuntime(dataDir)
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+}
+
+func recordFixtureInstallation(t *testing.T, database *db.DB) {
+	t.Helper()
+	cfg, err := config.LoadMinimal()
+	require.NoError(t, err)
+	// Named fixture machines are archive inputs; this installation owns none
+	// of those rows, so preserve their labels while recording that decision.
+	require.NoError(t, database.AdoptMachineIdentity(t.Context(), cfg.InstallationID, nil))
 }
 
 func TestSessionGetVariants(t *testing.T) {
@@ -1374,6 +1388,7 @@ func seedSubagentOnlyUsage(
 	t *testing.T, d *db.DB, parentID, childID string, outputTokens int,
 ) {
 	t.Helper()
+	recordFixtureInstallation(t, d)
 	require.NoError(t, d.UpsertSession(db.Session{
 		ID:               parentID,
 		Project:          "local-project",

@@ -755,22 +755,26 @@ type fakeEmitter struct {
 func (f *fakeEmitter) Emit(_ string) { f.count.Add(1) }
 
 func TestStartRemoteHostSync_EmitsAfterSuccess(t *testing.T) {
-	em := &fakeEmitter{}
-	syncFn := func() (int, error) { return 3, nil }
+	synctest.Test(t, func(t *testing.T) {
+		em := &fakeEmitter{}
+		syncFn := func() (int, error) { return 3, nil }
 
-	done := make(chan struct{})
-	exited := make(chan struct{})
-	interval := 10 * time.Millisecond
-	go func() {
-		runRemoteHostSyncLoop(context.Background(), "test-host", interval, syncFn, em, nil, done)
-		close(exited)
-	}()
+		done := make(chan struct{})
+		exited := make(chan struct{})
+		interval := 10 * time.Millisecond
+		go func() {
+			runRemoteHostSyncLoop(t.Context(), "test-host", interval, syncFn, em, nil, done)
+			close(exited)
+		}()
+		defer func() {
+			close(done)
+			synctest.Wait()
+			<-exited
+		}()
 
-	time.Sleep(3 * interval)
-	close(done)
-	<-exited
-
-	assert.Positive(t, em.count.Load(), "emitter should have been called at least once")
+		synctest.Sleep(3 * interval)
+		assert.Positive(t, em.count.Load(), "emitter should have been called at least once")
+	})
 }
 
 func TestRemoteHostSyncFuncSerializesWithEngineExclusiveLock(t *testing.T) {
@@ -1150,57 +1154,70 @@ func TestStartRemoteHostSync_EmitsSessionsScopeAfterSuccess(t *testing.T) {
 }
 
 func TestStartRemoteHostSync_NoEmitOnZeroSynced(t *testing.T) {
-	em := &fakeEmitter{}
-	syncFn := func() (int, error) { return 0, nil }
+	synctest.Test(t, func(t *testing.T) {
+		em := &fakeEmitter{}
+		syncFn := func() (int, error) { return 0, nil }
 
-	done := make(chan struct{})
-	exited := make(chan struct{})
-	interval := 10 * time.Millisecond
-	go func() {
-		runRemoteHostSyncLoop(context.Background(), "test-host", interval, syncFn, em, nil, done)
-		close(exited)
-	}()
+		done := make(chan struct{})
+		exited := make(chan struct{})
+		interval := 10 * time.Millisecond
+		go func() {
+			runRemoteHostSyncLoop(t.Context(), "test-host", interval, syncFn, em, nil, done)
+			close(exited)
+		}()
+		defer func() {
+			close(done)
+			synctest.Wait()
+			<-exited
+		}()
 
-	time.Sleep(3 * interval)
-	close(done)
-	<-exited
-
-	assert.Zero(t, em.count.Load(), "emitter should not fire when no sessions synced")
+		synctest.Sleep(3 * interval)
+		assert.Zero(t, em.count.Load(), "emitter should not fire when no sessions synced")
+	})
 }
 
 func TestStartRemoteHostSync_NoEmitOnError(t *testing.T) {
-	em := &fakeEmitter{}
-	syncFn := func() (int, error) { return 0, errors.New("ssh failure") }
+	synctest.Test(t, func(t *testing.T) {
+		em := &fakeEmitter{}
+		syncFn := func() (int, error) { return 0, errors.New("ssh failure") }
 
-	done := make(chan struct{})
-	exited := make(chan struct{})
-	interval := 10 * time.Millisecond
-	go func() {
-		runRemoteHostSyncLoop(context.Background(), "test-host", interval, syncFn, em, nil, done)
-		close(exited)
-	}()
+		done := make(chan struct{})
+		exited := make(chan struct{})
+		interval := 10 * time.Millisecond
+		go func() {
+			runRemoteHostSyncLoop(t.Context(), "test-host", interval, syncFn, em, nil, done)
+			close(exited)
+		}()
+		defer func() {
+			close(done)
+			synctest.Wait()
+			<-exited
+		}()
 
-	time.Sleep(3 * interval)
-	close(done)
-	<-exited
-
-	assert.Zero(t, em.count.Load(), "emitter should not fire when sync fails")
+		synctest.Sleep(3 * interval)
+		assert.Zero(t, em.count.Load(), "emitter should not fire when sync fails")
+	})
 }
 
 func TestStartRemoteHostSync_NilEmitterSafe(t *testing.T) {
-	syncFn := func() (int, error) { return 1, nil }
+	synctest.Test(t, func(t *testing.T) {
+		syncFn := func() (int, error) { return 1, nil }
 
-	done := make(chan struct{})
-	exited := make(chan struct{})
-	interval := 10 * time.Millisecond
-	go func() {
-		runRemoteHostSyncLoop(context.Background(), "test-host", interval, syncFn, nil, nil, done)
-		close(exited)
-	}()
+		done := make(chan struct{})
+		exited := make(chan struct{})
+		interval := 10 * time.Millisecond
+		go func() {
+			runRemoteHostSyncLoop(t.Context(), "test-host", interval, syncFn, nil, nil, done)
+			close(exited)
+		}()
+		defer func() {
+			close(done)
+			synctest.Wait()
+			<-exited
+		}()
 
-	time.Sleep(2 * interval)
-	close(done)
-	<-exited
+		synctest.Sleep(2 * interval)
+	})
 }
 
 func TestCollectWatchRootsHermesSessionsWatchesStateDBParent(t *testing.T) {
@@ -3223,9 +3240,9 @@ func TestSyncWatchBatchFullRecoveryDefersBrokenSymlinkRoot(t *testing.T) {
 	))
 
 	cfg := config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "local",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "local",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeRoot},
 			parser.AgentCodex:  {codexRoot},
@@ -3234,7 +3251,7 @@ func TestSyncWatchBatchFullRecoveryDefersBrokenSymlinkRoot(t *testing.T) {
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
-		Machine:   cfg.LocalMachineName,
+		Machine:   cfg.InstallationID,
 	})
 	t.Cleanup(engine.Close)
 
@@ -3322,9 +3339,9 @@ func TestSyncWatchBatchFullRecoveryDefersUnavailableRoots(t *testing.T) {
 	))
 
 	cfg := config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "local",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "local",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeRoot},
 			parser.AgentCodex:  {codexRoot},
@@ -3333,7 +3350,7 @@ func TestSyncWatchBatchFullRecoveryDefersUnavailableRoots(t *testing.T) {
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
-		Machine:   cfg.LocalMachineName,
+		Machine:   cfg.InstallationID,
 	})
 	t.Cleanup(engine.Close)
 
@@ -3408,9 +3425,9 @@ func TestSyncWatchBatchFullRecoveryDefersOverlappingUnavailableRoot(t *testing.T
 	))
 
 	cfg := config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "local",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "local",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {baseRoot, nestedRoot},
 		},
@@ -3418,7 +3435,7 @@ func TestSyncWatchBatchFullRecoveryDefersOverlappingUnavailableRoot(t *testing.T
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
-		Machine:   cfg.LocalMachineName,
+		Machine:   cfg.InstallationID,
 	})
 	t.Cleanup(engine.Close)
 
@@ -3481,9 +3498,9 @@ func TestSyncWatchBatchDirectoryRenameDefersUnavailableProviderRoots(t *testing.
 	writeCodexSession(rootB, uuidB)
 
 	cfg := config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "local",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "local",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {rootA, rootB},
 		},
@@ -3491,7 +3508,7 @@ func TestSyncWatchBatchDirectoryRenameDefersUnavailableProviderRoots(t *testing.
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
-		Machine:   cfg.LocalMachineName,
+		Machine:   cfg.InstallationID,
 	})
 	t.Cleanup(engine.Close)
 

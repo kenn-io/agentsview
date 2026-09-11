@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -32,6 +33,17 @@ type SessionBatchWrite struct {
 	RejectMessageCountDecrease bool
 	Checkpoint                 *ParserCheckpoint
 	CheckpointBlobs            *ParserCheckpointBlobs
+	// ToolResultImages overrides the DB policy for this sync-engine write.
+	ToolResultImages *config.ToolResultImages
+}
+
+func (db *DB) projectSessionBatchMessages(write SessionBatchWrite) []Message {
+	policy := db.ToolResultImages()
+	if write.ToolResultImages != nil {
+		policy = *write.ToolResultImages
+	}
+	projected, _ := ProjectToolResultImages(write.Messages, policy)
+	return projected
 }
 
 // SessionWouldShortenError reports a rejected message-count decrease.
@@ -134,7 +146,7 @@ func (db *DB) WriteSessionBatchContext(
 		if err != nil {
 			return result, err
 		}
-		write.Messages, _ = db.ProjectToolResultImages(write.Messages)
+		write.Messages = db.projectSessionBatchMessages(write)
 		if db.ArchiveContent().OmitsToolContent() {
 			write.Checkpoint, write.CheckpointBlobs = nil, nil
 		}
@@ -235,7 +247,7 @@ func (db *DB) WriteSessionBatchAtomic(
 
 	for i, write := range writes {
 		write = sanitizeSessionBatchWrite(write)
-		write.Messages, _ = db.ProjectToolResultImages(write.Messages)
+		write.Messages = db.projectSessionBatchMessages(write)
 		if db.ArchiveContent().OmitsToolContent() {
 			write.Checkpoint, write.CheckpointBlobs = nil, nil
 		}

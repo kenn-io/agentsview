@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { flushSync, mount, unmount } from "svelte";
 import { createClassComponent } from "svelte/legacy";
 import SessionItem from "./SessionItem.svelte";
+import { sessions } from "../../stores/sessions.svelte.js";
 
 let component: ReturnType<typeof mount> | undefined;
 
@@ -10,6 +11,7 @@ afterEach(() => {
   if (component) unmount(component);
   component = undefined;
   document.body.innerHTML = "";
+  sessions.machineLabels = {};
 });
 
 describe("SessionItem identity", () => {
@@ -38,12 +40,13 @@ describe("SessionItem identity", () => {
   }
 
   it("renders the session label and entrypoint badge", () => {
+    sessions.machineLabels = { "installation-a": "Workstation A" };
     mountSession({
       id: "custom-label",
       display_name: "A session with a long title",
       agent_label: "Claude Triage",
       entrypoint: "sdk-cli",
-      machine: "remote-machine",
+      machine: "installation-a",
     });
 
     const agentTag = document.querySelector<HTMLElement>(".agent-tag");
@@ -55,6 +58,7 @@ describe("SessionItem identity", () => {
     );
     expect(document.querySelector<HTMLElement>(".session-project")?.title).toBe("project");
     expect(document.querySelector<HTMLElement>(".entrypoint-tag")?.title).toBe("sdk-cli");
+    expect(document.querySelector(".machine-tag")?.textContent).toBe("Workstation A");
   });
 
   it("uses the registry label when no override exists", () => {

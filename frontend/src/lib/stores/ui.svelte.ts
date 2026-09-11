@@ -47,6 +47,7 @@ export const ALL_BLOCK_TYPES: BlockType[] = [
 
 const BLOCK_FILTER_KEY = "agentsview-block-filters";
 const TRANSCRIPT_MODE_KEY = "agentsview-transcript-mode";
+const UNKNOWN_XML_PREFORMATTED_KEY = "agentsview-unknown-xml-preformatted";
 const VITALS_KEY = "agentsview-session-vitals";
 const VITALS_CALLS_EXPANDED_KEY = "agentsview-session-vitals-calls-expanded";
 const SIGNAL_PANEL_KEY = "agentsview-signal-panel";
@@ -270,6 +271,9 @@ class UIStore {
   zoomChangeVersion = 0;
   private persistZoomStorage = true;
   private zoomSaveCallback: ZoomSaveCallback | null = null;
+  renderUnknownXmlBlocksAsPreformatted: boolean = $state(
+    readStoredBool(UNKNOWN_XML_PREFORMATTED_KEY, false),
+  );
 
   sidebarOpen: boolean = $state(true);
   isMobileViewport: boolean = $state(false);
@@ -357,6 +361,17 @@ class UIStore {
         }
         if (this.persistZoomStorage) {
           this.persistZoomPreference();
+        }
+      });
+
+      $effect(() => {
+        try {
+          localStorage?.setItem(
+            UNKNOWN_XML_PREFORMATTED_KEY,
+            String(this.renderUnknownXmlBlocksAsPreformatted),
+          );
+        } catch {
+          // ignore
         }
       });
 
@@ -497,6 +512,10 @@ class UIStore {
 
   setTranscriptMode(mode: TranscriptMode) {
     this.transcriptMode = mode;
+  }
+
+  toggleUnknownXmlBlocksAsPreformatted() {
+    this.renderUnknownXmlBlocksAsPreformatted = !this.renderUnknownXmlBlocksAsPreformatted;
   }
 
   setSidebarWidth(width: number) {

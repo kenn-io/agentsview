@@ -18,5 +18,8 @@ export interface ActivityTotals {
   interactive_sessions: number;
   output_tokens: number;
   sessions: number;
+  subagent_agent_minutes: number;
+  subagent_cost: MoneyMoney;
+  subagent_sessions: number;
   untimed_sessions: number;
 }

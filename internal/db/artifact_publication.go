@@ -11,7 +11,7 @@ import (
 
 const maxArtifactQueuePageSize = 1024
 
-const artifactLocalMachineStateKey = "artifact_local_machine_name"
+const artifactLocalInstallationStateKey = "artifact_local_installation_id"
 
 // ErrArtifactExportClaimStale tells callers to discard computed export
 // output and retry from a fresh queue claim.
@@ -831,9 +831,9 @@ func enqueueArtifactExportTx(tx transactionQueries, sessionID string) error {
 	_, err := tx.Exec(`
 		INSERT INTO artifact_export_queue(session_id)
 		SELECT id FROM sessions WHERE id = ? AND (
-			machine = 'local' OR machine = (
+			machine = 'local' OR machine IN (
 				SELECT value FROM pg_sync_state
-				WHERE key = 'artifact_local_machine_name'
+				WHERE key IN ('artifact_local_machine_name', 'artifact_local_installation_id')
 			)
 		)
 			AND EXISTS (SELECT 1 FROM pg_sync_state
@@ -852,72 +852,78 @@ func enqueueArtifactExportTx(tx transactionQueries, sessionID string) error {
 	return nil
 }
 
-// ArtifactLocalMachineName returns the configured machine identity used to
-// distinguish locally ingested sessions from imported peer sessions. "local"
-// remains the fallback for archives created before the identity was persisted.
-func (db *DB) ArtifactLocalMachineName(ctx context.Context) (string, error) {
-	var machine string
-	err := db.getReader().QueryRowContext(ctx, `
-		SELECT value FROM pg_sync_state WHERE key = ?`,
-		artifactLocalMachineStateKey,
-	).Scan(&machine)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "local", nil
-	}
+// ArtifactLocalMachines returns the current installation identity and any
+// previously recorded export authority, including the original "local" key.
+// Display labels and source locations do not establish publication ownership.
+func (db *DB) ArtifactLocalMachines(ctx context.Context) ([]string, error) {
+	rows, err := db.getReader().QueryContext(ctx, `
+		SELECT 'local' UNION
+		SELECT value FROM pg_sync_state
+		WHERE key IN ('artifact_local_machine_name', 'artifact_local_installation_id')
+		  AND trim(value) != ''`)
 	if err != nil {
-		return "", fmt.Errorf("reading artifact local machine name: %w", err)
+		return nil, fmt.Errorf("reading artifact local machines: %w", err)
 	}
-	if strings.TrimSpace(machine) == "" {
-		return "local", nil
+	defer rows.Close()
+	var machines []string
+	for rows.Next() {
+		var machine string
+		if err := rows.Scan(&machine); err != nil {
+			return nil, fmt.Errorf("scanning artifact local machine: %w", err)
+		}
+		machines = append(machines, machine)
 	}
-	return machine, nil
+	return machines, rows.Err()
 }
 
-// ConfigureArtifactLocalMachine atomically persists the runtime local-machine
-// identity and re-dirties active-origin publications when that identity
-// changes. This publishes newly owned sessions and removes publications that
-// belonged to the previous machine identity.
+// ConfigureArtifactLocalMachine persists the current installation identity and
+// requeues active-origin publications when it changes. Archive adoption must
+// run first so historical local rows already use this installation identity.
 func (db *DB) ConfigureArtifactLocalMachine(machine string) error {
 	if strings.TrimSpace(machine) == "" {
-		return errors.New("artifact local machine name is required")
+		return errors.New("artifact local installation identity is required")
 	}
 	return db.Update(func(tx *sql.Tx) error {
 		if err := lockArtifactPublicationTx(context.Background(), tx); err != nil {
 			return err
 		}
-		var existing string
-		err := tx.QueryRow(`
-			SELECT value FROM pg_sync_state WHERE key = ?`,
-			artifactLocalMachineStateKey,
-		).Scan(&existing)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("reading artifact local machine name: %w", err)
-		}
-		if err == nil && existing == machine {
-			return nil
-		}
-		if _, err := tx.Exec(`
-			INSERT INTO pg_sync_state(key, value) VALUES (?, ?)
-			ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-			artifactLocalMachineStateKey, machine,
-		); err != nil {
-			return fmt.Errorf("persisting artifact local machine name: %w", err)
-		}
-		var origin string
-		err = tx.QueryRow(`
-			SELECT value FROM pg_sync_state WHERE key = 'artifact_origin_id'`,
-		).Scan(&origin)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("reading artifact origin: %w", err)
-		}
-		if origin == "" {
-			return nil
-		}
-		return populateArtifactOriginQueueTx(tx, origin, true)
+		return configureArtifactLocalMachineTx(context.Background(), tx, machine)
 	})
+}
+
+func configureArtifactLocalMachineTx(ctx context.Context, tx *sql.Tx, machine string) error {
+	var existing string
+	err := tx.QueryRowContext(ctx, `
+		SELECT value FROM pg_sync_state WHERE key = ?`,
+		artifactLocalInstallationStateKey,
+	).Scan(&existing)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("reading artifact local installation identity: %w", err)
+	}
+	if err == nil && existing == machine {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO pg_sync_state(key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		artifactLocalInstallationStateKey, machine,
+	); err != nil {
+		return fmt.Errorf("persisting artifact local installation identity: %w", err)
+	}
+	var origin string
+	err = tx.QueryRowContext(ctx, `
+		SELECT value FROM pg_sync_state WHERE key = 'artifact_origin_id'`,
+	).Scan(&origin)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading artifact origin: %w", err)
+	}
+	if origin == "" {
+		return nil
+	}
+	return populateArtifactOriginQueueTx(tx, origin, true)
 }
 
 func artifactExportGenerationTx(

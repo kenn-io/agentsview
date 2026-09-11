@@ -1031,14 +1031,12 @@
   "activity_model": "Model",
   "activity_agent": "Agent",
   "activity_min_unit": " min",
-  "activity_int_auto_split": "int {int} / auto {auto}",
   "activity_breakdown": "Breakdown",
   "activity_view_in_data": "View {project} in Data",
   "activity_breakdown_metric": "Breakdown metric",
   "activity_agent_min": "Agent-min",
   "activity_cost": "Cost",
   "activity_none_lower": "none",
-  "activity_int_auto_short": "{int} int / {auto} auto",
   "activity_peak_label": "peak {count}",
   "activity_agent_min_value": "{value} agent-min",
   "activity_no_sessions_selected_range": "No sessions active in the selected time range.",
@@ -1052,6 +1050,16 @@
       }
     }
   ],
+  "activity_subagents": "Subagents",
+  "activity_subagent": "Subagent",
+  "activity_interactive_peak": "Interactive peak",
+  "activity_subagent_peak": "Subagent peak",
+  "activity_automated_peak": "Automated peak",
+  "activity_combined_peak": "Combined peak",
+  "activity_peak_at": "peak {count} at {time}",
+  "activity_independent_scales": "Each track has its own scale.",
+  "activity_all_sessions_overlay": "All-session overlay",
+  "activity_class_split": "int {int} / sub {sub} / auto {auto}",
   "activity_concurrency": "Concurrency",
   "activity_overlay": "Overlay",
   "activity_overlay_metric": "Concurrency overlay metric",
@@ -1067,6 +1075,22 @@
   "activity_session": "Session",
   "activity_automated_session": "Automated session",
   "activity_auto": "Auto",
+  "activity_session_kind_split": [
+    {
+      "declarations": [
+        "input interactive",
+        "input subagents",
+        "input subagentsLabel",
+        "input automated",
+        "local subagentPlural = subagents: plural"
+      ],
+      "selectors": ["subagentPlural"],
+      "match": {
+        "subagentPlural=one": "{interactive} interactive / {subagentsLabel} subagent / {automated} automated",
+        "subagentPlural=other": "{interactive} interactive / {subagentsLabel} subagents / {automated} automated"
+      }
+    }
+  ],
   "activity_interactive_automated_split": "{interactive} interactive / {automated} automated",
   "activity_untimed_count": "{count} untimed",
   "activity_peak_concurrency": "Peak Concurrency",
@@ -2038,5 +2062,69 @@
   "settings_tool_result_images_keep": "Keep",
   "settings_tool_result_images_drop": "Drop",
   "settings_tool_result_images_hint": "Stored results keep the policy they were written under, and switching back to Keep cannot restore payloads already removed. Run agentsview db strip --images to project existing rows.",
-  "settings_tool_result_images_restart_notice": "Restart the AgentsView daemon to apply this change to newly ingested sessions."
+  "settings_tool_result_images_restart_notice": "Restart the AgentsView daemon to apply this change to newly ingested sessions.",
+  "settings_tool_images_title": "Tool-result images",
+  "settings_tool_images_description": "Inline images stored inside tool results.",
+  "settings_search_keywords_tool_images": "images tool results strip cleanup payloads bytes storage",
+  "settings_image_cleanup_intro": "Preview which stored tool results still hold inline image payloads, then replace those payloads with readable placeholders.",
+  "settings_image_cleanup_project_label": "Project contains",
+  "settings_image_cleanup_project_placeholder": "All projects",
+  "settings_image_cleanup_before_label": "Ended before",
+  "settings_image_cleanup_before_placeholder": "YYYY-MM-DD",
+  "settings_image_cleanup_preview": "Preview",
+  "settings_image_cleanup_previewing": "Previewing…",
+  "settings_image_cleanup_preview_failed": "Preview failed.",
+  "settings_image_cleanup_unavailable": "Image removal runs only against a local archive on this machine.",
+  "settings_image_cleanup_proxy_denied": "Image removal must run with AgentsView open directly on this machine, not through a proxy or forwarded port.",
+  "settings_image_cleanup_read_only": "This archive is read-only, so stored rows cannot be changed.",
+  "settings_image_cleanup_empty": "No stored tool result in this selection holds an inline image payload.",
+  "settings_image_cleanup_sessions": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} session selected",
+        "countPlural=other": "{countLabel} sessions selected"
+      }
+    }
+  ],
+  "settings_image_cleanup_payloads": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} image payload",
+        "countPlural=other": "{countLabel} image payloads"
+      }
+    }
+  ],
+  "settings_image_cleanup_by_project": "By project",
+  "settings_image_cleanup_column_project": "Project",
+  "settings_image_cleanup_column_sessions": "Sessions",
+  "settings_image_cleanup_column_payloads": "Payloads",
+  "settings_image_cleanup_column_stored": "Stored",
+  "settings_image_cleanup_column_decoded": "Decoded",
+  "settings_image_cleanup_apply": "Remove image payloads",
+  "settings_image_cleanup_applying": "Removing…",
+  "settings_image_cleanup_apply_failed": "Image removal did not finish. Some sessions may already have changed. Preview again before retrying.",
+  "settings_image_cleanup_busy": "Another archive maintenance operation is already running. Try again once it finishes.",
+  "settings_image_cleanup_confirm_title": "Remove stored image payloads?",
+  "settings_image_cleanup_confirm_close": "Close",
+  "settings_image_cleanup_confirm_scope": "Cleanup covers every session matching these filters when it starts, so new matching content can join it after this preview.",
+  "settings_image_cleanup_confirm_body": "This rewrites the selected stored tool results in place and cannot be undone. Provider transcripts and standalone image files are not touched.",
+  "settings_image_cleanup_confirm_action": "Remove",
+  "settings_image_cleanup_cancel": "Cancel",
+  "settings_image_cleanup_applied": "Image removal completed.",
+  "settings_image_cleanup_changed": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} session changed",
+        "countPlural=other": "{countLabel} sessions changed"
+      }
+    }
+  ],
+  "settings_image_cleanup_compact_note": "Removing payloads rewrites the stored rows. The archive file keeps its size until you run agentsview db compact.",
+  "appearance_render_unknown_xml_blocks": "Render unknown XML blocks as preformatted text"
 }

@@ -881,9 +881,23 @@ func TestClaudeLineageSniffCacheInvalidatedBySameSizeRewrite(t *testing.T) {
 			}
 			info, err := os.Stat(target)
 			require.NoError(t, err)
+			beforeChangeTime, changeTimeOK := codexIndexChangeTime(target, info)
 			require.Len(t, tt.rewrite.content, int(info.Size()))
 			require.NoError(t, os.WriteFile(target, []byte(tt.rewrite.content), 0o644))
 			require.NoError(t, os.Chtimes(target, info.ModTime(), info.ModTime()))
+			if changeTimeOK {
+				// Rapid rewrites can share a filesystem timestamp tick.
+				// Establish the changed ctime that invalidates the memo
+				// while keeping size and mtime unchanged.
+				require.EventuallyWithT(t, func(c *assert.CollectT) {
+					require.NoError(c, os.Chtimes(target, info.ModTime(), info.ModTime()))
+					current, err := os.Stat(target)
+					require.NoError(c, err)
+					changeTime, ok := codexIndexChangeTime(target, current)
+					require.True(c, ok)
+					assert.NotEqual(c, beforeChangeTime, changeTime)
+				}, 2*time.Second, time.Millisecond)
+			}
 			restored, err := os.Stat(target)
 			require.NoError(t, err)
 			require.Equal(t, info.ModTime().UnixNano(), restored.ModTime().UnixNano())

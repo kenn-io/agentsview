@@ -5,8 +5,11 @@ import type {
   DataCandidatesResponse,
   DataCompactRequest,
   DataProjectRulesResponse,
+  DataStripImagesApplyRequest,
+  DataStripImagesRequest,
   DbCompactResult,
   DbProjectInventory,
+  DbStripImagesReport,
   GetApiV1DataProjectReclassificationCandidatesParams,
   GetApiV1DataProjectRulesParams,
 } from "../models";
@@ -116,5 +119,59 @@ export const getApiV1DataProjects = async (
   return orvalFetch<DbProjectInventory>(getGetApiV1DataProjectsUrl(), {
     ...options,
     method: "GET",
+  });
+};
+
+export const getPostApiV1DataStripImagesUrl = () => {
+  return `/api/v1/data/strip-images`;
+};
+
+/**
+ * @summary Remove retained inline tool-result images
+ */
+export const postApiV1DataStripImages = async (
+  dataStripImagesApplyRequest: DataStripImagesApplyRequest,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<DbStripImagesReport> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return orvalFetch<DbStripImagesReport>(getPostApiV1DataStripImagesUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
+    body: JSON.stringify(dataStripImagesApplyRequest),
+  });
+};
+
+export const getPostApiV1DataStripImagesPreviewUrl = () => {
+  return `/api/v1/data/strip-images/preview`;
+};
+
+/**
+ * @summary Preview inline tool-result image removal
+ */
+export const postApiV1DataStripImagesPreview = async (
+  dataStripImagesRequest: DataStripImagesRequest,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<DbStripImagesReport> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return orvalFetch<DbStripImagesReport>(getPostApiV1DataStripImagesPreviewUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
+    body: JSON.stringify(dataStripImagesRequest),
   });
 };

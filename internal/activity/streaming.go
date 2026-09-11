@@ -275,10 +275,10 @@ func buildCandidateArtifactsFromSource(
 			End:   window.End.Format(time.RFC3339),
 		}
 	}
-	automatedBy := automatedSet(sessions)
+	kindBy := sessionKinds(sessions)
 	state := candidateSweep{
 		report: &report, windows: windows, effectiveEnd: p.EffectiveEnd,
-		last: p.RangeStart, automatedBy: automatedBy,
+		last: p.RangeStart, kindBy: kindBy,
 		sessionEnds: make(map[string]time.Time),
 	}
 	heap.Init(&state.ends)
@@ -314,7 +314,7 @@ func buildCandidateArtifactsFromSource(
 		}
 		foldCandidateInterval(
 			&report, windows, membershipWindows, aggregates, membership, words,
-			automatedBy, iv,
+			kindBy, iv,
 		)
 		return nil
 	})
@@ -334,7 +334,7 @@ func buildCandidateArtifactsFromSource(
 	}
 	allocated := AllocateUsageCosts(survivors)
 	if err := applyUsageRows(
-		&report, windows, survivors, allocated, automatedBy,
+		&report, windows, survivors, allocated, kindBy,
 	); err != nil {
 		return CandidateArtifacts{}, err
 	}
@@ -379,7 +379,7 @@ func effectiveCandidateInterval(p Params, candidate IntervalCandidate) (interval
 type activeCandidateEnd struct {
 	sessionID string
 	end       time.Time
-	automated bool
+	kind      sessionKind
 }
 
 type activeCandidateHeap []activeCandidateEnd
@@ -403,7 +403,7 @@ type candidateSweep struct {
 	report       *Report
 	windows      []BucketWindow
 	effectiveEnd time.Time
-	automatedBy  map[string]bool
+	kindBy       map[string]sessionKind
 	ends         activeCandidateHeap
 	sessionEnds  map[string]time.Time
 	bucket       int
@@ -411,6 +411,7 @@ type candidateSweep struct {
 	live         int
 	liveAuto     int
 	liveInter    int
+	liveSub      int
 	active       time.Duration
 }
 
@@ -438,9 +439,12 @@ func (s *candidateSweep) advance(target time.Time) {
 			}
 			delete(s.sessionEnds, ended.sessionID)
 			s.live--
-			if ended.automated {
+			switch ended.kind {
+			case subagentSession:
+				s.liveSub--
+			case automatedSession:
 				s.liveAuto--
-			} else {
+			default:
 				s.liveInter--
 			}
 		}
@@ -465,30 +469,40 @@ func (s *candidateSweep) accrue(target time.Time) {
 }
 
 func (s *candidateSweep) open(iv interval) {
-	automated := s.automatedBy[iv.sessionID]
+	kind := s.kindBy[iv.sessionID]
 	s.sessionEnds[iv.sessionID] = iv.end
 	heap.Push(&s.ends, activeCandidateEnd{
-		sessionID: iv.sessionID, end: iv.end, automated: automated,
+		sessionID: iv.sessionID, end: iv.end, kind: kind,
 	})
 	s.live++
-	if automated {
+	switch kind {
+	case subagentSession:
+		s.liveSub++
+	case automatedSession:
 		s.liveAuto++
-	} else {
+	default:
 		s.liveInter++
 	}
-	if s.live > s.report.Peak.Agents {
-		s.report.Peak.Agents = s.live
-		at := iv.start.Format(time.RFC3339)
-		s.report.Peak.At = &at
-	}
+	recordPeak(&s.report.Peak, s.live, iv.start)
+	recordPeak(&s.report.InteractivePeak, s.liveInter, iv.start)
+	recordPeak(&s.report.SubagentPeak, s.liveSub, iv.start)
+	recordPeak(&s.report.AutomatedPeak, s.liveAuto, iv.start)
 	s.recordBucketPeak()
 }
 
+func recordPeak(peak *Peak, count int, at time.Time) {
+	if count > peak.Agents {
+		peak.Agents = count
+		ts := at.Format(time.RFC3339)
+		peak.At = &ts
+	}
+}
+
 func (s *candidateSweep) extend(iv interval) {
-	automated := s.automatedBy[iv.sessionID]
+	kind := s.kindBy[iv.sessionID]
 	s.sessionEnds[iv.sessionID] = iv.end
 	heap.Push(&s.ends, activeCandidateEnd{
-		sessionID: iv.sessionID, end: iv.end, automated: automated,
+		sessionID: iv.sessionID, end: iv.end, kind: kind,
 	})
 }
 
@@ -498,10 +512,14 @@ func (s *candidateSweep) recordBucketPeak() {
 		return
 	}
 	bucket := &s.report.Buckets[s.bucket]
+	bucket.MaxInteractiveAgents = max(bucket.MaxInteractiveAgents, s.liveInter)
+	bucket.MaxSubagentAgents = max(bucket.MaxSubagentAgents, s.liveSub)
+	bucket.MaxAutomatedAgents = max(bucket.MaxAutomatedAgents, s.liveAuto)
 	if s.live > bucket.MaxAgents {
 		bucket.MaxAgents = s.live
 		bucket.AutomatedAtPeak = s.liveAuto
 		bucket.InteractiveAtPeak = s.liveInter
+		bucket.SubagentAtPeak = s.liveSub
 	}
 }
 
@@ -512,14 +530,17 @@ func foldCandidateInterval(
 	aggregates map[string]*sessionIntervalAgg,
 	membership map[string]BucketMembership,
 	words int,
-	automatedBy map[string]bool,
+	kindBy map[string]sessionKind,
 	iv interval,
 ) {
 	minutes := iv.end.Sub(iv.start).Minutes()
 	report.Totals.AgentMinutes += minutes
-	if automatedBy[iv.sessionID] {
+	switch kindBy[iv.sessionID] {
+	case subagentSession:
+		report.Totals.SubagentAgentMinutes += minutes
+	case automatedSession:
 		report.Totals.AutomatedAgentMinutes += minutes
-	} else {
+	default:
 		report.Totals.InteractiveAgentMinutes += minutes
 	}
 	aggregate := aggregates[iv.sessionID]

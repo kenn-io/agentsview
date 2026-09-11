@@ -4832,9 +4832,9 @@ func (db *DB) ListOwnedSessionIDsForExport(ctx context.Context) ([]string, error
 	rows, err := db.getReader().QueryContext(ctx,
 		`SELECT id FROM sessions
 		 WHERE (
-			machine = 'local' OR machine = (
+			machine = 'local' OR machine IN (
 				SELECT value FROM pg_sync_state
-				WHERE key = 'artifact_local_machine_name'
+				WHERE key IN ('artifact_local_machine_name', 'artifact_local_installation_id')
 			)
 		 ) AND deleted_at IS NULL
 		 ORDER BY id`,

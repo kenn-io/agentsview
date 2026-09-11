@@ -104,6 +104,15 @@
     />
   </div>
 
+  <div class="setting-row">
+    <Checkbox
+      checked={ui.renderUnknownXmlBlocksAsPreformatted}
+      onchange={() => ui.toggleUnknownXmlBlocksAsPreformatted()}
+      ariaLabel={m.appearance_render_unknown_xml_blocks()}
+      label={m.appearance_render_unknown_xml_blocks()}
+    />
+  </div>
+
   <div class="setting-row column">
     <span class="setting-label">{m.appearance_block_visibility()}</span>
     <div class="block-toggles">

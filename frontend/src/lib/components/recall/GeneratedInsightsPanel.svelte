@@ -503,7 +503,9 @@
               </div>
             </div>
             <div class="markdown-body">
-              {@html renderMarkdown(insights.selectedItem.content)}
+              {@html renderMarkdown(insights.selectedItem.content, {
+                renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,
+              })}
             </div>
           {:else}
             <p>{m.insights_page_select_to_read()}</p>

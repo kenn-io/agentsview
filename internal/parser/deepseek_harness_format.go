@@ -72,6 +72,7 @@ func (err deepSeekHarnessUnsupportedError) Error() string {
 	return err.message
 }
 
+// Released version-0 inventory; see the pinned provenance in session-format-sources.md.
 var deepSeekHarnessKnownEvents = map[string]struct{}{
 	"agent-preset/selected": {}, "agent/inbox/spliced": {},
 	"approval/asked": {}, "approval/decided": {}, "approval/policy": {},
@@ -80,11 +81,14 @@ var deepSeekHarnessKnownEvents = map[string]struct{}{
 	"compaction/end": {}, "compaction/prune": {}, "compaction/start": {},
 	"compaction/summary": {}, "feedback/record": {}, "goal/change": {},
 	"hook/invoked": {}, "hook/result": {}, "llm/retry": {},
-	"llm/retry-started": {}, "permission/preset": {}, "plan/mode": {},
+	"llm/retry-started": {}, "model/selection": {}, "permission/preset": {}, "plan/mode": {},
 	"request/context": {}, "request/header": {}, "sandbox/mode": {},
 	"schedule/change": {}, "session/end-seed": {}, "session/title": {},
-	"session/title-llm-request": {}, "step/end": {}, "step/start": {},
-	"subagent/descriptor": {}, "todo/write": {},
+	"session-log-deepseek/delivery-accepted": {},
+	"session/title-llm-request":              {}, "step/end": {}, "step/start": {},
+	"subagent/descriptor": {}, "subagent/model-selection-policy": {},
+	"team/member": {}, "team/message/delivered": {},
+	"team/message/queued": {}, "team/task": {}, "todo/write": {},
 	"tool-workflow/agent-end": {}, "tool-workflow/agent-start": {},
 	"tool-workflow/run-end": {}, "tool-workflow/run-start": {},
 	"tool/call": {}, "tool/code-dispatch": {},
@@ -674,8 +678,8 @@ func parseDeepSeekHarnessEvent(
 		)
 	}
 	if hasSourceEventSeqs {
-		if _, err := deepSeekHarnessSafeIntArray(sourceEventSeqs, true); err != nil {
-			return deepSeekHarnessEvent{}, errors.New("event sourceEventSeqs is invalid")
+		if err := validateDeepSeekHarnessSourceEventSeqs(sourceEventSeqs, seq); err != nil {
+			return deepSeekHarnessEvent{}, fmt.Errorf("event sourceEventSeqs is invalid: %w", err)
 		}
 	}
 	if hasSurfaceOp {
@@ -906,6 +910,48 @@ func deepSeekHarnessSafeIntArray(raw jsontext.Value, nonNegative bool) ([]int64,
 		out = append(out, value)
 	}
 	return out, nil
+}
+
+func validateDeepSeekHarnessSourceEventSeqs(raw jsontext.Value, maxEntries int64) error {
+	if raw.Kind() != '[' {
+		return errors.New("expected array")
+	}
+	var entries []jsontext.Value
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return err
+	}
+	// Lineage is not used for transcript reconstruction. Validate inclusive
+	// ranges and their expanded count without allocating the expanded list.
+	previous := int64(-1)
+	hasRange, increasing := false, true
+	for _, entry := range entries {
+		var start, end int64
+		if entry.Kind() == '[' {
+			pair, err := deepSeekHarnessSafeIntArray(entry, true)
+			if err != nil || len(pair) != 2 || pair[0] > pair[1] {
+				return errors.New("expected safe integer range [start, end] with start <= end")
+			}
+			start, end = pair[0], pair[1]
+			hasRange = true
+		} else {
+			value, err := deepSeekHarnessRequiredSafeInt(map[string]jsontext.Value{"value": entry}, "value", true)
+			if err != nil {
+				return err
+			}
+			start, end = value, value
+		}
+		count := end - start + 1
+		if count > maxEntries {
+			return errors.New("expanded sources exceed event sequence")
+		}
+		maxEntries -= count
+		increasing = increasing && start > previous
+		previous = end
+	}
+	if hasRange && !increasing {
+		return errors.New("ranges must be strictly increasing")
+	}
+	return nil
 }
 
 func deepSeekHarnessStringArray(raw jsontext.Value) ([]string, error) {

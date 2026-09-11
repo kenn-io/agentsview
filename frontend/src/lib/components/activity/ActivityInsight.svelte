@@ -13,6 +13,7 @@
   import { sync } from "../../stores/sync.svelte.js";
   import { insights } from "../../stores/insights.svelte.js";
   import { router } from "../../stores/router.svelte.js";
+  import { ui } from "../../stores/ui.svelte.js";
   import { renderMarkdown } from "../../utils/markdown.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import type { AgentName } from "../../api/types.js";
@@ -241,7 +242,9 @@
       class="markdown-body"
       use:highlightCodeFences={{ content: insight.content }}
     >
-      {@html renderMarkdown(insight.content)}
+      {@html renderMarkdown(insight.content, {
+        renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,
+      })}
     </article>
   {:else}
     <EmptyState title={m.activity_insight_empty_text()}>
@@ -419,7 +422,7 @@
     border-radius: var(--radius-sm);
   }
 
-  .markdown-body :global(pre) {
+  .markdown-body :global(pre:not(.unknown-xml-block)) {
     background: var(--bg-inset);
     padding: 10px 14px;
     border-radius: var(--radius-md);

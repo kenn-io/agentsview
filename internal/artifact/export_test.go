@@ -812,6 +812,81 @@ func TestExportToStorePublishesConfiguredHostnameSession(t *testing.T) {
 	assert.Contains(t, checkpoint.Sessions, contractOrigin+"~sess-hostname")
 }
 
+func TestExportPreservesSessionIDsAfterInstallationAdoption(t *testing.T) {
+	t.Parallel()
+
+	database := testExportDB(t)
+	store := newTestArtifactStore(t)
+	sourcePath := filepath.Join(t.TempDir(), "session.jsonl")
+	require.NoError(t, database.SetSyncState(
+		"artifact_local_machine_name", "workstation.example",
+	))
+	seedSession(t, database, "hostname-session", "alpha", func(sess *db.Session) {
+		sess.Machine = "workstation.example"
+		sess.FilePath = &sourcePath
+	})
+	seedSession(t, database, "legacy-session", "alpha")
+	_, err := ExportToStore(t.Context(), database, store, ExportOptions{Origin: contractOrigin})
+	require.NoError(t, err)
+	before := latestStoreCheckpointForTest(t, store, contractOrigin)
+	require.Len(t, before.Sessions, 2)
+
+	const installationID = "0123456789abcdef0123456789abcdef"
+	_, err = database.EnsureInstallationIdentity(t.Context(), installationID)
+	require.NoError(t, err)
+	for _, session := range []struct{ id, machine string }{
+		{"installation-session", installationID},
+		{"unrelated-alias", "renamed.example"},
+		{"foreign-source", "peer.example"},
+		{"retired-key-peer", "workstation.example"},
+	} {
+		seedSession(t, database, session.id, "alpha", func(sess *db.Session) {
+			sess.Machine = session.machine
+			sess.FilePath = &sourcePath
+		})
+		require.NoError(t, database.SetSyncState("machine_label:"+session.machine, "workstation.example"))
+	}
+	foreignSource := []db.SessionSourcePath{{Agent: "claude", FilePath: sourcePath}}
+	require.NoError(t, database.ReplaceActiveSessionSourceBaselines(
+		t.Context(), "peer.example", foreignSource, foreignSource,
+	))
+	_, err = ExportToStore(t.Context(), database, store, ExportOptions{Origin: contractOrigin})
+	require.NoError(t, err)
+	incremental := latestStoreCheckpointForTest(t, store, contractOrigin)
+	assert.Len(t, incremental.Sessions, 3)
+	assert.Contains(t, incremental.Sessions, contractOrigin+"~hostname-session")
+	assert.Contains(t, incremental.Sessions, contractOrigin+"~legacy-session")
+	assert.Contains(t, incremental.Sessions, contractOrigin+"~installation-session")
+	assert.NotContains(t, incremental.Sessions, contractOrigin+"~unrelated-alias")
+	assert.NotContains(t, incremental.Sessions, contractOrigin+"~foreign-source")
+	assert.NotContains(t, incremental.Sessions, contractOrigin+"~retired-key-peer")
+
+	require.NoError(t, database.RequeueAllArtifactExports())
+	_, err = ExportToStore(t.Context(), database, store, ExportOptions{Origin: contractOrigin, Full: true})
+	require.NoError(t, err)
+	assert.Equal(t, incremental.Sessions, latestStoreCheckpointForTest(t, store, contractOrigin).Sessions)
+
+	// A clean queue must still let full export rebuild both generations' bodies.
+	rebuilt := newTestArtifactStore(t)
+	_, err = ExportToStore(t.Context(), database, rebuilt, ExportOptions{Origin: contractOrigin, Full: true})
+	require.NoError(t, err)
+	manifests, err := firstStoreEntryPage(t.Context(), rebuilt, contractOrigin, KindManifests, 10)
+	require.NoError(t, err)
+	var rebuiltIDs []string
+	for _, entry := range manifests.Items {
+		published, err := decodeManifestWithLimits(
+			readContractArtifact(t, rebuilt, entry.Ref), productionArtifactLimits(),
+		)
+		require.NoError(t, err)
+		rebuiltIDs = append(rebuiltIDs, published.NativeSessionID)
+	}
+	assert.ElementsMatch(t, []string{"hostname-session", "legacy-session", "installation-session"}, rebuiltIDs)
+	stored, err := database.GetSession(t.Context(), "hostname-session")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, installationID, stored.Machine)
+}
+
 func TestExportToStoreFullRepairsMissingDependencyWithoutNewCheckpoint(t *testing.T) {
 	t.Parallel()
 

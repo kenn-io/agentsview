@@ -112,7 +112,7 @@ func (t *toolset) searchSessions(
 	res, err := t.svc.Search(ctx, service.SearchRequest{
 		DateFrom: in.DateFrom,
 		DateTo:   in.DateTo,
-		Query:    buildSearchQuery(in.Query),
+		Query:    in.Query,
 		Project:  in.Project,
 		Sort:     in.Sort,
 		Cursor:   in.Cursor,

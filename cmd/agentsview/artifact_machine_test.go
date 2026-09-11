@@ -12,15 +12,15 @@ import (
 
 func TestOpenDBConfiguresArtifactLocalMachineOwnership(t *testing.T) {
 	cfg := config.Config{
-		DBPath:           filepath.Join(t.TempDir(), "sessions.db"),
-		LocalMachineName: "workstation.example",
+		DBPath:         filepath.Join(t.TempDir(), "sessions.db"),
+		InstallationID: "workstation.example",
 	}
 	database, err := openDB(cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	require.NoError(t, database.UpsertSession(db.Session{
 		ID: "hostname-local", Project: "project",
-		Machine: cfg.LocalMachineName, Agent: "claude",
+		Machine: cfg.InstallationID, Agent: "claude",
 	}))
 	_, err = database.EnsureArtifactOrigin("desktop-a1b2c3")
 	require.NoError(t, err)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -133,8 +134,8 @@ func resolveServiceSessionID(
 // valid canonical ID.
 //
 // machineFilter is the user's --machine flag value. "" or "local"
-// defers to cfg.LocalMachineName (the local archive's identity,
-// runtime-derived from os.Hostname by config.LoadPFlags); "*"
+// defers to cfg.InstallationID (the local archive's identity,
+// persisted in the data directory); "*"
 // accepts any machine; any other non-empty string is matched
 // exactly against detail.Machine. The caller is responsible for
 // parsing the flag into one of these categories.
@@ -148,7 +149,7 @@ func resolveBareCodebuffID(
 	if cfg == nil {
 		return "", nil
 	}
-	localMachine := cfg.LocalMachineName
+	localMachine := cfg.InstallationID
 	locations := parser.FindCodebuffFreebuffMatches(
 		[]parser.CodebuffFamilyRoots{
 			{Agent: parser.AgentCodebuff,
@@ -285,7 +286,7 @@ func resolveBareCodebuffID(
 
 // codebuffMachineMatches reports whether a row's machine column
 // passes the user's --machine filter. "" or "local" defers to
-// localMachine (cfg.LocalMachineName); "*" matches anything; any
+// localMachine (cfg.InstallationID); "*" matches anything; any
 // other non-empty value is matched exactly. This keeps the resolver
 // decoupled from cobra while still honouring the rule that
 // unspecified / "local" mean "this archive's own sessions".
@@ -347,6 +348,17 @@ func resolveCodebuffBareID(
 	}
 	cfg := mustLoadConfig(cmd)
 	machineFlag, _ := cmd.Flags().GetString("machine")
+	if machineFlag != "" && machineFlag != "local" && machineFlag != "*" {
+		database, err := openReadOnlyDB(cfg)
+		if err != nil {
+			return "", err
+		}
+		defer database.Close()
+		machineFlag, err = db.ResolveMachineFilter(cmd.Context(), database, machineFlag)
+		if err != nil {
+			return "", err
+		}
+	}
 	return resolveBareCodebuffID(
 		cmd.Context(), svc, &cfg, id, machineFlag,
 	)

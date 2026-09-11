@@ -971,6 +971,7 @@ func coordinateLocalSync(
 	prepare func() (sync.RebuildOptions, sync.RebuildCleanup, error),
 	work func(forceFull, rebuilt bool) error,
 ) (didResync bool, stats sync.SyncStats, err error) {
+	didResync = full || database.NeedsResync()
 	for _, def := range parser.Registry {
 		if !appCfg.IsUserConfigured(def.Type) {
 			continue
@@ -990,13 +991,12 @@ func coordinateLocalSync(
 		DisabledAgents:          appCfg.DisabledAgents,
 		IncludeCwdPrefixes:      appCfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths:      appCfg.ScanProtectedPaths,
-		Machine:                 appCfg.LocalMachineName,
+		Machine:                 appCfg.InstallationID,
 		BlockedResultCategories: appCfg.ResultContentBlockedCategories,
 		ArchiveContent:          appCfg.ArchiveContent,
 	})
 	defer engine.Close()
 
-	didResync = full || database.NeedsResync()
 	if fallbackOnAbort {
 		stats, err = engine.SyncThenRun(
 			ctx, full, progress,

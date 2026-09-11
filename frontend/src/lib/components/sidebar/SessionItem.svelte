@@ -495,8 +495,8 @@
         {/if}
       {/if}
       {#if showMachine}
-        <span class="machine-tag">
-          {truncate(session.machine, 18)}
+        <span class="machine-tag" title={session.machine}>
+          {truncate(sessions.machineLabel(session.machine), 18)}
         </span>
       {/if}
     </div>

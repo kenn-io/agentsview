@@ -143,7 +143,9 @@
                   class="pin-content-full markdown"
                   use:highlightCodeFences={{ content: pin.content }}
                 >
-                  {@html renderMarkdown(pin.content)}
+                  {@html renderMarkdown(pin.content, {
+                    renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,
+                  })}
                 </div>
               {:else}
                 <div class="pin-content-preview">{preview}</div>
@@ -348,7 +350,7 @@
     border-radius: 4px;
     padding: 0.15em 0.4em;
   }
-  .pin-content-full :global(pre) {
+  .pin-content-full :global(pre:not(.unknown-xml-block)) {
     background: var(--code-bg);
     color: var(--code-text);
     border-radius: var(--radius-md);

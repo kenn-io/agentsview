@@ -226,6 +226,11 @@ func (b localArchiveQueryBackend) DailyUsage(
 		b.database, b.offline, b.cfg.CustomModelPricing,
 	)
 	filter := localDailyUsageFilter(query)
+	var err error
+	filter.Machine, err = db.ResolveMachineFilter(ctx, b.database, filter.Machine)
+	if err != nil {
+		return db.DailyUsageResult{}, err
+	}
 	return b.database.GetDailyUsage(ctx, filter)
 }
 
@@ -264,7 +269,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 			DisabledAgents:          b.cfg.DisabledAgents,
 			IncludeCwdPrefixes:      b.cfg.SyncIncludeCwdPrefixes,
 			ScanProtectedPaths:      b.cfg.ScanProtectedPaths,
-			Machine:                 b.cfg.LocalMachineName,
+			Machine:                 b.cfg.InstallationID,
 			BlockedResultCategories: b.cfg.ResultContentBlockedCategories,
 			ArchiveContent:          b.cfg.ArchiveContent,
 		})

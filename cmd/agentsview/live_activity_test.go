@@ -23,7 +23,7 @@ func TestCollectLiveActivityTargetsUsesOnlyConfiguredHintProviders(t *testing.T)
 	base := t.TempDir()
 	custom := filepath.Join(t.TempDir(), "custom")
 	cfg := config.Config{
-		LocalMachineName: "local",
+		InstallationID: "local",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {
 				filepath.Join(base, "sessions"),
@@ -52,7 +52,7 @@ func TestCollectLiveActivityTargetsUsesOnlyConfiguredHintProviders(t *testing.T)
 func TestCollectLiveActivityTargetsIncludesTraeX(t *testing.T) {
 	base := filepath.Join(t.TempDir(), ".trae", "cli")
 	cfg := config.Config{
-		LocalMachineName: "local",
+		InstallationID: "local",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentTraeX: {filepath.Join(base, "sessions")},
 		},

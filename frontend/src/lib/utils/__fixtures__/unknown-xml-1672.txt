@@ -1,0 +1,11 @@
+<current_file_diff>
+diff --git a/example.py b/example.py
+--- a/example.py
++++ b/example.py
+@@ -1,2 +1 @@
+
+-    # FIXME: replace this
+-    old_value
++    new_value
+
+</current_file_diff>

@@ -268,19 +268,22 @@ add an archived or maintained mirror without replacing the original identity.
   background flag leave lineage unresolved when their complete UUID sets
   differ. Identical sets elect the smallest stem, retaining one copy across
   three background transcripts. An interactive original still wins a tie with
-  a background sibling. Reverified 2026-08-16 with Claude Code 2.1.233 using a
-  controlled `claude -p --session-id <uuid>` probe under an isolated
-  `CLAUDE_CONFIG_DIR`. Before the deliberately bounded probe was terminated
-  during its API retry, Claude had created the exact UUID transcript under
-  `projects/<sanitized-cwd>/`. A working directory containing spaces, `.`,
-  `_`, `@`, and separators confirmed that the producer preserves ASCII
-  letters, digits, and `-` and replaces every other character with `-`. The
-  transcript existed before process exit, so an interrupted wrapper can retain
-  exact recovery evidence. One-shot capture copies the exact root and bounded
-  subagent tree after an unchanged-file interval, requires every persisted
-  child reference to have a captured transcript, and includes every captured
-  subagent file even when interruption prevented its link record from being
-  flushed. Parser termination remains separate assurance; an interrupted
+  a background sibling. Reverified 2026-09-11 against the local lineage
+  fixtures: replacing the background marker or root UUID in a same-size
+  transcript updates the parsed lineage after its file-change timestamp
+  advances, even when its modification time is restored. Reverified 2026-08-16
+  with Claude Code 2.1.233 using a controlled `claude -p --session-id <uuid>`
+  probe under an isolated `CLAUDE_CONFIG_DIR`. Before the deliberately bounded
+  probe was terminated during its API retry, Claude had created the exact UUID
+  transcript under `projects/<sanitized-cwd>/`. A working directory containing
+  spaces, `.`, `_`, `@`, and separators confirmed that the producer preserves
+  ASCII letters, digits, and `-` and replaces every other character with `-`.
+  The transcript existed before process exit, so an interrupted wrapper can
+  retain exact recovery evidence. One-shot capture copies the exact root and
+  bounded subagent tree after an unchanged-file interval, requires every
+  persisted child reference to have a captured transcript, and includes every
+  captured subagent file even when interruption prevented its link record from
+  being flushed. Parser termination remains separate assurance; an interrupted
   transcript can still contain usable token records. Because an unparseable
   middle record may hide usage, one-shot capture marks assurance partial when
   any included session reports parser-malformed lines. One-shot correlation
@@ -1755,7 +1758,7 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 
 ## DeepSeek Harness (`deepseek-harness`)
 
-- **Format:** Version `0` session JSONL under
+- **Format:** Agentsview reads version `0` session JSONL under
   `<sessions-root>/<project>/<encoded-session-id>/session.jsonl`, or the
   default checksummed multi-frame zstd encoding at `session.jsonl.zstd`. The
   immutable header records session identity, cwd, creation time, seed lineage,
@@ -1765,13 +1768,31 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   strings and are injectively encoded before use as a directory name. A
   sessions root belongs to one physical encoding; the upstream backend rejects
   an opposite-suffix artifact rather than providing mixed-root fallback or
-  migration.
+  migration. `sourceEventSeqs` uses non-negative safe integers and inclusive
+  `[start, end]` ranges, mixed entry by entry: `[[138, 144]]` represents seven
+  sequences. This is intentional storage compression, introduced in upstream
+  commit
+  [df76bc6](https://github.com/deepseek-ai/deepseek-harness/commit/df76bc695b4bdff093369ab22a506cd37ca087c1).
 
 - **Evidence:** `source`.
 
 - **Upstream:** Clone `https://github.com/deepseek-ai/deepseek-harness.git` at
-  `47f943859bef60e4160492346772ded9b24f765a`. See the pinned
-  [JSONL layout, header, and scanner](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/session/session-persistence-jsonl/src/format.ts),
+  `56c4c3e47c195ff5edbfe3d307bdef81f3de348b` (reverified 2026-09-11). The
+  [frozen version-0 codec](https://github.com/deepseek-ai/deepseek-harness/blob/56c4c3e47c195ff5edbfe3d307bdef81f3de348b/packages/session/session-format-v0-to-v1/src/codec.ts),
+
+    [released event inventory](https://github.com/deepseek-ai/deepseek-harness/blob/56c4c3e47c195ff5edbfe3d307bdef81f3de348b/packages/session/session-format-v0-to-v1/src/dispositions.ts),
+    and
+    [version-0 envelope validation](https://github.com/deepseek-ai/deepseek-harness/blob/56c4c3e47c195ff5edbfe3d307bdef81f3de348b/packages/session/session-format-v0-to-v1/src/validation.ts)
+    define the generation this parser reads. The codec accepts mixed
+    provenance ranges, bounds their expanded count by the owning event sequence,
+    and requires strictly increasing sequences when ranges occur. Agentsview
+    validates those rules without allocating an unused expanded list. Version 0
+    retains `assistant/chunk` and `tool/code-dispatch*`, allows assistant
+    provenance, and uses `start`/`end` for surface replacements.
+
+    The original format evidence remains pinned at
+    `47f943859bef60e4160492346772ded9b24f765a` for the
+    [JSONL layout, header, and scanner](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/session/session-persistence-jsonl/src/format.ts),
 
     [multi-frame zstd backend](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/packages/session/session-persistence-jsonl/src/index.ts),
 
@@ -1814,7 +1835,21 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   Plain and zstd artifacts in one session directory are treated as one logical
   source and rejected while both exist; a change maps directly to the
   surviving sibling once that conflict is removed. The optional Harness SQLite
-  persistence backend is not supported.
+  persistence backend is not supported. The updated inventory accepts all
+  released version-0 event names, including `model/selection`, delivery
+  tracking, subagent model policy, and team events. These metadata events do
+  not add transcript rows; model-selection reasoning effort is not imported.
+
+- **Later formats:** The reverified upstream
+  [session schema](https://github.com/deepseek-ai/deepseek-harness/blob/56c4c3e47c195ff5edbfe3d307bdef81f3de348b/packages/core/session/src/types.ts)
+  is version `3`. Agentsview still rejects versions `1` through `3` and does
+  not run upstream's migrations. The current
+  [generated event inventory](https://github.com/deepseek-ai/deepseek-harness/blob/56c4c3e47c195ff5edbfe3d307bdef81f3de348b/packages/core/session/src/known-event-types.ts)
+  includes later events such as `assistant/attempt`, `system/message`, and
+  `tool/ptc-dispatch*`; these do not belong to the frozen version-0 inventory.
+  Version-3 system messages and `startSeq`/`endSeq` surface replacements need
+  a separate format update. Accepting compressed provenance and version-0
+  metadata does not add support for later session formats.
 
 ## OpenClaw (`openclaw`)
 

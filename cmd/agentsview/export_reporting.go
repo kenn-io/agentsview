@@ -196,7 +196,7 @@ func bindReportingSchemaVersion(command *cobra.Command) *int {
 		version,
 		"schema-version",
 		export.ReportingSchemaVersion,
-		"Reporting export schema version",
+		fmt.Sprintf("Reporting export schema version (only %d is supported)", export.ReportingSchemaVersion),
 	)
 	return version
 }

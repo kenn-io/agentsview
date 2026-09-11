@@ -170,10 +170,6 @@ export interface ProjectsResponse {
   projects: ProjectInfo[];
 }
 
-export interface MachinesResponse {
-  machines: string[];
-}
-
 /** Matches Go BranchInfo struct in internal/db/sessions.go */
 export interface BranchInfo {
   project: string;

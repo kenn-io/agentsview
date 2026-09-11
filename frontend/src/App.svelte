@@ -526,6 +526,7 @@
       }
       sessions.loadProjects();
       sessions.loadAgents();
+      sessions.loadMachines();
     });
   });
 

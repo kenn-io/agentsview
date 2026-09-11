@@ -138,6 +138,11 @@ func usagePairwiseRequestFromInput(
 func (s *Server) usageFilterFromInput(
 	ctx context.Context, in UsageFilterInput,
 ) (db.UsageFilter, error) {
+	machine, err := db.ResolveMachineFilter(ctx, s.db, in.Machine)
+	if err != nil {
+		return db.UsageFilter{}, serverError(err)
+	}
+	in.Machine = machine
 	req, err := service.ResolveUsageProjectKeys(
 		ctx, s.db, usageRequestFromInput(in),
 	)

@@ -230,11 +230,11 @@ themselves.
 
 #### CLI daemon behavior
 
-Most read-only CLI commands do not auto-start the daemon on a cold archive. They
-attach to a compatible local daemon when one is already running; otherwise they
-open SQLite directly in read-only mode and return the latest indexed data. This
-keeps commands such as `session list`, `session get`, `session messages`, and
-offline usage reports fast in scripts.
+Ordinary session commands, including `session list`, `session get`, and
+`session messages`, require a compatible local daemon and start one when needed.
+Use `db adopt-machine --list` to inspect historical machine keys or
+`doctor sync` for diagnostics. These dedicated commands read the archive without
+starting a daemon or changing configuration.
 
 Commands that need fresh data or need to write auto-start the detached daemon
 when no compatible daemon is running. That includes local `sync`,
@@ -243,8 +243,8 @@ when no compatible daemon is running. That includes local `sync`,
 own the archive but is not reachable, these commands refuse instead of writing
 directly.
 
-Set `AGENTSVIEW_NO_DAEMON=1` to disable daemon auto-start. With that escape
-hatch, read commands use direct read-only SQLite and write commands acquire the
+Set `AGENTSVIEW_NO_DAEMON=1` to disable daemon auto-start. Commands that require
+the daemon refuse while it is disabled. Direct write commands acquire the
 local write-owner lock before opening SQLite. If another process owns that lock,
 the command refuses and asks you to stop the daemon, wait for idle shutdown, or
 retry after the offline operation finishes.
@@ -432,6 +432,38 @@ agentsview prune --project "old-project" --max-messages 5 --before 2025-06-01
 
 The prune command displays the number of sessions deleted and disk space
 reclaimed. Use `--dry-run` first to verify the filter matches what you expect.
+
+______________________________________________________________________
+
+### `agentsview db adopt-machine`
+
+Assign historical local machine keys to this installation. Use this when an
+upgrade could not establish which archived sessions are local, or to adopt
+additional old hostnames you own. Inspect the archive first, then stop the daemon:
+
+```bash
+agentsview db adopt-machine --list
+agentsview daemon stop
+agentsview db adopt-machine host-a.example host-b.example
+agentsview daemon start
+```
+
+Use `--list` alone to print machine keys with session and worktree-rule counts.
+It does not start a daemon, write configuration, or adopt sessions.
+
+Select only keys whose sessions belong to this installation. The command moves
+their sessions, worktree rules, and project and source metadata to the current
+installation ID. Session IDs, messages, stars, pins, and other curation stay
+intact. Old named keys remain aliases for filters and URLs. Conflicting worktree
+rules stop the command so you can reconcile them before retrying.
+
+Keys that belong to other installations need no action. Legacy `local` rows
+always belong to this archive and are assigned to its installation ID at startup.
+
+The command records ownership in the archive; changing `local_machine_name`
+only changes a display label. See
+[Upgrading Historical Machine Keys](/docs/configuration/#upgrading-historical-machine-keys)
+for automatic adoption and mirror updates.
 
 ______________________________________________________________________
 
@@ -1245,7 +1277,7 @@ ______________________________________________________________________
 
 Export canonical UTC-hour activity and usage documents, coherent UTC-day
 snapshots, or compact date-range digests from the local archive. See
-[Reporting Export](/docs/reporting-export/) for the v2 wire schema, quiet-hour
+[Reporting Export](/docs/reporting-export/) for the v3 wire schema, quiet-hour
 semantics, snapshot guarantee, and digest rules.
 
 ```bash
@@ -1257,8 +1289,10 @@ agentsview export digest --from 2026-06-28 --to 2026-07-27
 Hour and date keys must be exact, zero-padded UTC values. Open and future hours
 are rejected. The current UTC date contains only closed hours and has no day
 digest. Digest ranges are inclusive and limited to 31 dates. Integrations should
-validate the emitted `schema_version: 2` and content digest before accepting a
-document.
+validate the emitted `schema_version: 3` and content digest before accepting a
+document. Version 3 is the default and the only accepted `--schema-version`;
+versions 1 and 2 are no longer emitted. Update consumers and refresh stored
+digests when upgrading.
 
 ______________________________________________________________________
 

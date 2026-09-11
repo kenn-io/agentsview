@@ -50,7 +50,7 @@ func runImport(cfg ImportConfig) {
 
 	assetsDir := filepath.Join(appCfg.DataDir, "assets")
 	stats, err := runImportDispatch(
-		ctx, database, cfg.Type, dir, assetsDir, appCfg.LocalMachineName,
+		ctx, database, cfg.Type, dir, assetsDir, appCfg.InstallationID,
 	)
 	if err != nil && strings.HasPrefix(err.Error(), "unknown import type:") {
 		log.Fatalf("%v", err)

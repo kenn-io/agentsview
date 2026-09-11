@@ -144,6 +144,10 @@ func (b *directBackend) List(
 		return nil, fmt.Errorf("list: %w", err)
 	}
 	f.Timezone = timezone
+	f.Machine, err = db.ResolveMachineFilter(ctx, b.db, f.Machine)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := db.ParseSortSpec(f.OrderBy); err != nil {
 		return nil, fmt.Errorf(
 			"list: invalid sort %q: %v (valid keys: %s)",
@@ -680,11 +684,14 @@ func (b *directBackend) Search(
 	page, err := b.db.Search(ctx, db.SearchFilter{
 		DateFrom: req.DateFrom,
 		DateTo:   req.DateTo,
-		Query:    db.PrepareFTSQuery(query),
-		Project:  req.Project,
-		Sort:     req.Sort,
-		Cursor:   req.Cursor,
-		Limit:    limit,
+		// Pass the query through untouched. db.Search prepares it itself,
+		// and pre-quoting here made every Chinese query look like an
+		// explicit FTS5 expression, which skipped word segmentation.
+		Query:   query,
+		Project: req.Project,
+		Sort:    req.Sort,
+		Cursor:  req.Cursor,
+		Limit:   limit,
 	})
 	if err != nil {
 		return nil, err
@@ -708,6 +715,10 @@ func (b *directBackend) UsageSummary(
 	ctx context.Context, req UsageRequest,
 ) (*UsageSummaryResult, error) {
 	var err error
+	req.Machine, err = db.ResolveMachineFilter(ctx, b.db, req.Machine)
+	if err != nil {
+		return nil, err
+	}
 	req, err = ResolveUsageProjectKeys(ctx, b.db, req)
 	if err != nil {
 		return nil, err
@@ -743,6 +754,10 @@ func (b *directBackend) UsagePairwiseComparison(
 	ctx context.Context, req UsagePairwiseComparisonRequest,
 ) (*UsagePairwiseComparisonResponse, error) {
 	var err error
+	req.Machine, err = db.ResolveMachineFilter(ctx, b.db, req.Machine)
+	if err != nil {
+		return nil, err
+	}
 	req, err = ResolveUsagePairwiseProjectKeys(ctx, b.db, req)
 	if err != nil {
 		return nil, err
@@ -815,6 +830,10 @@ func (b *directBackend) SearchContent(
 		return nil, &db.SearchInputError{Msg: "search: " + err.Error()}
 	}
 	req.Timezone = timezone
+	req.Machine, err = db.ResolveMachineFilter(ctx, b.db, req.Machine)
+	if err != nil {
+		return nil, err
+	}
 	page, err := b.db.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern:           req.Pattern,
 		Mode:              req.Mode,

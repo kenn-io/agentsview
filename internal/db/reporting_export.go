@@ -134,7 +134,7 @@ func (db *DB) reportingHoursFromSnapshot(
 		usageIDs,
 		lowerBound,
 		upperBound,
-		schemaVersion >= export.ReportingSchemaVersion,
+		true,
 	)
 	if err != nil {
 		return nil, err
@@ -154,8 +154,8 @@ func (db *DB) reportingHoursFromSnapshot(
 	for _, session := range allSessions {
 		sessionByID[session.SessionID] = session
 	}
-	usage, err = finalizeReportingUsageForSchema(
-		schemaVersion, query, usage, sessionByID,
+	usage, err = finalizeReportingUsage(
+		query, usage, sessionByID,
 	)
 	if err != nil {
 		return nil, err
@@ -440,30 +440,7 @@ func finalizeReportingUsage(
 	rows []activity.UsageRow,
 	sessionByID map[string]activity.SessionMeta,
 ) ([]activity.UsageRow, error) {
-	return finalizeReportingUsageForSchema(
-		export.ReportingSchemaVersion, query, rows, sessionByID,
-	)
-}
-
-func finalizeReportingUsageForSchema(
-	schemaVersion int,
-	query activity.Query,
-	rows []activity.UsageRow,
-	sessionByID map[string]activity.SessionMeta,
-) ([]activity.UsageRow, error) {
 	sortReportingUsage(rows)
-	if schemaVersion == export.ReportingLegacySchemaVersion {
-		mask := activity.LegacyUsageSurvivorMask(
-			query.RangeStart, query.RangeEnd, query.EffectiveEnd, rows,
-		)
-		survivors := make([]activity.UsageRow, 0, len(rows))
-		for i, keep := range mask {
-			if keep {
-				survivors = append(survivors, rows[i])
-			}
-		}
-		return allocateReportingUsageCosts(survivors)
-	}
 	mask, attribution, webSearchRequests := activity.UsageSurvivorSelection(
 		query.RangeStart, query.RangeEnd, query.EffectiveEnd, rows,
 	)
@@ -723,6 +700,7 @@ func reportingSessionCreatedAtFrom(
 type reportingFirstSeenCounts struct {
 	sessions            int
 	automatedSessions   int
+	subagentSessions    int
 	interactiveSessions int
 	untimedSessions     int
 	projects            int
@@ -846,7 +824,9 @@ func buildReportingFirstSeen(
 		}
 		count := counts[index]
 		count.sessions++
-		if sessionByID[sessionID].IsAutomated {
+		if sessionByID[sessionID].IsSubagent {
+			count.subagentSessions++
+		} else if sessionByID[sessionID].IsAutomated {
 			count.automatedSessions++
 		} else {
 			count.interactiveSessions++
@@ -891,6 +871,7 @@ func applyReportingFirstSeen(
 ) {
 	totals.NewSessions = counts.sessions
 	totals.NewAutomatedSessions = counts.automatedSessions
+	totals.NewSubagentSessions = counts.subagentSessions
 	totals.NewInteractiveSessions = counts.interactiveSessions
 	totals.NewUntimedSessions = counts.untimedSessions
 	totals.NewProjects = counts.projects
@@ -905,6 +886,7 @@ func reportingHourFromActivity(
 		report.Totals.AgentMinutes,
 		report.Totals.AutomatedAgentMinutes,
 		report.Totals.InteractiveAgentMinutes,
+		report.Totals.SubagentAgentMinutes,
 	)
 	if err != nil {
 		return export.ReportingHour{}, err
@@ -924,13 +906,17 @@ func reportingHourFromActivity(
 	buckets := make([]export.ReportingActivityBucket, len(report.Buckets))
 	for i, bucket := range report.Buckets {
 		buckets[i] = export.ReportingActivityBucket{
-			Start:             bucket.Start,
-			AgentMinutes:      bucket.AgentMinutes,
-			MaxAgents:         bucket.MaxAgents,
-			OutputTokens:      int64(bucket.OutputTokens),
-			Cost:              bucket.Cost,
-			AutomatedAtPeak:   bucket.AutomatedAtPeak,
-			InteractiveAtPeak: bucket.InteractiveAtPeak,
+			Start:                bucket.Start,
+			AgentMinutes:         bucket.AgentMinutes,
+			MaxAgents:            bucket.MaxAgents,
+			MaxInteractiveAgents: bucket.MaxInteractiveAgents,
+			MaxSubagentAgents:    bucket.MaxSubagentAgents,
+			MaxAutomatedAgents:   bucket.MaxAutomatedAgents,
+			OutputTokens:         int64(bucket.OutputTokens),
+			Cost:                 bucket.Cost,
+			AutomatedAtPeak:      bucket.AutomatedAtPeak,
+			SubagentAtPeak:       bucket.SubagentAtPeak,
+			InteractiveAtPeak:    bucket.InteractiveAtPeak,
 		}
 	}
 	return export.ReportingHour{
@@ -942,20 +928,22 @@ func reportingHourFromActivity(
 				IdleMinutes:             report.Totals.IdleMinutes,
 				AgentMinutes:            totalAgentMinutes,
 				AutomatedAgentMinutes:   report.Totals.AutomatedAgentMinutes,
+				SubagentAgentMinutes:    report.Totals.SubagentAgentMinutes,
 				InteractiveAgentMinutes: report.Totals.InteractiveAgentMinutes,
 				OutputTokens:            int64(report.Totals.OutputTokens),
 				Cost:                    report.Totals.Cost,
 				AutomatedCost:           report.Totals.AutomatedCost,
+				SubagentCost:            report.Totals.SubagentCost,
 				InteractiveCost:         report.Totals.InteractiveCost,
 			},
-			Peak: export.ReportingActivityPeak{
-				Agents: report.Peak.Agents,
-				At:     report.Peak.At,
-			},
-			Buckets:   buckets,
-			ByModel:   byModel,
-			ByAgent:   byAgent,
-			ByProject: byProject,
+			Peak:            export.ReportingActivityPeak(report.Peak),
+			InteractivePeak: export.ReportingActivityPeak(report.InteractivePeak),
+			SubagentPeak:    export.ReportingActivityPeak(report.SubagentPeak),
+			AutomatedPeak:   export.ReportingActivityPeak(report.AutomatedPeak),
+			Buckets:         buckets,
+			ByModel:         byModel,
+			ByAgent:         byAgent,
+			ByProject:       byProject,
 		},
 	}, nil
 }
@@ -964,7 +952,7 @@ const reportingMinuteToleranceFactor = 1e-9
 
 func reportingDerivedAgentMinutes(
 	field string,
-	original, automated, interactive float64,
+	original, automated, interactive, subagent float64,
 ) (float64, error) {
 	if math.IsNaN(original) || math.IsInf(original, 0) || original < 0 {
 		return 0, fmt.Errorf("%s agent minutes total is invalid", field)
@@ -980,7 +968,10 @@ func reportingDerivedAgentMinutes(
 			"%s interactive agent minutes is invalid", field,
 		)
 	}
-	derived := automated + interactive
+	if math.IsNaN(subagent) || math.IsInf(subagent, 0) || subagent < 0 {
+		return 0, fmt.Errorf("%s subagent agent minutes is invalid", field)
+	}
+	derived := automated + interactive + subagent
 	if math.IsNaN(derived) || math.IsInf(derived, 0) {
 		return 0, fmt.Errorf("%s derived agent minutes is invalid", field)
 	}
@@ -1005,6 +996,7 @@ func reportingActivityBreakdowns(
 			row.AgentMinutes,
 			row.AutomatedAgentMinutes,
 			row.InteractiveAgentMinutes,
+			row.SubagentAgentMinutes,
 		)
 		if err != nil {
 			return nil, err
@@ -1013,9 +1005,11 @@ func reportingActivityBreakdowns(
 			Key:                     row.Key,
 			AgentMinutes:            agentMinutes,
 			AutomatedAgentMinutes:   row.AutomatedAgentMinutes,
+			SubagentAgentMinutes:    row.SubagentAgentMinutes,
 			InteractiveAgentMinutes: row.InteractiveAgentMinutes,
 			Cost:                    row.Cost,
 			AutomatedCost:           row.AutomatedCost,
+			SubagentCost:            row.SubagentCost,
 			InteractiveCost:         row.InteractiveCost,
 		})
 	}
@@ -1032,6 +1026,7 @@ func reportingActivityProjectBreakdowns(
 			row.AgentMinutes,
 			row.AutomatedAgentMinutes,
 			row.InteractiveAgentMinutes,
+			row.SubagentAgentMinutes,
 		)
 		if err != nil {
 			return nil, err
@@ -1041,9 +1036,11 @@ func reportingActivityProjectBreakdowns(
 			ProjectKey:              row.ProjectKey,
 			AgentMinutes:            agentMinutes,
 			AutomatedAgentMinutes:   row.AutomatedAgentMinutes,
+			SubagentAgentMinutes:    row.SubagentAgentMinutes,
 			InteractiveAgentMinutes: row.InteractiveAgentMinutes,
 			Cost:                    row.Cost,
 			AutomatedCost:           row.AutomatedCost,
+			SubagentCost:            row.SubagentCost,
 			InteractiveCost:         row.InteractiveCost,
 		})
 	}

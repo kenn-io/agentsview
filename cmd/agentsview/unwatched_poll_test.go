@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -208,43 +209,45 @@ func TestUnwatchedPollTickUsesRootsAddedAfterStart(t *testing.T) {
 }
 
 func TestUnwatchedPollSkipsAbsentObligatedRootUntilItReturns(t *testing.T) {
-	parent := t.TempDir()
-	root := filepath.Join(parent, "provider")
-	require.NoError(t, os.Mkdir(root, 0o755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(root, "session.jsonl"), []byte("session\n"), 0o600,
-	))
+	synctest.Test(t, func(t *testing.T) {
+		parent := t.TempDir()
+		root := filepath.Join(parent, "provider")
+		require.NoError(t, os.Mkdir(root, 0o755))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(root, "session.jsonl"), []byte("session\n"), 0o600,
+		))
 
-	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
-	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil, time.Now,
-		func(d time.Duration) <-chan time.Time {
-			ch := make(chan time.Time, 1)
-			ch <- time.Time{}
-			return ch
-		},
-	)
-	t.Cleanup(coordinator.Stop)
-	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: "provider-root", Scopes: []pollingScope{{Root: root}},
-	}))
+		syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
+		coordinator := newUnwatchedPollCoordinatorWithTicks(
+			t.Context(), syncer, make(chan time.Time), func() {},
+			func(run func()) { run() }, nil, time.Now,
+			func(d time.Duration) <-chan time.Time {
+				ch := make(chan time.Time, 1)
+				ch <- time.Time{}
+				return ch
+			},
+		)
+		t.Cleanup(coordinator.Stop)
+		require.NoError(t, coordinator.AddObligation(pollingObligation{
+			Key: "provider-root", Scopes: []pollingScope{{Root: root}},
+		}))
 
-	coordinator.requestPoll()
-	requirePollWithin(t, syncer.wake, time.Second)
-	assert.Equal(t, [][]string{{root}}, syncer.snapshot())
+		coordinator.requestPoll()
+		requirePollWithin(t, syncer.wake, time.Second)
+		assert.Equal(t, [][]string{{root}}, syncer.snapshot())
 
-	require.NoError(t, os.RemoveAll(root))
-	coordinator.requestPoll()
-	assert.Never(t, func() bool { return len(syncer.snapshot()) > 1 },
-		100*time.Millisecond, 10*time.Millisecond,
-		"an absent root must not become an authoritative empty scope")
+		require.NoError(t, os.RemoveAll(root))
+		coordinator.requestPoll()
+		synctest.Wait()
+		assert.Len(t, syncer.snapshot(), 1,
+			"an absent root must not become an authoritative empty scope")
 
-	require.NoError(t, os.Mkdir(root, 0o755))
-	coordinator.requestPoll()
-	requirePollWithin(t, syncer.wake, time.Second)
-	assert.Equal(t, [][]string{{root}, {root}}, syncer.snapshot(),
-		"the polling obligation must remain active for a returning root")
+		require.NoError(t, os.Mkdir(root, 0o755))
+		coordinator.requestPoll()
+		requirePollWithin(t, syncer.wake, time.Second)
+		assert.Equal(t, [][]string{{root}, {root}}, syncer.snapshot(),
+			"the polling obligation must remain active for a returning root")
+	})
 }
 
 // TestUnwatchedPollDefersScopesWhileProbePathMissing is the nested-root
@@ -254,42 +257,44 @@ func TestUnwatchedPollSkipsAbsentObligatedRootUntilItReturns(t *testing.T) {
 // of authoritatively reconciling the still-present <root>, which would
 // tombstone every session under the vanished subtree.
 func TestUnwatchedPollDefersScopesWhileProbePathMissing(t *testing.T) {
-	configured := t.TempDir()
-	physical := filepath.Join(configured, "tmp")
-	require.NoError(t, os.Mkdir(physical, 0o755))
+	synctest.Test(t, func(t *testing.T) {
+		configured := t.TempDir()
+		physical := filepath.Join(configured, "tmp")
+		require.NoError(t, os.Mkdir(physical, 0o755))
 
-	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
-	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil, time.Now,
-		func(d time.Duration) <-chan time.Time {
-			ch := make(chan time.Time, 1)
-			ch <- time.Time{}
-			return ch
-		},
-	)
-	t.Cleanup(coordinator.Stop)
-	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: physical, Scopes: []pollingScope{{Root: configured}}, Probe: physical,
-	}))
+		syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
+		coordinator := newUnwatchedPollCoordinatorWithTicks(
+			t.Context(), syncer, make(chan time.Time), func() {},
+			func(run func()) { run() }, nil, time.Now,
+			func(d time.Duration) <-chan time.Time {
+				ch := make(chan time.Time, 1)
+				ch <- time.Time{}
+				return ch
+			},
+		)
+		t.Cleanup(coordinator.Stop)
+		require.NoError(t, coordinator.AddObligation(pollingObligation{
+			Key: physical, Scopes: []pollingScope{{Root: configured}}, Probe: physical,
+		}))
 
-	coordinator.requestPoll()
-	requirePollWithin(t, syncer.wake, time.Second)
-	assert.Equal(t, [][]string{{configured}}, syncer.snapshot(),
-		"an available probe reconciles the configured scope")
+		coordinator.requestPoll()
+		requirePollWithin(t, syncer.wake, time.Second)
+		assert.Equal(t, [][]string{{configured}}, syncer.snapshot(),
+			"an available probe reconciles the configured scope")
 
-	require.NoError(t, os.RemoveAll(physical))
-	coordinator.requestPoll()
-	assert.Never(t, func() bool { return len(syncer.snapshot()) > 1 },
-		100*time.Millisecond, 10*time.Millisecond,
-		"a missing physical watcher path must defer its reconciliation "+
-			"scopes even though the configured root still exists")
+		require.NoError(t, os.RemoveAll(physical))
+		coordinator.requestPoll()
+		synctest.Wait()
+		assert.Len(t, syncer.snapshot(), 1,
+			"a missing physical watcher path must defer its reconciliation "+
+				"scopes even though the configured root still exists")
 
-	require.NoError(t, os.Mkdir(physical, 0o755))
-	coordinator.requestPoll()
-	requirePollWithin(t, syncer.wake, time.Second)
-	assert.Equal(t, [][]string{{configured}, {configured}}, syncer.snapshot(),
-		"the deferred scope must resume once the physical path returns")
+		require.NoError(t, os.Mkdir(physical, 0o755))
+		coordinator.requestPoll()
+		requirePollWithin(t, syncer.wake, time.Second)
+		assert.Equal(t, [][]string{{configured}, {configured}}, syncer.snapshot(),
+			"the deferred scope must resume once the physical path returns")
+	})
 }
 
 // TestUnwatchedPollDefersSharedScopeWhileAnyProbeMissing pins the shared-scope
@@ -298,45 +303,47 @@ func TestUnwatchedPollDefersScopesWhileProbePathMissing(t *testing.T) {
 // present shallow plan must not make <root> pollable, or authoritative
 // reconciliation would tombstone every session under the vanished subtree.
 func TestUnwatchedPollDefersSharedScopeWhileAnyProbeMissing(t *testing.T) {
-	configured := t.TempDir()
-	sessions := filepath.Join(configured, "tmp")
-	require.NoError(t, os.Mkdir(sessions, 0o755))
+	synctest.Test(t, func(t *testing.T) {
+		configured := t.TempDir()
+		sessions := filepath.Join(configured, "tmp")
+		require.NoError(t, os.Mkdir(sessions, 0o755))
 
-	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
-	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil, time.Now,
-		func(d time.Duration) <-chan time.Time {
-			ch := make(chan time.Time, 1)
-			ch <- time.Time{}
-			return ch
-		},
-	)
-	t.Cleanup(coordinator.Stop)
-	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: configured, Scopes: []pollingScope{{Root: configured}}, Probe: configured,
-	}))
-	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: sessions, Scopes: []pollingScope{{Root: configured}}, Probe: sessions,
-	}))
+		syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 3)}
+		coordinator := newUnwatchedPollCoordinatorWithTicks(
+			t.Context(), syncer, make(chan time.Time), func() {},
+			func(run func()) { run() }, nil, time.Now,
+			func(d time.Duration) <-chan time.Time {
+				ch := make(chan time.Time, 1)
+				ch <- time.Time{}
+				return ch
+			},
+		)
+		t.Cleanup(coordinator.Stop)
+		require.NoError(t, coordinator.AddObligation(pollingObligation{
+			Key: configured, Scopes: []pollingScope{{Root: configured}}, Probe: configured,
+		}))
+		require.NoError(t, coordinator.AddObligation(pollingObligation{
+			Key: sessions, Scopes: []pollingScope{{Root: configured}}, Probe: sessions,
+		}))
 
-	coordinator.requestPoll()
-	requirePollWithin(t, syncer.wake, time.Second)
-	assert.Equal(t, [][]string{{configured}}, syncer.snapshot(),
-		"with every probe available the shared scope reconciles")
+		coordinator.requestPoll()
+		requirePollWithin(t, syncer.wake, time.Second)
+		assert.Equal(t, [][]string{{configured}}, syncer.snapshot(),
+			"with every probe available the shared scope reconciles")
 
-	require.NoError(t, os.RemoveAll(sessions))
-	coordinator.requestPoll()
-	assert.Never(t, func() bool { return len(syncer.snapshot()) > 1 },
-		100*time.Millisecond, 10*time.Millisecond,
-		"a missing session subtree must defer the shared scope even though "+
-			"the metadata plan's probe still exists")
+		require.NoError(t, os.RemoveAll(sessions))
+		coordinator.requestPoll()
+		synctest.Wait()
+		assert.Len(t, syncer.snapshot(), 1,
+			"a missing session subtree must defer the shared scope even though "+
+				"the metadata plan's probe still exists")
 
-	require.NoError(t, os.Mkdir(sessions, 0o755))
-	coordinator.requestPoll()
-	requirePollWithin(t, syncer.wake, time.Second)
-	assert.Equal(t, [][]string{{configured}, {configured}}, syncer.snapshot(),
-		"the shared scope must resume once every probe returns")
+		require.NoError(t, os.Mkdir(sessions, 0o755))
+		coordinator.requestPoll()
+		requirePollWithin(t, syncer.wake, time.Second)
+		assert.Equal(t, [][]string{{configured}, {configured}}, syncer.snapshot(),
+			"the shared scope must resume once every probe returns")
+	})
 }
 
 // TestAvailableUnwatchedPollRootsDefersRootsOverlappingBlockedScopes pins the
@@ -559,41 +566,47 @@ func TestUnwatchedPollObligationUpdatesRemainResponsiveDuringReconciliation(
 }
 
 func TestUnwatchedPollStopCancelsAndJoinsActiveReconciliation(t *testing.T) {
-	parentCtx, cancelParent := context.WithCancel(context.Background())
-	syncer := &cancelBlockingUnwatchedPollSyncer{
-		started:  make(chan struct{}, 2),
-		canceled: make(chan struct{}, 2),
-	}
-	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		parentCtx, syncer, make(chan time.Time), func() {},
-		func(run func()) { run() }, nil, time.Now, time.After,
-	)
-	t.Cleanup(func() {
-		cancelParent()
-		coordinator.Stop()
+	synctest.Test(t, func(t *testing.T) {
+		parentCtx, cancelParent := context.WithCancel(context.Background())
+		syncer := &cancelBlockingUnwatchedPollSyncer{
+			started:  make(chan struct{}, 2),
+			canceled: make(chan struct{}, 2),
+		}
+		coordinator := newUnwatchedPollCoordinatorWithTicks(
+			parentCtx, syncer, make(chan time.Time), func() {},
+			func(run func()) { run() }, nil, time.Now, time.After,
+		)
+		t.Cleanup(func() {
+			cancelParent()
+			coordinator.Stop()
+		})
+		owned := requireExistingPollRoot(t, t.TempDir(), "owned")
+		require.NoError(t, coordinator.AddObligation(pollingObligation{
+			Key: "owned", Scopes: []pollingScope{{Root: owned}},
+		}))
+		coordinator.requestPoll()
+		requirePollWithin(t, syncer.started, time.Second)
+		coordinator.requestPoll()
+
+		stopDone := make(chan struct{})
+		go func() {
+			coordinator.Stop()
+			close(stopDone)
+		}()
+		requirePollWithin(t, stopDone, time.Second)
+		select {
+		case <-syncer.canceled:
+		default:
+			require.FailNow(t, "poll did not run before timeout")
+		}
+		assert.Equal(t, 1, syncer.callCount(),
+			"shutdown must discard the wake queued during reconciliation")
+
+		coordinator.requestPoll()
+		synctest.Wait()
+		assert.Equal(t, 1, syncer.callCount(),
+			"shutdown must not start another queued reconciliation")
 	})
-	owned := requireExistingPollRoot(t, t.TempDir(), "owned")
-	require.NoError(t, coordinator.AddObligation(pollingObligation{
-		Key: "owned", Scopes: []pollingScope{{Root: owned}},
-	}))
-	coordinator.requestPoll()
-	requirePollWithin(t, syncer.started, time.Second)
-	coordinator.requestPoll()
-
-	stopDone := make(chan struct{})
-	go func() {
-		coordinator.Stop()
-		close(stopDone)
-	}()
-	requirePollWithin(t, stopDone, time.Second)
-	requirePollWithin(t, syncer.canceled, time.Second)
-	assert.Equal(t, 1, syncer.callCount(),
-		"shutdown must discard the wake queued during reconciliation")
-
-	coordinator.requestPoll()
-	assert.Never(t, func() bool { return syncer.callCount() > 1 },
-		100*time.Millisecond, 10*time.Millisecond,
-		"shutdown must not start another queued reconciliation")
 }
 
 func TestUnwatchedPollParentCancellationCancelsJoinsAndRejectsUpdates(
@@ -688,18 +701,20 @@ func TestUnwatchedPollRemovingOneOverlappingObligationKeepsSharedRoot(t *testing
 }
 
 func TestUnwatchedPollEmptyObligationNeverExpandsToFullReconciliation(t *testing.T) {
-	ticks := make(chan time.Time)
-	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
-	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, time.Now, time.After,
-	)
-	t.Cleanup(coordinator.Stop)
-	require.NoError(t, coordinator.AddObligation(pollingObligation{Key: "empty"}))
+	synctest.Test(t, func(t *testing.T) {
+		ticks := make(chan time.Time)
+		syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
+		coordinator := newUnwatchedPollCoordinatorWithTicks(
+			t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, time.Now, time.After,
+		)
+		t.Cleanup(coordinator.Stop)
+		require.NoError(t, coordinator.AddObligation(pollingObligation{Key: "empty"}))
 
-	coordinator.requestPoll()
+		coordinator.requestPoll()
+		synctest.Wait()
 
-	assert.Never(t, func() bool { return len(syncer.snapshot()) > 0 },
-		100*time.Millisecond, 10*time.Millisecond)
+		assert.Empty(t, syncer.snapshot())
+	})
 }
 
 func TestUnwatchedPollStopIsConcurrentAndRejectsLaterRoots(t *testing.T) {

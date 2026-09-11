@@ -149,6 +149,177 @@ func TestIncrementalSubagentLinksPreserveDecodedToolResults(t *testing.T) {
 	}
 }
 
+func TestEngineImagePolicyOverridesDatabaseForBulkAppendAndLink(t *testing.T) {
+	const raw = `[ {"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"} ]`
+	const want = `[{"type":"text","text":"before"},{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1},{"type":"text","text":"after"}]`
+	const linkWant = "beforeafter"
+
+	database := dbtest.OpenTestDB(t)
+	database.SetToolResultImages(config.ToolResultImagesKeep)
+	engine := NewEngine(database, EngineConfig{
+		Machine:          "local",
+		ToolResultImages: config.ToolResultImagesDrop,
+	})
+	t.Cleanup(engine.Close)
+
+	bulkID := "engine-policy-bulk"
+	bulk := engine.writeBatchBulkWithOutcome([]pendingWrite{{
+		sess: parser.ParsedSession{
+			ID: bulkID, Project: "project", Machine: "local",
+			Agent: parser.AgentClaude, StartedAt: time.Unix(1, 0),
+		},
+		msgs: []parser.ParsedMessage{{
+			Ordinal: 0, Role: parser.RoleAssistant, Content: "answer",
+			ToolCalls: []parser.ParsedToolCall{{
+				ToolUseID: "bulk-call", ToolName: "Bash", Category: "Bash",
+				ResultEvents: []parser.ParsedToolResultEvent{{
+					ToolUseID: "bulk-call", Source: "tool", Status: "completed",
+					Content: raw,
+				}},
+			}},
+		}},
+	}}, true)
+	require.Equal(t, 1, bulk.writtenSessions)
+	require.Equal(t, 0, bulk.failedSessions)
+
+	messages, err := database.GetAllMessages(t.Context(), bulkID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 1)
+	assert.Equal(t, want, messages[0].ToolCalls[0].ResultContent)
+	assert.Equal(t, len(want), messages[0].ToolCalls[0].ResultContentLength)
+
+	appendMessages := append([]db.Message(nil), messages...)
+	appendMessages = append(appendMessages, db.Message{
+		SessionID: bulkID, Ordinal: 1, Role: "assistant",
+		ToolCalls: []db.ToolCall{{
+			ToolUseID: "append-call", ResultContent: raw,
+			ResultEvents: []db.ToolResultEvent{{
+				ToolUseID: "append-call", Source: "tool", Status: "completed",
+				Content: raw,
+			}},
+		}},
+	})
+	require.NoError(t, engine.writeMessages(bulkID, appendMessages))
+
+	messages, err = database.GetAllMessages(t.Context(), bulkID)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, want, messages[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, len(want), messages[1].ToolCalls[0].ResultContentLength)
+
+	linkID := "engine-policy-link"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: linkID, Agent: string(parser.AgentClaude), Project: "project",
+		Machine: "local", MessageCount: 1,
+	}))
+	require.NoError(t, database.InsertMessages([]db.Message{{
+		SessionID: linkID, Ordinal: 0, Role: "assistant",
+		ToolCalls: []db.ToolCall{{
+			ToolUseID: "link-call", ToolName: "Task", Category: "Task",
+		}},
+	}}))
+	require.NoError(t, engine.writeIncremental(&incrementalUpdate{
+		sessionID: linkID, machine: "local", project: "project", msgCount: 1,
+		links: []parser.ClaudeSubagentLink{{
+			ToolUseID: "link-call", ResultContentRaw: raw,
+			ResultContentLen: len(raw), HasResult: true,
+		}},
+	}))
+
+	messages, err = database.GetAllMessages(t.Context(), linkID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, linkWant, messages[0].ToolCalls[0].ResultContent)
+	assert.Equal(t, len(linkWant), messages[0].ToolCalls[0].ResultContentLength)
+}
+
+func TestEngineImagePolicyDeduplicatesHistoricalRawLinkedResult(t *testing.T) {
+	const raw = `[{"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"}]`
+	const linkWant = "beforeafter"
+	database := dbtest.OpenTestDB(t)
+	database.SetToolResultImages(config.ToolResultImagesKeep)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "historical-link", Agent: string(parser.AgentClaude), Project: "project",
+		Machine: "local", MessageCount: 1,
+	}))
+	require.NoError(t, database.InsertMessages([]db.Message{{
+		SessionID: "historical-link", Ordinal: 0, Role: "assistant",
+		ToolCalls: []db.ToolCall{{
+			ToolUseID: "link-call", ToolName: "Task", Category: "Task",
+			ResultContent: raw,
+			ResultEvents: []db.ToolResultEvent{{
+				ToolUseID: "link-call", Source: "tool", Status: "completed",
+				Content: raw,
+			}},
+		}},
+	}}))
+
+	engine := NewEngine(database, EngineConfig{
+		Machine: "local", ToolResultImages: config.ToolResultImagesDrop,
+	})
+	t.Cleanup(engine.Close)
+	require.NoError(t, engine.writeIncremental(&incrementalUpdate{
+		sessionID: "historical-link", machine: "local", project: "project", msgCount: 1,
+		links: []parser.ClaudeSubagentLink{{
+			ToolUseID: "link-call", ResultContentRaw: raw,
+			ResultContentLen: len(raw), HasResult: true,
+		}},
+	}))
+
+	var storedSummary string
+	require.NoError(t, database.Reader().QueryRowContext(
+		t.Context(), "SELECT COALESCE(result_content, '') FROM tool_calls WHERE session_id = ?", "historical-link",
+	).Scan(&storedSummary))
+	assert.Equal(t, linkWant, storedSummary)
+
+	messages, err := database.GetAllMessages(t.Context(), "historical-link")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 1)
+	assert.Equal(t, linkWant, messages[0].ToolCalls[0].ResultContent)
+	assert.Equal(t, len(linkWant), messages[0].ToolCalls[0].ResultContentLength)
+}
+
+func TestEngineImagePolicyDeduplicatesLateProjectedResult(t *testing.T) {
+	const raw = `[{"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"}]`
+	const want = `[{"type":"text","text":"before"},{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1},{"type":"text","text":"after"}]`
+	database := dbtest.OpenTestDB(t)
+	database.SetToolResultImages(config.ToolResultImagesKeep)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "late-result", Agent: string(parser.AgentCodex), Project: "project",
+		Machine: "local", MessageCount: 1,
+	}))
+	require.NoError(t, database.InsertMessages([]db.Message{{
+		SessionID: "late-result", Ordinal: 0, Role: "assistant",
+		ToolCalls: []db.ToolCall{{ToolUseID: "late-call", ToolName: "Bash", Category: "Bash"}},
+	}}))
+
+	engine := NewEngine(database, EngineConfig{
+		Machine: "local", ToolResultImages: config.ToolResultImagesDrop,
+	})
+	t.Cleanup(engine.Close)
+	require.NoError(t, engine.writeIncremental(&incrementalUpdate{
+		sessionID: "late-result", machine: "local", project: "project", msgCount: 1,
+		toolCallUpdates: []parser.ParsedToolCallUpdate{{
+			ToolUseID: "late-call", MessageOrdinal: 0, CallIndex: 0,
+			ResultEvents: []parser.ParsedToolResultEvent{{
+				ToolUseID: "late-call", Source: "function_call_output", Content: raw,
+			}},
+		}},
+	}))
+
+	var storedSummary, storedEvent string
+	require.NoError(t, database.Reader().QueryRowContext(
+		t.Context(), "SELECT COALESCE(result_content, '') FROM tool_calls WHERE session_id = ?", "late-result",
+	).Scan(&storedSummary))
+	require.NoError(t, database.Reader().QueryRowContext(
+		t.Context(), "SELECT content FROM tool_result_events WHERE session_id = ?", "late-result",
+	).Scan(&storedEvent))
+	assert.Empty(t, storedSummary)
+	assert.Equal(t, want, storedEvent)
+}
+
 func TestReadOnlyResyncReplacementCarriesDropPolicy(t *testing.T) {
 	root := t.TempDir()
 	archivePath := filepath.Join(t.TempDir(), "archive.db")
@@ -333,7 +504,7 @@ func TestCodexImageRetentionAcrossFullAndLateResults(t *testing.T) {
 			)
 			require.NoError(t, os.WriteFile(path, []byte(transcript), 0o600))
 			database := openTestDB(t)
-			database.SetToolResultImages(config.ToolResultImagesDrop)
+			database.SetToolResultImages(config.ToolResultImagesKeep)
 			engine := NewEngine(database, EngineConfig{Machine: "local", Ephemeral: true,
 				AgentDirs:        map[parser.AgentType][]string{parser.AgentCodex: {root}},
 				ToolResultImages: config.ToolResultImagesDrop, StagedCodexParseMinBytes: threshold,

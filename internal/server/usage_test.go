@@ -341,6 +341,7 @@ func TestHandleUsageTopSessionsLimit(t *testing.T) {
 
 func TestHandleUsageTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
 	te := setup(t)
+	require.NoError(t, te.db.SetSyncState(db.MachineAliasKeyPrefix+"old-owner", "test"))
 	for _, fixture := range []struct {
 		id        string
 		input     int
@@ -379,6 +380,7 @@ func TestHandleUsageTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
 			"timezone":    "UTC",
 			"sort":        "tokens",
 			"token_types": "output",
+			"machine":     "old-owner",
 			"limit":       "1",
 		}))
 	assertStatus(t, w, http.StatusOK)

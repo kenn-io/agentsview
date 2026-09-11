@@ -267,6 +267,8 @@ class SessionsStore {
   projects: ProjectInfo[] = $state([]);
   agents: AgentInfo[] = $state([]);
   machines: string[] = $state([]);
+  machineLabels: Record<string, string> = $state({});
+  private machineAliases = new Map<string, string>();
   activeSessionId: string | null = $state(null);
   // Lets the message pane explain a 404 instead of rendering blank.
   activeSessionNotFound: boolean = $state(false);
@@ -420,6 +422,7 @@ class SessionsStore {
     this.filters = this.#savedFilters.filters;
     this.dateFiltersWindowDays = this.#savedFilters.windowDays;
     this.filterPersistenceHeld = false;
+    this.normalizeMachineFilter();
     if (
       previous.includeOneShot !== this.filters.includeOneShot ||
       previous.includeAutomated !== this.filters.includeAutomated
@@ -451,6 +454,7 @@ class SessionsStore {
     this.dateFiltersWindowDays = parseWindowDaysParam(params[SESSION_ANALYTICS_WINDOW_PARAM]);
     starred.filterOnly = params["starred"] === "true";
     this.filterPersistenceHeld = false;
+    this.normalizeMachineFilter();
     if (prevOneShot !== next.includeOneShot || prevAutomated !== next.includeAutomated) {
       this.invalidateFilterCaches();
     }
@@ -805,6 +809,9 @@ class SessionsStore {
         const res = await MetadataService.getApiV1Machines(this.metadataParams);
         if (ver === this.machinesVersion) {
           this.machines = res.machines;
+          this.machineLabels = res.machine_labels ?? {};
+          this.machineAliases = new Map(Object.entries(res.machine_aliases ?? {}));
+          this.normalizeMachineFilter();
           this.machinesLoaded = true;
         }
       } catch {
@@ -816,6 +823,22 @@ class SessionsStore {
       }
     })();
     return this.machinesPromise;
+  }
+
+  machineLabel(machine: string): string {
+    return this.machineLabels[machine] ?? machine;
+  }
+
+  private normalizeMachineFilter(): void {
+    const machine = [
+      ...new Set(
+        this.filters.machine.split(",").map((key) => this.machineAliases.get(key.trim()) ?? key),
+      ),
+    ].join(",");
+    if (machine !== this.filters.machine) {
+      this.filters.machine = machine;
+      this.persistFiltersIfAllowed();
+    }
   }
 
   private setActiveSession(id: string | null) {

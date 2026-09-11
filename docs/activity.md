@@ -39,12 +39,12 @@ and `automation`.
 
 The summary cards show:
 
-- **Peak Concurrency** — the maximum number of agents active in the same bucket,
-  with the local clock time of the peak
+- **Interactive peak** — the maximum number of interactive conversations active
+  at the same instant, with the clock time of the peak in the report timezone
 - **Active** — active wall-clock time, plus idle time in the range
 - **Agent-minutes** — combined active minutes across concurrent agents
-- **Sessions** — session count, with interactive/automated and untimed-session
-  detail when applicable
+- **Sessions** — session count, with interactive/subagent/automated and
+  untimed-session detail when applicable
 - **Projects** and **Models** — distinct counts in the range
 - **Total Cost** — selected session cost attributed to activity in the range:
   authoritative reported totals when available, otherwise catalog estimates
@@ -55,23 +55,39 @@ sessions, so **Total Cost** lines up with `agentsview usage daily` for the same
 day and timezone. Usage rows that recur across related sessions are deduplicated
 before totaling, the same rule the Usage page applies.
 
+The session count separates subagents from interactive and automated
+conversations. A subagent counts only in the subagent category, even if its
+prompt also matches the automation classifier. Forks remain in the interactive
+or automated category. Costs, agent-minutes, and concurrency use the same three
+separate categories. Automation filters still use each session's automation
+flag, including subagents.
+
 If the selected range reaches into the future, the page marks it as partial and
 shows the report's current **as of** time.
 
 ## Concurrency
 
-The **Concurrency** chart shows active agents over the selected range. Blue
-segments represent interactive sessions, orange segments represent automated
-sessions, and the strip below the chart marks active versus idle buckets.
+The **Concurrency** chart shows three aligned tracks on a shared time axis:
+**Interactive** in blue, **Subagents** in violet, and **Automated** in orange.
+Interactive is first and has more vertical space. Each track has its own scale
+and peak count, so a large subagent burst does not flatten the interactive
+activity. Each bar shows that class's maximum within the bucket; the three
+maxima may occur at different instants. The strip below the tracks marks active
+versus idle buckets across all sessions. Interactive concurrency counts
+overlapping human-facing conversations; human attention is not measured.
 
 ![Weekly Activity concurrency chart](/docs/assets/generated/screenshots/activity-concurrency.png)
 
-Hover a bucket to see its time range, peak agent count, agent-minutes, output
-tokens, and cost. The **Overlay** control can draw an additional **Tokens** or
-**Cost** trend over the concurrency bars.
+Hover a bucket to see its time range, each class's independent peak, the
+combined peak, agent-minutes, input and output tokens, and cost. The
+**All-session overlay** control draws a combined **Tokens** or **Cost** trend
+over the Interactive track, with its own scale on the right. These usage totals
+include all three classes.
 
 Clicking a bucket filters the Sessions table to the sessions active in that time
-slot. Click the same bucket again, or dismiss the **Active:** badge in the table
+slot. Drag across buckets to select a range on all three tracks. Keyboard users
+can select with Enter or Space, extend with Shift+Arrow, and clear with Escape.
+Click the same bucket again, or dismiss the **Active:** badge in the table
 header, to clear the slot filter. Membership is computed by the same shared
 aggregator that builds the chart, then fetched as a bounded page; the browser no
 longer downloads every raw activity interval to perform this drill-down.
@@ -93,14 +109,16 @@ later pages run on the server, with a maximum page size of 500 rows. A loading
 indicator remains local to the table, so the report summary and chart stay
 visible while a page is fetched.
 
-Automated sessions are marked with an **Auto** badge. Untimed sessions can still
-carry cost if usage rows exist but timestamped activity was unavailable.
+Subagent sessions are marked with a **Subagent** badge; other automated sessions
+have an **Auto** badge. Untimed sessions can still carry cost if usage rows
+exist but timestamped activity was unavailable.
 
 ## Breakdowns
 
 The **Breakdown** panel ranks activity by **Project**, **Model**, and **Agent**.
 Toggle between **Agent-min** and **Cost** to change the metric, and use the
-stacked bars to compare interactive and automated contributions.
+stacked bars to compare interactive, subagent, and automated contributions. Each
+session contributes to exactly one segment.
 
 ![Weekly Activity breakdowns](/docs/assets/generated/screenshots/activity-breakdowns.png)
 
@@ -212,6 +230,16 @@ automatically reaggregate it.
 Version 7 applies provider-specific billing identity to computed usage and
 preserves reported cost rows and custom pricing overrides. Costs from v6 and v7
 must not be compared as the same billing semantics.
+
+Version 8 separates interactive, subagent, and automated sessions in session
+counts, agent-minutes, costs, and concurrency. The three class counts sum to
+`totals.sessions`; total usage and cost accounting is unchanged. Buckets include
+independent `max_interactive_agents`, `max_subagent_agents`, and
+`max_automated_agents` values, while the `*_at_peak` fields describe the split
+at the combined `max_agents` peak. The report includes `interactive_peak`,
+`subagent_peak`, and `automated_peak`, each with its own count and timestamp.
+Session rows include `is_subagent`, which takes precedence over `is_automated`
+when assigning the visible class.
 
 Each project, branch, agent, or machine filter is limited to 1,024 UTF-8 bytes,
 with a 3,072-byte combined limit. The server also validates the fully encoded

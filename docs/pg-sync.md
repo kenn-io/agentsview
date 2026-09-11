@@ -32,14 +32,16 @@ dashboard as well.
 Add a `[pg]` section to `~/.agentsview/config.toml`:
 
 ```toml
+local_machine_name = "Laptop"
+
 [pg]
 url = "postgres://user:pass@host:5432/dbname?sslmode=require"
-machine_name = "my-laptop"
 ```
 
-The `machine_name` identifies which machine pushed each session. It defaults to
-the system hostname if omitted. It must not be `"local"` (reserved for the local
-SQLite sentinel).
+Sessions retain their source installation ID. `local_machine_name` supplies the
+display label after a daemon restart and the next push. The optional
+`[pg].machine_name` defaults to the installation ID and only supplies a key for
+legacy `local` rows; it does not rename recorded session keys.
 
 For multiple PostgreSQL destinations, use named `[pg.NAME]` blocks and
 `default_pg` instead of the legacy single `[pg]` block. Named target names are
@@ -272,7 +274,7 @@ PG messages: 47291
 
 | Field       | Description                                                |
 | ----------- | ---------------------------------------------------------- |
-| Machine     | Configured machine name or hostname                        |
+| Machine     | Configured machine key or installation ID        |
 | Last push   | Timestamp of last successful push ("never" if no push yet) |
 | PG sessions | Total session count in PostgreSQL (all machines)           |
 | PG messages | Total message count in PostgreSQL (all machines)           |
@@ -467,10 +469,18 @@ ______________________________________________________________________
 
 ## Machine Labels
 
-When multiple machines push to the same PostgreSQL database, each session is
-tagged with its source machine name. In the web UI, session items show a machine
-label when the session did not originate from the local machine. Use the
-multi-host filter in the sidebar to show sessions from specific machines.
+Each session keeps its source installation ID. The web UI uses display labels
+for readability; set `local_machine_name` in the source's `config.toml`, restart
+the daemon, and push again to change the label. Use the multi-host filter in the
+sidebar to show sessions from specific machines.
+
+The [installation upgrade](/docs/configuration/#upgrading-historical-machine-keys)
+moves historical local sessions to their installation ID in SQLite. The next
+incremental PostgreSQL push republishes those sessions and their metadata. It
+also copies adopted hostname aliases, so existing machine filters and URLs keep
+working. If two installations publish the same old hostname alias, the latest
+push determines its filter target. Use installation IDs to select machines
+unambiguously in a shared mirror. Equal display labels do not merge machines.
 
 ![Machine labels on session items](/docs/assets/generated/screenshots/machine-labels.png)
 
@@ -484,7 +494,6 @@ Single-target PostgreSQL settings can live in the legacy `[pg]` section of
 ```toml
 [pg]
 url = "postgres://user:pass@host:5432/dbname?sslmode=require"
-machine_name = "my-laptop"
 schema = "agentsview"
 allow_insecure = false
 ```
@@ -492,7 +501,7 @@ allow_insecure = false
 | Field              | Default      | Description                                                            |
 | ------------------ | ------------ | ---------------------------------------------------------------------- |
 | `url`              | (required)   | PostgreSQL connection string                                           |
-| `machine_name`     | OS hostname  | Identifies the pushing machine; defaults to `os.Hostname()` if omitted |
+| `machine_name`     | Installation ID | Explicit machine key for legacy local-sentinel rows; new sessions retain their recorded installation ID |
 | `schema`           | `agentsview` | PostgreSQL schema name                                                 |
 | `allow_insecure`   | `false`      | Allow non-TLS connections to non-loopback hosts                        |
 | `projects`         |              | Array of project names to include in push                              |
@@ -506,11 +515,9 @@ default_pg = "work"
 
 [pg.work]
 url = "postgres://user:pass@work-db:5432/agentsview?sslmode=require"
-machine_name = "my-laptop"
 
 [pg.archive]
 url = "postgres://user:pass@archive-db:5432/agentsview?sslmode=require"
-machine_name = "my-laptop-archive"
 exclude_projects = ["scratch"]
 ```
 
@@ -555,8 +562,9 @@ ______________________________________________________________________
 
 A typical team setup:
 
-1. **Each developer** configures `[pg]` in their local `config.toml` with a
-   unique `machine_name`
+1. **Each developer** configures `[pg]` in their local `config.toml`. The
+   installation ID identifies their sessions; `local_machine_name` sets the
+   display label
 1. **Each developer** installs `agentsview pg service` or runs
    `agentsview pg push --watch` to sync their sessions
 1. **One server** runs `agentsview pg serve` pointed at the shared PostgreSQL

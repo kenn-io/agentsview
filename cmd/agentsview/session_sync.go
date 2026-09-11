@@ -80,7 +80,7 @@ func syncService(
 		DisabledAgents:     cfg.DisabledAgents,
 		IncludeCwdPrefixes: cfg.SyncIncludeCwdPrefixes,
 		ScanProtectedPaths: cfg.ScanProtectedPaths,
-		Machine:            cfg.LocalMachineName,
+		Machine:            cfg.InstallationID,
 		ArchiveContent:     cfg.ArchiveContent,
 	})
 	// Close the engine before the DB so pending debounced signal

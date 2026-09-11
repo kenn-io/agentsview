@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -52,63 +53,59 @@ func (t pricingCatalogTransport) RoundTrip(
 }
 
 func TestRunPeriodicPricingRefreshFetchesAfterRecentAttempt(t *testing.T) {
-	database := dbtest.OpenTestDB(t)
-	previousAttempt := time.Now().Add(-10 * time.Minute).UTC().Format(
-		time.RFC3339,
-	)
-	require.NoError(t, database.SetPricingMeta(
-		"_litellm_last_attempt", previousAttempt,
-	))
+	synctest.Test(t, func(t *testing.T) {
+		database := dbtest.OpenTestDB(t)
+		previousAttempt := time.Now().Add(-10 * time.Minute).UTC().Format(
+			time.RFC3339,
+		)
+		require.NoError(t, database.SetPricingMeta(
+			"_litellm_last_attempt", previousAttempt,
+		))
 
-	requests := make(chan *http.Request, 3)
-	originalTransport := http.DefaultTransport
-	http.DefaultTransport = pricingCatalogTransport{requests: requests}
-	t.Cleanup(func() {
-		http.DefaultTransport = originalTransport
-	})
+		requests := make(chan *http.Request, 3)
+		originalTransport := http.DefaultTransport
+		http.DefaultTransport = pricingCatalogTransport{requests: requests}
+		t.Cleanup(func() {
+			http.DefaultTransport = originalTransport
+		})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	ticks := make(chan time.Time, 1)
-	done := make(chan struct{})
-	go func() {
-		runPeriodicPricingRefresh(ctx, ticks, database, nil)
-		close(done)
-	}()
-	t.Cleanup(func() {
-		cancel()
-		require.Eventually(t, func() bool {
-			select {
-			case <-done:
-				return true
-			default:
-				return false
-			}
-		}, pricingResyncTestTimeout, time.Millisecond)
-	})
+		ctx, cancel := context.WithCancel(context.Background())
+		ticks := make(chan time.Time, 1)
+		done := make(chan struct{})
+		go func() {
+			runPeriodicPricingRefresh(ctx, ticks, database, nil)
+			close(done)
+		}()
+		t.Cleanup(func() {
+			cancel()
+			synctest.Wait()
+			<-done
+		})
 
-	ticks <- time.Now()
-	require.Eventually(t, func() bool {
+		ticks <- time.Now()
+		synctest.Wait()
 		price, err := database.GetModelPricing("scheduled-model")
-		return err == nil && price != nil
-	}, pricingResyncTestTimeout, time.Millisecond)
+		require.NoError(t, err)
+		require.NotNil(t, price)
 
-	require.Equal(t,
-		"https://raw.githubusercontent.com/pydantic/genai-prices/main/"+
-			"prices/new_data/v2/data.json",
-		(<-requests).URL.String(),
-	)
-	require.Equal(t,
-		"https://raw.githubusercontent.com/BerriAI/litellm/main/"+
-			"model_prices_and_context_window.json",
-		(<-requests).URL.String(),
-	)
-	require.Equal(t,
-		"https://openrouter.ai/api/v1/models",
-		(<-requests).URL.String(),
-	)
-	currentAttempt, err := database.GetPricingMeta("_litellm_last_attempt")
-	require.NoError(t, err)
-	require.NotEqual(t, previousAttempt, currentAttempt)
+		require.Equal(t,
+			"https://raw.githubusercontent.com/pydantic/genai-prices/main/"+
+				"prices/new_data/v2/data.json",
+			(<-requests).URL.String(),
+		)
+		require.Equal(t,
+			"https://raw.githubusercontent.com/BerriAI/litellm/main/"+
+				"model_prices_and_context_window.json",
+			(<-requests).URL.String(),
+		)
+		require.Equal(t,
+			"https://openrouter.ai/api/v1/models",
+			(<-requests).URL.String(),
+		)
+		currentAttempt, err := database.GetPricingMeta("_litellm_last_attempt")
+		require.NoError(t, err)
+		require.NotEqual(t, previousAttempt, currentAttempt)
+	})
 }
 
 func TestStartPeriodicPricingRefreshWaitsForResyncSwap(t *testing.T) {
@@ -272,39 +269,33 @@ func TestSeedPricingWaitsForResyncSwap(t *testing.T) {
 }
 
 func TestRunPricingRefreshLoopContinuesAfterFailure(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	ticks := make(chan time.Time, 2)
-	done := make(chan struct{})
-	var attempts atomic.Int32
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		ticks := make(chan time.Time, 2)
+		done := make(chan struct{})
+		var attempts atomic.Int32
 
-	go func() {
-		runPricingRefreshLoop(ctx, ticks, func(context.Context) error {
-			if attempts.Add(1) == 1 {
-				return errors.New("temporary pricing failure")
-			}
-			return nil
+		go func() {
+			runPricingRefreshLoop(ctx, ticks, func(context.Context) error {
+				if attempts.Add(1) == 1 {
+					return errors.New("temporary pricing failure")
+				}
+				return nil
+			})
+			close(done)
+		}()
+		t.Cleanup(func() {
+			cancel()
+			synctest.Wait()
+			<-done
 		})
-		close(done)
-	}()
-	t.Cleanup(func() {
-		cancel()
-		require.Eventually(t, func() bool {
-			select {
-			case <-done:
-				return true
-			default:
-				return false
-			}
-		}, pricingResyncTestTimeout, time.Millisecond)
+
+		ticks <- time.Time{}
+		synctest.Wait()
+		require.Equal(t, int32(1), attempts.Load())
+
+		ticks <- time.Time{}
+		synctest.Wait()
+		require.Equal(t, int32(2), attempts.Load())
 	})
-
-	ticks <- time.Time{}
-	require.Eventually(t, func() bool {
-		return attempts.Load() == 1
-	}, pricingResyncTestTimeout, time.Millisecond)
-
-	ticks <- time.Time{}
-	require.Eventually(t, func() bool {
-		return attempts.Load() == 2
-	}, pricingResyncTestTimeout, time.Millisecond)
 }

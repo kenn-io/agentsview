@@ -48,6 +48,7 @@ describe("AppearanceSettings", () => {
 
   afterEach(() => {
     ui.applyZoomLevel(100);
+    ui.renderUnknownXmlBlocksAsPreformatted = false;
     if (ui.highContrast) ui.toggleHighContrast();
     settings.chartPalette = "agentsview";
     settings.readOnly = false;
@@ -111,6 +112,18 @@ describe("AppearanceSettings", () => {
     expect(queryAllByRole("option")).toHaveLength(0);
     await fireEvent.keyDown(input, { key: "Enter" });
     expect(ui.zoomLevel).toBe(100);
+  });
+
+  it("toggles rendering unknown XML blocks as preformatted text", async () => {
+    const { getByRole } = render(AppearanceSettings);
+    const checkbox = getByRole("checkbox", {
+      name: "Render unknown XML blocks as preformatted text",
+    });
+
+    expect((checkbox as HTMLInputElement).checked).toBe(false);
+    await fireEvent.click(checkbox);
+    expect(ui.renderUnknownXmlBlocksAsPreformatted).toBe(true);
+    expect((checkbox as HTMLInputElement).checked).toBe(true);
   });
 
   it("toggles high contrast", async () => {

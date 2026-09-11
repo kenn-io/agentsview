@@ -20,6 +20,7 @@
   import TerminalSettings from "./TerminalSettings.svelte";
   import ArchiveContentSettings from "./ArchiveContentSettings.svelte";
   import EmbeddingsSettings from "./EmbeddingsSettings.svelte";
+  import ToolImageCleanup from "./ToolImageCleanup.svelte";
   import GithubSettings from "./GithubSettings.svelte";
   import LanguageSettings from "./LanguageSettings.svelte";
   import RemoteSettings from "./RemoteSettings.svelte";
@@ -206,6 +207,8 @@
                 <TerminalSettings />
               {:else if meta.id === "agent-directories"}
                 <AgentDirSettings />
+              {:else if meta.id === "tool-result-images"}
+                <ToolImageCleanup />
               {:else if meta.id === "worktree-mappings"}
                 <Button
                   label={m.settings_worktree_moved_link()}

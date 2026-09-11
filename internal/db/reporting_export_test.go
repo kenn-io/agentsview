@@ -19,48 +19,26 @@ import (
 func TestReportingExportCompletedEmptyDayHas24QuietHours(t *testing.T) {
 	d := testDB(t)
 
-	tests := []struct {
-		name          string
-		schemaVersion int
-		digest        string
-	}{
-		{
-			name:          "legacy v1",
-			schemaVersion: export.ReportingLegacySchemaVersion,
-			digest:        "sha256:3e92051eeb2fa36ad03a30bbbf1a7769244ecd33c5dca3eddd3698ddc0cd71d3",
-		},
-		{
-			name:          "current v2",
-			schemaVersion: export.ReportingSchemaVersion,
-			digest:        "sha256:24fb5a2f40effe393c3c384087b4103811eabc85e029c1afd56b3f61afa8fe3e",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			day, err := d.ExportReportingDay(context.Background(), ReportingExportOptions{
-				Date:          time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
-				Now:           time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
-				SchemaVersion: tt.schemaVersion,
-			})
-			require.NoError(t, err)
-
-			assert.Equal(t, tt.schemaVersion, day.SchemaVersion)
-			assert.True(t, day.Complete)
-			assert.False(t, day.HasData)
-			assert.Equal(t, tt.digest, day.Digest)
-			require.Len(t, day.Hours, 24)
-			for _, hour := range day.Hours {
-				assert.False(t, hour.HasData)
-				assert.Zero(t, hour.Activity.Totals.IdleMinutes)
-				assert.Empty(t, hour.Activity.ByModel)
-				assert.Empty(t, hour.Activity.ByAgent)
-				assert.Empty(t, hour.Activity.ByProject)
-				assert.Empty(t, hour.Usage.ByModel)
-				assert.Empty(t, hour.Usage.ByAgent)
-				assert.Empty(t, hour.Usage.ByProject)
-				assert.Len(t, hour.Activity.Buckets, 12)
-			}
-		})
+	day, err := d.ExportReportingDay(context.Background(), ReportingExportOptions{
+		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, export.ReportingSchemaVersion, day.SchemaVersion)
+	assert.True(t, day.Complete)
+	assert.False(t, day.HasData)
+	assert.Equal(t, "sha256:308989b5c0df16c9d2d06fd050f3268632327d9faf9088f6dfb85ad9b221fc4c", day.Digest)
+	require.Len(t, day.Hours, 24)
+	for _, hour := range day.Hours {
+		assert.False(t, hour.HasData)
+		assert.Zero(t, hour.Activity.Totals.IdleMinutes)
+		assert.Empty(t, hour.Activity.ByModel)
+		assert.Empty(t, hour.Activity.ByAgent)
+		assert.Empty(t, hour.Activity.ByProject)
+		assert.Empty(t, hour.Usage.ByModel)
+		assert.Empty(t, hour.Usage.ByAgent)
+		assert.Empty(t, hour.Usage.ByProject)
+		assert.Len(t, hour.Activity.Buckets, 12)
 	}
 }
 
@@ -133,6 +111,94 @@ func TestReportingExportCurrentDayOmitsOpenHour(t *testing.T) {
 	assert.Empty(t, day.Digest)
 	require.Len(t, day.Hours, 14)
 	assert.Equal(t, "2026-07-29-13", day.Hours[13].Period)
+}
+
+func TestReportingExportSeparatesSubagentsAndIndependentPeaks(t *testing.T) {
+	d := testDB(t)
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: "model-a", OutputPerMTok: money.MustParseDollars("1"),
+	}}))
+	for _, session := range []struct {
+		id, start, end      string
+		subagent, automated bool
+	}{
+		{"root-a", "10:00:00", "10:02:00", false, false},
+		{"root-b", "10:00:00", "10:01:00", false, false},
+		{"child-a", "10:01:00", "10:03:00", true, false},
+		{"child-b", "10:02:00", "10:04:00", true, false},
+		{"automated-child", "10:02:00", "10:03:00", true, true},
+		{"automated-a", "10:03:00", "10:05:00", false, true},
+		{"automated-b", "10:03:00", "10:04:00", false, true},
+		{"untimed-child", "10:04:00", "", true, false},
+	} {
+		start := "2026-07-28T" + session.start + "Z"
+		insertSession(t, d, session.id, "project-a", func(s *Session) {
+			s.Agent = "agent-a"
+			s.StartedAt = new(start)
+			s.IsAutomated = session.automated
+			if session.subagent {
+				s.ParentSessionID = new("root-a")
+				s.RelationshipType = "subagent"
+			}
+		})
+		seedMessage(t, d, session.id, 1, "user", start, "")
+		if session.end != "" {
+			insertMessages(t, d, Message{
+				SessionID: session.id, Ordinal: 2, Role: "assistant",
+				Content: "answer", Timestamp: "2026-07-28T" + session.end + "Z",
+				Model: "model-a", TokenUsage: jsontext.Value(`{"output_tokens":10}`),
+			})
+		}
+	}
+
+	day, err := d.ExportReportingDay(context.Background(), ReportingExportOptions{
+		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.Len(t, day.Hours, 24)
+	hour := day.Hours[10]
+	assert.Equal(t, 11.0, hour.Activity.Totals.AgentMinutes)
+	assert.Equal(t, 3.0, hour.Activity.Totals.InteractiveAgentMinutes)
+	assert.Equal(t, 5.0, hour.Activity.Totals.SubagentAgentMinutes)
+	assert.Equal(t, 3.0, hour.Activity.Totals.AutomatedAgentMinutes)
+	assert.Equal(t, money.Money{Microdollars: 70}, hour.Activity.Totals.Cost)
+	assert.Equal(t, money.Money{Microdollars: 20}, hour.Activity.Totals.InteractiveCost)
+	assert.Equal(t, money.Money{Microdollars: 30}, hour.Activity.Totals.SubagentCost)
+	assert.Equal(t, money.Money{Microdollars: 20}, hour.Activity.Totals.AutomatedCost)
+	assert.Equal(t, int64(70), hour.Activity.Totals.OutputTokens)
+	assert.Equal(t, hour.Activity.Totals.Cost, hour.Usage.Totals.Cost)
+	assert.Equal(t, 8, hour.Activity.Totals.NewSessions)
+	assert.Equal(t, 2, hour.Activity.Totals.NewInteractiveSessions)
+	assert.Equal(t, 4, hour.Activity.Totals.NewSubagentSessions)
+	assert.Equal(t, 2, hour.Activity.Totals.NewAutomatedSessions)
+	assert.Equal(t, 1, hour.Activity.Totals.NewUntimedSessions)
+	assert.Zero(t, day.Hours[11].Activity.Totals.NewSessions)
+	assert.Equal(t, export.ReportingActivityPeak{Agents: 3, At: new("2026-07-28T10:02:00Z")}, hour.Activity.Peak)
+	assert.Equal(t, export.ReportingActivityPeak{Agents: 2, At: new("2026-07-28T10:00:00Z")}, hour.Activity.InteractivePeak)
+	assert.Equal(t, export.ReportingActivityPeak{Agents: 3, At: new("2026-07-28T10:02:00Z")}, hour.Activity.SubagentPeak)
+	assert.Equal(t, export.ReportingActivityPeak{Agents: 2, At: new("2026-07-28T10:03:00Z")}, hour.Activity.AutomatedPeak)
+	require.Len(t, hour.Activity.Buckets, 12)
+	bucket := hour.Activity.Buckets[0]
+	assert.Equal(t, 3, bucket.MaxAgents)
+	assert.Equal(t, 2, bucket.MaxInteractiveAgents)
+	assert.Equal(t, 3, bucket.MaxSubagentAgents)
+	assert.Equal(t, 2, bucket.MaxAutomatedAgents)
+	assert.Zero(t, bucket.InteractiveAtPeak)
+	assert.Equal(t, 3, bucket.SubagentAtPeak)
+	assert.Zero(t, bucket.AutomatedAtPeak)
+	for _, rows := range [][]export.ReportingActivityBreakdown{hour.Activity.ByModel, hour.Activity.ByAgent} {
+		require.Len(t, rows, 1)
+		assert.Equal(t, 11.0, rows[0].AgentMinutes)
+		assert.Equal(t, 3.0, rows[0].InteractiveAgentMinutes)
+		assert.Equal(t, 5.0, rows[0].SubagentAgentMinutes)
+		assert.Equal(t, 3.0, rows[0].AutomatedAgentMinutes)
+		assert.Equal(t, money.Money{Microdollars: 30}, rows[0].SubagentCost)
+	}
+	require.Len(t, hour.Activity.ByProject, 1)
+	assert.Equal(t, 11.0, hour.Activity.ByProject[0].AgentMinutes)
+	assert.Equal(t, 5.0, hour.Activity.ByProject[0].SubagentAgentMinutes)
+	assert.Equal(t, money.Money{Microdollars: 30}, hour.Activity.ByProject[0].SubagentCost)
 }
 
 func TestReportingUsageBreakdownsIgnoreNilAccumulators(t *testing.T) {
@@ -1267,6 +1333,7 @@ func TestReportingHourRejectsInvalidAgentMinutes(t *testing.T) {
 		original    float64
 		automated   float64
 		interactive float64
+		subagent    float64
 		want        float64
 		wantErr     bool
 	}{
@@ -1276,6 +1343,18 @@ func TestReportingHourRejectsInvalidAgentMinutes(t *testing.T) {
 			automated:   0.25,
 			interactive: 0.25,
 			want:        0.5,
+		},
+		{
+			name: "subagent component", original: 1, automated: 0.25, interactive: 0.25, subagent: 0.5, want: 1,
+		},
+		{
+			name: "negative subagent", subagent: -0.1, wantErr: true,
+		},
+		{
+			name: "nan subagent", subagent: math.NaN(), wantErr: true,
+		},
+		{
+			name: "infinite subagent", subagent: math.Inf(1), wantErr: true,
 		},
 		{
 			name:        "inclusive tolerance boundary",
@@ -1338,7 +1417,7 @@ func TestReportingHourRejectsInvalidAgentMinutes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := reportingDerivedAgentMinutes(
-				"fixture", tt.original, tt.automated, tt.interactive,
+				"fixture", tt.original, tt.automated, tt.interactive, tt.subagent,
 			)
 			if tt.wantErr {
 				require.Error(t, err)

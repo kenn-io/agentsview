@@ -40,9 +40,9 @@ func testConfigWithClaudeFixture(t *testing.T) config.Config {
 		))
 	}
 	return config.Config{
-		DataDir:          dataDir,
-		DBPath:           filepath.Join(dataDir, "sessions.db"),
-		LocalMachineName: "local",
+		DataDir:        dataDir,
+		DBPath:         filepath.Join(dataDir, "sessions.db"),
+		InstallationID: "0123456789abcdef0123456789abcdef",
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeDir},
 		},
@@ -144,14 +144,34 @@ func TestSyncWorkerStartupUsesConfiguredSourceMachine(t *testing.T) {
 }
 
 func TestSyncWorkerReportsAbortAsFailure(t *testing.T) {
-	cfg := testConfigWithClaudeFixture(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // aborted before work starts
+	for _, mode := range []string{"startup", "resync-build"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := testConfigWithClaudeFixture(t)
+			database, err := openDB(cfg)
+			require.NoError(t, err)
+			require.NoError(t, database.Close())
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel() // aborted before work starts
+			var out bytes.Buffer
+			err = runSyncWorkerContext(ctx, cfg, mode, &out)
+			require.Error(t, err, "aborted work must not exit zero")
+			result := decodeSingleResult(t, &out)
+			assert.Equal(t, "aborted", result.Status)
+			assert.False(t, result.DiscoveryComplete)
+		})
+	}
+}
+
+func TestSyncWorkerResyncBuildReportsMissingArchive(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{
+		DataDir: dir, DBPath: filepath.Join(dir, "missing.db"),
+		InstallationID: "0123456789abcdef0123456789abcdef",
+	}
 	var out bytes.Buffer
-	err := runSyncWorkerContext(ctx, cfg, "startup", &out)
-	require.Error(t, err, "aborted work must not exit zero")
+	require.Error(t, runSyncWorkerContext(t.Context(), cfg, "resync-build", &out))
 	result := decodeSingleResult(t, &out)
-	assert.Equal(t, "aborted", result.Status)
+	assert.Equal(t, "failed", result.Status)
 	assert.False(t, result.DiscoveryComplete)
 }
 
