@@ -538,15 +538,26 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	windsurfWorkspaceJSON := filepath.Join(windsurfWorkspaceDir, "workspace.json")
 	poolsideRoot := filepath.Join(home, ".local", "state", "poolside")
 	poolsideTrajectories := filepath.Join(poolsideRoot, "trajectories")
+	clineRoot := filepath.Join(home, ".cline")
+	clineSessionDir := filepath.Join(clineRoot, "data", "sessions", "sess-test")
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
 	require.NoError(t, os.MkdirAll(codexDir, 0o755))
 	require.NoError(t, os.MkdirAll(devinDir, 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Dir(aiderHistory), 0o755))
 	require.NoError(t, os.MkdirAll(windsurfWorkspaceDir, 0o755))
 	require.NoError(t, os.MkdirAll(poolsideTrajectories, 0o755))
+	require.NoError(t, os.MkdirAll(clineSessionDir, 0o755))
 	require.NoError(t, os.WriteFile(aiderHistory, []byte("# aider\n"), 0o644))
 	require.NoError(t, os.WriteFile(windsurfStateDB, []byte("state"), 0o644))
 	require.NoError(t, os.WriteFile(windsurfWorkspaceJSON, []byte("{}\n"), 0o644))
+	clineMeta := filepath.Join(clineSessionDir, "sess-test.json")
+	clineMsg := filepath.Join(clineSessionDir, "sess-test.messages.json")
+	require.NoError(t, os.WriteFile(clineMeta, []byte(`{"session_id":"sess-test"}`), 0o644))
+	require.NoError(t, os.WriteFile(clineMsg, []byte(`{"messages":[]}`), 0o644))
+	clineSecretDir := filepath.Join(clineRoot, "data", "sessions", ".secret")
+	require.NoError(t, os.MkdirAll(clineSecretDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(clineSecretDir, ".secret.json"), []byte(`{"session_id":".secret"}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(clineSecretDir, ".secret.messages.json"), []byte(`{"messages":[]}`), 0o644))
 	codexIndex := filepath.Join(home, ".codex", parser.CodexSessionIndexFilename)
 	require.NoError(t, os.WriteFile(codexIndex, []byte("{}\n"), 0o644))
 
@@ -565,6 +576,7 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 			parser.AgentAider:    {aiderRoot},
 			parser.AgentWindsurf: {windsurfUserRoot},
 			parser.AgentPoolside: {poolsideRoot},
+			parser.AgentCline:    {clineRoot},
 		},
 	})
 	assert.ElementsMatch(t, sshDirs[parser.AgentClaude], goTargets.Dirs[parser.AgentClaude])
@@ -589,6 +601,11 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	// subdirectory, not the application-data root.
 	assert.ElementsMatch(t, []string{poolsideTrajectories}, sshDirs[parser.AgentPoolside])
 	assert.ElementsMatch(t, sshDirs[parser.AgentPoolside], goTargets.Dirs[parser.AgentPoolside])
+	// Cline: both resolvers must emit only session files.
+	assert.ElementsMatch(t, []string{clineRoot}, sshDirs[parser.AgentCline])
+	assert.ElementsMatch(t, sshDirs[parser.AgentCline], goTargets.Dirs[parser.AgentCline])
+	assert.ElementsMatch(t, []string{clineMeta, clineMsg}, sshFiles[parser.AgentCline])
+	assert.ElementsMatch(t, sshFiles[parser.AgentCline], goTargets.Files[parser.AgentCline])
 }
 
 func TestSelectAllowedFiles(t *testing.T) {
@@ -968,6 +985,200 @@ func TestRooCodeRemoteSyncSkipsRootWithoutSessions(t *testing.T) {
 	// root must not fall back to a recursive directory target.
 	assert.NotContains(t, targets.Dirs, parser.AgentRooCode)
 	assert.NotContains(t, targets.Files, parser.AgentRooCode)
+}
+
+func TestClineRemoteSyncExportsOnlySessionFiles(t *testing.T) {
+	root := t.TempDir()
+	clineRoot := filepath.Join(root, ".cline")
+	sess1 := filepath.Join(clineRoot, "data", "sessions", "sess-1")
+	sess2 := filepath.Join(clineRoot, "data", "sessions", "sess-2")
+	settingsDir := filepath.Join(clineRoot, "settings")
+	checkpoints := filepath.Join(clineRoot, "data", "checkpoints")
+	require.NoError(t, os.MkdirAll(sess1, 0o755))
+	require.NoError(t, os.MkdirAll(sess2, 0o755))
+	require.NoError(t, os.MkdirAll(settingsDir, 0o755))
+	require.NoError(t, os.MkdirAll(checkpoints, 0o755))
+
+	sess1Meta := filepath.Join(sess1, "sess-1.json")
+	sess1Messages := filepath.Join(sess1, "sess-1.messages.json")
+	sess2Meta := filepath.Join(sess2, "sess-2.json")
+	mcpSettings := filepath.Join(settingsDir, "mcp_settings.json")
+	checkpointBlob := filepath.Join(checkpoints, "checkpoint.bin")
+	require.NoError(t, os.WriteFile(sess1Meta,
+		[]byte(`{"session_id":"sess-1","started_at":"2026-09-10T10:00:00Z"}`), 0o644))
+	require.NoError(t, os.WriteFile(sess1Messages, []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(sess2Meta,
+		[]byte(`{"session_id":"sess-2","started_at":"2026-09-10T11:00:00Z"}`), 0o644))
+	require.NoError(t, os.WriteFile(mcpSettings,
+		[]byte(`{"mcpServers":{"s":{"env":{"API_KEY":"sk-secret"}}}}`), 0o644))
+	require.NoError(t, os.WriteFile(checkpointBlob, []byte("checkpoint"), 0o644))
+
+	targets := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot},
+		},
+	})
+
+	assert.Equal(t, []string{clineRoot}, targets.Dirs[parser.AgentCline])
+	assert.ElementsMatch(t, []string{
+		sess1Meta,
+		sess1Messages,
+		sess2Meta,
+	}, targets.Files[parser.AgentCline])
+
+	var buf bytes.Buffer
+	require.NoError(t, remotesync.WriteArchive(&buf, targets))
+	names := []string{}
+	tr := tar.NewReader(&buf)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		names = append(names, hdr.Name)
+	}
+	joined := strings.Join(names, "\n")
+	assert.Contains(t, joined, "data/sessions/sess-1/sess-1.json")
+	assert.Contains(t, joined, "data/sessions/sess-1/sess-1.messages.json")
+	assert.Contains(t, joined, "data/sessions/sess-2/sess-2.json")
+	assert.NotContains(t, joined, "mcp_settings.json")
+	assert.NotContains(t, joined, "checkpoint")
+
+	_, ok := remotesync.SelectAllowedFiles(targets, []string{mcpSettings})
+	assert.False(t, ok, "settings under the Cline root must be rejected")
+	_, ok = remotesync.SelectAllowedFiles(targets, []string{checkpointBlob})
+	assert.False(t, ok, "checkpoint data under the Cline root must be rejected")
+	assert.NotContains(t, targets.DeltaAllowedRoots(), clineRoot)
+}
+
+func TestClineRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
+	// 1. Configured-root layout (e.g. ~/.cline)
+	root := t.TempDir()
+	clineRoot := filepath.Join(root, ".cline")
+	sess1 := filepath.Join(clineRoot, "data", "sessions", "sess-1")
+	sess2 := filepath.Join(clineRoot, "data", "sessions", "sess-2")
+	require.NoError(t, os.MkdirAll(sess1, 0o755))
+	require.NoError(t, os.MkdirAll(sess2, 0o755))
+	sess1Meta := filepath.Join(sess1, "sess-1.json")
+	sess1Messages := filepath.Join(sess1, "sess-1.messages.json")
+	sess2Meta := filepath.Join(sess2, "sess-2.json")
+	require.NoError(t, os.WriteFile(sess1Meta,
+		[]byte(`{"session_id":"sess-1","started_at":"2026-09-10T10:00:00Z"}`), 0o644))
+	require.NoError(t, os.WriteFile(sess1Messages, []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(sess2Meta,
+		[]byte(`{"session_id":"sess-2","started_at":"2026-09-10T11:00:00Z"}`), 0o644))
+
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot},
+		},
+	}
+	staleClientTargets := resolveTargetsForTest(t, cfg)
+	require.Contains(t, staleClientTargets.Files[parser.AgentCline], sess1Messages)
+
+	require.NoError(t, os.RemoveAll(sess1))
+	freshServerTargets := resolveTargetsForTest(t, cfg)
+	assert.NotContains(t, freshServerTargets.Files[parser.AgentCline], sess1Messages)
+
+	selected, ok := remotesync.SelectAllowedTargets(
+		freshServerTargets, staleClientTargets,
+	)
+	require.True(t, ok, "a vanished session file under configured root must not fail request")
+	var buf bytes.Buffer
+	require.NoError(t, remotesync.WriteArchive(&buf, selected))
+	names := []string{}
+	tr := tar.NewReader(&buf)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		names = append(names, hdr.Name)
+	}
+	joined := strings.Join(names, "\n")
+	assert.Contains(t, joined, "sess-2/sess-2.json")
+	assert.NotContains(t, joined, "sess-1")
+
+	files, ok := remotesync.SelectAllowedFiles(
+		freshServerTargets, []string{sess1Messages},
+	)
+	require.True(t, ok, "vanished session file must validate as delta request")
+	var delta bytes.Buffer
+	require.NoError(t, remotesync.WriteArchiveFiles(&delta, freshServerTargets, files))
+	dr := tar.NewReader(&delta)
+	_, err := dr.Next()
+	assert.Equal(t, io.EOF, err, "vanished file streams nothing")
+
+	// Non-session paths must stay rejected
+	for _, path := range []string{
+		filepath.Join(clineRoot, "settings", "mcp_settings.json"),
+		filepath.Join(clineRoot, "data", "checkpoints", "checkpoint.bin"),
+		filepath.Join(clineRoot, "data", "sessions", "_meta", "sess-1.json"),
+		filepath.Join(clineRoot, "sess-1.json"),
+	} {
+		_, ok := remotesync.SelectAllowedFiles(freshServerTargets, []string{path})
+		assert.False(t, ok, "non-session path must stay rejected: %s", path)
+	}
+
+	// 2. Direct-sessions-root layout (e.g. ~/.cline/data/sessions)
+	directRoot := filepath.Join(root, "direct", "sessions")
+	directSess1 := filepath.Join(directRoot, "dsess-1")
+	directSess2 := filepath.Join(directRoot, "dsess-2")
+	require.NoError(t, os.MkdirAll(directSess1, 0o755))
+	require.NoError(t, os.MkdirAll(directSess2, 0o755))
+	dsess1Meta := filepath.Join(directSess1, "dsess-1.json")
+	dsess2Meta := filepath.Join(directSess2, "dsess-2.json")
+	require.NoError(t, os.WriteFile(dsess1Meta,
+		[]byte(`{"session_id":"dsess-1","started_at":"2026-09-10T10:00:00Z"}`), 0o644))
+	require.NoError(t, os.WriteFile(dsess2Meta,
+		[]byte(`{"session_id":"dsess-2","started_at":"2026-09-10T11:00:00Z"}`), 0o644))
+
+	directCfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {directRoot},
+		},
+	}
+	staleDirectTargets := resolveTargetsForTest(t, directCfg)
+	require.Contains(t, staleDirectTargets.Files[parser.AgentCline], dsess1Meta)
+
+	require.NoError(t, os.RemoveAll(directSess1))
+	freshDirectTargets := resolveTargetsForTest(t, directCfg)
+	assert.NotContains(t, freshDirectTargets.Files[parser.AgentCline], dsess1Meta)
+
+	_, ok = remotesync.SelectAllowedTargets(freshDirectTargets, staleDirectTargets)
+	require.True(t, ok, "a vanished session file under direct sessions root must not fail request")
+}
+
+func TestClineRemoteSyncPreservesRootWhenEmpty(t *testing.T) {
+	root := t.TempDir()
+	clineRoot := filepath.Join(root, ".cline")
+	sessionsDir := filepath.Join(clineRoot, "data", "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot},
+		},
+	}
+	targets := resolveTargetsForTest(t, cfg)
+	assert.Contains(t, targets.Dirs[parser.AgentCline], clineRoot)
+	require.Contains(t, targets.Files, parser.AgentCline, "must retain files entry for Cline")
+	assert.Empty(t, targets.Files[parser.AgentCline], "file slice must be empty when no sessions exist")
+
+	// Verify a stale client request for a deleted session can still be authorized for eviction
+	staleTargets := remotesync.TargetSet{
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot},
+		},
+		Files: map[parser.AgentType][]string{
+			parser.AgentCline: {filepath.Join(sessionsDir, "old-sess", "old-sess.json")},
+		},
+	}
+	selected, ok := remotesync.SelectAllowedTargets(targets, staleTargets)
+	require.True(t, ok, "stale session file under empty Cline root must remain authorized for eviction")
+	assert.Empty(t, selected.Files[parser.AgentCline])
 }
 
 func TestCursorRemoteTargetsExcludeChatsRoot(t *testing.T) {

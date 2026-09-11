@@ -1237,6 +1237,29 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   `internal/parser/roocode_provider.go`; observed older Roo/Cline message
   variants remain covered by the parser's colocated fixtures.
 
+## Cline CLI (`cline`)
+
+- **Format:** One session directory per task under `~/.cline/data/sessions/<id>/`
+  containing `<id>.json` (session metadata and aggregate usage) and
+  `<id>.messages.json` (transcript array with text, thinking, tool_use, and
+  tool_result blocks).
+- **Evidence:** `source`.
+- **Upstream:** Clone `https://github.com/cline/cline.git` at
+  `595f1dbf2ea819e987afeadb4ed4dd9a0ae9a55e`. The pinned
+  [session persistence](https://github.com/cline/cline/blob/595f1dbf2ea819e987afeadb4ed4dd9a0ae9a55e/sdk/packages/core/src/session/services/persistence-service.ts)
+  and
+  [conversation store](https://github.com/cline/cline/blob/595f1dbf2ea819e987afeadb4ed4dd9a0ae9a55e/sdk/packages/core/src/session/stores/conversation-store.ts)
+  persist metadata to `<sessionId>/<sessionId>.json` and structured messages to
+  `<sessionId>/<sessionId>.messages.json`.
+- **Usage and cost:** `<id>.json` persists cumulative `inputTokens`,
+  `outputTokens`, `cacheReadTokens`, and `cacheWriteTokens` along with
+  `totalCost` in the `metadata.usage` / `metadata.aggregateUsage` object.
+  Individual assistant messages also carry per-turn `metrics` (input,
+  output, cache read/write tokens). Agentsview consumes the reported cost,
+  including explicit zero, and tracks the peak context window across turns.
+- **Agentsview:** `internal/parser/cline.go` and
+  `internal/parser/cline_provider.go`.
+
 ## OpenHands (`openhands`)
 
 - **Format:** A CLI conversation directory containing `base_state.json` and one

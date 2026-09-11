@@ -290,6 +290,35 @@ func buildResolveScript() string {
 			"printf '%s\\000' \"" + string(parser.AgentPoolside) + ":$av_poolside_traj\";; " +
 			"esac; " +
 			"}\n" +
+			// Cline CLI stores sessions under <root>/data/sessions/<id>/
+			// (or directly under <root>/<id>/ if configured to sessions/)
+			// with <id>.json (metadata) and <id>.messages.json (transcript).
+			// Roots also hold settings, caches, and checkpoints that must
+			// never be transferred over SSH sync. Emit only discovered
+			// per-session files, never the raw directory, mirroring
+			// remotesync.resolveClineTarget.
+			"av_emit_cline_target() { " +
+			"target=\"$1\"; " +
+			"case \"$target\" in */) target=\"${target%/}\";; esac; " +
+			"av_cline_sessions=\"$target\"; " +
+			"case \"$target\" in " +
+			"*/data/sessions|*/sessions) ;; " +
+			"*) if [ -d \"$target/data/sessions\" ]; then av_cline_sessions=\"$target/data/sessions\"; else return; fi;; " +
+			"esac; " +
+			"[ -d \"$av_cline_sessions\" ] || return; " +
+			"target=$(av_phys_dir \"$target\") || return 0; " +
+			"printf '%s\\000' \"" + string(parser.AgentCline) + ":$target\"; " +
+			"for av_cline_sess in \"$av_cline_sessions\"/*; do " +
+			"[ -d \"$av_cline_sess\" ] || continue; " +
+			"[ -L \"$av_cline_sess\" ] && continue; " +
+			"av_cline_id=\"${av_cline_sess##*/}\"; " +
+			"case \"$av_cline_id\" in _*|.*) continue;; esac; " +
+			"av_cline_meta=\"$av_cline_sess/$av_cline_id.json\"; " +
+			"[ -f \"$av_cline_meta\" ] || continue; " +
+			"av_emit_agent_file \"" + string(parser.AgentCline) + "\" \"$av_cline_meta\"; " +
+			"av_emit_agent_file \"" + string(parser.AgentCline) + "\" \"$av_cline_sess/$av_cline_id.messages.json\"; " +
+			"done; " +
+			"}\n" +
 			// Provider-specific narrowing keys on the override's literal
 			// basename (a symlink named "trajectories" or
 			// "workspaceStorage" is meaningful as spelled), so
@@ -304,6 +333,10 @@ func buildResolveScript() string {
 			"fi; " +
 			"if [ \"$agent\" = \"" + string(parser.AgentRooCode) + "\" ]; then " +
 			"av_emit_roocode_target \"$target\"; " +
+			"return; " +
+			"fi; " +
+			"if [ \"$agent\" = \"" + string(parser.AgentCline) + "\" ]; then " +
+			"av_emit_cline_target \"$target\"; " +
 			"return; " +
 			"fi; " +
 			"if [ \"$agent\" = \"" + string(parser.AgentKiloLegacy) + "\" ]; then " +
@@ -638,9 +671,12 @@ func parseResolvedTargets(
 		seen[value] = struct{}{}
 		dirs[at] = append(dirs[at], value)
 	}
-	// Evener roots stay file-scoped even when every filename was rejected.
+	// Evener and Cline roots stay file-scoped even when every filename was rejected.
 	if len(dirs[parser.AgentEvener]) > 0 && len(files[parser.AgentEvener]) == 0 {
 		files[parser.AgentEvener] = []string{}
+	}
+	if len(dirs[parser.AgentCline]) > 0 && len(files[parser.AgentCline]) == 0 {
+		files[parser.AgentCline] = []string{}
 	}
 	return dirs, files, extraFiles, forbiddenRoots, nil
 }

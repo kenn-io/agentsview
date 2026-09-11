@@ -37,7 +37,7 @@ func NormalizeToolCategory(rawName string) string {
 		return "Task"
 
 	// Gemini tools
-	case "read_file", "list_directory":
+	case "read_file", "read_files", "list_directory":
 		return "Read"
 	case "write_file":
 		return "Write"
@@ -74,6 +74,19 @@ func NormalizeToolCategory(rawName string) string {
 	case "fetchInstructions", "updateTodoList", "finishTask",
 		"switchMode":
 		return "Tool"
+
+	// Cline tools (snake_case variants not already covered above:
+	// read_file→Read, execute_command→Bash, write_to_file→Write,
+	// search_files→Grep, list_files→Read, use_mcp_tool/switch_mode→Tool)
+	case "replace_in_file":
+		return "Edit"
+	case "list_code_definition_names":
+		return "Read"
+	case "browser_action", "access_mcp_resource",
+		"ask_followup_question", "attempt_completion":
+		return "Tool"
+	case "new_task":
+		return "Task"
 
 	// Antigravity tools
 	case "view_file", "read_url_content":
@@ -271,9 +284,7 @@ func NormalizeToolCategory(rawName string) string {
 	case "explore":
 		return "Task"
 
-	// Warp tools
-	case "read_files":
-		return "Read"
+	// Warp tools (read_files handled in earlier section)
 	case "apply_file_diff":
 		return "Edit"
 	case "search_codebase":

@@ -746,6 +746,114 @@ func TestResolveScriptRooCodeSkipsRootWithoutSessions(t *testing.T) {
 	}
 }
 
+func TestResolveScriptClineTargetsOnlySessionFiles(t *testing.T) {
+	home := physTempDir(t)
+	clineRoot := filepath.Join(home, ".cline")
+	sess1 := filepath.Join(clineRoot, "data", "sessions", "sess-1")
+	sess2 := filepath.Join(clineRoot, "data", "sessions", "sess-2")
+	metaDir := filepath.Join(clineRoot, "data", "sessions", "_meta")
+	settingsDir := filepath.Join(clineRoot, "settings")
+	checkpoints := filepath.Join(clineRoot, "data", "checkpoints")
+	require.NoError(t, os.MkdirAll(sess1, 0o755))
+	require.NoError(t, os.MkdirAll(sess2, 0o755))
+	require.NoError(t, os.MkdirAll(metaDir, 0o755))
+	require.NoError(t, os.MkdirAll(settingsDir, 0o755))
+	require.NoError(t, os.MkdirAll(checkpoints, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sess1, "sess-1.json"), []byte(`{"session_id":"sess-1"}`), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sess1, "sess-1.messages.json"), []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sess2, "sess-2.json"), []byte(`{"session_id":"sess-2"}`), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(settingsDir, "mcp_settings.json"),
+		[]byte(`{"mcpServers":{"s":{"env":{"API_KEY":"sk-secret"}}}}`), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(checkpoints, "checkpoint.bin"), []byte("checkpoint"), 0o644))
+
+	out := runResolveScriptForTest(t, "HOME="+home)
+
+	records := resolveOutputRecords(string(out))
+	agentFilePrefix := resolveAgentFilePrefix + ":" + string(parser.AgentCline)
+	assert.True(t, hasRecordWithPathSuffix(records,
+		string(parser.AgentCline), ".cline"),
+		"root must be emitted once as the agent target")
+	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		"data/sessions/sess-1/sess-1.json"))
+	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		"data/sessions/sess-1/sess-1.messages.json"))
+	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		"data/sessions/sess-2/sess-2.json"))
+	// sess-2 has no sess-2.messages.json; av_emit_agent_file skips it.
+	assert.False(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		"data/sessions/sess-2/sess-2.messages.json"))
+	for _, record := range records {
+		assert.NotContains(t, record, "mcp_settings.json",
+			"settings must never be emitted")
+		assert.NotContains(t, record, "checkpoint",
+			"checkpoint data must never be emitted")
+		assert.NotContains(t, record, "_meta",
+			"underscore-prefixed session dirs must be skipped")
+	}
+}
+
+func TestResolveScriptClineSkipsRootWithoutSessions(t *testing.T) {
+	home := physTempDir(t)
+	clineRoot := filepath.Join(home, ".cline")
+	settingsDir := filepath.Join(clineRoot, "settings")
+	require.NoError(t, os.MkdirAll(settingsDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(settingsDir, "mcp_settings.json"),
+		[]byte(`{"mcpServers":{}}`), 0o644))
+
+	out := runResolveScriptForTest(t, "HOME="+home)
+
+	for _, record := range resolveOutputRecords(string(out)) {
+		assert.NotContains(t, record, "cline",
+			"a session-less Cline root must emit nothing")
+	}
+}
+
+func TestResolveScriptClineRetainsEmptyFilesMarkerOnUnrepresentableSessionID(t *testing.T) {
+	// A Cline root whose only session ID contains unrepresentable characters
+	// (e.g. carriage return) will have its file records dropped by
+	// invalidResolvedPath. The resolver must preserve an explicit empty
+	// files[AgentCline] slice so buildTarCommand does not fall back to
+	// recursively archiving the whole Cline root directory.
+	input := "cline:/home/user/.cline\x00@agentfile:cline:/home/user/.cline/data/sessions/sess\r1/sess\r1.json\x00"
+	dirs, files, extraFiles, forbiddenRoots, err := parseResolvedTargets(input)
+	require.NoError(t, err)
+	assert.Empty(t, extraFiles)
+	assert.Empty(t, forbiddenRoots)
+	assert.Equal(t, []string{"/home/user/.cline"}, dirs[parser.AgentCline])
+	require.Contains(t, files, parser.AgentCline, "must retain files entry for Cline")
+	assert.Empty(t, files[parser.AgentCline], "file slice must be empty after invalid path was dropped")
+
+	tarCmd := buildTarCommand(dirs, files, nil, nil)
+	assert.NotContains(t, tarCmd, "/home/user/.cline",
+		"tar command must not fall back to archiving the entire Cline root directory")
+}
+
+func TestResolveScriptClinePreservesRootWhenEmpty(t *testing.T) {
+	home := physTempDir(t)
+	clineRoot := filepath.Join(home, ".cline")
+	sessionsDir := filepath.Join(clineRoot, "data", "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+
+	out := runResolveScriptForTest(t, "HOME="+home)
+	dirs, files, extraFiles, _, err := parseResolvedTargets(string(out))
+	require.NoError(t, err)
+	assert.Empty(t, extraFiles)
+	assert.Truef(t, hasSuffix(dirs[parser.AgentCline], ".cline"),
+		"cline root dir should be resolved, got %v", dirs[parser.AgentCline])
+	require.Contains(t, files, parser.AgentCline, "must retain files entry for empty Cline root")
+	assert.Empty(t, files[parser.AgentCline], "files slice must be empty when no sessions exist")
+
+	tarCmd := buildTarCommand(dirs, files, nil, nil)
+	assert.NotContains(t, tarCmd, ".cline",
+		"empty Cline root must not be archived recursively")
+}
+
 func TestResolveScriptKiloLegacyRejectsSymlinkedTaskDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")

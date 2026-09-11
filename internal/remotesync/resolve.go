@@ -94,6 +94,20 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 				}
 				continue
 			}
+			if def.Type == parser.AgentCline {
+				root, targetFiles, err := resolveClineTarget(dir)
+				if err != nil {
+					return TargetSet{}, err
+				}
+				if root != "" {
+					dirs[def.Type] = append(dirs[def.Type], root)
+					if _, exists := files[def.Type]; !exists {
+						files[def.Type] = []string{}
+					}
+					files[def.Type] = append(files[def.Type], targetFiles...)
+				}
+				continue
+			}
 			if def.Type == parser.AgentKiloLegacy {
 				root, targetFiles, err := resolveKiloLegacyTarget(dir)
 				if err != nil {
@@ -597,6 +611,64 @@ func resolveRooCodeTarget(root string) (string, []string, error) {
 	return targetRoot, files, nil
 }
 
+// resolveClineTarget resolves a Cline root directory to only the per-session
+// metadata and transcript files (<id>.json, <id>.messages.json).
+func resolveClineTarget(root string) (string, []string, error) {
+	targetRoot := filepath.Clean(root)
+	ok, err := statCuratedDir(targetRoot)
+	if err != nil || !ok {
+		return "", nil, err
+	}
+	base := filepath.Base(targetRoot)
+	isDirect := base == "sessions" || strings.HasSuffix(filepath.ToSlash(targetRoot), "data/sessions")
+	sessionsDir := targetRoot
+	if !isDirect {
+		sessionsDir = filepath.Join(targetRoot, "data", "sessions")
+	}
+	sessionsExist, err := statCuratedDir(sessionsDir)
+	if err != nil || !sessionsExist {
+		return "", nil, err
+	}
+	provider, ok := parser.NewProvider(parser.AgentCline, parser.ProviderConfig{
+		Roots: []string{targetRoot},
+	})
+	if !ok {
+		return "", nil, nil
+	}
+	sources, err := discoverProviderSources(provider)
+	if err != nil {
+		return "", nil, fmt.Errorf("discover cline remote sync targets under %q: %w",
+			targetRoot, err)
+	}
+	var files []string
+	for _, source := range sources {
+		metaPath := providerDiscoveredPath(source)
+		if metaPath == "" {
+			continue
+		}
+		regular, err := statRegularRemoteSyncFile(metaPath)
+		if err != nil {
+			return "", nil, err
+		}
+		if !regular {
+			continue
+		}
+		files = append(files, metaPath)
+		dir := filepath.Dir(metaPath)
+		sessionID := filepath.Base(dir)
+		msgPath := filepath.Join(dir, sessionID+".messages.json")
+		regular, err = statRegularRemoteSyncFile(msgPath)
+		if err != nil {
+			return "", nil, err
+		}
+		if regular {
+			files = append(files, msgPath)
+		}
+	}
+	sort.Strings(files)
+	return targetRoot, files, nil
+}
+
 // resolveKiloLegacyTarget resolves a Kilo Legacy globalStorage root to
 // only the per-task session files (task_metadata.json, ui_messages.json,
 // api_conversation_history.json). This avoids recursively transferring
@@ -972,6 +1044,43 @@ func kiloLegacySessionFileShape(rel string) bool {
 	return false
 }
 
+// clineSessionFileShape reports whether rel — a slash-separated path
+// relative to a Cline root — names exactly a session file the
+// provider would discover: data/sessions/<sessionID>/<sessionID>.json,
+// data/sessions/<sessionID>/<sessionID>.messages.json, or relative to
+// a direct sessions root, <sessionID>/<sessionID>.json or
+// <sessionID>/<sessionID>.messages.json. Session IDs starting with "_"
+// or "." are rejected, matching discovery's marker-directory skip.
+func clineSessionFileShape(root, rel string) bool {
+	parts := strings.Split(rel, "/")
+	var sessionID, filename string
+	switch len(parts) {
+	case 4:
+		if parts[0] != "data" || parts[1] != "sessions" {
+			return false
+		}
+		sessionID, filename = parts[2], parts[3]
+	case 3:
+		if parts[0] != "sessions" {
+			return false
+		}
+		sessionID, filename = parts[1], parts[2]
+	case 2:
+		base := filepath.Base(filepath.Clean(root))
+		if base != "sessions" && !strings.HasSuffix(filepath.ToSlash(filepath.Clean(root)), "data/sessions") {
+			return false
+		}
+		sessionID, filename = parts[0], parts[1]
+	default:
+		return false
+	}
+	if sessionID == "" || strings.HasPrefix(sessionID, "_") || strings.HasPrefix(sessionID, ".") ||
+		strings.ContainsAny(sessionID, "\\:\x00") {
+		return false
+	}
+	return filename == sessionID+".json" || filename == sessionID+".messages.json"
+}
+
 // authorizedStaleCuratedFile reports whether a curated file request
 // that missed the fresh per-request resolution is still authorized
 // under a verbatim or snapshot file-scoped agent's allowed root — the
@@ -1120,6 +1229,8 @@ func sessionFileShape(agent parser.AgentType, root, rel string) bool {
 		return ok && id != "" && id != "." && id != ".." && !strings.ContainsAny(id, "\\:\x00")
 	case parser.AgentKiloLegacy:
 		return kiloLegacySessionFileShape(rel)
+	case parser.AgentCline:
+		return clineSessionFileShape(root, rel)
 	case parser.AgentCursor:
 		_, ok := parser.ParseCursorTranscriptRelPath(rel)
 		return ok

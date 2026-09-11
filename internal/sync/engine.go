@@ -8544,6 +8544,14 @@ func (e *Engine) discoveredFileEffectiveMtime(
 		_, mtime := roocodeEffectiveStat(file.Path, info)
 		return mtime, nil
 	}
+	if file.Agent == parser.AgentCline {
+		info, err := os.Stat(file.Path)
+		if err != nil {
+			return 0, err
+		}
+		_, mtime := clineEffectiveStat(file.Path, info)
+		return mtime, nil
+	}
 	// Kilo Legacy is excluded from the provider-Fingerprint path for
 	// cost, not correctness: its Fingerprint content-hashes all three
 	// session files, so consulting it here would read every task's full
@@ -14651,6 +14659,15 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 		if e.shouldSkipByPath(path, effectiveInfo) {
 			return mtime, true
 		}
+	case parser.AgentCline:
+		size, mtime := clineEffectiveStat(path, info)
+		effectiveInfo := fakeSnapshotInfo{
+			fSize:  size,
+			fMtime: mtime,
+		}
+		if e.shouldSkipByPath(path, effectiveInfo) {
+			return mtime, true
+		}
 	case parser.AgentKiloLegacy:
 		// Kilo Legacy's fingerprint is composite (task_metadata.json
 		// plus ui_messages.json and api_conversation_history.json).
@@ -15781,6 +15798,25 @@ func roocodeEffectiveStat(historyPath string, info os.FileInfo) (int64, int64) {
 	size := info.Size()
 	mtime := info.ModTime().UnixNano()
 	msgPath := filepath.Join(filepath.Dir(historyPath), "ui_messages.json")
+	if msgInfo, err := os.Stat(msgPath); err == nil && !msgInfo.IsDir() {
+		size += msgInfo.Size()
+		if ts := msgInfo.ModTime().UnixNano(); ts > mtime {
+			mtime = ts
+		}
+	}
+	return size, mtime
+}
+
+// clineEffectiveStat returns the composite size and latest mtime of
+// a Cline session's <id>.json and its <id>.messages.json sibling
+// using stat calls only. The values mirror what clineFingerprintSource
+// stamps on stored sessions (summed size, max mtime).
+func clineEffectiveStat(metaPath string, info os.FileInfo) (int64, int64) {
+	size := info.Size()
+	mtime := info.ModTime().UnixNano()
+	dir := filepath.Dir(metaPath)
+	sessionID := filepath.Base(dir)
+	msgPath := filepath.Join(dir, sessionID+".messages.json")
 	if msgInfo, err := os.Stat(msgPath); err == nil && !msgInfo.IsDir() {
 		size += msgInfo.Size()
 		if ts := msgInfo.ModTime().UnixNano(); ts > mtime {
@@ -18691,6 +18727,7 @@ func shouldReplaceFullParseMessages(
 		// messages, and strips embedded read results into them. An
 		// append would leave the existing rows' result events stale.
 		pw.sess.Agent == parser.AgentRooCode ||
+		pw.sess.Agent == parser.AgentCline ||
 		// Kilo Legacy pairs later command_output, MCP response,
 		// and error records back to earlier tool-call messages,
 		// similar to RooCode. An incremental append would leave
@@ -19130,7 +19167,7 @@ func (e *Engine) writeSessionFullWithResolver(
 func (e *Engine) shouldPreserveRooCodeArchive(
 	agent parser.AgentType, sessionID string, msgs []db.Message,
 ) bool {
-	if (agent != parser.AgentRooCode && agent != parser.AgentKiloLegacy) || len(msgs) > 0 {
+	if (agent != parser.AgentRooCode && agent != parser.AgentKiloLegacy && agent != parser.AgentCline) || len(msgs) > 0 {
 		return false
 	}
 	store := e.archiveStore
@@ -20246,6 +20283,14 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 			return 0
 		}
 		_, mtime := roocodeEffectiveStat(path, info)
+		return mtime
+	}
+	if def.Type == parser.AgentCline {
+		info, err := os.Stat(path)
+		if err != nil {
+			return 0
+		}
+		_, mtime := clineEffectiveStat(path, info)
 		return mtime
 	}
 	if def.Type == parser.AgentCodebuff {

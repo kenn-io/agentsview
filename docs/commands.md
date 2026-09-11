@@ -1529,6 +1529,7 @@ agentsview help
 | `COWORK_DIR`                      | (platform-specific)                                  | Claude Desktop cowork sessions directory                                                            |
 | `CODEX_SESSIONS_DIR`              | `~/.codex/sessions`                                  | Codex sessions directory                                                                            |
 | `CODEX_HOME`                      | unset                                                | Codex home that re-roots the default `sessions/` and `archived_sessions/` discovery paths           |
+| `CLINE_DIR`                       | `~/.cline`                                           | Cline sessions directory (discovers under `<root>/data/sessions/` or direct sessions root)          |
 | `COMMANDCODE_PROJECTS_DIR`        | `~/.commandcode/projects`                            | Command Code projects directory                                                                     |
 | `COPILOT_DIR`                     | `~/.copilot`                                         | Copilot CLI sessions directory                                                                      |
 | `CORTEX_DIR`                      | `~/.snowflake/cortex/conversations`                  | Cortex Code conversations directory                                                                 |

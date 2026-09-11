@@ -77,6 +77,7 @@ const (
 	AgentEvener         AgentType = "evener"
 	AgentIcodemate      AgentType = "icodemate"
 	AgentRooCode        AgentType = "roocode"
+	AgentCline          AgentType = "cline"
 	AgentPoolside       AgentType = "poolside"
 	AgentOmnigent       AgentType = "omnigent"
 	AgentCodebuff       AgentType = "codebuff"
@@ -975,6 +976,17 @@ var Registry = []AgentDef{
 		},
 		IDPrefix:  "roocode:",
 		FileBased: true,
+	},
+	{
+		// Cline CLI stores sessions under ~/.cline/data/sessions/<id>/
+		// with <id>.json (metadata) and <id>.messages.json (transcript).
+		Type:        AgentCline,
+		DisplayName: "Cline",
+		EnvVar:      "CLINE_DIR",
+		ConfigKey:   "cline_dirs",
+		DefaultDirs: []string{".cline"},
+		IDPrefix:    "cline:",
+		FileBased:   true,
 	},
 	{
 		Type:        AgentPoolside,

@@ -926,6 +926,7 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  COPILOT_DIR             Copilot sessions or exported JetBrains Copilot directory")
 	fmt.Fprintln(w, "  GEMINI_DIR              Gemini CLI directory")
 	fmt.Fprintln(w, "  OPENCODE_DIR            OpenCode data directory")
+	fmt.Fprintln(w, "  CLINE_DIR               Cline sessions directory")
 	fmt.Fprintln(w, "  CURSOR_PROJECTS_DIR     Cursor projects directory")
 	fmt.Fprintln(w, "  IFLOW_DIR               iFlow projects directory")
 	fmt.Fprintln(w, "  AMP_DIR                 Amp threads directory")
