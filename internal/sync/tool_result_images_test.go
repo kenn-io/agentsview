@@ -593,6 +593,33 @@ func TestCodexDropImagesNeverEnterScratch(t *testing.T) {
 	assert.NotContains(t, string(bytes), "data:image/png;base64,AAEC")
 }
 
+func TestCodexDropImagesNeverEnterScratchWhenToolContentOmitted(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	database.SetArchiveContent(config.ArchiveContentTranscripts)
+	sink, err := newCodexStagingSink(t.TempDir(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sink.Close()) })
+	sink.database = database
+	sink.toolResultImages = config.ToolResultImagesDrop
+	sink.AppendMessage(parser.ParsedMessage{ToolCalls: []parser.ParsedToolCall{{ToolUseID: "call", Category: "Bash"}}})
+	const raw = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	const want = `[{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1}]`
+	sink.AppendToolResultEvent("call", nil, parser.ParsedToolResultEvent{
+		ToolUseID: "call", Source: "function_call_output", Content: raw,
+	})
+	require.NoError(t, sink.Err())
+	var content string
+	var contentLength int
+	require.NoError(t, sink.scratch.QueryRow(
+		"SELECT content, content_length FROM stage_events LIMIT 1",
+	).Scan(&content, &contentLength))
+	assert.Equal(t, want, content)
+	assert.Equal(t, len(want), contentLength)
+	bytes, err := os.ReadFile(sink.Path())
+	require.NoError(t, err)
+	assert.NotContains(t, string(bytes), "data:image/png;base64,AAEC")
+}
+
 func TestToolResultImagesOffloadFullIngest(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	engine := NewEngine(database, EngineConfig{Machine: "local", ToolResultImages: config.ToolResultImages("offload"), AssetsDir: t.TempDir()})

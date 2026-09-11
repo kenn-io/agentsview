@@ -10,7 +10,7 @@
     $derived([
       { value: "keep", label: m.settings_tool_result_images_keep() },
       { value: "drop", label: m.settings_tool_result_images_drop() },
- { value: "offload", label: m.settings_tool_result_images_offload() },
+      { value: "offload", label: m.settings_tool_result_images_offload() },
     ]);
 
   let restartRequired = $state(false);

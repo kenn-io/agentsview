@@ -390,14 +390,6 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// ProjectToolResultImages applies the configured policy to a message graph.
-// Projection copies the graph and its nested tool-result slices before editing.
-func ProjectToolResultImages(
-	messages []Message, policy config.ToolResultImages,
-) ([]Message, ToolImageStats) {
-	return projectToolResultImages(messages, policy, "")
-}
-
 func projectToolResultImages(
 	messages []Message, policy config.ToolResultImages, assetsDir string,
 ) ([]Message, ToolImageStats) {

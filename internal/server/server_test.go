@@ -5709,18 +5709,16 @@ func TestSettingsAgentHomesPersistAndRoundTrip(t *testing.T) {
 	assert.Equal(t, []string{"/sessions/pi"}, persisted.Agents["pi"].Dirs)
 }
 
-func TestNormalizedSessionExportsPreserveOffloadedImages(t *testing.T) {
+func TestMarkdownSessionExportPreservesOffloadedImages(t *testing.T) {
 	te := setup(t)
 	te.db.SetToolResultImages(config.ToolResultImagesOffload)
 	te.db.SetAssetsDir(t.TempDir())
 	te.seedSession(t, "image-export", "project", 1)
 	require.NoError(t, te.db.InsertMessages([]db.Message{{SessionID: "image-export", Role: "assistant", Content: "image result", ToolCalls: []db.ToolCall{{ToolUseID: "call", ToolName: "Read", Category: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`}}}}))
-	for _, endpoint := range []string{"export", "md"} {
-		w := te.get(t, "/api/v1/sessions/image-export/"+endpoint)
-		require.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Body.String(), "image_ref")
-		assert.Contains(t, w.Body.String(), "asset://")
-		assert.Contains(t, w.Body.String(), "agentsview_image")
-		assert.NotContains(t, w.Body.String(), "base64,AAEC")
-	}
+	w := te.get(t, "/api/v1/sessions/image-export/md")
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "image_ref")
+	assert.Contains(t, w.Body.String(), "asset://")
+	assert.Contains(t, w.Body.String(), "agentsview_image")
+	assert.NotContains(t, w.Body.String(), "base64,AAEC")
 }

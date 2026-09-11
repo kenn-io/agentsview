@@ -541,7 +541,8 @@ func (s *codexStagingSink) AppendToolResultEvent(
 		// contract before the real content enters the scratch publish source.
 		// Keep dedup above this point raw: two provider events that differ
 		// only by stripped controls remain two events on the collecting path.
-		if s.database == nil || !s.database.ArchiveContent().OmitsToolContent() {
+		if s.toolResultImages != config.ToolResultImagesOffload ||
+			s.database == nil || !s.database.ArchiveContent().OmitsToolContent() {
 			assetsDir := ""
 			if s.database != nil {
 				assetsDir = s.database.AssetsDir()
