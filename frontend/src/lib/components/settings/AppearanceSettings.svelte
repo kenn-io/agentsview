@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { Button, Checkbox, SegmentedControl } from "@kenn-io/kit-ui";
+  import { Button, Checkbox, SegmentedControl, Typeahead } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { settings } from "../../stores/settings.svelte.js";
   import {
     ui,
     ALL_BLOCK_TYPES,
-    FONT_SCALE_STEPS,
+    ZOOM_STEPS,
     type BlockType,
     type MessageLayout,
   } from "../../stores/ui.svelte.js";
@@ -42,9 +42,9 @@
     system: m.header_transcript_blocks_system(),
   });
 
-  const FONT_SCALE_OPTIONS = $derived(
-    FONT_SCALE_STEPS.map((step) => ({
-      value: String(step),
+  const ZOOM_OPTIONS = $derived(
+    ZOOM_STEPS.map((step) => ({
+      name: String(step),
       label: `${step}%`,
     })),
   );
@@ -89,13 +89,17 @@
     />
   </div>
 
-  <div class="setting-row option-row">
-    <span class="setting-label">{m.appearance_text_size()}</span>
-    <SegmentedControl
-      options={FONT_SCALE_OPTIONS}
-      value={String(ui.fontScale)}
-      ariaLabel={m.appearance_text_size()}
-      onchange={(value) => ui.setFontScale(Number(value))}
+  <div class="setting-row">
+    <span class="setting-label">{m.appearance_zoom()}</span>
+    <Typeahead
+      options={ZOOM_OPTIONS}
+      value={String(ui.zoomLevel)}
+      fallbackLabel="100%"
+      triggerPrefix={m.appearance_zoom()}
+      placeholder={m.appearance_zoom()}
+      title={m.appearance_zoom()}
+      emptyLabel={m.filter_dropdown_no_matches()}
+      onselect={(value) => ui.setZoomLevel(Number(value))}
     />
   </div>
 
@@ -143,6 +147,10 @@
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+  }
+
+  :global(.kit-typeahead__panel) {
+    zoom: var(--agentsview-zoom-compensation, 1);
   }
 
   @media (max-width: 640px) {

@@ -1164,7 +1164,7 @@ organized into sections:
 | Section           | What You Can Configure                                                                                                                                                                                    |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Language          | Interface language (English, French, Japanese, Korean, Simplified Chinese, or Traditional Chinese)                                                                                                        |
-| Appearance        | Theme (light/dark), high-contrast mode, chart colors, message layout, text size, block visibility, desktop zoom level                                                                                     |
+| Appearance        | Theme (light/dark), high-contrast mode, chart colors, message layout, zoom, block visibility                                                                                     |
 | Date ranges       | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality                                                                                                  |
 | Agent Directories | Custom paths for each agent's session files. For Devin CLI, point at the local root that contains `cli/` (for example a redacted `.../Application Support/devin` path), not copied config or OAuth files. |
 | Terminal          | Default terminal emulator for session resume                                                                                                                                                              |
@@ -1178,15 +1178,9 @@ organized into sections:
 
 ![Chart color palette setting](/docs/assets/generated/screenshots/settings-chart-colors.png)
 
-Language, theme, high contrast, message layout, text size, block visibility,
-desktop zoom, and Date ranges preferences are stored in the browser. **Chart
-colors** are the exception within Appearance: the selected palette is saved
-server-wide as `chart_palette` in `~/.agentsview/config.toml`. Agent directory
-overrides, terminal settings, the saved GitHub token, and the local server's
-remote-access authentication settings also use that file. Worktree mapping rules
-moved to the [Data page](/docs/data/#rules) and live in the local archive
-database. See [Remote Access](/docs/remote-access/) for details on the remote
-access settings.
+Language, theme, high contrast, message layout, zoom, block visibility, and Date ranges preferences use local storage in the current browser or desktop webview profile. Each profile keeps its own choices.
+
+Chart colors use the server-wide `chart_palette` setting in `~/.agentsview/config.toml`. Agent directory overrides, terminal settings, the saved GitHub token, and the local server's remote-access authentication settings also use that file. Worktree mapping rules moved to the [Data page](/docs/data/#rules) and live in the local archive database. See [Remote Access](/docs/remote-access/) for details on the remote access settings.
 
 ______________________________________________________________________
 
@@ -1200,12 +1194,11 @@ commit, and links to the changelog and GitHub repository.
 
 ______________________________________________________________________
 
-## Desktop Zoom
+## Zoom
 
-In the desktop app, use `Cmd+Plus` and `Cmd+Minus` (or `Ctrl+Plus` /
-`Ctrl+Minus` on Windows) to zoom in and out. `Cmd+0` resets to the default zoom
-level. The zoom level can also be set in the Settings page under the
-**Appearance** tab.
+Settings > Appearance has one Zoom setting for the whole interface in both the browser and desktop app. It offers 67%, 75%, 80%, 90%, 100%, 110%, 120%, 125%, 130%, 150%, 175%, and 200%. Existing text-size preferences migrate to Zoom. A saved non-default zoom takes precedence. Otherwise, a saved non-default text size takes precedence over 100%.
+
+The desktop status bar and shortcuts change the same setting. Use `Cmd+Plus` and `Cmd+Minus`, or `Ctrl+Plus` and `Ctrl+Minus` on Windows, to zoom in and out. `Cmd+0`, or `Ctrl+0` on Windows, resets Zoom to 100%.
 
 ______________________________________________________________________
 

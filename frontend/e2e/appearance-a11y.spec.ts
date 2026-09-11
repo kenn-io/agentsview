@@ -1,7 +1,7 @@
-import { test, expect, type Locator } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 
-function readZoom(page: import("@playwright/test").Page): Promise<string> {
+function readZoom(page: Page): Promise<string> {
   return page.evaluate(() => document.documentElement.style.getPropertyValue("zoom"));
 }
 
@@ -166,12 +166,17 @@ test.describe("Appearance accessibility", () => {
     await expect(alert).toHaveCSS("display", "grid");
   });
 
-  test("text size scales the UI on web without horizontal overflow", async ({ page }) => {
+  test("legacy zoom scales the UI on web without horizontal overflow", async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem("agentsview-font-scale", "130");
     });
     const sp = new SessionsPage(page);
-    await sp.goto();
+    await page.goto("/sessions");
+    await sp.sessionItems.first().waitFor({ state: "attached" });
+    if (await page.evaluate(() => matchMedia("(max-width: 760px)").matches)) {
+      await page.getByRole("button", { name: "Toggle sidebar", exact: true }).click();
+    }
+    await expect(sp.sessionItems.first()).toBeVisible();
 
     expect(await readZoom(page)).toBe("1.3");
 
@@ -184,29 +189,22 @@ test.describe("Appearance accessibility", () => {
     await expect(sp.messageRows.first()).toBeVisible();
   });
 
-  test("text size at 90% renders and scrolls the transcript", async ({ page }) => {
+  test("zoom at 90% renders and scrolls the transcript", async ({ page }) => {
     await page.addInitScript(() => {
-      localStorage.setItem("agentsview-font-scale", "90");
+      localStorage.setItem("agentsview-zoom-level", "90");
     });
     const sp = new SessionsPage(page);
-    await sp.goto();
+    await page.goto("/sessions");
+    await sp.sessionItems.first().waitFor({ state: "attached" });
+    if (await page.evaluate(() => matchMedia("(max-width: 760px)").matches)) {
+      await page.getByRole("button", { name: "Toggle sidebar", exact: true }).click();
+    }
+    await expect(sp.sessionItems.first()).toBeVisible();
 
     expect(await readZoom(page)).toBe("0.9");
 
     await sp.selectFirstSession();
     await expect(sp.messageRows.first()).toBeVisible();
-  });
-
-  test("desktop window zoom stays separate from text size in the browser", async ({ page }) => {
-    await page.addInitScript(() => {
-      localStorage.setItem("agentsview-zoom-level", "150");
-      localStorage.setItem("agentsview-font-scale", "120");
-    });
-    await page.goto("/?desktop");
-    const sp = new SessionsPage(page);
-    await expect(sp.sessionItems.first()).toBeVisible({ timeout: 5_000 });
-
-    expect(await readZoom(page)).toBe("1.8");
   });
 
   test("high contrast applies the root class and overrides tokens", async ({ page }) => {
@@ -286,4 +284,121 @@ test.describe("Appearance accessibility", () => {
     await expect(assistantRoleIcon).toBeVisible();
     expectReadableContrast(await elementColors(assistantRoleIcon));
   });
+});
+
+async function openAppearance(page: Page, url: string) {
+  await page.goto(url);
+  await expect(page.getByRole("heading", { name: "Appearance", exact: true })).toBeVisible();
+  await expect(page.getByTitle("Zoom", { exact: true })).toBeVisible();
+}
+
+async function expectZoom(page: Page, label: string, css: string, stored: string) {
+  await expect(page.getByTitle("Zoom", { exact: true })).toHaveText(`Zoom ${label}`);
+  await expect.poll(() => readZoom(page)).toBe(css);
+  expect(await page.evaluate(() => localStorage.getItem("agentsview-zoom-level"))).toBe(stored);
+  expect(await page.evaluate(() => localStorage.getItem("agentsview-font-scale"))).toBeNull();
+}
+
+for (const desktop of [false, true]) {
+  test.describe(`Shared zoom in ${desktop ? "desktop-marked browser" : "browser"}`, () => {
+    const url = desktop ? "/settings?desktop" : "/settings";
+
+    for (const state of [
+      { canonical: null, legacy: null, label: "100%", css: "1", stored: "100" },
+      { canonical: null, legacy: "120", label: "120%", css: "1.2", stored: "120" },
+      { canonical: "100", legacy: "130", label: "130%", css: "1.3", stored: "130" },
+      { canonical: "150", legacy: "120", label: "150%", css: "1.5", stored: "150" },
+      { canonical: "bad", legacy: "90", label: "90%", css: "0.9", stored: "90" },
+      { canonical: "133", legacy: "150", label: "100%", css: "1", stored: "100" },
+    ]) {
+      test(`restores canonical ${state.canonical} and legacy ${state.legacy} through reload`, async ({ page }) => {
+        await page.addInitScript(({ canonical, legacy }) => {
+          if (sessionStorage.getItem("zoom-seeded")) return;
+          if (canonical !== null) localStorage.setItem("agentsview-zoom-level", canonical);
+          if (legacy !== null) localStorage.setItem("agentsview-font-scale", legacy);
+          sessionStorage.setItem("zoom-seeded", "true");
+        }, state);
+        await openAppearance(page, url);
+        await expectZoom(page, state.label, state.css, state.stored);
+        await page.reload();
+        await expectZoom(page, state.label, state.css, state.stored);
+      });
+    }
+
+    for (const width of [1280, 768, 400]) {
+      test(`selects shared zoom and reloads at width ${width}`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 });
+        await openAppearance(page, url);
+        await expect(page.getByText("Text size", { exact: true })).toHaveCount(0);
+        await expect(page.getByText("Desktop zoom", { exact: true })).toHaveCount(0);
+        await page.getByTitle("Zoom", { exact: true }).click();
+        await expect(page.getByRole("option")).toHaveText([
+          "67%", "75%", "80%", "90%", "100%", "110%", "120%", "125%", "130%", "150%", "175%", "200%",
+        ]);
+        await page.getByRole("option", { name: "120%", exact: true }).click();
+        await expectZoom(page, "120%", "1.2", "120");
+        await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(2);
+        await page.reload();
+        await expectZoom(page, "120%", "1.2", "120");
+        await page.getByTitle("Zoom", { exact: true }).click();
+        await expect(page.getByRole("option", { name: "120%", exact: true })).toHaveAttribute("aria-selected", "true");
+        await page.getByRole("combobox", { name: "Zoom", exact: true }).fill("133");
+        await expect(page.getByText("No matches", { exact: true })).toBeVisible();
+        await page.keyboard.press("Enter");
+        expect(await readZoom(page)).toBe("1.2");
+        await page.keyboard.press("Escape");
+      });
+    }
+
+    test("selects the native sink only with both desktop and bridge markers", async ({ page }) => {
+      await page.addInitScript(() => {
+        localStorage.setItem("agentsview-zoom-level", "150");
+        localStorage.setItem("agentsview-font-scale", "120");
+        const calls: number[] = [];
+        Object.assign(window, {
+          zoomCalls: calls,
+          __TAURI__: { webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom: async (factor: number) => { calls.push(factor); } }) } },
+        });
+      });
+      await openAppearance(page, url);
+      await expectZoom(page, "150%", desktop ? "1" : "1.5", "150");
+      expect(await page.evaluate(() => (window as Window & { zoomCalls?: number[] }).zoomCalls)).toEqual(desktop ? [1.5] : []);
+      await page.getByTitle("Zoom", { exact: true }).click();
+      await page.getByRole("option", { name: "120%", exact: true }).click();
+      await expectZoom(page, "120%", desktop ? "1" : "1.2", "120");
+      expect(await page.evaluate(() => (window as Window & { zoomCalls?: number[] }).zoomCalls)).toEqual(desktop ? [1.5, 1.2] : []);
+    });
+  });
+}
+
+test("Shared zoom synchronizes Appearance, desktop status bar, and shortcuts", async ({ page }) => {
+  await openAppearance(page, "/settings?desktop");
+  await page.getByTitle("Zoom", { exact: true }).click();
+  await page.getByRole("option", { name: "120%", exact: true }).click();
+  await expect(page.locator(".zoom-level")).toHaveText("120%");
+  await page.locator(".zoom-controls").getByTitle(/Zoom in/).click();
+  await expectZoom(page, "125%", "1.25", "125");
+  await page.keyboard.press("ControlOrMeta+-");
+  await expectZoom(page, "120%", "1.2", "120");
+  await page.keyboard.press("ControlOrMeta+=");
+  await expectZoom(page, "125%", "1.25", "125");
+  await page.keyboard.press("ControlOrMeta+0");
+  await expectZoom(page, "100%", "1", "100");
+  await expect(page.locator(".zoom-level")).toHaveText("100%");
+  await page.reload();
+  await expectZoom(page, "100%", "1", "100");
+});
+
+test("Shared zoom keeps desktop controls and shortcut interception out of the browser", async ({ page }) => {
+  await openAppearance(page, "/settings");
+  await page.getByTitle("Zoom", { exact: true }).click();
+  await page.getByRole("option", { name: "120%", exact: true }).click();
+  await expect(page.locator(".zoom-controls")).toHaveCount(0);
+  const prevented = await page.evaluate(() => {
+    const event = new KeyboardEvent("keydown", { key: "0", ctrlKey: true, metaKey: true, bubbles: true, cancelable: true });
+    document.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(prevented).toBe(false);
+  await expectZoom(page, "120%", "1.2", "120");
 });

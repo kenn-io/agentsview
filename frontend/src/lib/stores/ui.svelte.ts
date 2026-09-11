@@ -96,12 +96,11 @@ const VALID_TRANSCRIPT_MODES: TranscriptMode[] = ["normal", "focused"];
 const IS_DESKTOP =
   typeof window !== "undefined" && new URLSearchParams(window.location.search).has("desktop");
 
-const ZOOM_STEPS = [67, 75, 80, 90, 100, 110, 125, 150, 175, 200];
+export const ZOOM_STEPS = [67, 75, 80, 90, 100, 110, 120, 125, 130, 150, 175, 200];
 const ZOOM_DEFAULT = 100;
 const FONT_SCALE_KEY = "agentsview-font-scale";
 const HIGH_CONTRAST_KEY = "agentsview-high-contrast";
-export const FONT_SCALE_STEPS = [90, 100, 110, 120, 130];
-const FONT_SCALE_DEFAULT = 100;
+const LEGACY_FONT_SCALE_STEPS = [90, 100, 110, 120, 130];
 
 type DesktopTauriWebviewWindow = {
   setZoom(scaleFactor: number): Promise<void>;
@@ -128,39 +127,17 @@ function syncDesktopZoom(scaleFactor: number): boolean {
   return true;
 }
 
-function composedRootZoom(fontScale: number, zoomLevel: number): string {
-  let scale = fontScale / 100;
-  if (IS_DESKTOP && !currentDesktopWebviewWindow()) {
-    scale *= zoomLevel / 100;
-  }
-  return String(scale);
-}
-
 function readStoredZoom(): number {
-  if (!IS_DESKTOP) return ZOOM_DEFAULT;
   try {
-    const raw = localStorage?.getItem(ZOOM_KEY);
-    if (raw) {
-      const val = Number(raw);
-      if (ZOOM_STEPS.includes(val)) return val;
-    }
+    const zoom = Number(localStorage?.getItem(ZOOM_KEY));
+    if (ZOOM_STEPS.includes(zoom) && zoom !== ZOOM_DEFAULT) return zoom;
+    // Prefer a saved text size over the old store's automatic 100%.
+    const legacy = Number(localStorage?.getItem(FONT_SCALE_KEY));
+    if (LEGACY_FONT_SCALE_STEPS.includes(legacy)) return legacy;
   } catch {
     // ignore
   }
   return ZOOM_DEFAULT;
-}
-
-function readStoredFontScale(): number {
-  try {
-    const raw = localStorage?.getItem(FONT_SCALE_KEY);
-    if (raw) {
-      const val = Number(raw);
-      if (FONT_SCALE_STEPS.includes(val)) return val;
-    }
-  } catch {
-    // ignore
-  }
-  return FONT_SCALE_DEFAULT;
 }
 
 const VALID_LAYOUTS: MessageLayout[] = ["default", "compact", "stream", "skim"];
@@ -273,7 +250,6 @@ class UIStore {
   pendingScrollSession: string | null = $state(null);
 
   zoomLevel: number = $state(readStoredZoom());
-  fontScale: number = $state(readStoredFontScale());
 
   sidebarOpen: boolean = $state(true);
   isMobileViewport: boolean = $state(false);
@@ -322,29 +298,17 @@ class UIStore {
         }
       });
 
-      // Apply the root font scale in the document; desktop zoom
-      // falls back to CSS when the native webview bridge is absent.
       $effect(() => {
-        (document.documentElement.style as unknown as Record<string, string>).zoom =
-          composedRootZoom(this.fontScale, this.zoomLevel);
-      });
-
-      // Persist the desktop window zoom (desktop only).
-      $effect(() => {
-        if (IS_DESKTOP) {
-          syncDesktopZoom(this.zoomLevel / 100);
-          try {
-            localStorage?.setItem(ZOOM_KEY, String(this.zoomLevel));
-          } catch {
-            // ignore
-          }
-        }
-      });
-
-      // Persist the font scale (web and desktop).
-      $effect(() => {
+        const factor = this.zoomLevel / 100;
+        const nativeZoom = syncDesktopZoom(factor);
+        document.documentElement.style.setProperty("zoom", nativeZoom ? "1" : String(factor));
+        document.documentElement.style.setProperty(
+          "--agentsview-zoom-compensation",
+          nativeZoom ? "1" : String(1 / factor),
+        );
         try {
-          localStorage?.setItem(FONT_SCALE_KEY, String(this.fontScale));
+          localStorage?.setItem(ZOOM_KEY, String(this.zoomLevel));
+          localStorage?.removeItem(FONT_SCALE_KEY);
         } catch {
           // ignore
         }
@@ -558,9 +522,9 @@ class UIStore {
     this.zoomLevel = ZOOM_DEFAULT;
   }
 
-  setFontScale(scale: number) {
-    if (FONT_SCALE_STEPS.includes(scale)) {
-      this.fontScale = scale;
+  setZoomLevel(level: number) {
+    if (ZOOM_STEPS.includes(level)) {
+      this.zoomLevel = level;
     }
   }
 

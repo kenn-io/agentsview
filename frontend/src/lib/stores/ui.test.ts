@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { tick } from "svelte";
 import {
   SIDEBAR_WIDTH_DEFAULT,
@@ -191,101 +191,6 @@ describe("UIStore", () => {
 
       expect(ui.followLatest).toBe(false);
       expect(ui.pendingScrollOrdinal).toBe(10);
-    });
-  });
-
-  describe("desktop zoom bridge", () => {
-    it("routes desktop zoom steps through the native webview bridge", async () => {
-      const tauriWindow = window as Window & {
-        __TAURI__?: unknown;
-      };
-      const originalUrl = window.location.href;
-      const hadTauri = Object.prototype.hasOwnProperty.call(tauriWindow, "__TAURI__");
-      const originalTauri = tauriWindow.__TAURI__;
-      const setZoom = vi.fn(() => Promise.resolve());
-      const getCurrentWebviewWindow = vi.fn(() => ({
-        setZoom,
-      }));
-
-      Object.defineProperty(tauriWindow, "__TAURI__", {
-        value: {
-          webviewWindow: {
-            getCurrentWebviewWindow,
-          },
-        },
-        writable: true,
-        configurable: true,
-      });
-      window.history.replaceState({}, "", "?desktop");
-
-      try {
-        // @ts-expect-error -- cache bust for fresh UIStore
-        const mod = await import("./ui.svelte.js?desktopZoomBridge");
-        await tick();
-        setZoom.mockClear();
-
-        mod.ui.zoomIn();
-        await tick();
-
-        expect(mod.ui.zoomLevel).toBe(110);
-        expect(getCurrentWebviewWindow).toHaveBeenCalled();
-        expect(setZoom).toHaveBeenLastCalledWith(1.1);
-
-        mod.ui.zoomOut();
-        await tick();
-
-        expect(mod.ui.zoomLevel).toBe(100);
-        expect(setZoom).toHaveBeenLastCalledWith(1);
-
-        mod.ui.zoomIn();
-        await tick();
-        mod.ui.resetZoom();
-        await tick();
-
-        expect(mod.ui.zoomLevel).toBe(100);
-        expect(setZoom).toHaveBeenLastCalledWith(1);
-      } finally {
-        window.history.replaceState({}, "", originalUrl);
-        if (hadTauri) {
-          Object.defineProperty(tauriWindow, "__TAURI__", {
-            value: originalTauri,
-            writable: true,
-            configurable: true,
-          });
-        } else {
-          delete tauriWindow.__TAURI__;
-        }
-      }
-    });
-
-    it("falls back to CSS zoom on desktop pages without the Tauri bridge", async () => {
-      const tauriWindow = window as Window & {
-        __TAURI__?: unknown;
-      };
-      const originalUrl = window.location.href;
-      const hadTauri = Object.prototype.hasOwnProperty.call(tauriWindow, "__TAURI__");
-      const originalTauri = tauriWindow.__TAURI__;
-      delete tauriWindow.__TAURI__;
-      window.history.replaceState({}, "", "?desktop");
-
-      try {
-        // @ts-expect-error -- cache bust for fresh UIStore
-        const mod = await import("./ui.svelte.js?desktopCssFallback");
-        mod.ui.zoomLevel = 200;
-        mod.ui.setFontScale(110);
-        await tick();
-
-        expect(document.documentElement.style.getPropertyValue("zoom")).toBe("2.2");
-      } finally {
-        window.history.replaceState({}, "", originalUrl);
-        if (hadTauri) {
-          Object.defineProperty(tauriWindow, "__TAURI__", {
-            value: originalTauri,
-            writable: true,
-            configurable: true,
-          });
-        }
-      }
     });
   });
 
@@ -961,147 +866,189 @@ describe("UIStore", () => {
     });
   });
 
-  describe("fontScale", () => {
+  describe("shared zoom", () => {
+    const originalUrl = window.location.href;
+    let stored: Map<string, string>;
+    let storage: Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
     beforeEach(() => {
-      ui.setFontScale(100);
-    });
-
-    it("defaults to 100", () => {
-      expect(ui.fontScale).toBe(100);
-    });
-
-    it("sets a valid step", () => {
-      ui.setFontScale(130);
-      expect(ui.fontScale).toBe(130);
-    });
-
-    it("ignores values outside the allowed steps", () => {
-      ui.setFontScale(120);
-      ui.setFontScale(145);
-      expect(ui.fontScale).toBe(120);
-      ui.setFontScale(0);
-      expect(ui.fontScale).toBe(120);
-    });
-
-    it("applies font scale as root zoom on web", async () => {
-      const original = globalThis.localStorage;
-      Object.defineProperty(globalThis, "localStorage", {
-        value: { getItem: vi.fn(() => null), setItem: vi.fn() },
-        writable: true,
-        configurable: true,
-      });
-      try {
-        // @ts-expect-error -- query string busts module cache
-        const mod = await import("./ui.svelte.js?webFontScale");
-        mod.ui.setFontScale(110);
-        await tick();
-        expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1.1");
-      } finally {
-        Object.defineProperty(globalThis, "localStorage", {
-          value: original,
-          writable: true,
-          configurable: true,
-        });
-      }
-    });
-
-    it("composes desktop window zoom with font scale", async () => {
-      const original = globalThis.localStorage;
-      const tauriWindow = window as Window & {
-        __TAURI__?: unknown;
+      vi.resetModules();
+      stored = new Map();
+      storage = {
+        getItem: vi.fn((key: string) => stored.get(key) ?? null),
+        setItem: vi.fn((key: string, value: string) => { stored.set(key, value); }),
+        removeItem: vi.fn((key: string) => { stored.delete(key); }),
       };
-      const hadTauri = Object.prototype.hasOwnProperty.call(tauriWindow, "__TAURI__");
-      const originalTauri = tauriWindow.__TAURI__;
+      vi.stubGlobal("localStorage", storage);
+      vi.stubGlobal("__TAURI__", undefined);
+      window.history.replaceState({}, "", "/");
+    });
+
+    afterEach(async () => {
+      await tick();
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+      window.history.replaceState({}, "", originalUrl);
+      document.documentElement.style.removeProperty("zoom");
+    });
+
+    const percentages = [
+      [67, "0.67"], [75, "0.75"], [80, "0.8"], [90, "0.9"],
+      [100, "1"], [110, "1.1"], [120, "1.2"], [125, "1.25"],
+      [130, "1.3"], [150, "1.5"], [175, "1.75"], [200, "2"],
+    ] as const;
+
+    it.each(percentages)("restores and applies canonical %i in the browser", async (level, factor) => {
+      stored.set("agentsview-zoom-level", String(level));
+      const { ui: zoom } = await import("./ui.svelte.js");
+      await tick();
+      expect(zoom.zoomLevel).toBe(level);
+      expect(document.documentElement.style.getPropertyValue("zoom")).toBe(factor);
+      expect(stored.get("agentsview-zoom-level")).toBe(String(level));
+    });
+
+    describe.each(["/", "/?desktop"])("migration at %s", (url) => {
+      it.each([
+        [null, null, 100], ["100", "100", 100], [null, "90", 90],
+        [null, "100", 100], [null, "110", 110], [null, "120", 120],
+        [null, "130", 130], ["100", "120", 120], ["150", "120", 150],
+        ["120", "130", 120], ["150", "100", 150], ["bad", "130", 130],
+        ["133", "120", 120], ["0", "120", 120], ["NaN", "120", 120],
+        ["Infinity", "120", 120], ["-100", "120", 120], ["", "120", 120],
+        ["bad", "bad", 100], ["100", "150", 100], [null, "125", 100],
+        [null, "0", 100], [null, "NaN", 100], [null, "", 100],
+      ])("chooses %s plus legacy %s as %i", async (canonical, legacy, expected) => {
+        window.history.replaceState({}, "", url);
+        if (canonical !== null) stored.set("agentsview-zoom-level", String(canonical));
+        if (legacy !== null) stored.set("agentsview-font-scale", String(legacy));
+        const { ui: zoom } = await import("./ui.svelte.js");
+        await tick();
+        expect(zoom.zoomLevel).toBe(expected);
+        expect(stored.get("agentsview-zoom-level")).toBe(String(expected));
+        expect(stored.has("agentsview-font-scale")).toBe(false);
+        expect(storage.setItem).toHaveBeenCalledWith("agentsview-zoom-level", String(expected));
+        expect(storage.removeItem).toHaveBeenCalledWith("agentsview-font-scale");
+      });
+    });
+
+    it.each([
+      ["browser", "/", false, false],
+      ["browser with bridge marker", "/", true, false],
+      ["desktop without bridge", "/?desktop", false, false],
+      ["native desktop", "/?desktop", true, true],
+    ])("applies each selection once in %s", async (_mode, url, bridge, native) => {
+      window.history.replaceState({}, "", url);
       const setZoom = vi.fn(() => Promise.resolve());
-      Object.defineProperty(globalThis, "localStorage", {
-        value: { getItem: vi.fn(() => null), setItem: vi.fn() },
-        writable: true,
-        configurable: true,
-      });
-      Object.defineProperty(tauriWindow, "__TAURI__", {
-        value: {
-          webviewWindow: {
-            getCurrentWebviewWindow: () => ({
-              setZoom,
-            }),
-          },
-        },
-        writable: true,
-        configurable: true,
-      });
+      if (bridge) vi.stubGlobal("__TAURI__", { webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) } });
+      const { ui: zoom } = await import("./ui.svelte.js");
+      await tick();
+      for (const [level, factor] of percentages) {
+        setZoom.mockClear();
+        zoom.setZoomLevel(level);
+        await tick();
+        expect(zoom.zoomLevel).toBe(level);
+        expect(document.documentElement.style.getPropertyValue("zoom")).toBe(native ? "1" : factor);
+        expect(stored.get("agentsview-zoom-level")).toBe(String(level));
+        if (native) expect(setZoom.mock.calls).toEqual([[Number(factor)]]);
+        else expect(setZoom).not.toHaveBeenCalled();
+      }
+    });
+
+    it("keeps step controls, endpoints, and reset on the shared percentage", async () => {
+      const { ui: zoom } = await import("./ui.svelte.js");
+      zoom.setZoomLevel(67);
+      zoom.zoomOut();
+      await tick();
+      expect(stored.get("agentsview-zoom-level")).toBe("67");
+      for (const [level] of percentages.slice(1)) {
+        zoom.zoomIn();
+        await tick();
+        expect(stored.get("agentsview-zoom-level")).toBe(String(level));
+      }
+      zoom.zoomIn();
+      expect(zoom.zoomLevel).toBe(200);
+      for (const [level] of percentages.slice(0, -1).toReversed()) {
+        zoom.zoomOut();
+        await tick();
+        expect(stored.get("agentsview-zoom-level")).toBe(String(level));
+      }
+      zoom.resetZoom();
+      await tick();
+      expect(stored.get("agentsview-zoom-level")).toBe("100");
+      expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1");
+    });
+
+    it("ignores invalid setters without persisting or calling the bridge", async () => {
       window.history.replaceState({}, "", "/?desktop");
-      try {
-        // @ts-expect-error -- query string busts module cache
-        const mod = await import("./ui.svelte.js?desktopCompose");
-        mod.ui.zoomLevel = 200;
-        mod.ui.setFontScale(110);
+      const setZoom = vi.fn(() => Promise.resolve());
+      vi.stubGlobal("__TAURI__", { webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) } });
+      const { ui: zoom } = await import("./ui.svelte.js");
+      zoom.setZoomLevel(120);
+      await tick();
+      setZoom.mockClear();
+      vi.mocked(storage.setItem).mockClear();
+      for (const level of [0, -100, 66, 133, 201, 120.5, NaN, Infinity]) {
+        zoom.setZoomLevel(level);
         await tick();
-        expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1.1");
-        expect(setZoom).toHaveBeenLastCalledWith(2);
-      } finally {
-        window.history.replaceState({}, "", "/");
-        Object.defineProperty(globalThis, "localStorage", {
-          value: original,
-          writable: true,
-          configurable: true,
-        });
-        if (hadTauri) {
-          Object.defineProperty(tauriWindow, "__TAURI__", {
-            value: originalTauri,
-            writable: true,
-            configurable: true,
-          });
-        } else {
-          delete tauriWindow.__TAURI__;
-        }
+        expect(zoom.zoomLevel).toBe(120);
       }
+      expect(setZoom).not.toHaveBeenCalled();
+      expect(storage.setItem).not.toHaveBeenCalled();
+      expect(stored.get("agentsview-zoom-level")).toBe("120");
     });
 
-    it("persists font scale changes", async () => {
-      const original = globalThis.localStorage;
-      const setItem = vi.fn();
-      Object.defineProperty(globalThis, "localStorage", {
-        value: { getItem: vi.fn(() => null), setItem },
-        writable: true,
-        configurable: true,
-      });
-      try {
-        // @ts-expect-error -- query string busts module cache
-        const mod = await import("./ui.svelte.js?persistFontScale");
-        setItem.mockClear();
-        mod.ui.setFontScale(120);
-        await tick();
-        expect(setItem).toHaveBeenCalledWith("agentsview-font-scale", "120");
-      } finally {
-        Object.defineProperty(globalThis, "localStorage", {
-          value: original,
-          writable: true,
-          configurable: true,
-        });
-      }
+    it("handles native rejection without applying a second CSS factor", async () => {
+      window.history.replaceState({}, "", "/?desktop");
+      stored.set("agentsview-font-scale", "120");
+      const setZoom = vi.fn(() => Promise.reject(new Error("webview unavailable")));
+      vi.stubGlobal("__TAURI__", { webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) } });
+      await import("./ui.svelte.js");
+      await tick();
+      expect(setZoom.mock.calls).toEqual([[1.2]]);
+      expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1");
+      expect(stored.get("agentsview-zoom-level")).toBe("120");
     });
 
-    it("falls back to 100 for an invalid stored font scale", async () => {
-      const original = globalThis.localStorage;
-      Object.defineProperty(globalThis, "localStorage", {
-        value: {
-          getItem: vi.fn((key: string) => (key === "agentsview-font-scale" ? "145" : null)),
-          setItem: vi.fn(),
-        },
-        writable: true,
-        configurable: true,
+    it("defaults when storage reads throw and still applies later selections", async () => {
+      vi.mocked(storage.getItem).mockImplementation(() => { throw new Error("blocked"); });
+      const { ui: zoom } = await import("./ui.svelte.js");
+      await tick();
+      expect(zoom.zoomLevel).toBe(100);
+      expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1");
+      zoom.setZoomLevel(130);
+      await tick();
+      expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1.3");
+    });
+
+    it("retains legacy storage when the canonical write fails", async () => {
+      stored.set("agentsview-font-scale", "120");
+      vi.mocked(storage.setItem).mockImplementation(() => { throw new Error("quota"); });
+      const { ui: zoom } = await import("./ui.svelte.js");
+      await tick();
+      expect(zoom.zoomLevel).toBe(120);
+      zoom.setZoomLevel(130);
+      await tick();
+      expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1.3");
+      expect(stored.get("agentsview-font-scale")).toBe("120");
+      expect(stored.has("agentsview-zoom-level")).toBe(false);
+      expect(storage.removeItem).not.toHaveBeenCalled();
+    });
+
+    it("persists before cleanup and survives a failed legacy removal", async () => {
+      stored.set("agentsview-font-scale", "120");
+      let savedAtRemoval: string | undefined;
+      vi.mocked(storage.removeItem).mockImplementation(() => {
+        savedAtRemoval = stored.get("agentsview-zoom-level");
+        throw new Error("blocked");
       });
-      try {
-        // @ts-expect-error -- query string busts module cache
-        const mod = await import("./ui.svelte.js?badFontScale");
-        expect(mod.ui.fontScale).toBe(100);
-      } finally {
-        Object.defineProperty(globalThis, "localStorage", {
-          value: original,
-          writable: true,
-          configurable: true,
-        });
-      }
+      const { ui: zoom } = await import("./ui.svelte.js");
+      zoom.setZoomLevel(130);
+      await tick();
+      expect(storage.removeItem).toHaveBeenCalledWith("agentsview-font-scale");
+      expect(savedAtRemoval).toBe("130");
+      expect(stored.get("agentsview-zoom-level")).toBe("130");
+      expect(stored.get("agentsview-font-scale")).toBe("120");
+      expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1.3");
     });
   });
 
