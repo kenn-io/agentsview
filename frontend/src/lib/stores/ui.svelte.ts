@@ -121,7 +121,7 @@ function currentDesktopWebviewWindow(): DesktopTauriWebviewWindow | undefined {
 
 function syncDesktopZoom(scaleFactor: number): Promise<void> | undefined {
   const webview = currentDesktopWebviewWindow();
-  return webview?.setZoom(scaleFactor);
+  return webview ? Promise.resolve().then(() => webview.setZoom(scaleFactor)) : undefined;
 }
 
 function setCssZoom(factor: number): void {

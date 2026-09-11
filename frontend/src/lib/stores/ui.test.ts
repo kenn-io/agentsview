@@ -1004,7 +1004,23 @@ describe("UIStore", () => {
       vi.stubGlobal("__TAURI__", { webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) } });
       await import("./ui.svelte.js");
       await tick();
-      expect(setZoom.mock.calls).toEqual([[1.2]]);
+      await Promise.resolve();
+      await tick();
+      expect(setZoom.mock.calls.at(-1)).toEqual([1.2]);
+      expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1.2");
+      expect(stored.get("agentsview-zoom-level")).toBe("120");
+    });
+
+    it("falls back to CSS zoom when native zoom throws synchronously", async () => {
+      window.history.replaceState({}, "", "/?desktop");
+      stored.set("agentsview-font-scale", "120");
+      const setZoom = vi.fn(() => { throw new Error("webview unavailable"); });
+      vi.stubGlobal("__TAURI__", { webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) } });
+      await import("./ui.svelte.js");
+      await tick();
+      await Promise.resolve();
+      await tick();
+      expect(setZoom.mock.calls.at(-1)).toEqual([1.2]);
       expect(document.documentElement.style.getPropertyValue("zoom")).toBe("1.2");
       expect(stored.get("agentsview-zoom-level")).toBe("120");
     });
