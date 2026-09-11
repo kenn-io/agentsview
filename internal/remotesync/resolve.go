@@ -624,6 +624,9 @@ func resolveClineTarget(root string) (string, []string, error) {
 	sessionsDir := targetRoot
 	if !isDirect {
 		sessionsDir = filepath.Join(targetRoot, "data", "sessions")
+		if symlinkEscapesRoot(targetRoot, filepath.Join(sessionsDir, "placeholder")) {
+			return "", nil, nil
+		}
 	}
 	sessionsExist, err := statCuratedDir(sessionsDir)
 	if err != nil || !sessionsExist {
@@ -643,7 +646,7 @@ func resolveClineTarget(root string) (string, []string, error) {
 	var files []string
 	for _, source := range sources {
 		metaPath := providerDiscoveredPath(source)
-		if metaPath == "" {
+		if metaPath == "" || symlinkEscapesRoot(targetRoot, metaPath) {
 			continue
 		}
 		regular, err := statRegularRemoteSyncFile(metaPath)

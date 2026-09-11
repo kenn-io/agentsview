@@ -854,6 +854,88 @@ func TestResolveScriptClinePreservesRootWhenEmpty(t *testing.T) {
 		"empty Cline root must not be archived recursively")
 }
 
+func TestResolveScriptClineRejectsSymlinkedAncestors(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	outsideHome := physTempDir(t)
+	outsideSessions := filepath.Join(outsideHome, "outside_sessions", "sess-outside")
+	require.NoError(t, os.MkdirAll(outsideSessions, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(outsideSessions, "sess-outside.json"),
+		[]byte(`{"session_id":"sess-outside"}`),
+		0o644,
+	))
+
+	// Case 1: data directory is a symlink pointing outside root.
+	home1 := physTempDir(t)
+	clineRoot1 := filepath.Join(home1, ".cline")
+	require.NoError(t, os.MkdirAll(clineRoot1, 0o755))
+	outsideData := filepath.Join(outsideHome, "data")
+	require.NoError(t, os.MkdirAll(filepath.Join(outsideData, "sessions", "sess-outside"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(outsideData, "sessions", "sess-outside", "sess-outside.json"),
+		[]byte(`{"session_id":"sess-outside"}`),
+		0o644,
+	))
+	require.NoError(t, os.Symlink(outsideData, filepath.Join(clineRoot1, "data")))
+
+	out1 := runResolveScriptForTest(t, "HOME="+home1)
+	for _, record := range resolveOutputRecords(string(out1)) {
+		assert.NotContains(t, record, "sess-outside",
+			"Cline resolver must reject symlinked data ancestor")
+		assert.NotContains(t, record, "cline:",
+			"Cline resolver must reject emitting root with symlinked data ancestor")
+	}
+
+	// Case 2: data/sessions directory is a symlink pointing outside root.
+	home2 := physTempDir(t)
+	clineRoot2 := filepath.Join(home2, ".cline")
+	require.NoError(t, os.MkdirAll(filepath.Join(clineRoot2, "data"), 0o755))
+	require.NoError(t, os.Symlink(filepath.Dir(outsideSessions), filepath.Join(clineRoot2, "data", "sessions")))
+
+	out2 := runResolveScriptForTest(t, "HOME="+home2)
+	for _, record := range resolveOutputRecords(string(out2)) {
+		assert.NotContains(t, record, "sess-outside",
+			"Cline resolver must reject symlinked data/sessions ancestor")
+		assert.NotContains(t, record, "cline:",
+			"Cline resolver must reject emitting root with symlinked data/sessions ancestor")
+	}
+}
+
+func TestResolveScriptClineRejectsBackslashSessionID(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("backslashes in file names are not allowed on Windows")
+	}
+	home := physTempDir(t)
+	clineRoot := filepath.Join(home, ".cline")
+	validSess := filepath.Join(clineRoot, "data", "sessions", "sess-valid")
+	require.NoError(t, os.MkdirAll(validSess, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(validSess, "sess-valid.json"),
+		[]byte(`{"session_id":"sess-valid"}`),
+		0o644,
+	))
+
+	hostileSess := filepath.Join(clineRoot, "data", "sessions", `sess\escape`)
+	require.NoError(t, os.MkdirAll(hostileSess, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(hostileSess, `sess\escape.json`),
+		[]byte(`{"session_id":"sess\\escape"}`),
+		0o644,
+	))
+
+	out := runResolveScriptForTest(t, "HOME="+home)
+	records := resolveOutputRecords(string(out))
+	agentFilePrefix := resolveAgentFilePrefix + ":" + string(parser.AgentCline)
+	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		"data/sessions/sess-valid/sess-valid.json"))
+	for _, record := range records {
+		assert.NotContains(t, record, `sess\escape`,
+			"session ID containing backslash must be skipped to avoid tar escape processing")
+	}
+}
+
 func TestResolveScriptKiloLegacyRejectsSymlinkedTaskDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")

@@ -45,14 +45,10 @@ func newClineProviderFactory(def AgentDef) ProviderFactory {
 
 func clineResolveSessionsDir(root string) string {
 	clean := filepath.Clean(root)
-	if strings.HasSuffix(clean, filepath.Join("data", "sessions")) || filepath.Base(clean) == "sessions" {
+	if strings.HasSuffix(filepath.ToSlash(clean), "data/sessions") || filepath.Base(clean) == "sessions" {
 		return clean
 	}
-	candidate := filepath.Join(clean, "data", "sessions")
-	if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-		return candidate
-	}
-	return clean
+	return filepath.Join(clean, "data", "sessions")
 }
 
 func clineDiscoverEach(

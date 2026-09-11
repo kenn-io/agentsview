@@ -1231,3 +1231,77 @@ func samePathForTest(t *testing.T, a, b string) bool {
 	return filepath.Clean(aAbs) == filepath.Clean(bAbs) ||
 		strings.EqualFold(filepath.Clean(aAbs), filepath.Clean(bAbs))
 }
+
+func TestClineRemoteSyncRejectsSymlinkedAncestorsAndSessions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	outsideDir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	outsideSessions := filepath.Join(outsideDir, "outside_sessions", "sess-outside")
+	require.NoError(t, os.MkdirAll(outsideSessions, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(outsideSessions, "sess-outside.json"),
+		[]byte(`{"session_id":"sess-outside"}`),
+		0o644,
+	))
+
+	// Case 1: data is a symlink pointing outside targetRoot.
+	root1, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	clineRoot1 := filepath.Join(root1, ".cline")
+	require.NoError(t, os.MkdirAll(clineRoot1, 0o755))
+	outsideData := filepath.Join(outsideDir, "data")
+	require.NoError(t, os.MkdirAll(filepath.Join(outsideData, "sessions", "sess-outside"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(outsideData, "sessions", "sess-outside", "sess-outside.json"),
+		[]byte(`{"session_id":"sess-outside"}`),
+		0o644,
+	))
+	require.NoError(t, os.Symlink(outsideData, filepath.Join(clineRoot1, "data")))
+
+	targets1 := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot1},
+		},
+	})
+	assert.Empty(t, targets1.Dirs[parser.AgentCline])
+	assert.Empty(t, targets1.Files[parser.AgentCline])
+
+	// Case 2: data/sessions is a symlink pointing outside targetRoot.
+	root2, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	clineRoot2 := filepath.Join(root2, ".cline")
+	require.NoError(t, os.MkdirAll(filepath.Join(clineRoot2, "data"), 0o755))
+	require.NoError(t, os.Symlink(filepath.Dir(outsideSessions), filepath.Join(clineRoot2, "data", "sessions")))
+
+	targets2 := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot2},
+		},
+	})
+	assert.Empty(t, targets2.Dirs[parser.AgentCline])
+	assert.Empty(t, targets2.Files[parser.AgentCline])
+
+	// Case 3: session dir within data/sessions is a symlink pointing outside targetRoot.
+	root3, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	clineRoot3 := filepath.Join(root3, ".cline")
+	sessionsDir3 := filepath.Join(clineRoot3, "data", "sessions")
+	validSessionDir := filepath.Join(sessionsDir3, "sess-valid")
+	require.NoError(t, os.MkdirAll(validSessionDir, 0o755))
+	validMeta := filepath.Join(validSessionDir, "sess-valid.json")
+	require.NoError(t, os.WriteFile(validMeta, []byte(`{"session_id":"sess-valid"}`), 0o644))
+	require.NoError(t, os.Symlink(outsideSessions, filepath.Join(sessionsDir3, "sess-outside")))
+
+	targets3 := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot3},
+		},
+	})
+	assert.Contains(t, targets3.Dirs[parser.AgentCline], clineRoot3)
+	assert.Contains(t, targets3.Files[parser.AgentCline], validMeta)
+	for _, file := range targets3.Files[parser.AgentCline] {
+		assert.NotContains(t, file, "sess-outside", "symlinked session escaping root must be rejected")
+	}
+}

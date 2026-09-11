@@ -303,7 +303,11 @@ func buildResolveScript() string {
 			"av_cline_sessions=\"$target\"; " +
 			"case \"$target\" in " +
 			"*/data/sessions|*/sessions) ;; " +
-			"*) if [ -d \"$target/data/sessions\" ]; then av_cline_sessions=\"$target/data/sessions\"; else return; fi;; " +
+			"*) if [ -d \"$target/data/sessions\" ]; then " +
+			"[ -L \"$target/data\" ] && return; " +
+			"[ -L \"$target/data/sessions\" ] && return; " +
+			"av_cline_sessions=\"$target/data/sessions\"; " +
+			"else return; fi;; " +
 			"esac; " +
 			"[ -d \"$av_cline_sessions\" ] || return; " +
 			"target=$(av_phys_dir \"$target\") || return 0; " +
@@ -312,7 +316,7 @@ func buildResolveScript() string {
 			"[ -d \"$av_cline_sess\" ] || continue; " +
 			"[ -L \"$av_cline_sess\" ] && continue; " +
 			"av_cline_id=\"${av_cline_sess##*/}\"; " +
-			"case \"$av_cline_id\" in _*|.*) continue;; esac; " +
+			"case \"$av_cline_id\" in _*|.*|*'\\'*) continue;; esac; " +
 			"av_cline_meta=\"$av_cline_sess/$av_cline_id.json\"; " +
 			"[ -f \"$av_cline_meta\" ] || continue; " +
 			"av_emit_agent_file \"" + string(parser.AgentCline) + "\" \"$av_cline_meta\"; " +

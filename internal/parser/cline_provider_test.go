@@ -53,7 +53,7 @@ func TestClineDiscovery(t *testing.T) {
 }
 
 func TestClineDiscovery_DirectSessionsRoot(t *testing.T) {
-	sessionsDir := t.TempDir()
+	sessionsDir := filepath.Join(t.TempDir(), "sessions")
 	meta := writeClineDiscoverySession(t, sessionsDir, "1789000000003_ccc")
 
 	provider, ok := NewProvider(AgentCline, ProviderConfig{
@@ -183,4 +183,21 @@ func TestClineFingerprintSource(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, fp1.Hash, fp2.Hash)
 	assert.NotEqual(t, fp1.Size, fp2.Size)
+}
+
+func TestClineDiscovery_MissingDataSessions(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "settings"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "settings", "settings.json"), []byte("{}"), 0o644))
+
+	assert.Equal(t, filepath.Join(root, "data", "sessions"), clineResolveSessionsDir(root))
+
+	provider, ok := NewProvider(AgentCline, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+
+	paths, err := clineDiscoverPaths(t, provider)
+	require.NoError(t, err)
+	assert.Empty(t, paths)
 }
