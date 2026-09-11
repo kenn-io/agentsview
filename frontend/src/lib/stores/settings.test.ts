@@ -126,6 +126,44 @@ describe("SettingsStore.load mode handling", () => {
     expect(settingsService.putApiV1Settings).toHaveBeenCalledWith({ zoom_level: 120 });
   });
 
+  it("defers Zoom after a failed settings load", async () => {
+    settings.loaded = false;
+    settingsService.getApiV1Settings.mockRejectedValueOnce(new Error("load failed"));
+
+    await settings.load();
+    ui.setZoomLevel(120);
+
+    expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
+
+    settingsService.getApiV1Settings.mockResolvedValueOnce({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+      zoom_level: 100,
+    });
+    settingsService.putApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+      zoom_level: 120,
+    });
+
+    await settings.load();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledWith({ zoom_level: 120 });
+  });
+
   it("records read-only mode from the settings response", async () => {
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
@@ -294,11 +332,13 @@ describe("SettingsStore.load mode handling", () => {
     });
 
     ui.setZoomLevel(150);
-    await settings.load();
+    const loading = settings.load();
+    expect(settingsService.getApiV1Settings).not.toHaveBeenCalled();
 
     expect(ui.zoomLevel).toBe(150);
     finishFirstSave(saveResponse);
     await firstSave;
+    await loading;
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(settingsService.putApiV1Settings).toHaveBeenCalledTimes(2);
   });

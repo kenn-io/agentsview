@@ -83,7 +83,7 @@ class SettingsStore {
   constructor() {
     ui.setZoomSaveCallback((level) => {
       this.zoomSaveVersion += 1;
-      if (!this.loaded) {
+      if (!this.loaded || this.error) {
         this.pendingZoomSave = true;
       } else if (!this.readOnly) {
         void this.save({ zoom_level: level });
@@ -91,7 +91,11 @@ class SettingsStore {
     });
   }
 
-  async load() {
+  async load(): Promise<void> {
+    if (this.saving && this.mutationQueue) {
+      await this.mutationQueue;
+      return this.load();
+    }
     const loadVersion = ++this.loadVersion;
     const zoomChangeVersion = ui.zoomChangeVersion;
     const zoomSaveVersion = this.zoomSaveVersion;
