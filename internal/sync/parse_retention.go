@@ -180,9 +180,11 @@ func (e *Engine) parseRetentionSourceBytes(file parser.DiscoveredFile) int64 {
 		return 0
 	}
 	if members := e.sqliteContainerDiscoveredMembers(file); members > 1 {
-		// retainedBytes reads a non-positive size as "unknown source" and
-		// charges the whole budget, which is the fault this fixes, so the
-		// share floors at one byte rather than dividing to zero.
+		// Sole-member containers keep the raw size so a zero-byte container
+		// still reports zero, which retainedBytes reads as an unknown source.
+		// Above one member the share floors at a byte instead, because a
+		// non-positive estimate would charge the whole budget: the fault this
+		// fixes.
 		return max(info.Size()/int64(members), 1)
 	}
 	return info.Size()

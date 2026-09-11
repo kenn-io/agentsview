@@ -1138,8 +1138,7 @@ func TestParseRetentionChargesContainerMemberItsShare(t *testing.T) {
 	for _, file := range files {
 		total += engine.parseRetentionSourceBytes(file)
 	}
-	assert.Equal(t, int64(67108864), total)
-	assert.LessOrEqual(t, total, int64(67108864),
+	assert.Equal(t, int64(67108864), total,
 		"member shares must sum back to the container they partition")
 }
 
