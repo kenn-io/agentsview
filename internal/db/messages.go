@@ -3312,6 +3312,7 @@ func (db *DB) SetToolCallSubagentSession(
 // loading content so repeated appends do not rescan the event history.
 func soleToolResultEventTx(
 	tx *sql.Tx, sessionID string, messageOrdinal, callIndex int,
+	imagePolicy config.ToolResultImages, summary string,
 ) ([]ToolResultEvent, error) {
 	var count int
 	var content sql.NullString
@@ -3343,7 +3344,9 @@ func soleToolResultEventTx(
 			sessionID, messageOrdinal, callIndex, err,
 		)
 	}
-	return []ToolResultEvent{{Content: content.String}}, nil
+	return []ToolResultEvent{{Content: projectToolResultEventForDedup(
+		content.String, summary, imagePolicy,
+	)}}, nil
 }
 
 func applyToolCallSubagentLinkTx(
@@ -3408,7 +3411,7 @@ func applyToolCallSubagentLinkTx(
 		// targets may already have one stored. Re-storing a summary the
 		// event repeats would undo the dedup on every incremental pass.
 		sole, err := soleToolResultEventTx(
-			tx, sessionID, messageOrdinal, callIndex,
+			tx, sessionID, messageOrdinal, callIndex, imagePolicy, resultContent,
 		)
 		if err != nil {
 			return false, err
@@ -3605,6 +3608,7 @@ func applyToolCallResultUpdateTx(
 
 		sole, err := soleToolResultEventTx(
 			tx, sessionID, position.MessageOrdinal, position.CallIndex,
+			imagePolicy, summary,
 		)
 		if err != nil {
 			return false, nil, err

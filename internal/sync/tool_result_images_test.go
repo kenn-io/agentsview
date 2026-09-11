@@ -234,6 +234,84 @@ func TestEngineImagePolicyOverridesDatabaseForBulkAppendAndLink(t *testing.T) {
 	assert.Equal(t, len(linkWant), messages[0].ToolCalls[0].ResultContentLength)
 }
 
+func TestEngineImagePolicyDeduplicatesHistoricalRawLinkedResult(t *testing.T) {
+	const raw = `[{"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"}]`
+	database := dbtest.OpenTestDB(t)
+	database.SetToolResultImages(config.ToolResultImagesKeep)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "historical-link", Agent: string(parser.AgentClaude), Project: "project",
+		Machine: "local", MessageCount: 1,
+	}))
+	require.NoError(t, database.InsertMessages([]db.Message{{
+		SessionID: "historical-link", Ordinal: 0, Role: "assistant",
+		ToolCalls: []db.ToolCall{{
+			ToolUseID: "link-call", ToolName: "Task", Category: "Task",
+			ResultContent: raw,
+			ResultEvents: []db.ToolResultEvent{{
+				ToolUseID: "link-call", Source: "tool", Status: "completed",
+				Content: raw,
+			}},
+		}},
+	}}))
+
+	engine := NewEngine(database, EngineConfig{
+		Machine: "local", ToolResultImages: config.ToolResultImagesDrop,
+	})
+	t.Cleanup(engine.Close)
+	require.NoError(t, engine.writeIncremental(&incrementalUpdate{
+		sessionID: "historical-link", machine: "local", project: "project", msgCount: 1,
+		links: []parser.ClaudeSubagentLink{{
+			ToolUseID: "link-call", ResultContentRaw: raw,
+			ResultContentLen: len(raw), HasResult: true,
+		}},
+	}))
+
+	var storedSummary string
+	require.NoError(t, database.Reader().QueryRowContext(
+		t.Context(), "SELECT COALESCE(result_content, '') FROM tool_calls WHERE session_id = ?", "historical-link",
+	).Scan(&storedSummary))
+	assert.Empty(t, storedSummary)
+}
+
+func TestEngineImagePolicyDeduplicatesLateProjectedResult(t *testing.T) {
+	const raw = `[{"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"}]`
+	const want = `[{"type":"text","text":"before"},{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1},{"type":"text","text":"after"}]`
+	database := dbtest.OpenTestDB(t)
+	database.SetToolResultImages(config.ToolResultImagesKeep)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "late-result", Agent: string(parser.AgentCodex), Project: "project",
+		Machine: "local", MessageCount: 1,
+	}))
+	require.NoError(t, database.InsertMessages([]db.Message{{
+		SessionID: "late-result", Ordinal: 0, Role: "assistant",
+		ToolCalls: []db.ToolCall{{ToolUseID: "late-call", ToolName: "Bash", Category: "Bash"}},
+	}}))
+
+	engine := NewEngine(database, EngineConfig{
+		Machine: "local", ToolResultImages: config.ToolResultImagesDrop,
+	})
+	t.Cleanup(engine.Close)
+	require.NoError(t, engine.writeIncremental(&incrementalUpdate{
+		sessionID: "late-result", machine: "local", project: "project", msgCount: 1,
+		toolCallUpdates: []parser.ParsedToolCallUpdate{{
+			ToolUseID: "late-call", MessageOrdinal: 0, CallIndex: 0,
+			ResultEvents: []parser.ParsedToolResultEvent{{
+				ToolUseID: "late-call", Source: "function_call_output", Content: raw,
+			}},
+		}},
+	}))
+
+	var storedSummary, storedEvent string
+	require.NoError(t, database.Reader().QueryRowContext(
+		t.Context(), "SELECT COALESCE(result_content, '') FROM tool_calls WHERE session_id = ?", "late-result",
+	).Scan(&storedSummary))
+	require.NoError(t, database.Reader().QueryRowContext(
+		t.Context(), "SELECT content FROM tool_result_events WHERE session_id = ?", "late-result",
+	).Scan(&storedEvent))
+	assert.Empty(t, storedSummary)
+	assert.Equal(t, want, storedEvent)
+}
+
 func TestReadOnlyResyncReplacementCarriesDropPolicy(t *testing.T) {
 	root := t.TempDir()
 	archivePath := filepath.Join(t.TempDir(), "archive.db")
