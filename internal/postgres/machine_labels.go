@@ -2,8 +2,6 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -51,27 +49,18 @@ func (s *Sync) syncMachineMetadata(ctx context.Context) error {
 		return fmt.Errorf("starting machine metadata sync: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	for machine, label := range labels {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO sync_metadata (key, value) VALUES ($1, $2)
-			ON CONFLICT(key) DO UPDATE SET value = excluded.value
-			WHERE sync_metadata.value IS DISTINCT FROM excluded.value`,
-			db.MachineLabelKeyPrefix+machine, label); err != nil {
-			return fmt.Errorf("syncing machine label: %w", err)
-		}
-	}
-	for old, canonical := range aliases {
-		var target string
-		err := tx.QueryRowContext(ctx, `
-			INSERT INTO sync_metadata (key, value) VALUES ($1, $2)
-			ON CONFLICT(key) DO UPDATE SET value = excluded.value
-			WHERE sync_metadata.value = excluded.value
-			RETURNING value`, db.MachineAliasKeyPrefix+old, canonical).Scan(&target)
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("machine alias %q already belongs to another installation; resolve the conflicting alias in PostgreSQL before retrying", old)
-		}
-		if err != nil {
-			return fmt.Errorf("syncing machine alias: %w", err)
+	for prefix, values := range map[string]map[string]string{
+		db.MachineLabelKeyPrefix: labels,
+		db.MachineAliasKeyPrefix: aliases,
+	} {
+		for machine, value := range values {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO sync_metadata (key, value) VALUES ($1, $2)
+				ON CONFLICT(key) DO UPDATE SET value = excluded.value
+				WHERE sync_metadata.value IS DISTINCT FROM excluded.value`,
+				prefix+machine, value); err != nil {
+				return fmt.Errorf("syncing machine metadata: %w", err)
+			}
 		}
 	}
 	return tx.Commit()

@@ -478,9 +478,9 @@ The [installation upgrade](/docs/configuration/#upgrading-historical-machine-key
 moves historical local sessions to their installation ID in SQLite. The next
 incremental PostgreSQL push republishes those sessions and their metadata. It
 also copies adopted hostname aliases, so existing machine filters and URLs keep
-working. A shared PostgreSQL mirror rejects an alias that belongs to another
-installation instead of overwriting its owner. Equal display labels do not
-merge machines.
+working. If two installations publish the same old hostname alias, the latest
+push determines its filter target. Use installation IDs to select machines
+unambiguously in a shared mirror. Equal display labels do not merge machines.
 
 ![Machine labels on session items](/docs/assets/generated/screenshots/machine-labels.png)
 
