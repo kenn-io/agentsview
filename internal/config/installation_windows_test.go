@@ -51,7 +51,44 @@ func TestInstallationIdentityLongPath(t *testing.T) {
 	const id = "0123456789abcdef0123456789abcdef"
 	path := filepath.Join(dir, installationIDFilename)
 	require.NoError(t, os.WriteFile(path, []byte(id+"\n"), 0o600))
-	cfg := Config{DataDir: dir}
-	require.NoError(t, cfg.ensureInstallationID())
-	require.Equal(t, id, cfg.InstallationID)
+	t.Chdir(dir)
+	for _, dataDir := range []string{dir, `\\?\` + dir, "."} {
+		cfg := Config{DataDir: dataDir}
+		require.NoError(t, cfg.ensureInstallationID())
+		require.Equal(t, id, cfg.InstallationID)
+	}
+}
+
+func TestInstallationIDWindowsPath(t *testing.T) {
+	tail := strings.Repeat(`directory\`, 30) + installationIDFilename
+	for _, tc := range []struct {
+		name string
+		path string
+		want string
+	}{
+		{"short", `C:\data\telemetry-install-id`, `C:\data\telemetry-install-id`},
+		{"drive", `C:\data\` + tail, `\\?\C:\data\` + tail},
+		{"unc", `\\server\share\` + tail, `\\?\UNC\server\share\` + tail},
+		{"extended", `\\?\C:\data\` + tail, `\\?\C:\data\` + tail},
+		{"extended unc", `\\?\UNC\server\share\` + tail, `\\?\UNC\server\share\` + tail},
+		{"device", `\\.\C:\data\` + tail, `\\.\C:\data\` + tail},
+		{"native", `\??\C:\data\` + tail, `\??\C:\data\` + tail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := installationIDWindowsPath(tc.path)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestReadInstallationIDInvalidPath(t *testing.T) {
+	for _, path := range []string{"bad\x00path", "\\\\?\\C:\\bad\x00path"} {
+		_, err := readInstallationIDFile(path)
+		var pathErr *os.PathError
+		require.ErrorAs(t, err, &pathErr)
+		require.Equal(t, "open", pathErr.Op)
+		require.Equal(t, path, pathErr.Path)
+		require.NotErrorIs(t, err, os.ErrNotExist)
+	}
 }
