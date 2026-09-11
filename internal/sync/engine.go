@@ -11309,6 +11309,7 @@ func (e *Engine) processProviderFile(
 	if file.ProviderSource == nil && file.Project != "" {
 		source.ProjectHint = file.Project
 	}
+	file.ProviderSource = &source
 	cwdDecision = e.sourceCwdDecision(source)
 	cwdPath = e.sourceCwdLookupPath(source)
 	cwdAgent = source.Provider
