@@ -50,9 +50,9 @@ type crushProjectsFile struct {
 	} `json:"projects"`
 }
 
-// CrushProjectsDataDirs reads a Crush projects.json registry and returns
+// crushProjectsDataDirs reads a Crush projects.json registry and returns
 // the per-project data directories it lists.
-func CrushProjectsDataDirs(registryPath string) []string {
+func crushProjectsDataDirs(registryPath string) []string {
 	data, err := os.ReadFile(registryPath)
 	if err != nil {
 		return nil
@@ -378,7 +378,8 @@ func loadCrushMessages(db *sql.DB, sessionID string) ([]ParsedMessage, error) {
 		       COALESCE(parts, '[]'),
 		       COALESCE(model, ''),
 		       COALESCE(provider, ''),
-		       COALESCE(created_at, 0)
+		       COALESCE(created_at, 0),
+		       COALESCE(is_summary_message, 0)
 		  FROM messages
 		 WHERE session_id = ?
 		 ORDER BY created_at, rowid
@@ -396,12 +397,16 @@ func loadCrushMessages(db *sql.DB, sessionID string) ([]ParsedMessage, error) {
 			model     string
 			provider  string
 			createdAt int64
+			isSummary int64
 		)
-		if err := rows.Scan(&rowID, &role, &parts, &model, &provider, &createdAt); err != nil {
+		if err := rows.Scan(
+			&rowID, &role, &parts, &model, &provider, &createdAt, &isSummary,
+		); err != nil {
 			return nil, fmt.Errorf("scanning crush message row: %w", err)
 		}
 		message, ok, err := buildCrushMessage(
 			len(parsed), rowID, role, parts, model, provider, createdAt,
+			isSummary != 0,
 		)
 		if err != nil {
 			return nil, err
@@ -417,7 +422,8 @@ func loadCrushMessages(db *sql.DB, sessionID string) ([]ParsedMessage, error) {
 }
 
 func buildCrushMessage(
-	ordinal int, rowID, role, parts, model, provider string, createdAt int64,
+	ordinal int, rowID, role, parts, model, provider string,
+	createdAt int64, isSummary bool,
 ) (ParsedMessage, bool, error) {
 	contentJSON := gjson.Parse(parts)
 	if !gjson.Valid(parts) || !contentJSON.IsArray() {
@@ -442,6 +448,17 @@ func buildCrushMessage(
 		message.IsSystem = true
 	default:
 		return ParsedMessage{}, false, nil
+	}
+	if isSummary {
+		// Crush marks condensed conversation summaries with
+		// is_summary_message=1 (backed by sessions.summary_message_id);
+		// they are context-management boundaries, not conversation
+		// content of the row's original role.
+		message.Role = RoleSystem
+		message.IsSystem = true
+		message.IsCompactBoundary = true
+		message.Model = ""
+		message.ProviderID = ""
 	}
 
 	var texts []string
@@ -506,8 +523,8 @@ func crushParseToolCall(rowID string, part gjson.Result) (ParsedToolCall, bool) 
 		ToolName:  name,
 		Category:  NormalizeToolCategory(name),
 		InputJSON: inputJSON,
+		SkillName: inferToolSkillName(name, inputJSON),
 	}
-	call.SkillName = inferToolSkillName(name, inputJSON)
 	return call, true
 }
 

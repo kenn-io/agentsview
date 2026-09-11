@@ -386,3 +386,102 @@ func TestCrushRegistryCompletenessIncludesCrush(t *testing.T) {
 	assert.True(t, def.PeriodicReconcile)
 	assert.True(t, def.Usage.NoPerMessageTokenData)
 }
+
+func TestCrushSummaryMessageIsCompactBoundary(t *testing.T) {
+	fixture := newCrushTestFixture(t)
+	const created = int64(1_789_093_626)
+	fixture.insertSession(t, "sess-summary", "Compacted", "",
+		created, created, 0, 0, 0)
+	fixture.insertMessage(t, "msg-sum", "sess-summary", "assistant", `[
+		{"type":"text","data":{"text":"Summary of the conversation so far."}}
+	]`, created, "glm-5.3-flash", "")
+	// Mark the row as a condensed summary.
+	_, err := fixture.database.Exec(
+		`UPDATE messages SET is_summary_message = 1 WHERE id = 'msg-sum'`,
+	)
+	require.NoError(t, err)
+
+	session, messages, err := parseCrushSession(fixture.dbPath, "sess-summary", "m")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	message := messages[0]
+	assert.Equal(t, RoleSystem, message.Role)
+	assert.True(t, message.IsSystem)
+	assert.True(t, message.IsCompactBoundary)
+	assert.Equal(t, "Summary of the conversation so far.", message.Content)
+	assert.Empty(t, message.Model,
+		"summary rows must not attribute the original row's model")
+	assert.Equal(t, 0, session.UserMessageCount)
+}
+
+func TestCrushChangedSessionIDsAreBoundedToNewRows(t *testing.T) {
+	fixture := newCrushTestFixture(t)
+	const created = int64(1_789_093_626)
+	fixture.insertSession(t, "sess-a", "A", "", created, created, 0, 0, 0)
+	fixture.insertSession(t, "sess-b", "B", "", created, created, 0, 0, 0)
+	tracker := newCrushChangeTracker()
+
+	// Cold start: no stored cursor, full enumeration is expected.
+	ids, cold, snapshot, err := tracker.changedSessionIDs(context.Background(), fixture.dbPath)
+	require.NoError(t, err)
+	assert.True(t, cold)
+	assert.Empty(t, ids)
+	tracker.commit(fixture.dbPath, snapshot)
+
+	// A new message in sess-a must report only sess-a, not sess-b.
+	fixture.insertMessage(t, "msg-new", "sess-a", "user", `[
+		{"type":"text","data":{"text":"more"}}
+	]`, created+1, "", "")
+	ids, cold, _, err = tracker.changedSessionIDs(context.Background(), fixture.dbPath)
+	require.NoError(t, err)
+	assert.False(t, cold)
+	assert.Equal(t, []string{"sess-a"}, ids)
+
+	// Committing again drains the cursor.
+	_, cold, snapshot, err = tracker.changedSessionIDs(context.Background(), fixture.dbPath)
+	require.NoError(t, err)
+	assert.False(t, cold)
+	tracker.commit(fixture.dbPath, snapshot)
+	ids, cold, _, err = tracker.changedSessionIDs(context.Background(), fixture.dbPath)
+	require.NoError(t, err)
+	assert.False(t, cold)
+	assert.Empty(t, ids)
+}
+
+func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
+	fixture := newCrushTestFixture(t)
+	const created = int64(1_789_093_626)
+	fixture.insertSession(t, "sess-fp", "Fingerprint", "",
+		created, created, 0, 0, 0)
+	fixture.insertMessage(t, "msg-fp", "sess-fp", "user", `[
+		{"type":"text","data":{"text":"before"}}
+	]`, created, "", "")
+
+	first, found, err := crushSessionFingerprint(
+		context.Background(), fixture.dbPath, "sess-fp",
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+
+	// An edit within the same second leaves every timestamp unchanged;
+	// the content hash must still move.
+	_, err = fixture.database.Exec(`
+		UPDATE messages SET parts = '[{"type":"text","data":{"text":"after"}}]'
+		WHERE id = 'msg-fp'
+	`)
+	require.NoError(t, err)
+	second, found, err := crushSessionFingerprint(
+		context.Background(), fixture.dbPath, "sess-fp",
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.NotEqual(t, first, second,
+		"a same-second parts edit must change the fingerprint")
+
+	// A vanished session reports not-found rather than a stale hash.
+	_, found, err = crushSessionFingerprint(
+		context.Background(), fixture.dbPath, "sess-missing",
+	)
+	require.NoError(t, err)
+	assert.False(t, found)
+}
