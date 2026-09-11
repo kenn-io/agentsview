@@ -12,4 +12,6 @@ export interface ActivityKeyMinutes {
   interactive_cost: MoneyMoney;
   key: string;
   project_key?: string;
+  subagent_agent_minutes: number;
+  subagent_cost: MoneyMoney;
 }

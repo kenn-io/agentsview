@@ -12,14 +12,19 @@ class ResizeObserverMock {
   disconnect = vi.fn();
 }
 
-type PeakSplit = "interactive_at_peak" | "automated_at_peak";
+type PeakSplit =
+  | "interactive_at_peak"
+  | "subagent_at_peak"
+  | "automated_at_peak"
+  | "max_interactive_agents"
+  | "max_subagent_agents"
+  | "max_automated_agents";
 type BucketFixture = Omit<Bucket, PeakSplit> & Partial<Pick<Bucket, PeakSplit>>;
 type ReportOverrides = Partial<Omit<Report, "buckets">> & { buckets?: BucketFixture[] | null };
 
 function makeReport(overrides: ReportOverrides = {}): Report {
-  // idx 2 (peak 3) carries a mixed split (2 interactive / 1 automated) for the
-  // stacking and split-tooltip tests; idx 3 (peak 1) is all-interactive.
-  const buckets = [
+  // Default fixture includes both interactive and automated work.
+  const buckets: BucketFixture[] = [
     {
       start: "2026-06-16T00:00:00Z",
       end: "2026-06-16T03:00:00Z",
@@ -74,6 +79,9 @@ function makeReport(overrides: ReportOverrides = {}): Report {
   ];
   const report = {
     peak: { agents: 3, at: "2026-06-16T06:00:00Z" },
+    interactive_peak: { agents: 2, at: "2026-06-16T06:00:00Z" },
+    subagent_peak: { agents: 0, at: null },
+    automated_peak: { agents: 1, at: "2026-06-16T03:00:00Z" },
     totals: {
       active_minutes: 50,
       idle_minutes: 10,
@@ -106,13 +114,15 @@ function makeReport(overrides: ReportOverrides = {}): Report {
     projects: {},
     ...overrides,
   } as Report;
-  // Backfill the peak-automation split onto any bucket literal that omits it
-  // (most fixtures only set max_agents), so the stacked bars get real geometry
-  // instead of NaN. Unspecified buckets default to all-interactive.
+  // Geometry fixtures default to interactive-only activity.
   report.buckets = (overrides.buckets ?? buckets).map((b) => ({
     ...b,
     interactive_at_peak: b.interactive_at_peak ?? b.max_agents,
     automated_at_peak: b.automated_at_peak ?? 0,
+    subagent_at_peak: b.subagent_at_peak ?? 0,
+    max_interactive_agents: b.max_interactive_agents ?? b.interactive_at_peak ?? b.max_agents,
+    max_subagent_agents: b.max_subagent_agents ?? 0,
+    max_automated_agents: b.max_automated_agents ?? b.automated_at_peak ?? 0,
   }));
   return report;
 }
@@ -258,42 +268,46 @@ describe("ConcurrencyTimeline", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders one interactive and one automated segment per bucket", async () => {
+  it("renders aligned tracks with independent scales and independent class peaks", async () => {
     const report = makeReport();
-    const c = mount(ConcurrencyTimeline, {
-      target: document.body,
-      props: { report },
-    });
+    // The class maxima occur at different instants from the combined peak.
+    report.buckets![2] = {
+      ...report.buckets![2]!,
+      max_agents: 101,
+      interactive_at_peak: 1,
+      subagent_at_peak: 100,
+      automated_at_peak: 0,
+      max_interactive_agents: 2,
+      max_subagent_agents: 100,
+      max_automated_agents: 4,
+    };
+    report.peak = { agents: 101, at: "2026-06-16T07:00:00Z" };
+    report.subagent_peak = { agents: 100, at: "2026-06-16T07:00:00Z" };
+    report.automated_peak = { agents: 4, at: "2026-06-16T08:00:00Z" };
+    const c = mount(ConcurrencyTimeline, { target: document.body, props: { report } });
     await tick();
 
-    const interactive = document.querySelectorAll(".concurrency-seg.interactive");
-    const automated = document.querySelectorAll(".concurrency-seg.automated");
-    expect(interactive.length).toBe(report.buckets!.length);
-    expect(automated.length).toBe(report.buckets!.length);
-
-    unmount(c);
-  });
-
-  it("stacks a taller interactive base under a shorter automated cap", async () => {
-    const report = makeReport();
-    const c = mount(ConcurrencyTimeline, {
-      target: document.body,
-      props: { report },
-    });
-    await tick();
-    // Bucket idx 2 peaks at 3 (2 interactive + 1 automated).
-    const interactive = document.querySelectorAll(
-      ".concurrency-seg.interactive",
-    )[2] as SVGRectElement;
-    const automated = document.querySelectorAll(".concurrency-seg.automated")[2] as SVGRectElement;
-    const h = (el: SVGRectElement) => Number(el.getAttribute("height"));
-    const y = (el: SVGRectElement) => Number(el.getAttribute("y"));
-    // The automated cap has real height and sits above (smaller y) the taller
-    // interactive base.
-    expect(h(automated)).toBeGreaterThan(0);
-    expect(h(interactive)).toBeGreaterThan(h(automated));
-    expect(y(automated)).toBeLessThan(y(interactive));
-
+    const tracks = [...document.querySelectorAll(".concurrency-track")];
+    expect(tracks.map((track) => track.querySelector(".track-label")?.textContent)).toEqual([
+      "Interactive",
+      "Subagents",
+      "Automated",
+    ]);
+    expect(tracks.map((track) => track.querySelector(".track-peak")?.textContent)).toEqual([
+      "peak 2 at 06:00",
+      "peak 100 at 07:00",
+      "peak 4 at 08:00",
+    ]);
+    const bars = tracks.map((track) => track.querySelectorAll(".concurrency-seg")[2]!);
+    expect(bars.map((bar) => bar.getAttribute("x"))).toEqual([
+      bars[0]!.getAttribute("x"),
+      bars[0]!.getAttribute("x"),
+      bars[0]!.getAttribute("x"),
+    ]);
+    expect(bars.map((bar) => Number(bar.getAttribute("height")))).toEqual([120, 72, 72]);
+    expect(
+      tracks.map((track) => [...track.querySelectorAll(".y-label")].at(-1)?.textContent),
+    ).toEqual(["2", "100", "4"]);
     unmount(c);
   });
 
@@ -456,7 +470,7 @@ describe("ConcurrencyTimeline", () => {
     await tick();
     const tip = target.querySelector(".tooltip");
     expect(tip).toBeTruthy();
-    expect(tip!.querySelector(".tooltip-metrics > div")?.textContent).toContain("Peak Concurrency");
+    expect(tip!.querySelector(".tooltip-metrics > div")?.textContent).toContain("Interactive peak");
     hit.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
     await tick();
     expect(target.querySelector(".tooltip")).toBeNull();
@@ -478,46 +492,15 @@ describe("ConcurrencyTimeline", () => {
     expect(tip).toBeTruthy();
     const rows = Array.from(tip!.querySelectorAll(".tooltip-metrics > div"));
     expect(rows.map((row) => row.textContent?.replace(/\s+/g, " ").trim())).toEqual([
-      "Peak Concurrency 3 (2 int / 1 auto)",
+      "Interactive peak 2",
+      "Subagent peak 0",
+      "Automated peak 1",
+      "Combined peak 3",
       "Agent-min 7.5K",
       "Input Tokens 120K",
       "Output Tokens 9K",
       "Cost $0.90",
     ]);
-    unmount(c);
-    target.remove();
-  });
-
-  it("splits only the peak count in the tooltip, leaving agent-min combined", async () => {
-    const target = document.createElement("div");
-    document.body.appendChild(target);
-    const c = mount(ConcurrencyTimeline, { target, props: { report: makeReport() } });
-    await tick();
-    const hit = target.querySelectorAll(".slot-hit")[2] as SVGRectElement; // peak 3 = 2 int / 1 auto
-    hit.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
-    await tick();
-    const tip = target.querySelector(".tooltip");
-    const rows = tip!.querySelectorAll(".tooltip-metrics > div");
-    expect(rows[0]!.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "Peak Concurrency 3 (2 int / 1 auto)",
-    );
-    // agent-minutes stays a single combined figure, not split by automation.
-    expect(rows[1]!.textContent?.replace(/\s+/g, " ").trim()).toBe("Agent-min 30");
-    unmount(c);
-    target.remove();
-  });
-
-  it("omits the peak split when the bucket has no automated agent", async () => {
-    const target = document.createElement("div");
-    document.body.appendChild(target);
-    const c = mount(ConcurrencyTimeline, { target, props: { report: makeReport() } });
-    await tick();
-    const hit = target.querySelectorAll(".slot-hit")[3] as SVGRectElement; // peak 1, all interactive
-    hit.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
-    await tick();
-    const tip = target.querySelector(".tooltip");
-    const peakRow = tip!.querySelector(".tooltip-metrics > div");
-    expect(peakRow?.textContent?.replace(/\s+/g, " ").trim()).toBe("Peak Concurrency 1");
     unmount(c);
     target.remove();
   });

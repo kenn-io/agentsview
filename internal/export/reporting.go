@@ -12,19 +12,15 @@ const (
 	reportingHourLayout = "2006-01-02-15"
 	reportingDateLayout = "2006-01-02"
 
-	// ReportingLegacySchemaVersion preserves the original first-seen usage
-	// snapshot and token-only charging semantics.
-	ReportingLegacySchemaVersion = 1
 	// ReportingSchemaVersion is the current wire version for hour, day, and
 	// digest exports consumed by downstream integrations.
-	ReportingSchemaVersion = 2
+	ReportingSchemaVersion = 3
 )
 
 // IsSupportedReportingSchemaVersion reports whether reporting exports can
 // still produce the requested wire semantics.
 func IsSupportedReportingSchemaVersion(version int) bool {
-	return version == ReportingLegacySchemaVersion ||
-		version == ReportingSchemaVersion
+	return version == ReportingSchemaVersion
 }
 
 // ReportingHour is one immutable UTC-hour export. Digest identifies the
@@ -70,12 +66,15 @@ type ReportingDigestDay struct {
 }
 
 type ReportingActivity struct {
-	Totals    ReportingActivityTotals             `json:"totals"`
-	Peak      ReportingActivityPeak               `json:"peak"`
-	Buckets   []ReportingActivityBucket           `json:"buckets"`
-	ByModel   []ReportingActivityBreakdown        `json:"by_model"`
-	ByAgent   []ReportingActivityBreakdown        `json:"by_agent"`
-	ByProject []ReportingActivityProjectBreakdown `json:"by_project"`
+	Totals          ReportingActivityTotals             `json:"totals"`
+	Peak            ReportingActivityPeak               `json:"peak"`
+	InteractivePeak ReportingActivityPeak               `json:"interactive_peak"`
+	SubagentPeak    ReportingActivityPeak               `json:"subagent_peak"`
+	AutomatedPeak   ReportingActivityPeak               `json:"automated_peak"`
+	Buckets         []ReportingActivityBucket           `json:"buckets"`
+	ByModel         []ReportingActivityBreakdown        `json:"by_model"`
+	ByAgent         []ReportingActivityBreakdown        `json:"by_agent"`
+	ByProject       []ReportingActivityProjectBreakdown `json:"by_project"`
 }
 
 type ReportingActivityTotals struct {
@@ -83,13 +82,16 @@ type ReportingActivityTotals struct {
 	IdleMinutes             float64     `json:"idle_minutes"`
 	AgentMinutes            float64     `json:"agent_minutes"`
 	AutomatedAgentMinutes   float64     `json:"automated_agent_minutes"`
+	SubagentAgentMinutes    float64     `json:"subagent_agent_minutes"`
 	InteractiveAgentMinutes float64     `json:"interactive_agent_minutes"`
 	OutputTokens            int64       `json:"output_tokens"`
 	Cost                    money.Money `json:"cost"`
 	AutomatedCost           money.Money `json:"automated_cost"`
+	SubagentCost            money.Money `json:"subagent_cost"`
 	InteractiveCost         money.Money `json:"interactive_cost"`
 	NewSessions             int         `json:"new_sessions"`
 	NewAutomatedSessions    int         `json:"new_automated_sessions"`
+	NewSubagentSessions     int         `json:"new_subagent_sessions"`
 	NewInteractiveSessions  int         `json:"new_interactive_sessions"`
 	NewUntimedSessions      int         `json:"new_untimed_sessions"`
 	NewProjects             int         `json:"new_projects"`
@@ -102,22 +104,28 @@ type ReportingActivityPeak struct {
 }
 
 type ReportingActivityBucket struct {
-	Start             string      `json:"start"`
-	AgentMinutes      float64     `json:"agent_minutes"`
-	MaxAgents         int         `json:"max_agents"`
-	OutputTokens      int64       `json:"output_tokens"`
-	Cost              money.Money `json:"cost"`
-	AutomatedAtPeak   int         `json:"automated_at_peak"`
-	InteractiveAtPeak int         `json:"interactive_at_peak"`
+	Start                string      `json:"start"`
+	AgentMinutes         float64     `json:"agent_minutes"`
+	MaxAgents            int         `json:"max_agents"`
+	MaxInteractiveAgents int         `json:"max_interactive_agents"`
+	MaxSubagentAgents    int         `json:"max_subagent_agents"`
+	MaxAutomatedAgents   int         `json:"max_automated_agents"`
+	OutputTokens         int64       `json:"output_tokens"`
+	Cost                 money.Money `json:"cost"`
+	AutomatedAtPeak      int         `json:"automated_at_peak"`
+	SubagentAtPeak       int         `json:"subagent_at_peak"`
+	InteractiveAtPeak    int         `json:"interactive_at_peak"`
 }
 
 type ReportingActivityBreakdown struct {
 	Key                     string      `json:"key"`
 	AgentMinutes            float64     `json:"agent_minutes"`
 	AutomatedAgentMinutes   float64     `json:"automated_agent_minutes"`
+	SubagentAgentMinutes    float64     `json:"subagent_agent_minutes"`
 	InteractiveAgentMinutes float64     `json:"interactive_agent_minutes"`
 	Cost                    money.Money `json:"cost"`
 	AutomatedCost           money.Money `json:"automated_cost"`
+	SubagentCost            money.Money `json:"subagent_cost"`
 	InteractiveCost         money.Money `json:"interactive_cost"`
 }
 
@@ -126,9 +134,11 @@ type ReportingActivityProjectBreakdown struct {
 	ProjectKey              string      `json:"project_key"`
 	AgentMinutes            float64     `json:"agent_minutes"`
 	AutomatedAgentMinutes   float64     `json:"automated_agent_minutes"`
+	SubagentAgentMinutes    float64     `json:"subagent_agent_minutes"`
 	InteractiveAgentMinutes float64     `json:"interactive_agent_minutes"`
 	Cost                    money.Money `json:"cost"`
 	AutomatedCost           money.Money `json:"automated_cost"`
+	SubagentCost            money.Money `json:"subagent_cost"`
 	InteractiveCost         money.Money `json:"interactive_cost"`
 }
 

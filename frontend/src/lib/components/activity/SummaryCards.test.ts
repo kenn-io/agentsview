@@ -19,6 +19,9 @@ function makeReport(totals: Partial<Report["totals"]> = {}): Report {
     elapsed_bucket_count: 0,
     buckets: [],
     peak: { agents: 0, at: null },
+    interactive_peak: { agents: 0, at: null },
+    subagent_peak: { agents: 0, at: null },
+    automated_peak: { agents: 0, at: null },
     totals: {
       active_minutes: 0,
       idle_minutes: 0,
@@ -29,8 +32,10 @@ function makeReport(totals: Partial<Report["totals"]> = {}): Report {
       distinct_models: 0,
       output_tokens: 0,
       cost: testMoney(0),
+      subagent_agent_minutes: 0,
       automated_agent_minutes: 0,
       interactive_agent_minutes: 0,
+      subagent_cost: testMoney(0),
       automated_cost: testMoney(0),
       interactive_cost: testMoney(0),
       automated_sessions: 0,
@@ -66,6 +71,17 @@ async function render(report: Report): Promise<HTMLElement> {
 describe("SummaryCards", () => {
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("features interactive concurrency instead of the combined peak", async () => {
+    const report = makeReport();
+    report.peak = { agents: 102, at: "2026-06-16T07:00:00Z" };
+    report.interactive_peak = { agents: 2, at: "2026-06-16T06:00:00Z" };
+    const target = await render(report);
+    const featured = target.querySelector(".card.featured");
+    expect(featured?.querySelector(".card-value")?.textContent).toBe("2");
+    expect(featured?.querySelector(".card-label")?.textContent).toBe("Interactive peak");
+    expect(featured?.querySelector(".card-sub")?.textContent).toBe("at 06:00");
   });
 
   it("shows the interactive/automated split when automated sessions exist", async () => {

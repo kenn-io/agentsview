@@ -458,19 +458,20 @@ func TestAggregate_BreakdownCostAndAutomatedSegments(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("7"), proj.Cost, "1+2+4 includes the untimed session")
 	assert.InDelta(t, 2.0, proj.AutomatedAgentMinutes, 1e-9)
 	assert.InDelta(t, 3.0, proj.InteractiveAgentMinutes, 1e-9)
-	assert.Equal(t, money.MustParseDollars("5"), proj.AutomatedCost, "ta 1 + ua 4")
+	assert.Equal(t, money.MustParseDollars("1"), proj.AutomatedCost, "automated subagent cost is separate")
 	assert.Equal(t, money.MustParseDollars("2"), proj.InteractiveCost, "ti 2")
 	assert.InDelta(t, proj.AgentMinutes,
-		proj.AutomatedAgentMinutes+proj.InteractiveAgentMinutes, 1e-9)
-	assert.Equal(t, proj.Cost, money.MustAdd(proj.AutomatedCost, proj.InteractiveCost))
+		proj.AutomatedAgentMinutes+proj.InteractiveAgentMinutes+proj.SubagentAgentMinutes, 1e-9)
+	assert.Equal(t, proj.Cost, money.MustAdd(money.MustAdd(proj.AutomatedCost, proj.InteractiveCost), proj.SubagentCost))
 	assert.Equal(t, r.Totals.Cost, proj.Cost,
 		"cost breakdown sums to total cost; untimed cost is not dropped")
 
 	assert.InDelta(t, 5.0, r.Totals.AgentMinutes, 1e-9)
 	assert.InDelta(t, 2.0, r.Totals.AutomatedAgentMinutes, 1e-9)
 	assert.InDelta(t, 3.0, r.Totals.InteractiveAgentMinutes, 1e-9)
-	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.AutomatedCost)
+	assert.Equal(t, money.MustParseDollars("1.0"), r.Totals.AutomatedCost)
 	assert.Equal(t, money.MustParseDollars("2.0"), r.Totals.InteractiveCost)
+	assert.Equal(t, money.MustParseDollars("4.0"), r.Totals.SubagentCost)
 
 	autoByID := map[string]bool{}
 	for _, row := range r.BySession {
@@ -484,8 +485,11 @@ func TestAggregate_BreakdownCostAndAutomatedSegments(t *testing.T) {
 	assert.Equal(t, "m1", r.ByModel[0].Key)
 	assert.InDelta(t, 5.0, r.ByModel[0].AgentMinutes, 1e-9)
 	assert.Equal(t, money.MustParseDollars("7.0"), r.ByModel[0].Cost)
-	assert.Equal(t, money.MustParseDollars("5.0"), r.ByModel[0].AutomatedCost)
+	assert.Equal(t, money.MustParseDollars("1.0"), r.ByModel[0].AutomatedCost)
 	assert.Equal(t, money.MustParseDollars("2.0"), r.ByModel[0].InteractiveCost)
+	assert.Equal(t, money.MustParseDollars("4.0"), r.ByModel[0].SubagentCost)
+	assert.Equal(t, money.MustParseDollars("4.0"), proj.SubagentCost)
+	assert.Equal(t, money.MustParseDollars("4.0"), r.ByAgent[0].SubagentCost)
 }
 
 // TestAggregate_UsageOnlySessionZeroCostKeepsPrimaryModel confirms a session
@@ -571,4 +575,73 @@ func TestAggregate_BreakdownCostDeterministicAcrossSessionOrder(t *testing.T) {
 		"by-agent cost must not depend on session arrival order")
 	require.Equal(t, rAsc.ByProject[0].Cost, rDesc.ByProject[0].Cost,
 		"by-project cost must not depend on session arrival order")
+}
+
+// Category peaks need not coincide with the combined peak: a burst of
+// delegated work must not hide a later increase in human-facing sessions.
+func TestAggregate_IndependentSessionKindPeaks(t *testing.T) {
+	p := baseParams(t, "2026-06-16", "UTC")
+	sessions := []SessionMeta{
+		{SessionID: "human-1", Project: "P", Agent: "claude"},
+		{SessionID: "human-2", Project: "P", Agent: "claude"},
+		{SessionID: "child-1", Project: "P", Agent: "claude", IsSubagent: true},
+		{SessionID: "child-2", Project: "P", Agent: "claude", IsSubagent: true, IsAutomated: true},
+		{SessionID: "automated", Project: "P", Agent: "claude", IsAutomated: true},
+	}
+	var events []ActivityEvent
+	for _, span := range []struct{ id, start, end string }{
+		{"human-1", "10:00", "10:04"},
+		{"human-2", "10:03", "10:04"},
+		{"child-1", "10:01", "10:03"},
+		{"child-2", "10:01", "10:03"},
+		{"automated", "10:00", "10:02"},
+	} {
+		events = append(events,
+			ActivityEvent{SessionID: span.id, Ordinal: 1, Timestamp: "2026-06-16T" + span.start + ":00Z", Role: "user"},
+			ActivityEvent{SessionID: span.id, Ordinal: 2, Timestamp: "2026-06-16T" + span.end + ":00Z", Role: "assistant", Model: "m1"},
+		)
+	}
+	r := mustAggregate(t, p, sessions, events, nil)
+	for _, tc := range []struct {
+		name  string
+		peak  Peak
+		count int
+		at    string
+	}{
+		{"combined", r.Peak, 4, "2026-06-16T10:01:00Z"},
+		{"interactive", r.InteractivePeak, 2, "2026-06-16T10:03:00Z"},
+		{"subagent", r.SubagentPeak, 2, "2026-06-16T10:01:00Z"},
+		{"automated", r.AutomatedPeak, 1, "2026-06-16T10:00:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.count, tc.peak.Agents)
+			require.NotNil(t, tc.peak.At)
+			assert.Equal(t, tc.at, *tc.peak.At)
+		})
+	}
+	bucket := r.Buckets[120]
+	assert.Equal(t, 4, bucket.MaxAgents)
+	assert.Equal(t, 2, bucket.MaxInteractiveAgents)
+	assert.Equal(t, 2, bucket.MaxSubagentAgents)
+	assert.Equal(t, 1, bucket.MaxAutomatedAgents)
+	assert.Equal(t, 1, bucket.InteractiveAtPeak)
+	assert.Equal(t, 2, bucket.SubagentAtPeak)
+	assert.Equal(t, 1, bucket.AutomatedAtPeak)
+	assert.Equal(t, 4.0, r.Totals.ActiveMinutes)
+	assert.Equal(t, 11.0, r.Totals.AgentMinutes)
+	assert.Equal(t, 5.0, r.Totals.InteractiveAgentMinutes)
+	assert.Equal(t, 4.0, r.Totals.SubagentAgentMinutes)
+	assert.Equal(t, 2.0, r.Totals.AutomatedAgentMinutes)
+	for _, rows := range [][]KeyMinutes{r.ByProject, r.ByAgent, r.ByModel} {
+		require.Len(t, rows, 1)
+		assert.Equal(t, 4.0, rows[0].SubagentAgentMinutes)
+		assert.Equal(t, 5.0, rows[0].InteractiveAgentMinutes)
+		assert.Equal(t, 2.0, rows[0].AutomatedAgentMinutes)
+	}
+	for _, row := range r.BySession {
+		if row.SessionID == "child-2" {
+			assert.True(t, row.IsSubagent)
+			assert.True(t, row.IsAutomated)
+		}
+	}
 }

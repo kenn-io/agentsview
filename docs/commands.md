@@ -1245,7 +1245,7 @@ ______________________________________________________________________
 
 Export canonical UTC-hour activity and usage documents, coherent UTC-day
 snapshots, or compact date-range digests from the local archive. See
-[Reporting Export](/docs/reporting-export/) for the v2 wire schema, quiet-hour
+[Reporting Export](/docs/reporting-export/) for the v3 wire schema, quiet-hour
 semantics, snapshot guarantee, and digest rules.
 
 ```bash
@@ -1257,8 +1257,10 @@ agentsview export digest --from 2026-06-28 --to 2026-07-27
 Hour and date keys must be exact, zero-padded UTC values. Open and future hours
 are rejected. The current UTC date contains only closed hours and has no day
 digest. Digest ranges are inclusive and limited to 31 dates. Integrations should
-validate the emitted `schema_version: 2` and content digest before accepting a
-document.
+validate the emitted `schema_version: 3` and content digest before accepting a
+document. Version 3 is the default and the only accepted `--schema-version`;
+versions 1 and 2 are no longer emitted. Update consumers and refresh stored
+digests when upgrading.
 
 ______________________________________________________________________
 

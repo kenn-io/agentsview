@@ -43,9 +43,7 @@
     return `${h}h ${m}m`;
   }
 
-  // RFC3339 -> "HH:MM" in the viewer's local zone. The report's
-  // day window is already local-timezone-aligned server-side, so
-  // local formatting keeps the clock label consistent with it.
+  // Keep the clock label in the same timezone as the report and timeline.
   function fmtClock(ts: string | null): string {
     if (!ts) return "";
     const d = new Date(ts);
@@ -54,10 +52,11 @@
       hour: "2-digit",
       minute: "2-digit",
       hourCycle: "h23",
+      timeZone: report.timezone,
     });
   }
 
-  const peakAt = $derived(fmtClock(report.peak.at));
+  const peakAt = $derived(fmtClock(report.interactive_peak.at));
   const asOf = $derived(fmtClock(report.as_of));
 
   interface SummaryCard {
@@ -71,8 +70,8 @@
     const t = report.totals;
     return [
       {
-        label: m.activity_peak_concurrency(),
-        value: String(report.peak.agents),
+        label: m.activity_interactive_peak(),
+        value: fmtInt(report.interactive_peak.agents),
         sub: peakAt ? m.activity_at_time({ time: peakAt }) : "",
         featured: true,
       },
