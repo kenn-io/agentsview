@@ -54,6 +54,7 @@ function forbiddenMessage(serverMessage: string): string {
 
 class SettingsStore {
   private mutationQueue: Promise<void> | null = null;
+  private pendingZoomSave = false;
   private zoomSaveVersion = 0;
   private loadVersion = 0;
   agentDirs: Record<string, string[]> = $state({});
@@ -82,7 +83,11 @@ class SettingsStore {
   constructor() {
     ui.setZoomSaveCallback((level) => {
       this.zoomSaveVersion += 1;
-      if (!this.readOnly) void this.save({ zoom_level: level });
+      if (!this.loaded) {
+        this.pendingZoomSave = true;
+      } else if (!this.readOnly) {
+        void this.save({ zoom_level: level });
+      }
     });
   }
 
@@ -91,6 +96,8 @@ class SettingsStore {
     const zoomChangeVersion = ui.zoomChangeVersion;
     const zoomSaveVersion = this.zoomSaveVersion;
     const mutationActive = this.saving;
+    const pendingZoomSave = this.pendingZoomSave;
+    let loadedData = false;
     this.loading = true;
     this.loaded = false;
     this.error = null;
@@ -118,7 +125,8 @@ class SettingsStore {
         loadVersion === this.loadVersion &&
         ui.zoomChangeVersion === zoomChangeVersion &&
         this.zoomSaveVersion === zoomSaveVersion &&
-        !mutationActive
+        !mutationActive &&
+        !pendingZoomSave
       ) {
         if (data.zoom_level !== undefined) {
           ui.applyZoomLevel(data.zoom_level);
@@ -135,6 +143,7 @@ class SettingsStore {
       if (data.auth_token && !isRemoteConnection()) {
         setAuthToken(data.auth_token);
       }
+      loadedData = true;
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         this.needsAuth = true;
@@ -146,6 +155,14 @@ class SettingsStore {
     } finally {
       this.loading = false;
       this.loaded = true;
+      if (
+        loadedData &&
+        loadVersion === this.loadVersion &&
+        this.pendingZoomSave
+      ) {
+        this.pendingZoomSave = false;
+        if (!this.readOnly) void this.save({ zoom_level: ui.zoomLevel });
+      }
     }
   }
 

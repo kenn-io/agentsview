@@ -54,7 +54,7 @@ beforeEach(() => {
   settings.readOnly = false;
   settings.chartPalette = DEFAULT_CHART_PALETTE;
   settings.toolResultImages = "keep";
-  settings.loaded = false;
+  settings.loaded = true;
   settings.loading = false;
   settings.saving = false;
   settings.error = null;
@@ -65,6 +65,67 @@ beforeEach(() => {
 });
 
 describe("SettingsStore.load mode handling", () => {
+  it("defers an early zoom change until read-only mode is known", async () => {
+    settings.loaded = false;
+    let finish!: (value: Record<string, unknown>) => void;
+    settingsService.getApiV1Settings.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+
+    const loading = settings.load();
+    ui.setZoomLevel(120);
+    expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
+    finish({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: true,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    await loading;
+
+    expect(ui.zoomLevel).toBe(120);
+    expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
+  });
+
+  it("saves an early zoom change after writable mode is known", async () => {
+    settings.loaded = false;
+    ui.setZoomLevel(120);
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+      zoom_level: 100,
+    });
+    settingsService.putApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+      zoom_level: 120,
+    });
+
+    await settings.load();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(ui.zoomLevel).toBe(120);
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledWith({ zoom_level: 120 });
+  });
+
   it("records read-only mode from the settings response", async () => {
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
@@ -198,7 +259,7 @@ describe("SettingsStore.load mode handling", () => {
       github_configured: false,
       host: "127.0.0.1",
       port: 8080,
-      read_only: false,
+      read_only: true,
       require_auth: false,
       terminal: { mode: "auto" },
       zoom_level: 120,

@@ -37,6 +37,7 @@ describe("AppearanceSettings", () => {
     });
     settings.chartPalette = "agentsview";
     settings.readOnly = false;
+    settings.loaded = true;
     settings.saving = false;
     Object.defineProperty(sync, "isDesktop", {
       value: false,
@@ -50,6 +51,7 @@ describe("AppearanceSettings", () => {
     if (ui.highContrast) ui.toggleHighContrast();
     settings.chartPalette = "agentsview";
     settings.readOnly = false;
+    settings.loaded = false;
     Object.defineProperty(sync, "isDesktop", {
       value: originalIsDesktop,
       writable: true,
