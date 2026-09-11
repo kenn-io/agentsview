@@ -467,6 +467,22 @@ describe("renderMarkdown", () => {
       expect(dom.querySelector("ul")).toBeNull();
     });
 
+    it("distinguishes literal XML from fenced code for theming", () => {
+      const source = '<policy>\n  Keep &amp; and <item value="a&b"/> literal.\n</policy>';
+      const fence = `\`\`\`xml\n${source}\n\`\`\``;
+      const dom = parseHTML(
+        renderMarkdown(`${source}\n\n${fence}`, {
+          renderUnknownXmlBlocksAsPreformatted: true,
+        }),
+      );
+
+      const xml = dom.querySelector("pre.unknown-xml-block > code");
+      expect(xml?.textContent).toBe(`${source}\n`);
+      const code = dom.querySelector("pre:not(.unknown-xml-block)");
+      expect(code?.querySelector("code.language-xml")?.textContent).toBe(`${source}\n`);
+      expect(dom.querySelectorAll("pre.unknown-xml-block")).toHaveLength(1);
+    });
+
     it("renders the issue fixture as one literal code block when enabled", () => {
       const dom = parseHTML(
         renderMarkdown(issueReproductionFixture, {

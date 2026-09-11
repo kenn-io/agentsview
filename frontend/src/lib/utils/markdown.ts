@@ -1,8 +1,9 @@
 // kit-ui-check-ignore: app renderer adds agent-specific XML escaping and shell wrapper tags on top of marked; migrating to kit-ui createMarkdownRenderer needs a dedicated behavior-preserving pass.
-import { Lexer, Marked, Tokenizer, type Links, type Token, type TokenizerExtension } from "marked";
+import { Lexer, Marked, Tokenizer, type Links, type Token, type TokenizerExtension, type TokenizerAndRendererExtension } from "marked";
 // kit-ui-check-ignore: app renderer sanitizes the custom marked output above; migrating to kit-ui createMarkdownRenderer needs a dedicated behavior-preserving pass.
 import DOMPurify from "dompurify";
 import { LRUCache } from "./cache.js";
+import { escapeHTML } from "./highlight.js";
 
 const KNOWN_HTML_TAGS = new Set([
   "a",
@@ -692,7 +693,7 @@ function findUnknownXmlCandidate(
   return undefined;
 }
 
-function unknownXmlBlockExtension(): TokenizerExtension {
+function unknownXmlBlockExtension(): TokenizerAndRendererExtension {
   return {
     name: "unknownXmlBlock",
     level: "block",
@@ -703,7 +704,7 @@ function unknownXmlBlockExtension(): TokenizerExtension {
       if (scan?.context.results.has(base)) {
         if (cachedEnd === undefined) return undefined;
         const raw = src.slice(0, cachedEnd - base);
-        return { type: "code", raw, text: raw };
+        return { type: "unknownXmlBlock", raw, text: raw };
       }
 
       const end = matchUnknownXmlBlockAt(
@@ -723,7 +724,11 @@ function unknownXmlBlockExtension(): TokenizerExtension {
       );
       if (end === undefined) return undefined;
       const raw = src.slice(0, end);
-      return { type: "code", raw, text: raw };
+      return { type: "unknownXmlBlock", raw, text: raw };
+    },
+    renderer(token) {
+      const text = escapeHTML(token.text.replace(/\n$/, "") + "\n");
+      return `<pre class="unknown-xml-block"><code>${text}</code></pre>\n`;
     },
   };
 }
