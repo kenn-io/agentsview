@@ -76,7 +76,7 @@ test.describe("Settings: Tool-result images", () => {
     const previewBtn = page.getByRole("button", { name: "Preview" });
     await previewBtn.click();
 
-    await expect(page.getByText("5", { exact: false })).toBeVisible();
+    await expect(page.getByText("5 image payloads", { exact: true })).toBeVisible();
     await expect(page.getByText("my-project")).toBeVisible();
   });
 
