@@ -220,6 +220,7 @@ func TestCrushProviderParsesTranscriptToolsAndUsage(t *testing.T) {
 	event := session.UsageEvents[0]
 	assert.Equal(t, "crush:sess-1", event.SessionID)
 	assert.Equal(t, "glm-5.3-flash", event.Model)
+	assert.Equal(t, "hyper", event.ProviderID)
 	assert.Equal(t, 43_922, event.InputTokens)
 	assert.Equal(t, 185, event.OutputTokens)
 	require.NotNil(t, event.Cost)
@@ -242,6 +243,12 @@ func TestCrushTimestampSecondsNotMilliseconds(t *testing.T) {
 		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
 		"millisecond-scale timestamps must decode forward-compatible")
 	assert.True(t, crushUnixTimestamp(0).IsZero())
+	assert.False(t, crushUnixTimestamp(10_000_000_000).After(
+		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+		"the exact boundary must decode as milliseconds (1970-era)")
+	assert.True(t, crushUnixTimestamp(9_999_999_999).After(
+		time.Date(2286, 1, 1, 0, 0, 0, 0, time.UTC)),
+		"one below the boundary must decode as seconds")
 }
 
 func TestCrushZeroCostWithTokensStillEmitsEvent(t *testing.T) {

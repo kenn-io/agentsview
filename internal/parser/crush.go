@@ -45,7 +45,6 @@ type crushSessionRow struct {
 // ~/.local/share/crush/projects.json.
 type crushProjectsFile struct {
 	Projects []struct {
-		Path    string `json:"path"`
 		DataDir string `json:"data_dir"`
 	} `json:"projects"`
 }
@@ -77,6 +76,17 @@ func openCrushDB(dbPath string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening crush sessions database %s: %w", dbPath, err)
+	}
+	if err := db.PingContext(context.Background()); err != nil {
+		_ = db.Close()
+		fallback := "file:" + sqliteURIPath(dbPath) + "?mode=ro&immutable=1&_busy_timeout=3000"
+		if fb, err2 := sql.Open("sqlite3", fallback); err2 == nil {
+			if err3 := fb.PingContext(context.Background()); err3 == nil {
+				return fb, nil
+			}
+			_ = fb.Close()
+		}
+		return nil, fmt.Errorf("opening crush sessions database %s: %w (WAL corruption is a possible cause; Crush must repair the store)", dbPath, err)
 	}
 	return db, nil
 }
@@ -620,6 +630,7 @@ func crushUsageEvents(
 		SessionID:    "crush:" + row.id,
 		Source:       "session",
 		Model:        crushLatestModel(messages),
+		ProviderID:   crushLatestProvider(messages),
 		InputTokens:  promptTokens,
 		OutputTokens: completionTokens,
 		OccurredAt:   timeString(session.EndedAt, session.StartedAt),
@@ -645,6 +656,16 @@ func crushLatestModel(messages []ParsedMessage) string {
 	return model
 }
 
+func crushLatestProvider(messages []ParsedMessage) string {
+	provider := ""
+	for _, message := range messages {
+		if message.Role == RoleAssistant && message.ProviderID != "" {
+			provider = message.ProviderID
+		}
+	}
+	return provider
+}
+
 func nonnegativeCrushToken(value int64) int {
 	if value <= 0 {
 		return 0
@@ -664,7 +685,7 @@ func crushUnixTimestamp(value int64) time.Time {
 	if value <= 0 {
 		return time.Time{}
 	}
-	if value > 10_000_000_000 {
+	if value >= 10_000_000_000 {
 		return time.UnixMilli(value).UTC()
 	}
 	return time.Unix(value, 0).UTC()

@@ -84,7 +84,8 @@ func (p *crushProvider) DiscoverEach(
 
 // captureDiscoveryWatermarks reads the change cursors before enumeration.
 // Publishing them only after a successful pass leaves rows committed during
-// discovery available to the next watcher event.
+// discovery available to the next watcher event. A single unreadable database
+// is skipped so healthy roots can still be discovered.
 func (p *crushProvider) captureDiscoveryWatermarks(
 	ctx context.Context,
 ) ([]crushDiscoveryWatermark, error) {
@@ -96,7 +97,7 @@ func (p *crushProvider) captureDiscoveryWatermarks(
 		}
 		state, err := readCrushTrackedDatabase(ctx, dbPath)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		watermarks = append(watermarks, crushDiscoveryWatermark{
 			dbPath: dbPath,
@@ -150,15 +151,8 @@ func (p *crushProvider) SourcesForChangedPath(
 
 		sources := make([]SourceRef, 0, len(ids))
 		for _, id := range ids {
-			meta, found, err := crushSessionMeta(ctx, dbPath, id)
-			if err != nil {
-				return nil, err
-			}
-			if !found {
-				continue
-			}
 			sources = append(sources, p.sources.newSourceRef(
-				root, dbPath, meta.SessionID, meta.VirtualPath,
+				root, dbPath, id, VirtualSourcePath(dbPath, id),
 			))
 		}
 		sort.Slice(sources, func(i, j int) bool {
@@ -476,7 +470,9 @@ func (t *crushChangeTracker) changedSessionIDs(
 ) (ids []string, cold bool, snapshot crushTrackedDatabase, err error) {
 	entry := t.entry(dbPath)
 	entry.mu.Lock()
-	defer entry.mu.Unlock()
+	previous := entry.state
+	known := entry.known
+	entry.mu.Unlock()
 
 	info, err := os.Stat(dbPath)
 	if err != nil {
@@ -492,14 +488,14 @@ func (t *crushChangeTracker) changedSessionIDs(
 	if err != nil {
 		return nil, false, crushTrackedDatabase{}, err
 	}
-	if !entry.known || crushTrackedDatabaseReplaced(entry.state, current) {
+	if !known || crushTrackedDatabaseReplaced(previous, current) {
 		return nil, true, current, nil
 	}
 
 	seen := make(map[string]struct{})
 	for _, check := range []crushCursorCheck{
-		{table: "sessions", previous: entry.state.sessions, current: current.sessions},
-		{table: "messages", previous: entry.state.messages, current: current.messages},
+		{table: "sessions", previous: previous.sessions, current: current.sessions},
+		{table: "messages", previous: previous.messages, current: current.messages},
 	} {
 		valid, err := crushCursorStillValid(ctx, db, check)
 		if err != nil {
@@ -514,8 +510,9 @@ func (t *crushChangeTracker) changedSessionIDs(
 			return nil, false, crushTrackedDatabase{}, err
 		}
 	}
-	entry.state = current
-	entry.known = true
+	entry.mu.Lock()
+	entry.mergeLocked(current)
+	entry.mu.Unlock()
 	ids = make([]string, 0, len(seen))
 	for id := range seen {
 		ids = append(ids, id)
