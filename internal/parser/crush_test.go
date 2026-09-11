@@ -385,6 +385,60 @@ func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 	assert.Equal(t, []string{registryDir + "-missing"}, dataDirs)
 }
 
+// A configured database-file root must map onto the data directory that
+// holds virtual session members, so reconciliation can prove the whole
+// membership rather than the bare crush.db path.
+func TestCrushResolveReconciliationScopesMapsDatabaseFileRoot(t *testing.T) {
+	fixture := newCrushTestFixture(t)
+	factory := newCrushProviderFactory(AgentDef{
+		Type: AgentCrush, IDPrefix: "crush:",
+	})
+
+	for name, requested := range map[string]string{
+		"database":       fixture.dbPath,
+		"virtual member": VirtualSourcePath(fixture.dbPath, "sess-1"),
+		"data directory": fixture.dataDir,
+	} {
+		t.Run(name, func(t *testing.T) {
+			provider := factory.NewProvider(ProviderConfig{
+				Roots: []string{fixture.dbPath},
+			})
+			plan, err := provider.ResolveReconciliationScopes(
+				t.Context(), ReconciliationScopeRequest{Roots: []string{requested}},
+			)
+			require.NoError(t, err)
+			require.Len(t, plan.Scopes, 1)
+			scope := plan.Scopes[0]
+			assert.Equal(t, []string{fixture.dataDir}, scope.TraversalRoots,
+				"traversal must use the normalized data-directory root")
+			assert.Equal(t,
+				[]string{cleanReconciliationScopeRoot(fixture.dataDir)},
+				scope.CoverageIdentities,
+				"the database-file request must cover the configured data directory")
+			assert.Equal(t, []string{requested}, scope.RetryRoots)
+			assert.Equal(t,
+				[]string{cleanReconciliationScopeRoot(fixture.dataDir)},
+				plan.RequiredCoverageIdentities)
+		})
+	}
+
+	// A configured data directory requested by its crush.db path still
+	// covers the configured root.
+	provider := factory.NewProvider(ProviderConfig{
+		Roots: []string{fixture.dataDir},
+	})
+	plan, err := provider.ResolveReconciliationScopes(
+		t.Context(), ReconciliationScopeRequest{Roots: []string{fixture.dbPath}},
+	)
+	require.NoError(t, err)
+	require.Len(t, plan.Scopes, 1)
+	assert.Equal(t,
+		[]string{cleanReconciliationScopeRoot(fixture.dataDir)},
+		plan.Scopes[0].CoverageIdentities,
+	)
+	assert.Equal(t, []string{fixture.dbPath}, plan.Scopes[0].RetryRoots)
+}
+
 func TestCrushSchemaValidationRejectsGooseStores(t *testing.T) {
 	fixture := newCrushTestFixture(t)
 	// Drop the parts column marker: a messages table without it is not

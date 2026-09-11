@@ -91,21 +91,43 @@ type crushProvider struct {
 // ResolveReconciliationScopes expands registry roots to their per-project
 // data directories before scope resolution. The configured roots contain
 // only expanded data directories, so a request root that is a registry
-// directory would otherwise match no scope.
+// directory would otherwise match no scope. A crush.db database-file root
+// or virtual member widens through the container topology onto the owning
+// data directory so virtual session members stay in the proof scope.
 func (p *crushProvider) ResolveReconciliationScopes(
-	ctx context.Context, req ReconciliationScopeRequest,
+	_ context.Context, req ReconciliationScopeRequest,
 ) (ReconciliationScopePlan, error) {
 	expanded := make([]string, 0, len(req.Roots))
 	for _, root := range req.Roots {
 		if dataDirs, ok := p.registryMapping[filepath.Clean(root)]; ok {
 			expanded = append(expanded, dataDirs...)
-		} else {
-			expanded = append(expanded, root)
+			continue
 		}
+		expanded = append(expanded, root)
 	}
-	return p.dbBackedProvider.ResolveReconciliationScopes(ctx, ReconciliationScopeRequest{
-		Roots: expanded,
-	})
+	if err := ValidateReconciliationScopeRoots(
+		p.Def.Type, p.Config.Roots, expanded,
+	); err != nil {
+		return ReconciliationScopePlan{}, err
+	}
+	return containerAwareReconciliationScopePlan(
+		p.Config.Roots, expanded, p.reconciliationContainer,
+	), nil
+}
+
+// reconciliationContainer maps a crush.db path or virtual member onto the
+// owning data directory, which is the spelling configured roots carry after
+// normalizeCrushRoots. Classification must not stat: a deleted database must
+// still resolve so its members remain reclaimable.
+func (p *crushProvider) reconciliationContainer(requested string) (string, bool) {
+	physical := requested
+	if container, _, ok := ParseVirtualSourcePath(physical); ok {
+		physical = container
+	}
+	if filepath.Base(physical) != CrushDBName {
+		return "", false
+	}
+	return filepath.Dir(physical), true
 }
 
 func (p *crushProvider) Discover(ctx context.Context) ([]SourceRef, error) {
