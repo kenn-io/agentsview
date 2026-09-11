@@ -352,12 +352,7 @@ class UIStore {
           setCssZoom(factor);
         }
         if (this.persistZoomStorage) {
-          try {
-            localStorage?.setItem(ZOOM_KEY, String(this.zoomLevel));
-            localStorage?.removeItem(FONT_SCALE_KEY);
-          } catch {
-            // ignore
-          }
+          this.persistZoomPreference();
         }
       });
 
@@ -592,9 +587,20 @@ class UIStore {
     return this.applyZoomLevel(readStoredZoom());
   }
 
+  private persistZoomPreference() {
+    try {
+      localStorage?.setItem(ZOOM_KEY, String(this.zoomLevel));
+      localStorage?.removeItem(FONT_SCALE_KEY);
+    } catch {
+      // ignore
+    }
+  }
+
   private setUserZoomLevel(level: number) {
+    const changed = this.zoomLevel !== level;
     this.persistZoomStorage = true;
     this.zoomLevel = level;
+    if (!changed) this.persistZoomPreference();
     this.zoomChangeVersion += 1;
     this.zoomSaveCallback?.(level);
   }

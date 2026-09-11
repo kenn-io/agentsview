@@ -1011,9 +1011,11 @@ describe("UIStore", () => {
       zoom.applyZoomLevel(150);
       await tick();
       expect(stored.get("agentsview-zoom-level")).toBe("120");
+      zoom.setZoomLevel(150);
+      expect(stored.get("agentsview-zoom-level")).toBe("150");
       zoom.resetZoom();
 
-      expect(save.mock.calls).toEqual([[120], [100]]);
+      expect(save.mock.calls).toEqual([[120], [150], [100]]);
       expect(zoom.zoomLevel).toBe(100);
       zoom.setZoomSaveCallback(null);
     });
