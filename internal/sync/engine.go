@@ -11233,6 +11233,9 @@ func (e *Engine) processProviderFile(
 		return processResult{}, false
 	}
 	e.discardStaleSQLiteProviderSource(&file)
+	if file.ProviderSource != nil {
+		sqliteContainerResultPath = providerDiscoveredPath(*file.ProviderSource)
+	}
 
 	// OpenCode-family shared-SQLite gate: when the whole container
 	// provably has not changed since the last fully verified pass, none

@@ -1061,6 +1061,76 @@ func TestSQLiteContainerGateParsesNewlyUnshadowedSession(t *testing.T) {
 		"a newly exposed row must parse despite the unchanged container")
 }
 
+func TestSQLiteContainerGateUsesCarriedSourcePath(t *testing.T) {
+	archive := openTestDB(t)
+	e := &Engine{
+		db: archive,
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentOpenCode: parser.ProviderMigrationProviderAuthoritative,
+		},
+	}
+	dbPath, _ := newContainerTestDB(t)
+	state, ok := parser.StatSQLiteContainerState(dbPath)
+	require.True(t, ok, "container state must be readable")
+	virtualPath := parser.VirtualSourcePath(dbPath, "ses-1")
+	shadowPath := filepath.Join(t.TempDir(), "ses-1.json")
+	require.NoError(t, os.WriteFile(shadowPath, []byte("{}"), 0o600))
+
+	filePath := virtualPath
+	session := db.Session{
+		ID: "opencode:ses-1", Agent: string(parser.AgentOpenCode),
+		Project: "project", Machine: "local", FilePath: &filePath,
+	}
+	require.NoError(t, archive.UpsertSession(session))
+	require.NoError(t, archive.SetSessionDataVersion(
+		session.ID, db.CurrentDataVersion(),
+	))
+
+	virtualSource := parser.SourceRef{
+		Provider: parser.AgentOpenCode, DisplayPath: virtualPath,
+		FingerprintKey: virtualPath, Key: virtualPath,
+	}
+	e.trustedSQLiteContainers = map[string]trustedSQLiteContainer{
+		dbPath: {state: state},
+	}
+	e.beginSQLiteContainerPass(
+		[]parser.DiscoveredFile{{
+			Agent: parser.AgentOpenCode, Path: virtualPath,
+			ProviderSource: &virtualSource,
+		}},
+		map[string]parser.SQLiteContainerState{dbPath: state},
+	)
+	gateFile := parser.DiscoveredFile{
+		Agent:          parser.AgentOpenCode,
+		Path:           virtualPath,
+		ProviderSource: &virtualSource,
+	}
+	require.True(t, e.sqliteContainerSourceFresh(gateFile), "the carried virtual source must be fresh")
+
+	result, used := e.processProviderFile(t.Context(), parser.DiscoveredFile{
+		Agent:           parser.AgentOpenCode,
+		Path:            virtualPath,
+		ProviderSource:  &virtualSource,
+		ProviderProcess: true,
+	})
+	require.True(t, used)
+	require.NoError(t, result.err)
+	assert.True(t, result.skip)
+	assert.Equal(t, virtualPath, result.sqliteContainerResultPath,
+		"an early gate return must retain its carried source path")
+
+	shadowSource := virtualSource
+	shadowSource.DisplayPath = shadowPath
+	shadowSource.FingerprintKey = shadowPath
+	shadowSource.Key = shadowPath
+	shadow := parser.DiscoveredFile{
+		Agent: parser.AgentOpenCode, Path: virtualPath,
+		ProviderSource: &shadowSource,
+	}
+	assert.False(t, e.sqliteContainerSourceFresh(shadow),
+		"a resolved storage shadow must not use the SQLite container gate")
+}
+
 // TestSQLiteContainerScopedPassDoesNotPromoteUndiscoveredContainer pins the
 // promotion precondition: a pass may only trust a container it actually
 // verified, meaning it discovered (and completed) at least one of its

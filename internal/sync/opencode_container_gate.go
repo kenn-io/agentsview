@@ -618,6 +618,13 @@ func (e *Engine) sqliteContainerSourceFresh(file parser.DiscoveredFile) bool {
 	if e.forceParseRequested(file) {
 		return false
 	}
+	// Rehydration keeps the candidate path for archive identity, so gate the
+	// source that the provider resolved for this pass.
+	if file.ProviderSource != nil {
+		if path := providerDiscoveredPath(*file.ProviderSource); path != "" {
+			file.Path = path
+		}
+	}
 	dbPath, sessionID, ok := sqliteContainerSourceForFile(file)
 	if !ok {
 		return false
