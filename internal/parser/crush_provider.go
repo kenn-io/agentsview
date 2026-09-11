@@ -363,7 +363,12 @@ func (p *crushProvider) Fingerprint(
 		return SourceFingerprint{}, err
 	}
 	if found {
-		fingerprint.Hash = hash
+		hasher := sha256.New()
+		crushWriteFingerprintField(hasher, hash)
+		crushWriteFingerprintField(
+			hasher, crushProjectDir(src.DBPath, p.projectMapping),
+		)
+		fingerprint.Hash = hex.EncodeToString(hasher.Sum(nil))
 	}
 	return fingerprint, nil
 }
