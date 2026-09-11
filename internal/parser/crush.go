@@ -1,0 +1,626 @@
+package parser
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json/v2"
+	"fmt"
+	"math"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/tidwall/gjson"
+
+	"go.kenn.io/agentsview/internal/money"
+)
+
+// CrushDBName is the SQLite store filename inside each project's
+// <project>/.crush data directory.
+const CrushDBName = "crush.db"
+
+// CrushProjectsFileName is the registry file inside Crush's data directory
+// that maps project paths to their per-project data directories.
+const CrushProjectsFileName = "projects.json"
+
+// crushSourceVersion identifies the Crush SQLite session format parsed here.
+const crushSourceVersion = "crush-sqlite-v1"
+
+type crushSessionRow struct {
+	id               string
+	title            string
+	parentSessionID  string
+	messageCount     int64
+	promptTokens     int64
+	completionTokens int64
+	cost             float64
+	createdAt        int64
+	updatedAt        int64
+	maxMessageAt     sql.NullInt64
+}
+
+// crushProjectsFile holds the structure of
+// ~/.local/share/crush/projects.json.
+type crushProjectsFile struct {
+	Projects []struct {
+		Path    string `json:"path"`
+		DataDir string `json:"data_dir"`
+	} `json:"projects"`
+}
+
+// CrushProjectsDataDirs reads a Crush projects.json registry and returns
+// the per-project data directories it lists.
+func CrushProjectsDataDirs(registryPath string) []string {
+	data, err := os.ReadFile(registryPath)
+	if err != nil {
+		return nil
+	}
+	var pf crushProjectsFile
+	if err := json.Unmarshal(data, &pf); err != nil {
+		return nil
+	}
+	dirs := make([]string, 0, len(pf.Projects))
+	for _, project := range pf.Projects {
+		dir := strings.TrimSpace(project.DataDir)
+		if dir == "" {
+			continue
+		}
+		dirs = append(dirs, filepath.Clean(dir))
+	}
+	return dirs
+}
+
+func openCrushDB(dbPath string) (*sql.DB, error) {
+	dsn := "file:" + sqliteURIPath(dbPath) + "?mode=ro&immutable=0&_busy_timeout=3000"
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("opening crush sessions database %s: %w", dbPath, err)
+	}
+	return db, nil
+}
+
+func crushTableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
+	var count int
+	err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?
+	`, table).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("checking crush table %s: %w", table, err)
+	}
+	return count > 0, nil
+}
+
+func crushTableColumns(
+	ctx context.Context, db *sql.DB, table string,
+) (map[string]bool, error) {
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return nil, fmt.Errorf("listing crush %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var (
+			cid      int
+			name     string
+			typeName string
+			notNull  int
+			defaultV sql.NullString
+			pk       int
+		)
+		if err := rows.Scan(&cid, &name, &typeName, &notNull, &defaultV, &pk); err != nil {
+			return nil, fmt.Errorf("scanning crush %s columns: %w", table, err)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return columns, nil
+}
+
+// validateCrushSchema requires the Crush shape: sessions with title
+// columns and messages with a parts JSON column. The parts column is the
+// agent-specific marker — Crush vendors goose's migration tool, so a
+// goose_db_version table proves nothing about the format.
+func validateCrushSchema(ctx context.Context, db *sql.DB) error {
+	hasSessions, err := crushTableExists(ctx, db, "sessions")
+	if err != nil {
+		return err
+	}
+	hasMessages, err := crushTableExists(ctx, db, "messages")
+	if err != nil {
+		return err
+	}
+	if !hasSessions || !hasMessages {
+		return fmt.Errorf("unsupported crush schema: missing sessions or messages table")
+	}
+	sessionColumns, err := crushTableColumns(ctx, db, "sessions")
+	if err != nil {
+		return err
+	}
+	for _, required := range []string{"id", "title", "created_at", "updated_at"} {
+		if !sessionColumns[required] {
+			return fmt.Errorf("unsupported crush sessions schema: missing sessions.%s", required)
+		}
+	}
+	messageColumns, err := crushTableColumns(ctx, db, "messages")
+	if err != nil {
+		return err
+	}
+	for _, required := range []string{"id", "session_id", "role", "parts", "created_at"} {
+		if !messageColumns[required] {
+			return fmt.Errorf("unsupported crush messages schema: missing messages.%s", required)
+		}
+	}
+	return nil
+}
+
+// crushSessionSelect joins per-session message activity so discovery and
+// fingerprints can stat one snapshot. created_at values are Unix seconds
+// despite schema comments claiming milliseconds.
+const crushSessionSelect = `
+	SELECT id,
+	       COALESCE(title, ''),
+	       COALESCE(parent_session_id, ''),
+	       COALESCE(message_count, 0),
+	       COALESCE(prompt_tokens, 0),
+	       COALESCE(completion_tokens, 0),
+	       COALESCE(cost, 0),
+	       COALESCE(created_at, 0),
+	       COALESCE(updated_at, 0),
+	       (SELECT MAX(m.created_at) FROM messages m WHERE m.session_id = sessions.id)
+	  FROM sessions
+`
+
+func scanCrushSessionRow(scanner interface{ Scan(...any) error }) (crushSessionRow, error) {
+	var row crushSessionRow
+	err := scanner.Scan(
+		&row.id, &row.title, &row.parentSessionID, &row.messageCount,
+		&row.promptTokens, &row.completionTokens, &row.cost,
+		&row.createdAt, &row.updatedAt, &row.maxMessageAt,
+	)
+	if err != nil {
+		return crushSessionRow{}, err
+	}
+	return row, nil
+}
+
+func forEachCrushSessionMeta(
+	ctx context.Context, dbPath string, yield func(dbBackedSessionMeta) error,
+) error {
+	if !IsRegularFile(dbPath) {
+		return nil
+	}
+	db, err := openCrushDB(dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := validateCrushSchema(ctx, db); err != nil {
+		return err
+	}
+	rows, err := db.QueryContext(ctx, crushSessionSelect+" ORDER BY id")
+	if err != nil {
+		return fmt.Errorf("listing crush sessions: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		row, err := scanCrushSessionRow(rows)
+		if err != nil {
+			return fmt.Errorf("scanning crush session metadata: %w", err)
+		}
+		observeStreamingDiscoveryBuffer(ctx, 1)
+		if err := yield(dbBackedSessionMeta{
+			SessionID:   row.id,
+			VirtualPath: VirtualSourcePath(dbPath, row.id),
+			FileMtime:   crushSessionMtime(dbPath, row),
+		}); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func crushSessionMeta(
+	ctx context.Context, dbPath, sessionID string,
+) (dbBackedSessionMeta, bool, error) {
+	if !IsRegularFile(dbPath) {
+		return dbBackedSessionMeta{}, false, nil
+	}
+	db, err := openCrushDB(dbPath)
+	if err != nil {
+		return dbBackedSessionMeta{}, false, err
+	}
+	defer db.Close()
+	if err := validateCrushSchema(ctx, db); err != nil {
+		return dbBackedSessionMeta{}, false, err
+	}
+	row, err := scanCrushSessionRow(db.QueryRowContext(
+		ctx, crushSessionSelect+" WHERE sessions.id = ?", sessionID,
+	))
+	if err == sql.ErrNoRows {
+		return dbBackedSessionMeta{}, false, nil
+	}
+	if err != nil {
+		return dbBackedSessionMeta{}, false, fmt.Errorf(
+			"loading crush session %s: %w", sessionID, err,
+		)
+	}
+	return dbBackedSessionMeta{
+		SessionID:   row.id,
+		VirtualPath: VirtualSourcePath(dbPath, row.id),
+		FileMtime:   crushSessionMtime(dbPath, row),
+	}, true, nil
+}
+
+func crushSessionMtime(dbPath string, row crushSessionRow) int64 {
+	maxTime := maxCrushTime(
+		crushUnixTimestamp(row.updatedAt),
+		crushUnixTimestamp(row.createdAt),
+		crushUnixTimestamp(row.maxMessageAt.Int64),
+	)
+	if !maxTime.IsZero() {
+		return maxTime.UnixNano()
+	}
+	mtime, _ := sqliteDBCompositeMtime(dbPath, []string{"", "-wal"})
+	return mtime
+}
+
+func parseCrushSession(
+	dbPath, sessionID, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
+	db, err := openCrushDB(dbPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer db.Close()
+	ctx := context.Background()
+	if err := validateCrushSchema(ctx, db); err != nil {
+		return nil, nil, err
+	}
+	row, err := scanCrushSessionRow(db.QueryRowContext(
+		ctx, crushSessionSelect+" WHERE sessions.id = ?", sessionID,
+	))
+	if err == sql.ErrNoRows {
+		return nil, nil, sql.ErrNoRows
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading crush session %s: %w", sessionID, err)
+	}
+	messages, err := loadCrushMessages(db, sessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// The store lives at <project>/.crush/crush.db; the project directory
+	// is two levels above the database file. Configured roots that keep
+	// crush.db elsewhere still resolve to the store's parent directory.
+	projectDir := filepath.Clean(filepath.Dir(filepath.Dir(dbPath)))
+	project := ExtractProjectFromCwd(projectDir)
+	if project == "" {
+		project = "crush"
+	}
+
+	sessionName := strings.TrimSpace(row.title)
+	firstMessage := crushFirstMessage(messages)
+	if firstMessage == "" && sessionName != "" {
+		firstMessage = truncate(strings.ReplaceAll(sessionName, "\n", " "), 300)
+	}
+
+	userMessages := 0
+	for _, message := range messages {
+		if message.Role == RoleUser && len(message.ToolResults) == 0 {
+			userMessages++
+		}
+	}
+
+	startedAt := crushUnixTimestamp(row.createdAt)
+	endedAt := crushUnixTimestamp(row.updatedAt)
+	for _, message := range messages {
+		if message.Timestamp.After(endedAt) {
+			endedAt = message.Timestamp
+		}
+		if startedAt.IsZero() ||
+			(!message.Timestamp.IsZero() && message.Timestamp.Before(startedAt)) {
+			startedAt = message.Timestamp
+		}
+	}
+	if startedAt.IsZero() {
+		startedAt = endedAt
+	}
+	if endedAt.IsZero() {
+		endedAt = startedAt
+	}
+
+	session := &ParsedSession{
+		ID:                  "crush:" + row.id,
+		Project:             project,
+		Machine:             machine,
+		Agent:               AgentCrush,
+		Cwd:                 projectDir,
+		SourceSessionID:     row.id,
+		SourceVersion:       crushSourceVersion,
+		FirstMessage:        firstMessage,
+		SessionName:         sessionName,
+		StartedAt:           startedAt,
+		EndedAt:             endedAt,
+		MessageCount:        len(messages),
+		UserMessageCount:    userMessages,
+		CountsAuthoritative: true,
+		File: FileInfo{
+			Path:  VirtualSourcePath(dbPath, row.id),
+			Mtime: crushSessionMtime(dbPath, row),
+		},
+	}
+	if info, err := os.Stat(dbPath); err == nil {
+		session.File.Size = info.Size()
+	}
+	if parentID := strings.TrimSpace(row.parentSessionID); parentID != "" {
+		session.ParentSessionID = "crush:" + parentID
+		session.RelationshipType = RelSubagent
+	}
+	usageEvents := crushUsageEvents(session, row, messages)
+	applyUsageEventTokenTotals(session, usageEvents)
+	session.UsageEvents = usageEvents
+	return session, messages, nil
+}
+
+func loadCrushMessages(db *sql.DB, sessionID string) ([]ParsedMessage, error) {
+	rows, err := db.Query(`
+		SELECT id,
+		       COALESCE(role, ''),
+		       COALESCE(parts, '[]'),
+		       COALESCE(model, ''),
+		       COALESCE(provider, ''),
+		       COALESCE(created_at, 0)
+		  FROM messages
+		 WHERE session_id = ?
+		 ORDER BY created_at, rowid
+	`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("listing crush messages for %s: %w", sessionID, err)
+	}
+	defer rows.Close()
+	parsed := make([]ParsedMessage, 0)
+	for rows.Next() {
+		var (
+			rowID     string
+			role      string
+			parts     string
+			model     string
+			provider  string
+			createdAt int64
+		)
+		if err := rows.Scan(&rowID, &role, &parts, &model, &provider, &createdAt); err != nil {
+			return nil, fmt.Errorf("scanning crush message row: %w", err)
+		}
+		message, ok, err := buildCrushMessage(
+			len(parsed), rowID, role, parts, model, provider, createdAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			parsed = append(parsed, message)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+func buildCrushMessage(
+	ordinal int, rowID, role, parts, model, provider string, createdAt int64,
+) (ParsedMessage, bool, error) {
+	contentJSON := gjson.Parse(parts)
+	if !gjson.Valid(parts) || !contentJSON.IsArray() {
+		return ParsedMessage{}, false, fmt.Errorf(
+			"parsing crush message %s parts: expected JSON array", rowID,
+		)
+	}
+	message := ParsedMessage{
+		Ordinal:    ordinal,
+		Timestamp:  crushUnixTimestamp(createdAt),
+		SourceUUID: rowID,
+	}
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "user":
+		message.Role = RoleUser
+	case "assistant":
+		message.Role = RoleAssistant
+		message.Model = strings.TrimSpace(model)
+		message.ProviderID = strings.TrimSpace(provider)
+	case "tool":
+		message.Role = RoleUser
+		message.IsSystem = true
+	default:
+		return ParsedMessage{}, false, nil
+	}
+
+	var texts []string
+	var thinking []string
+	contentJSON.ForEach(func(_, part gjson.Result) bool {
+		switch part.Get("type").Str {
+		case "text":
+			if text := strings.TrimSpace(part.Get("data.text").Str); text != "" {
+				texts = append(texts, text)
+			}
+		case "reasoning":
+			message.HasThinking = true
+			if text := strings.TrimSpace(part.Get("data.thinking").Str); text != "" {
+				thinking = append(thinking, text)
+				texts = append(texts, "[Thinking]\n"+text+"\n[/Thinking]")
+			}
+		case "tool_call":
+			if call, ok := crushParseToolCall(rowID, part); ok {
+				message.HasToolUse = true
+				message.ToolCalls = append(message.ToolCalls, call)
+			}
+		case "tool_result":
+			if result, ok := crushParseToolResult(part); ok {
+				message.ToolResults = append(message.ToolResults, result)
+			}
+		case "finish":
+			if message.Role == RoleAssistant {
+				if reason := strings.TrimSpace(part.Get("data.reason").Str); reason != "" {
+					message.StopReason = reason
+				}
+			}
+		default:
+			// Unknown part types are skipped; Crush adds part types in
+			// minor releases and unknown data must not fail the session.
+		}
+		return true
+	})
+	message.Content = strings.Join(texts, "\n")
+	message.ThinkingText = strings.Join(thinking, "\n\n")
+	message.ContentLength = len(message.Content)
+	return message, true, nil
+}
+
+func crushParseToolCall(rowID string, part gjson.Result) (ParsedToolCall, bool) {
+	data := part.Get("data")
+	name := strings.TrimSpace(data.Get("name").Str)
+	if name == "" {
+		return ParsedToolCall{}, false
+	}
+	toolUseID := strings.TrimSpace(data.Get("id").Str)
+	if toolUseID == "" {
+		// Payload call IDs are unique per request; fall back to the row ID
+		// plus part index so repeated calls never share a ToolUseID.
+		toolUseID = rowID + ":" + strconv.Itoa(part.Index)
+	}
+	inputJSON := data.Get("input").Str
+	if !gjson.Valid(inputJSON) {
+		inputJSON = "{}"
+	}
+	call := ParsedToolCall{
+		ToolUseID: "crush:" + toolUseID,
+		ToolName:  name,
+		Category:  NormalizeToolCategory(name),
+		InputJSON: inputJSON,
+	}
+	call.SkillName = inferToolSkillName(name, inputJSON)
+	return call, true
+}
+
+func crushParseToolResult(part gjson.Result) (ParsedToolResult, bool) {
+	data := part.Get("data")
+	toolUseID := strings.TrimSpace(data.Get("tool_call_id").Str)
+	if toolUseID == "" {
+		return ParsedToolResult{}, false
+	}
+	content := data.Get("content")
+	if !content.Exists() || content.Type == gjson.Null {
+		return ParsedToolResult{ToolUseID: "crush:" + toolUseID, ContentRaw: "null"}, true
+	}
+	var quoted []byte
+	if content.Type == gjson.String {
+		quoted, _ = json.Marshal(content.Str)
+	} else {
+		quoted = []byte(content.Raw)
+	}
+	return ParsedToolResult{
+		ToolUseID:     "crush:" + toolUseID,
+		ContentLength: len(content.Str),
+		ContentRaw:    string(quoted),
+	}, true
+}
+
+func crushFirstMessage(messages []ParsedMessage) string {
+	for _, message := range messages {
+		if message.Role != RoleUser || message.IsSystem {
+			continue
+		}
+		text := strings.TrimSpace(message.Content)
+		if text == "" {
+			continue
+		}
+		return truncate(strings.ReplaceAll(text, "\n", " "), 300)
+	}
+	return ""
+}
+
+// crushUsageEvents emits one aggregate usage event per session. Crush
+// tracks cumulative session totals (prompt_tokens, completion_tokens, cost)
+// with no per-request breakdown; the model is the most recent assistant
+// message's model.
+func crushUsageEvents(
+	session *ParsedSession, row crushSessionRow, messages []ParsedMessage,
+) []ParsedUsageEvent {
+	promptTokens := nonnegativeCrushToken(row.promptTokens)
+	completionTokens := nonnegativeCrushToken(row.completionTokens)
+	cost := row.cost
+	if promptTokens <= 0 && completionTokens <= 0 && cost <= 0 {
+		return nil
+	}
+	event := ParsedUsageEvent{
+		SessionID:    "crush:" + row.id,
+		Source:       "session",
+		Model:        crushLatestModel(messages),
+		InputTokens:  promptTokens,
+		OutputTokens: completionTokens,
+		OccurredAt:   timeString(session.EndedAt, session.StartedAt),
+		DedupKey:     "session:crush:" + row.id + "|aggregate",
+	}
+	if cost >= 0 && !math.IsNaN(cost) && !math.IsInf(cost, 0) {
+		if parsed, err := money.FromFloatDollars(cost); err == nil {
+			event.Cost = &parsed
+			event.CostStatus = "unknown"
+			event.CostSource = "crush-session"
+		}
+	}
+	return []ParsedUsageEvent{event}
+}
+
+func crushLatestModel(messages []ParsedMessage) string {
+	model := ""
+	for _, message := range messages {
+		if message.Role == RoleAssistant && message.Model != "" {
+			model = message.Model
+		}
+	}
+	return model
+}
+
+func nonnegativeCrushToken(value int64) int {
+	if value <= 0 {
+		return 0
+	}
+	maxInt := int64(^uint(0) >> 1)
+	if value > maxInt {
+		return int(maxInt)
+	}
+	return int(value)
+}
+
+// crushUnixTimestamp decodes Crush timestamps. The schema comments claim
+// milliseconds, but Crush writes Unix seconds (its update triggers use
+// strftime('%s','now')); values beyond the millisecond threshold are
+// decoded as milliseconds for forward compatibility.
+func crushUnixTimestamp(value int64) time.Time {
+	if value <= 0 {
+		return time.Time{}
+	}
+	if value > 10_000_000_000 {
+		return time.UnixMilli(value).UTC()
+	}
+	return time.Unix(value, 0).UTC()
+}
+
+func maxCrushTime(values ...time.Time) time.Time {
+	var result time.Time
+	for _, value := range values {
+		if value.After(result) {
+			result = value
+		}
+	}
+	return result
+}
