@@ -163,6 +163,9 @@ func (p *crushProvider) withConfiguredRoots(sources []SourceRef) []SourceRef {
 // directory would otherwise match no scope. A crush.db database-file root
 // or virtual member widens through the container topology onto the owning
 // data directory so virtual session members stay in the proof scope.
+// TraversalRoots are rewritten back onto the original configured spelling
+// so a scoped NewProvider reconstruction re-applies registry expansion,
+// project mapping, and configured-root machine attribution.
 func (p *crushProvider) ResolveReconciliationScopes(
 	_ context.Context, req ReconciliationScopeRequest,
 ) (ReconciliationScopePlan, error) {
@@ -179,9 +182,29 @@ func (p *crushProvider) ResolveReconciliationScopes(
 	); err != nil {
 		return ReconciliationScopePlan{}, err
 	}
-	return containerAwareReconciliationScopePlan(
+	plan := containerAwareReconciliationScopePlan(
 		p.Config.Roots, expanded, p.reconciliationContainer,
-	), nil
+	)
+	for i := range plan.Scopes {
+		plan.Scopes[i].TraversalRoots = p.withOriginalTraversalRoots(
+			plan.Scopes[i].TraversalRoots,
+		)
+	}
+	return plan, nil
+}
+
+// withOriginalTraversalRoots maps each expanded data directory back onto the
+// configured registry, crush.db, or data-directory root that produced it.
+func (p *crushProvider) withOriginalTraversalRoots(roots []string) []string {
+	out := make([]string, 0, len(roots))
+	for _, root := range roots {
+		if original, ok := p.configuredRoot[filepath.Clean(root)]; ok {
+			out = append(out, original)
+			continue
+		}
+		out = append(out, root)
+	}
+	return out
 }
 
 // reconciliationContainer maps a crush.db path or virtual member onto the
@@ -515,7 +538,7 @@ func crushSessionFingerprint(
 		{"model", true, "COALESCE(model, '')"},
 		{"provider", messageColumns["provider"], "COALESCE(provider, '')"},
 		{"created_at", true, "CAST(COALESCE(created_at, 0) AS TEXT)"},
-		{"updated_at", true, "CAST(COALESCE(updated_at, 0) AS TEXT)"},
+		{"updated_at", messageColumns["updated_at"], "CAST(COALESCE(updated_at, 0) AS TEXT)"},
 		{"finished_at", messageColumns["finished_at"], "COALESCE(CAST(finished_at AS TEXT), '')"},
 		{"is_summary_message", messageColumns["is_summary_message"], "CAST(COALESCE(is_summary_message, 0) AS TEXT)"},
 	}
