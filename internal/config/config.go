@@ -597,6 +597,38 @@ func ParseChartPalette(value string) (ChartPalette, error) {
 	}
 }
 
+type ZoomLevel int
+
+const (
+	ZoomLevel67  ZoomLevel = 67
+	ZoomLevel75  ZoomLevel = 75
+	ZoomLevel80  ZoomLevel = 80
+	ZoomLevel90  ZoomLevel = 90
+	ZoomLevel100 ZoomLevel = 100
+	ZoomLevel110 ZoomLevel = 110
+	ZoomLevel120 ZoomLevel = 120
+	ZoomLevel125 ZoomLevel = 125
+	ZoomLevel130 ZoomLevel = 130
+	ZoomLevel150 ZoomLevel = 150
+	ZoomLevel175 ZoomLevel = 175
+	ZoomLevel200 ZoomLevel = 200
+)
+
+func ParseZoomLevel(value int) (ZoomLevel, error) {
+	zoom := ZoomLevel(value)
+	switch zoom {
+	case ZoomLevel67, ZoomLevel75, ZoomLevel80, ZoomLevel90,
+		ZoomLevel100, ZoomLevel110, ZoomLevel120, ZoomLevel125,
+		ZoomLevel130, ZoomLevel150, ZoomLevel175, ZoomLevel200:
+		return zoom, nil
+	default:
+		return 0, fmt.Errorf(
+			"zoom_level must be one of 67, 75, 80, 90, 100, 110, 120, 125, 130, 150, 175, or 200 (got %d)",
+			value,
+		)
+	}
+}
+
 // ArchiveContent selects how much session content the SQLite archive stores.
 // The policy applies when rows are written; it never rewrites rows already in
 // the archive.
@@ -690,6 +722,7 @@ type Config struct {
 	Host                 string                 `json:"host" toml:"host"`
 	Port                 int                    `json:"port" toml:"port"`
 	ChartPalette         ChartPalette           `json:"chart_palette" toml:"chart_palette"`
+	ZoomLevel            *ZoomLevel             `json:"zoom_level,omitempty" toml:"zoom_level,omitempty"`
 	DataDir              string                 `json:"data_dir" toml:"data_dir"`
 	DBPath               string                 `json:"-" toml:"-"`
 	PublicURL            string                 `json:"public_url,omitempty" toml:"public_url"`
@@ -1472,6 +1505,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		Host                           string                 `toml:"host"`
 		Port                           int                    `toml:"port"`
 		ChartPalette                   ChartPalette           `toml:"chart_palette"`
+		ZoomLevel                      int                    `toml:"zoom_level"`
 		PublicURL                      string                 `toml:"public_url"`
 		PublicOrigins                  []string               `toml:"public_origins"`
 		Proxy                          ProxyConfig            `toml:"proxy"`
@@ -1503,6 +1537,14 @@ func (c *Config) applyConfigTOML(data string) error {
 	meta, err := toml.Decode(data, &file)
 	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
+	}
+	var zoomLevel *ZoomLevel
+	if meta.IsDefined("zoom_level") {
+		parsed, err := ParseZoomLevel(file.ZoomLevel)
+		if err != nil {
+			return err
+		}
+		zoomLevel = &parsed
 	}
 	customModelPricing, err := decodeCustomModelPricing(data)
 	if err != nil {
@@ -1539,6 +1581,9 @@ func (c *Config) applyConfigTOML(data string) error {
 			return err
 		}
 		c.ChartPalette = palette
+	}
+	if zoomLevel != nil {
+		c.ZoomLevel = zoomLevel
 	}
 	if file.PublicURL != "" {
 		c.PublicURL = file.PublicURL
@@ -3301,6 +3346,15 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 			return err
 		}
 	}
+	if value, ok := patch["zoom_level"]; ok {
+		zoom, ok := value.(ZoomLevel)
+		if !ok {
+			return fmt.Errorf("zoom_level must use the typed configuration value")
+		}
+		if _, err := ParseZoomLevel(int(zoom)); err != nil {
+			return err
+		}
+	}
 	if value, ok := patch["disabled_agents"]; ok {
 		agents, ok := value.([]parser.AgentType)
 		if !ok {
@@ -3402,6 +3456,12 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 		if v, ok := patch["chart_palette"]; ok {
 			if palette, ok := v.(ChartPalette); ok {
 				c.ChartPalette = palette
+			}
+		}
+		if v, ok := patch["zoom_level"]; ok {
+			if zoom, ok := v.(ZoomLevel); ok {
+				zoomCopy := zoom
+				c.ZoomLevel = &zoomCopy
 			}
 		}
 		if v, ok := patch["tool_result_images"]; ok {

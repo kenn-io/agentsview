@@ -3635,6 +3635,55 @@ func TestSettingsChartPaletteRoundTrip(t *testing.T) {
 	assert.Equal(t, config.ChartPaletteMatplotlib, persisted.ChartPalette)
 }
 
+func TestSettingsZoomLevelRoundTrip(t *testing.T) {
+	configured := config.ZoomLevel120
+	te := setup(t, func(cfg *config.Config) { cfg.ZoomLevel = &configured })
+	require.NoError(t, os.WriteFile(filepath.Join(te.dataDir, "config.toml"), []byte(
+		"github_token = \"keep\"\n[proxy]\nmode = \"caddy\"\n"), 0o600))
+	putSettings := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://127.0.0.1:0")
+		w := httptest.NewRecorder()
+		te.handler.ServeHTTP(w, req)
+		return w
+	}
+
+	w := te.get(t, "/api/v1/settings")
+	assertStatus(t, w, http.StatusOK)
+	assert.Contains(t, w.Body.String(), `"zoom_level":120`)
+
+	w = putSettings(`{"zoom_level":120}`)
+	assertStatus(t, w, http.StatusOK)
+	var updated struct {
+		ZoomLevel *config.ZoomLevel `json:"zoom_level"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+	require.NotNil(t, updated.ZoomLevel)
+	assert.Equal(t, config.ZoomLevel120, *updated.ZoomLevel)
+
+	var persisted struct {
+		ZoomLevel   *config.ZoomLevel  `toml:"zoom_level"`
+		GithubToken string             `toml:"github_token"`
+		Proxy       config.ProxyConfig `toml:"proxy"`
+	}
+	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
+	require.NoError(t, err)
+	require.NotNil(t, persisted.ZoomLevel)
+	assert.Equal(t, config.ZoomLevel120, *persisted.ZoomLevel)
+	assert.Equal(t, "keep", persisted.GithubToken)
+	assert.Equal(t, "caddy", persisted.Proxy.Mode)
+
+	before, err := os.ReadFile(filepath.Join(te.dataDir, "config.toml"))
+	require.NoError(t, err)
+	w = putSettings(`{"zoom_level":101}`)
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, "zoom_level must be one of")
+	after, err := os.ReadFile(filepath.Join(te.dataDir, "config.toml"))
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+}
+
 func TestSettingsRejectInvalidChartPaletteWithoutChangingSelection(t *testing.T) {
 	te := setup(t)
 	putSettings := func(body string) *httptest.ResponseRecorder {
@@ -3794,6 +3843,20 @@ func TestSettingsToolResultImagesReadOnlyBackend(t *testing.T) {
 	te := setupPGMode(t)
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
 		strings.NewReader(`{"tool_result_images":"drop"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusNotImplemented)
+
+	_, err := os.Stat(filepath.Join(te.dataDir, "config.toml"))
+	assert.True(t, os.IsNotExist(err), "config.toml must not be written by a read-only backend")
+}
+
+func TestSettingsZoomLevelReadOnlyBackend(t *testing.T) {
+	te := setupPGMode(t)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		strings.NewReader(`{"zoom_level":120}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "http://127.0.0.1:0")
 	w := httptest.NewRecorder()

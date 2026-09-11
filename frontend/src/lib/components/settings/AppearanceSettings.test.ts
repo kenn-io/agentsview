@@ -25,6 +25,16 @@ const originalIsDesktop = sync.isDesktop;
 describe("AppearanceSettings", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    settingsService.putApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
     settings.chartPalette = "agentsview";
     settings.readOnly = false;
     settings.saving = false;
@@ -36,7 +46,7 @@ describe("AppearanceSettings", () => {
   });
 
   afterEach(() => {
-    ui.setZoomLevel(100);
+    ui.applyZoomLevel(100);
     if (ui.highContrast) ui.toggleHighContrast();
     settings.chartPalette = "agentsview";
     settings.readOnly = false;
@@ -50,7 +60,7 @@ describe("AppearanceSettings", () => {
 
   it.each([false, true])("shares one Zoom selector with desktop=%s", async (isDesktop) => {
     Object.defineProperty(sync, "isDesktop", { value: isDesktop, writable: true, configurable: true });
-    ui.setZoomLevel(120);
+    ui.applyZoomLevel(120);
     const { getByTitle, getByRole, getAllByRole, queryByText } = render(AppearanceSettings);
     expect(getByTitle("Zoom").textContent).toContain("120%");
     expect(getByRole("button", { name: "Zoom 120%" })).toBeTruthy();
@@ -71,14 +81,19 @@ describe("AppearanceSettings", () => {
     await waitFor(() => expect(getByTitle("Zoom").textContent).toContain("100%"));
   });
 
-  it("keeps Zoom editable when server settings are read-only", async () => {
+  it("disables Zoom when server settings are read-only", () => {
     settings.readOnly = true;
-    const { getByTitle, getByRole } = render(AppearanceSettings);
-    await fireEvent.click(getByTitle("Zoom"));
-    await fireEvent.mouseDown(getByRole("option", { name: "120%" }));
-    await waitFor(() => expect(getByTitle("Zoom").textContent).toContain("120%"));
-    expect(ui.zoomLevel).toBe(120);
+    const { getByRole } = render(AppearanceSettings);
+
+    expect((getByRole("button", { name: "Zoom 100%" }) as HTMLButtonElement).disabled).toBe(true);
     expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
+  });
+
+  it("disables Zoom while settings are saving", () => {
+    settings.saving = true;
+    const { getByRole } = render(AppearanceSettings);
+
+    expect((getByRole("button", { name: "Zoom 100%" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("rejects an unlisted percentage and shows localized empty text", async () => {

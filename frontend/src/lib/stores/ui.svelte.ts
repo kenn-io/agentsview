@@ -104,6 +104,7 @@ const LEGACY_FONT_SCALE_STEPS = [90, 100, 110, 120, 130];
 let zoomRequest = 0;
 let nativeZoomQueue = Promise.resolve();
 let confirmedNativeZoom = 1;
+type ZoomSaveCallback = (level: number) => void;
 
 type DesktopTauriWebviewWindow = {
   setZoom(scaleFactor: number): Promise<void>;
@@ -262,6 +263,8 @@ class UIStore {
   pendingScrollSession: string | null = $state(null);
 
   zoomLevel: number = $state(readStoredZoom());
+  zoomChangeVersion = 0;
+  private zoomSaveCallback: ZoomSaveCallback | null = null;
 
   sidebarOpen: boolean = $state(true);
   isMobileViewport: boolean = $state(false);
@@ -545,28 +548,46 @@ class UIStore {
     this.setFollowLatest(!this.followLatest);
   }
 
+  setZoomSaveCallback(callback: ZoomSaveCallback | null) {
+    this.zoomSaveCallback = callback;
+  }
+
   zoomIn() {
     const idx = ZOOM_STEPS.indexOf(this.zoomLevel);
     if (idx < ZOOM_STEPS.length - 1) {
-      this.zoomLevel = ZOOM_STEPS[idx + 1]!;
+      this.setUserZoomLevel(ZOOM_STEPS[idx + 1]!);
     }
   }
 
   zoomOut() {
     const idx = ZOOM_STEPS.indexOf(this.zoomLevel);
     if (idx > 0) {
-      this.zoomLevel = ZOOM_STEPS[idx - 1]!;
+      this.setUserZoomLevel(ZOOM_STEPS[idx - 1]!);
     }
   }
 
   resetZoom() {
-    this.zoomLevel = ZOOM_DEFAULT;
+    this.setUserZoomLevel(ZOOM_DEFAULT);
   }
 
   setZoomLevel(level: number) {
     if (ZOOM_STEPS.includes(level)) {
-      this.zoomLevel = level;
+      this.setUserZoomLevel(level);
     }
+  }
+
+  applyZoomLevel(level: number) {
+    if (ZOOM_STEPS.includes(level)) {
+      this.zoomLevel = level;
+      return true;
+    }
+    return false;
+  }
+
+  private setUserZoomLevel(level: number) {
+    this.zoomLevel = level;
+    this.zoomChangeVersion += 1;
+    this.zoomSaveCallback?.(level);
   }
 
   toggleHighContrast() {

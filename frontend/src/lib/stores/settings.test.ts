@@ -3,6 +3,7 @@ import { settings } from "./settings.svelte.js";
 import { SettingsService } from "../api/generated/index";
 import { ApiError } from "../api/runtime.js";
 import { DEFAULT_CHART_PALETTE } from "../utils/chartPalette.js";
+import { ui } from "./ui.svelte.js";
 
 const runtime = vi.hoisted(() => ({
   setAuthToken: vi.fn(),
@@ -52,12 +53,15 @@ beforeEach(() => {
   settings.requireAuth = false;
   settings.readOnly = false;
   settings.chartPalette = DEFAULT_CHART_PALETTE;
+  settings.toolResultImages = "keep";
   settings.loaded = false;
   settings.loading = false;
   settings.saving = false;
   settings.error = null;
   settings.saveError = null;
   settings.needsAuth = false;
+  ui.applyZoomLevel(100);
+  ui.zoomChangeVersion = 0;
 });
 
 describe("SettingsStore.load mode handling", () => {
@@ -76,6 +80,184 @@ describe("SettingsStore.load mode handling", () => {
     await settings.load();
 
     expect(settings.readOnly).toBe(true);
+  });
+
+  it("hydrates configured zoom without saving it", async () => {
+    ui.applyZoomLevel(130);
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+      zoom_level: 120,
+    });
+
+    await settings.load();
+
+    expect(ui.zoomLevel).toBe(120);
+    expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
+  });
+
+  it("hydrates an explicit 100% over local storage", async () => {
+    ui.applyZoomLevel(130);
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+      zoom_level: 100,
+    });
+
+    await settings.load();
+
+    expect(ui.zoomLevel).toBe(100);
+    expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
+  });
+
+  it("keeps the newest response when settings loads overlap", async () => {
+    let finishFirst!: (value: Record<string, unknown>) => void;
+    let finishSecond!: (value: Record<string, unknown>) => void;
+    settingsService.getApiV1Settings
+      .mockReturnValueOnce(new Promise((resolve) => { finishFirst = resolve; }))
+      .mockReturnValueOnce(new Promise((resolve) => { finishSecond = resolve; }));
+
+    const first = settings.load();
+    const second = settings.load();
+    finishSecond({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+      zoom_level: 150,
+    });
+    await second;
+    finishFirst({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+      zoom_level: 120,
+    });
+    await first;
+
+    expect(ui.zoomLevel).toBe(150);
+  });
+
+  it("keeps local zoom when the server omits the field", async () => {
+    ui.applyZoomLevel(130);
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+
+    await settings.load();
+
+    expect(ui.zoomLevel).toBe(130);
+  });
+
+  it("does not let a pending load replace a newer user zoom", async () => {
+    settings.readOnly = true;
+    let finish!: (value: Record<string, unknown>) => void;
+    settingsService.getApiV1Settings.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+
+    const loading = settings.load();
+    ui.setZoomLevel(150);
+    finish({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+      zoom_level: 120,
+    });
+    await loading;
+
+    expect(ui.zoomLevel).toBe(150);
+    expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
+  });
+});
+
+describe("SettingsStore zoom persistence", () => {
+  const response = {
+    agent_dirs: {},
+    chart_palette: "agentsview",
+    github_configured: false,
+    host: "127.0.0.1",
+    port: 8080,
+    read_only: false,
+    require_auth: false,
+    terminal: { mode: "auto" },
+  };
+
+  it("saves user zoom through the shared callback", async () => {
+    settingsService.putApiV1Settings.mockResolvedValue({ ...response, zoom_level: 120 });
+
+    ui.setZoomLevel(120);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledWith({ zoom_level: 120 });
+    expect(ui.zoomLevel).toBe(120);
+  });
+
+  it("keeps local zoom and exposes a failed save", async () => {
+    settingsService.putApiV1Settings.mockRejectedValue(new Error("save failed"));
+
+    ui.setZoomLevel(120);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(ui.zoomLevel).toBe(120);
+    expect(settings.saveError).toBe("save failed");
+  });
+
+  it("does not rewind a newer selection when an earlier save returns", async () => {
+    let finishFirst!: (value: typeof response & { zoom_level?: number }) => void;
+    settingsService.putApiV1Settings
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishFirst = resolve;
+        }),
+      )
+      .mockResolvedValueOnce({ ...response, zoom_level: 150 });
+
+    ui.setZoomLevel(120);
+    ui.setZoomLevel(150);
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledTimes(1);
+
+    finishFirst({ ...response, zoom_level: 120 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(ui.zoomLevel).toBe(150);
+    expect(settingsService.putApiV1Settings).toHaveBeenNthCalledWith(2, { zoom_level: 150 });
   });
 });
 

@@ -1178,7 +1178,7 @@ organized into sections:
 
 ![Chart color palette setting](/docs/assets/generated/screenshots/settings-chart-colors.png)
 
-Language, theme, high contrast, message layout, zoom, block visibility, and Date ranges preferences use local storage in the current browser or desktop webview profile. Each profile keeps its own choices.
+Language, theme, high contrast, message layout, block visibility, and Date ranges preferences use local storage in the current browser or desktop webview profile. Each profile keeps its own choices. Zoom uses the server-wide `zoom_level` setting when configured. If the field is absent, the browser or desktop webview keeps its local zoom preference.
 
 Chart colors use the server-wide `chart_palette` setting in `~/.agentsview/config.toml`. Agent directory overrides, terminal settings, the saved GitHub token, and the local server's remote-access authentication settings also use that file. Worktree mapping rules moved to the [Data page](/docs/data/#rules) and live in the local archive database. See [Remote Access](/docs/remote-access/) for details on the remote access settings.
 
@@ -1202,6 +1202,12 @@ browser and desktop app. It offers 67%, 75%, 80%, 90%, 100%, 110%, 120%, 125%,
 saved non-default zoom takes precedence. Otherwise, a saved non-default text
 size takes precedence over 100%.
 
+To set the same default for every client, edit `~/.agentsview/config.toml` and
+add `zoom_level = 120`. The field accepts the twelve values listed above. The
+server applies a manual edit after it reloads its configuration. Settings saves
+write the same field. When the field is absent, each client uses its local
+preference and its existing text-size migration.
+
 The desktop status bar and shortcuts change the same setting. Use `Cmd+Plus` and `Cmd+Minus`, or `Ctrl+Plus` and `Ctrl+Minus` on Windows, to zoom in and out. `Cmd+0`, or `Ctrl+0` on Windows, resets Zoom to 100%.
 
 ______________________________________________________________________
@@ -1217,8 +1223,7 @@ sessions.
 ![Dark theme](/docs/assets/generated/screenshots/theme-dark.png)
 
 Settings > Appearance also offers a **high-contrast** mode for greater
-legibility and a **text size** control (90–130%) that scales message and
-interface text. Both preferences are saved and persist across sessions.
+legibility. The theme and high-contrast preferences persist across sessions.
 
 The **Chart colors** control selects the categorical palette used by the
 dashboard skill trend, Trends, and Usage charts. Choose **Agentsview** for the

@@ -20,4 +20,5 @@ export interface SettingsResponse {
   terminal: TerminalResponse;
   /** Inline tool-result image retention applied to ingestion after a daemon restart */
   tool_result_images: SettingsResponseToolResultImages;
+  zoom_level?: number;
 }

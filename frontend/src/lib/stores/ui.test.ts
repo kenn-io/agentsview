@@ -1001,6 +1001,20 @@ describe("UIStore", () => {
       expect(stored.get("agentsview-zoom-level")).toBe("120");
     });
 
+    it("saves user changes but not server hydration", async () => {
+      const { ui: zoom } = await import("./ui.svelte.js");
+      const save = vi.fn();
+      zoom.setZoomSaveCallback(save);
+
+      zoom.setZoomLevel(120);
+      zoom.applyZoomLevel(150);
+      zoom.resetZoom();
+
+      expect(save.mock.calls).toEqual([[120], [100]]);
+      expect(zoom.zoomLevel).toBe(100);
+      zoom.setZoomSaveCallback(null);
+    });
+
     it("falls back to CSS zoom when native zoom rejects", async () => {
       window.history.replaceState({}, "", "/?desktop");
       stored.set("agentsview-font-scale", "120");

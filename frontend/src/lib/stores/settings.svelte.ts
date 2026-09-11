@@ -11,6 +11,7 @@ import {
   isRemoteConnection,
 } from "../api/runtime.js";
 import { DEFAULT_CHART_PALETTE, isChartPalette, type ChartPalette } from "../utils/chartPalette.js";
+import { ui } from "./ui.svelte.js";
 
 export type ToolResultImagesPolicy = "keep" | "drop";
 
@@ -53,6 +54,8 @@ function forbiddenMessage(serverMessage: string): string {
 
 class SettingsStore {
   private mutationQueue: Promise<void> | null = null;
+  private zoomSaveVersion = 0;
+  private loadVersion = 0;
   agentDirs: Record<string, string[]> = $state({});
   sessionProviders: SessionProvider[] = $state([]);
   disabledAgents: string[] = $state([]);
@@ -76,7 +79,17 @@ class SettingsStore {
    *  to provide an auth token before the app can load. */
   needsAuth: boolean = $state(false);
 
+  constructor() {
+    ui.setZoomSaveCallback((level) => {
+      this.zoomSaveVersion += 1;
+      if (!this.readOnly) void this.save({ zoom_level: level });
+    });
+  }
+
   async load() {
+    const loadVersion = ++this.loadVersion;
+    const zoomChangeVersion = ui.zoomChangeVersion;
+    const zoomSaveVersion = this.zoomSaveVersion;
     this.loading = true;
     this.loaded = false;
     this.error = null;
@@ -100,6 +113,14 @@ class SettingsStore {
       this.requireAuth = data.require_auth ?? false;
       this.readOnly = data.read_only === true;
       this.chartPalette = data.chart_palette;
+      if (
+        data.zoom_level !== undefined &&
+        loadVersion === this.loadVersion &&
+        ui.zoomChangeVersion === zoomChangeVersion &&
+        this.zoomSaveVersion === zoomSaveVersion
+      ) {
+        ui.applyZoomLevel(data.zoom_level);
+      }
       // A response without the field, including every fixture that predates
       // it, reads as the default keep policy instead of failing the load.
       this.toolResultImages = data.tool_result_images === "drop" ? "drop" : "keep";

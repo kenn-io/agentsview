@@ -94,6 +94,7 @@
     <Typeahead
       options={ZOOM_OPTIONS}
       value={String(ui.zoomLevel)}
+      disabled={settings.saving || settings.readOnly}
       fallbackLabel="100%"
       triggerPrefix={m.appearance_zoom()}
       placeholder={m.appearance_zoom()}

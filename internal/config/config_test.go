@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -111,6 +112,48 @@ func TestChartPaletteRejectsInvalidValue(t *testing.T) {
 			require.NoError(t, err)
 			err = cfg.applyConfigTOML(tt.toml)
 			require.EqualError(t, err, tt.want)
+		})
+	}
+}
+
+func TestZoomLevelConfig(t *testing.T) {
+	for _, level := range []int{67, 75, 80, 90, 100, 110, 120, 125, 130, 150, 175, 200} {
+		t.Run(strconv.Itoa(level), func(t *testing.T) {
+			cfg, err := Default()
+			require.NoError(t, err)
+			require.NoError(t, cfg.applyConfigTOML("zoom_level = "+strconv.Itoa(level)))
+			require.NotNil(t, cfg.ZoomLevel)
+			assert.Equal(t, ZoomLevel(level), *cfg.ZoomLevel)
+		})
+	}
+
+	cfg, err := Default()
+	require.NoError(t, err)
+	assert.Nil(t, cfg.ZoomLevel)
+	require.NoError(t, cfg.applyConfigTOML("zoom_level = 100"))
+	require.NotNil(t, cfg.ZoomLevel)
+	assert.Equal(t, ZoomLevel100, *cfg.ZoomLevel)
+}
+
+func TestZoomLevelConfigRejectsInvalidValuesWithoutMutation(t *testing.T) {
+	for _, toml := range []string{
+		"zoom_level = 0",
+		"zoom_level = 101",
+		"zoom_level = -1",
+		"zoom_level = 100.5",
+		`zoom_level = "120"`,
+		"zoom_level = true",
+	} {
+		t.Run(strings.ReplaceAll(toml, " ", "_"), func(t *testing.T) {
+			cfg, err := Default()
+			require.NoError(t, err)
+			zoom := ZoomLevel120
+			cfg.ZoomLevel = &zoom
+			err = cfg.applyConfigTOML(toml)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "zoom_level")
+			require.NotNil(t, cfg.ZoomLevel)
+			assert.Equal(t, ZoomLevel120, *cfg.ZoomLevel)
 		})
 	}
 }
