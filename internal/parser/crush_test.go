@@ -469,9 +469,11 @@ func TestCrushReconciliationTraversalRootsRestoreRegistryMetadata(t *testing.T) 
 	)
 	require.NoError(t, err)
 	require.Len(t, plan.Scopes, 1)
-	assert.Equal(t, []string{filepath.Clean(registryDir)},
+	assert.Equal(t, []string{
+		filepath.Clean(registryDir), filepath.Clean(fixture.dataDir),
+	},
 		plan.Scopes[0].TraversalRoots,
-		"traversal must keep the configured registry root for scoped reconstruction")
+		"traversal must keep the registry metadata and its discovered data directory")
 
 	// Reconstruct exactly as the sync engine does after scope resolution.
 	scoped := factory.NewProvider(ProviderConfig{
