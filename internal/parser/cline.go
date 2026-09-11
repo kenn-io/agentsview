@@ -613,6 +613,31 @@ func parseClineToolResultContent(raw jsontext.Value) (string, bool) {
 	return strings.TrimSpace(string(raw)), false
 }
 
+var clineTerminalTools = map[string]bool{
+	"attempt_completion": true,
+}
+
+// clineLastAssistantEndsWithTerminalTool reports whether the final
+// non-system assistant message ends on a terminal tool call (attempt_completion).
+// Such sessions are clean completions: the trailing tool call is the agent's
+// explicit completion signal, not an interrupted call awaiting a result.
+func clineLastAssistantEndsWithTerminalTool(messages []ParsedMessage) bool {
+	for _, v := range slices.Backward(messages) {
+		m := v
+		if m.IsSystem {
+			continue
+		}
+		if m.Role != RoleAssistant {
+			return false
+		}
+		if len(m.ToolCalls) == 0 {
+			return false
+		}
+		return clineTerminalTools[m.ToolCalls[len(m.ToolCalls)-1].ToolName]
+	}
+	return false
+}
+
 // classifyClineTermination classifies session termination from the metadata status
 // and transcript messages.
 func classifyClineTermination(
@@ -621,6 +646,12 @@ func classifyClineTermination(
 ) TerminationStatus {
 	if len(messages) == 0 {
 		return ""
+	}
+	if clineLastAssistantEndsWithTerminalTool(messages) {
+		if status == "failed" || status == "error" {
+			return TerminationTruncated
+		}
+		return TerminationClean
 	}
 	if hasOrphanedToolCall(messages) {
 		return TerminationToolCallPending

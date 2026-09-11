@@ -1305,3 +1305,69 @@ func TestClineRemoteSyncRejectsSymlinkedAncestorsAndSessions(t *testing.T) {
 		assert.NotContains(t, file, "sess-outside", "symlinked session escaping root must be rejected")
 	}
 }
+
+func TestClineRootSymlinkParity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	outsideDir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	realCline := filepath.Join(outsideDir, "real-cline")
+	realSessions := filepath.Join(realCline, "data", "sessions", "sess-outside")
+	require.NoError(t, os.MkdirAll(realSessions, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(realSessions, "sess-outside.json"),
+		[]byte(`{"session_id":"sess-outside"}`),
+		0o644,
+	))
+
+	// Case 1: The configured Cline root itself is a symlink.
+	home1, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	symlinkedRoot := filepath.Join(home1, ".cline")
+	require.NoError(t, os.Symlink(realCline, symlinkedRoot))
+
+	goTargets1 := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {symlinkedRoot},
+		},
+	})
+	assert.Empty(t, goTargets1.Dirs[parser.AgentCline])
+	assert.Empty(t, goTargets1.Files[parser.AgentCline])
+
+	cmd1 := exec.Command("sh")
+	cmd1.Stdin = strings.NewReader(ssh.BuildResolveScriptForTest())
+	cmd1.Env = []string{"HOME=" + home1}
+	out1, err := cmd1.CombinedOutput()
+	require.NoError(t, err, "ssh output: %s", out1)
+	sshDirs1, sshFiles1, _, _ := ssh.ParseResolvedTargetsWithFilesForTest(string(out1))
+	assert.Empty(t, sshDirs1[parser.AgentCline])
+	assert.Empty(t, sshFiles1[parser.AgentCline])
+	assert.ElementsMatch(t, sshDirs1[parser.AgentCline], goTargets1.Dirs[parser.AgentCline])
+	assert.ElementsMatch(t, sshFiles1[parser.AgentCline], goTargets1.Files[parser.AgentCline])
+
+	// Case 2: The direct sessions root is a symlink.
+	home2, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	symlinkedDirect := filepath.Join(home2, "direct-sessions")
+	require.NoError(t, os.Symlink(filepath.Join(realCline, "data", "sessions"), symlinkedDirect))
+
+	goTargets2 := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {symlinkedDirect},
+		},
+	})
+	assert.Empty(t, goTargets2.Dirs[parser.AgentCline])
+	assert.Empty(t, goTargets2.Files[parser.AgentCline])
+
+	cmd2 := exec.Command("sh")
+	cmd2.Stdin = strings.NewReader(ssh.BuildResolveScriptForTest())
+	cmd2.Env = []string{"HOME=" + home2, "CLINE_DIR=" + symlinkedDirect}
+	out2, err := cmd2.CombinedOutput()
+	require.NoError(t, err, "ssh output: %s", out2)
+	sshDirs2, sshFiles2, _, _ := ssh.ParseResolvedTargetsWithFilesForTest(string(out2))
+	assert.Empty(t, sshDirs2[parser.AgentCline])
+	assert.Empty(t, sshFiles2[parser.AgentCline])
+	assert.ElementsMatch(t, sshDirs2[parser.AgentCline], goTargets2.Dirs[parser.AgentCline])
+	assert.ElementsMatch(t, sshFiles2[parser.AgentCline], goTargets2.Files[parser.AgentCline])
+}

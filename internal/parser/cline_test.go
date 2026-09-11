@@ -441,6 +441,55 @@ func TestParseClineSession_OrphanedToolCall(t *testing.T) {
 	assert.Equal(t, TerminationToolCallPending, sess.TerminationStatus)
 }
 
+func TestParseClineSession_AttemptCompletionEnding(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "1789000000007_complete"
+	taskDir := filepath.Join(dir, sessionID)
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
+
+	metaJSON := `{
+		"session_id": "1789000000007_complete",
+		"status": "completed",
+		"prompt": "build filter"
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".json"), []byte(metaJSON), 0o644))
+
+	messagesJSON := `{
+		"messages": [
+			{
+				"id": "m1",
+				"role": "user",
+				"content": [{"type": "text", "text": "build filter"}],
+				"ts": 1000
+			},
+			{
+				"id": "m2",
+				"role": "assistant",
+				"content": [
+					{
+						"type": "text",
+						"text": "Filter has been built successfully."
+					},
+					{
+						"type": "tool_use",
+						"id": "call_done",
+						"name": "attempt_completion",
+						"input": {"result": "Built successfully"}
+					}
+				],
+				"ts": 2000
+			}
+		]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
+
+	sess, _, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assert.Equal(t, TerminationClean, sess.TerminationStatus)
+}
+
 func TestParseClineSession_ThinkingOnlyEnding(t *testing.T) {
 	dir := t.TempDir()
 	sessionID := "1789000000003_thinking"

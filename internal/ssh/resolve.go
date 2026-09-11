@@ -300,15 +300,18 @@ func buildResolveScript() string {
 			"av_emit_cline_target() { " +
 			"target=\"$1\"; " +
 			"case \"$target\" in */) target=\"${target%/}\";; esac; " +
+			"[ -L \"$target\" ] && return; " +
 			"av_cline_sessions=\"$target\"; " +
 			"case \"$target\" in " +
-			"*/data/sessions|*/sessions) ;; " +
+			"*/data/sessions|*/sessions) " +
+			"[ -L \"$target\" ] && return;; " +
 			"*) if [ -d \"$target/data/sessions\" ]; then " +
 			"[ -L \"$target/data\" ] && return; " +
 			"[ -L \"$target/data/sessions\" ] && return; " +
 			"av_cline_sessions=\"$target/data/sessions\"; " +
 			"else return; fi;; " +
 			"esac; " +
+			"[ -L \"$av_cline_sessions\" ] && return; " +
 			"[ -d \"$av_cline_sessions\" ] || return; " +
 			"target=$(av_phys_dir \"$target\") || return 0; " +
 			"printf '%s\\000' \"" + string(parser.AgentCline) + ":$target\"; " +

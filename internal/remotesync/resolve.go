@@ -615,7 +615,7 @@ func resolveRooCodeTarget(root string) (string, []string, error) {
 // metadata and transcript files (<id>.json, <id>.messages.json).
 func resolveClineTarget(root string) (string, []string, error) {
 	targetRoot := filepath.Clean(root)
-	ok, err := statCuratedDir(targetRoot)
+	ok, err := curatedRoot(targetRoot)
 	if err != nil || !ok {
 		return "", nil, err
 	}
@@ -628,7 +628,7 @@ func resolveClineTarget(root string) (string, []string, error) {
 			return "", nil, nil
 		}
 	}
-	sessionsExist, err := statCuratedDir(sessionsDir)
+	sessionsExist, err := curatedRoot(sessionsDir)
 	if err != nil || !sessionsExist {
 		return "", nil, err
 	}

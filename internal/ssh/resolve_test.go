@@ -901,6 +901,38 @@ func TestResolveScriptClineRejectsSymlinkedAncestors(t *testing.T) {
 		assert.NotContains(t, record, "cline:",
 			"Cline resolver must reject emitting root with symlinked data/sessions ancestor")
 	}
+
+	// Case 3: configured Cline root (~/.cline) is a symlink.
+	home3 := physTempDir(t)
+	outsideCline := filepath.Join(outsideHome, "outside_cline")
+	require.NoError(t, os.MkdirAll(filepath.Join(outsideCline, "data", "sessions", "sess-outside"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(outsideCline, "data", "sessions", "sess-outside", "sess-outside.json"),
+		[]byte(`{"session_id":"sess-outside"}`),
+		0o644,
+	))
+	require.NoError(t, os.Symlink(outsideCline, filepath.Join(home3, ".cline")))
+
+	out3 := runResolveScriptForTest(t, "HOME="+home3)
+	for _, record := range resolveOutputRecords(string(out3)) {
+		assert.NotContains(t, record, "sess-outside",
+			"Cline resolver must reject symlinked configured root")
+		assert.NotContains(t, record, "cline:",
+			"Cline resolver must reject emitting symlinked configured root")
+	}
+
+	// Case 4: direct sessions root is a symlink.
+	home4 := physTempDir(t)
+	symlinkedDirect := filepath.Join(home4, "direct-sessions")
+	require.NoError(t, os.Symlink(filepath.Join(outsideCline, "data", "sessions"), symlinkedDirect))
+
+	out4 := runResolveScriptForTest(t, "HOME="+home4, "CLINE_DIR="+symlinkedDirect)
+	for _, record := range resolveOutputRecords(string(out4)) {
+		assert.NotContains(t, record, "sess-outside",
+			"Cline resolver must reject symlinked direct sessions root")
+		assert.NotContains(t, record, "cline:",
+			"Cline resolver must reject emitting symlinked direct sessions root")
+	}
 }
 
 func TestResolveScriptClineRejectsBackslashSessionID(t *testing.T) {
