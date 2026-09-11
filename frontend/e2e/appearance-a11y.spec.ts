@@ -6,29 +6,12 @@ function readZoom(page: Page): Promise<string> {
 }
 
 async function isolateServerZoom(page: Page): Promise<void> {
-  let settingsBody: Record<string, unknown> | undefined;
+  const response = await page.request.get("/api/v1/settings");
+  const settingsBody: Record<string, unknown> = await response.json();
+  delete settingsBody.zoom_level;
   await page.route("**/api/v1/settings", async (route) => {
-    if (route.request().method() === "GET") {
-      const response = await route.fetch();
-      settingsBody = await response.json();
-      delete settingsBody.zoom_level;
-      await route.fulfill({
-        response,
-        body: JSON.stringify(settingsBody),
-      });
-      return;
-    }
-    if (route.request().method() === "PUT") {
-      if (!settingsBody) {
-        const response = await page.request.get("/api/v1/settings");
-        settingsBody = await response.json();
-        delete settingsBody.zoom_level;
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(settingsBody),
-      });
+    if (["GET", "PUT"].includes(route.request().method())) {
+      await route.fulfill({ json: settingsBody });
       return;
     }
     await route.continue();
