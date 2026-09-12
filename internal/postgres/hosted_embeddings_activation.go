@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"strconv"
 )
 
 func embeddingActivationReady(ctx context.Context, q hostedQuerier, id int64) (bool, error) {
@@ -13,7 +14,18 @@ func embeddingActivationReady(ctx context.Context, q hostedQuerier, id int64) (b
  AND NOT EXISTS(SELECT 1 FROM hosted_embedding_requirements WHERE tenant_id=current_setting('agentsview.tenant_id') AND generation_id=$1 AND (state<>'complete' OR completed_revision IS DISTINCT FROM required_revision))`, id).Scan(&ready)
 	return ready, e
 }
+
+// Activate explicitly selects a ready desired generation, including manual ones.
 func (s *HostedEmbeddingStore) Activate(ctx context.Context, id int64) (bool, error) {
+	return s.activate(ctx, id, true)
+}
+
+// ActivateAutomatic leaves manual generations in shadow after building coverage.
+func (s *HostedEmbeddingStore) ActivateAutomatic(ctx context.Context, id int64) (bool, error) {
+	return s.activate(ctx, id, false)
+}
+
+func (s *HostedEmbeddingStore) activate(ctx context.Context, id int64, explicit bool) (bool, error) {
 	tx, e := s.fence(ctx)
 	if e != nil {
 		return false, e
@@ -22,6 +34,18 @@ func (s *HostedEmbeddingStore) Activate(ctx context.Context, id int64) (bool, er
 	ready, e := embeddingActivationReady(ctx, tx, id)
 	if e != nil || !ready {
 		return false, e
+	}
+	g, e := loadEmbeddingGeneration(ctx, tx, id)
+	if e != nil {
+		return false, e
+	}
+	if !explicit && g.ActivationMode == HostedEmbeddingActivationManual {
+		return false, nil
+	}
+	if explicit {
+		if _, e = tx.ExecContext(ctx, `SELECT set_config('agentsview.embedding_activation_tenant',$1,true),set_config('agentsview.embedding_activation_generation',$2,true)`, s.tenant, strconv.FormatInt(id, 10)); e != nil {
+			return false, e
+		}
 	}
 	if _, e = tx.ExecContext(ctx, `UPDATE hosted_embedding_state SET active_generation_id=$1,active_valid=true WHERE singleton=1 AND desired_generation_id=$1`, id); e != nil {
 		return false, e

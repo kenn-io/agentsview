@@ -26,32 +26,37 @@ func newPGEmbeddingsCommand() *cobra.Command {
 	cmd.AddCommand(newPGEmbeddingGenerationCommand("rebuild"))
 	cmd.AddCommand(newPGEmbeddingStatusCommand())
 	cmd.AddCommand(newPGEmbeddingRetryFailedCommand())
+	cmd.AddCommand(newPGEmbeddingActivateCommand())
 	return cmd
 }
 
 func newPGEmbeddingGenerationCommand(action string) *cobra.Command {
-	var profileName, runtimeRole, instanceKey string
+	var profileName, runtimeRole, instanceKey, activationMode string
 	cmd := &cobra.Command{
 		Use: action + " [target]", Args: cobra.MaximumNArgs(1),
 		Short: "Provision and select a hosted embedding generation",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if activationMode != "" && activationMode != postgres.HostedEmbeddingActivationAutomatic && activationMode != postgres.HostedEmbeddingActivationManual {
+				return errors.New("--activation-mode must be automatic or manual")
+			}
 			target := ""
 			if len(args) > 0 {
 				target = args[0]
 			}
-			return runPGEmbeddingGeneration(cmd.Context(), cmd.OutOrStdout(), action, target, profileName, runtimeRole, instanceKey)
+			return runPGEmbeddingGeneration(cmd.Context(), cmd.OutOrStdout(), action, target, profileName, runtimeRole, instanceKey, activationMode)
 		},
 	}
 	cmd.Flags().StringVar(&profileName, "profile", "", "Named hosted embedding profile")
 	cmd.Flags().StringVar(&runtimeRole, "runtime-role", "", "Existing restricted PostgreSQL runtime role")
 	cmd.Flags().StringVar(&instanceKey, "instance-key", "", "Stable generation instance key")
+	cmd.Flags().StringVar(&activationMode, "activation-mode", "", "Activation policy: automatic or manual")
 	_ = cmd.MarkFlagRequired("profile")
 	_ = cmd.MarkFlagRequired("runtime-role")
 	_ = cmd.MarkFlagRequired("instance-key")
 	return cmd
 }
 
-func runPGEmbeddingGeneration(ctx context.Context, out interface{ Write([]byte) (int, error) }, action, target, profileName, runtimeRole, instanceKey string) error {
+func runPGEmbeddingGeneration(ctx context.Context, out interface{ Write([]byte) (int, error) }, action, target, profileName, runtimeRole, instanceKey, activationMode string) error {
 	cfg, err := config.LoadMinimal()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -90,11 +95,11 @@ func runPGEmbeddingGeneration(ctx context.Context, out interface{ Write([]byte) 
 			return errors.New("hosted embedding rebuild requires a new instance key after a completed generation")
 		}
 	}
-	generation, err := postgres.ProvisionHostedEmbeddings(ctx, owner, pgCfg.Schema, pgCfg.RawTenant, recipe, instanceKey, runtimeRole)
+	generation, err := postgres.ProvisionHostedEmbeddingsWithOptions(ctx, owner, pgCfg.Schema, pgCfg.RawTenant, recipe, instanceKey, runtimeRole, postgres.HostedEmbeddingProvisionOptions{ActivationMode: activationMode})
 	if err != nil {
 		return fmt.Errorf("hosted embedding provisioning failed: %w", err)
 	}
-	_, err = fmt.Fprintf(out, "Generation %d profile=%s fingerprint=%s is desired. Check the restricted runtime target with: agentsview pg embeddings status RUNTIME_TARGET\n", generation.ID, generation.Recipe.ProfileName, generation.Recipe.Fingerprint)
+	_, err = fmt.Fprintf(out, "Generation %d profile=%s fingerprint=%s activation_mode=%s is desired. Check the restricted runtime target with: agentsview pg embeddings status RUNTIME_TARGET\n", generation.ID, generation.Recipe.ProfileName, generation.Recipe.Fingerprint, generation.ActivationMode)
 	return err
 }
 
@@ -131,6 +136,7 @@ type hostedEmbeddingGenerationDTO struct {
 	Fingerprint      string           `json:"fingerprint"`
 	Model            string           `json:"model"`
 	Dimensions       int              `json:"dimensions"`
+	ActivationMode   string           `json:"activation_mode"`
 	BackfillFinished bool             `json:"backfill_finished"`
 	Ready            int64            `json:"ready"`
 	Leased           int64            `json:"leased"`
@@ -145,7 +151,7 @@ func hostedEmbeddingGenerationStatusDTO(status *postgres.HostedEmbeddingGenerati
 		return nil
 	}
 	g := status.Generation
-	return &hostedEmbeddingGenerationDTO{ID: g.ID, InstanceKey: g.InstanceKey, Profile: g.Recipe.ProfileName, Fingerprint: g.Recipe.Fingerprint, Model: g.Recipe.Model, Dimensions: g.Recipe.Dimensions, BackfillFinished: status.BackfillFinished, Ready: status.Ready, Leased: status.Leased, Retry: status.Retry, Failed: status.Failed, Complete: status.Complete, Errors: status.Errors}
+	return &hostedEmbeddingGenerationDTO{ID: g.ID, InstanceKey: g.InstanceKey, Profile: g.Recipe.ProfileName, Fingerprint: g.Recipe.Fingerprint, Model: g.Recipe.Model, Dimensions: g.Recipe.Dimensions, ActivationMode: g.ActivationMode, BackfillFinished: status.BackfillFinished, Ready: status.Ready, Leased: status.Leased, Retry: status.Retry, Failed: status.Failed, Complete: status.Complete, Errors: status.Errors}
 }
 
 func newPGEmbeddingStatusCommand() *cobra.Command {
@@ -205,7 +211,7 @@ func runPGEmbeddingStatus(ctx context.Context, out interface{ Write([]byte) (int
 		if generation == nil {
 			continue
 		}
-		if _, err = fmt.Fprintf(out, "%s: id=%d profile=%s backfill=%t ready=%d leased=%d retry=%d failed=%d complete=%d\n", label, generation.ID, generation.Profile, generation.BackfillFinished, generation.Ready, generation.Leased, generation.Retry, generation.Failed, generation.Complete); err != nil {
+		if _, err = fmt.Fprintf(out, "%s: id=%d profile=%s activation_mode=%s backfill=%t ready=%d leased=%d retry=%d failed=%d complete=%d\n", label, generation.ID, generation.Profile, generation.ActivationMode, generation.BackfillFinished, generation.Ready, generation.Leased, generation.Retry, generation.Failed, generation.Complete); err != nil {
 			return err
 		}
 	}

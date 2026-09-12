@@ -187,6 +187,10 @@ func checkHostedInventory(ctx context.Context, q hostedQuerier, schema string) e
 }
 
 func checkHostedCatalog(ctx context.Context, q hostedQuerier, schema, tenant string) error {
+	return checkHostedCatalogEmbeddingPolicy(ctx, q, schema, tenant, false)
+}
+
+func checkHostedCatalogEmbeddingPolicy(ctx context.Context, q hostedQuerier, schema, tenant string, legacyEmbeddingPolicy bool) error {
 	if err := checkHostedInventory(ctx, q, schema); err != nil {
 		return err
 	}
@@ -235,7 +239,7 @@ func checkHostedCatalog(ctx context.Context, q hostedQuerier, schema, tenant str
 	if !immutable {
 		return fmt.Errorf("hosted binding immutability trigger missing")
 	}
-	return checkEmbeddingCatalog(ctx, q, schema, tenant, extra)
+	return checkEmbeddingCatalogPolicy(ctx, q, schema, tenant, extra, legacyEmbeddingPolicy)
 }
 
 // CheckHostedTenant is a read-only startup gate for a permanently bound pool.

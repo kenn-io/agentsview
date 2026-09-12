@@ -33,6 +33,7 @@ type hostedEmbeddingFakeStore struct {
 	failed          map[string]string
 	retryable       map[string]bool
 	activated       []int64
+	autoActivated   []int64
 	desired         *postgres.HostedEmbeddingGeneration
 	publishFn       func(context.Context, *postgres.HostedEmbeddingSnapshot, []postgres.HostedEmbeddingVector) error
 	heartbeats      atomic.Int32
@@ -99,6 +100,13 @@ func (s *hostedEmbeddingFakeStore) Activate(_ context.Context, id int64) (bool, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.activated = append(s.activated, id)
+	return s.activateErr == nil, s.activateErr
+}
+
+func (s *hostedEmbeddingFakeStore) ActivateAutomatic(_ context.Context, id int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.autoActivated = append(s.autoActivated, id)
 	return s.activateErr == nil, s.activateErr
 }
 
@@ -171,7 +179,8 @@ func TestHostedEmbeddingWorkerPublishesRawChunksWithOriginalIndices(t *testing.T
 		{DocumentKey: "doc-a", ChunkIndex: 0, Values: []float32{1, 0, 0}},
 		{DocumentKey: "doc-a", ChunkIndex: 2, Values: []float32{0, 1, 0}},
 	}, store.published["source-a"])
-	assert.Equal(t, []int64{7}, store.activated)
+	assert.Equal(t, []int64{7}, store.autoActivated)
+	assert.Empty(t, store.activated)
 }
 
 func TestHostedEmbeddingWorkerActivatesEmptyDesiredOnlyWithExactAvailableProfile(t *testing.T) {
@@ -190,11 +199,12 @@ func TestHostedEmbeddingWorkerActivatesEmptyDesiredOnlyWithExactAvailableProfile
 	currentOnly := hostedEmbeddingTestConfig("http://127.0.0.1:1/v1", 1)
 	runtime := newHostedEmbeddingRuntime(t.Context(), store, newHostedEmbeddingResolver(currentOnly), hostedEmbeddingRuntimeOptions{})
 	require.NoError(t, runtime.processBatch(t.Context()))
-	assert.Empty(t, store.activated, "an unavailable desired profile must retain the current active generation")
+	assert.Empty(t, store.autoActivated, "an unavailable desired profile must retain the current active generation")
 
 	runtime = newHostedEmbeddingRuntime(t.Context(), store, newHostedEmbeddingResolver(nextConfig), hostedEmbeddingRuntimeOptions{})
 	require.NoError(t, runtime.processBatch(t.Context()))
-	assert.Equal(t, []int64{9}, store.activated)
+	assert.Equal(t, []int64{9}, store.autoActivated)
+	assert.Empty(t, store.activated)
 }
 
 func TestHostedEmbeddingResolverRequiresSelectedSecretOnly(t *testing.T) {

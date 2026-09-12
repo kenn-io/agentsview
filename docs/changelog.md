@@ -26,6 +26,12 @@ description: Release history for AgentsView
 
 **Improvements**
 
+- Build a hosted embedding generation in shadow while the current generation
+  keeps serving search, then switch explicitly after operator acceptance. The
+  owner command records an automatic or manual activation policy, status shows
+  when current source coverage is ready, and the restricted runtime activation
+  command rechecks readiness without contacting the encoder.
+
 - Retry a bounded batch of failed hosted embedding jobs after repairing their
   cause, while preserving completed vectors and the active generation. The new
   operator command reports aggregate counts and leaves encoding to the normal

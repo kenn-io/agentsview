@@ -248,19 +248,54 @@ the generation as desired, and returns immediately. It does not create roles,
 activate incomplete coverage or wait for the worker. Start `pg serve` with
 `hosted_embeddings_enabled = true`; encoding begins only after server readiness.
 `status` reports active and desired identity, backfill state, and separate
-ready, leased, retry, failed and complete counters without source IDs.
+ready, leased, retry, failed and complete counters without source IDs. It also
+reports each generation's `activation_mode`. Omitting `--activation-mode`
+preserves an existing generation's policy and gives a new generation the
+`automatic` policy.
 
-To migrate, keep `current` configured, add `next`, and select a fresh instance:
+To build a migration in shadow, keep `current` and its credential configured,
+add `next`, and select a fresh manual instance:
 
 ```bash
-agentsview pg embeddings rebuild provision --profile next --runtime-role hosted_runtime --instance-key migration-next
+agentsview pg embeddings rebuild provision --profile next --runtime-role hosted_runtime --instance-key migration-next --activation-mode manual
 agentsview pg embeddings status hosted --json
 ```
 
 The active generation continues serving while the desired generation builds.
-Activation occurs only after complete coverage. Repeating the same incomplete
-instance key and recipe preserves its progress and leases. A completed rebuild
-requires a new instance key.
+The worker keeps a manual generation in shadow after it reaches
+`activation_ready`. This status proves current source coverage and clean
+worker state; it does not measure semantic parity. Compare the generations by
+the operator's separate acceptance process, then activate the exact desired
+generation through the restricted runtime target:
+
+```bash
+agentsview pg embeddings activate hosted --generation 2
+agentsview pg embeddings activate hosted --generation 2 --format json
+```
+
+Activation rechecks desired selection, complete coverage, pending source work,
+and the configured `next` profile and credential. It does not contact the
+encoder or rebuild vectors. A refusal leaves the active generation unchanged.
+Repeating a successful activation is safe. Keep both profiles and credentials
+available throughout the shadow build, and retain the old profile and
+credential for rollback.
+
+Repeating the same incomplete instance key and recipe preserves its progress,
+leases, and activation policy. A completed rebuild requires a new instance
+key. Changing `--activation-mode` for an existing instance is rejected.
+
+The first owner provision or rebuild after this upgrade installs the activation
+policy and database guard without replacing existing generation data. Run that
+owner command before starting the new runtime against an older embedding
+schema: the new runtime rejects the old catalog until the explicit owner
+upgrade completes. An older binary also rejects the upgraded catalog on a new
+startup. An older worker that was already running cannot select a manual
+generation because the database guard rejects its automatic update.
+
+Rollback is a rebuild workflow rather than an instant pointer swap. Reselect
+the retired profile with its existing instance key using the owner command;
+the worker rebuilds coverage missed while it was retired, and the same
+readiness and activation rules apply before it can serve again.
 
 Failed and exhausted requirements are durable. Raising
 `hosted_embeddings_max_attempts`, restarting, or selecting the same instance

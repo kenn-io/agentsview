@@ -63,10 +63,15 @@ func CanonicalHostedEmbeddingRecipe(r HostedEmbeddingRecipe) (HostedEmbeddingRec
 }
 func embeddingHash(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
 
+type HostedEmbeddingProvisionOptions struct {
+	ActivationMode string
+}
+
 type HostedEmbeddingGeneration struct {
-	ID          int64
-	InstanceKey string
-	Recipe      HostedEmbeddingRecipe
+	ActivationMode string
+	ID             int64
+	InstanceKey    string
+	Recipe         HostedEmbeddingRecipe
 }
 type HostedEmbeddingLease struct {
 	GenerationID           int64
@@ -211,7 +216,7 @@ func (s *HostedEmbeddingStore) fence(ctx context.Context) (*sql.Tx, error) {
 func loadEmbeddingGeneration(ctx context.Context, q hostedQuerier, id int64) (HostedEmbeddingGeneration, error) {
 	var g HostedEmbeddingGeneration
 	var b []byte
-	e := q.QueryRowContext(ctx, `SELECT id,instance_key,recipe_json FROM hosted_embedding_generations WHERE id=$1`, id).Scan(&g.ID, &g.InstanceKey, &b)
+	e := q.QueryRowContext(ctx, `SELECT id,instance_key,recipe_json,activation_mode FROM hosted_embedding_generations WHERE id=$1`, id).Scan(&g.ID, &g.InstanceKey, &b, &g.ActivationMode)
 	if e != nil {
 		return g, e
 	}

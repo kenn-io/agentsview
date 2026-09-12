@@ -22,7 +22,7 @@ type hostedEmbeddingWorkStore interface {
 	Publish(context.Context, *postgres.HostedEmbeddingSnapshot, []postgres.HostedEmbeddingVector) error
 	Heartbeat(context.Context, postgres.HostedEmbeddingLease, time.Duration) (postgres.HostedEmbeddingLease, error)
 	Fail(context.Context, postgres.HostedEmbeddingLease, string, bool) error
-	Activate(context.Context, int64) (bool, error)
+	ActivateAutomatic(context.Context, int64) (bool, error)
 }
 
 type hostedEmbeddingRuntimeOptions struct {
@@ -146,7 +146,7 @@ func (r *hostedEmbeddingRuntime) processBatch(ctx context.Context) error {
 	wg.Wait()
 	if desired != nil && r.resolver.available(*desired) == nil {
 		coordination, cancel = context.WithTimeout(ctx, r.opts.CoordinationTimeout)
-		_, activateErr := r.store.Activate(coordination, desired.ID)
+		_, activateErr := r.store.ActivateAutomatic(coordination, desired.ID)
 		cancel()
 		if activateErr != nil && firstErr == nil {
 			firstErr = activateErr

@@ -68,7 +68,14 @@ func embeddingTables(ctx context.Context, q hostedQuerier, schema string) ([]Hos
 // ProvisionHostedEmbeddings is an explicit owner operation. Source DDL locks
 // precede the corpus fence; force rebuilds touch only new generation tables.
 func ProvisionHostedEmbeddings(ctx context.Context, owner *sql.DB, schema, tenant string, recipe HostedEmbeddingRecipe, instanceKey, runtimeRole string) (HostedEmbeddingGeneration, error) {
+	return ProvisionHostedEmbeddingsWithOptions(ctx, owner, schema, tenant, recipe, instanceKey, runtimeRole, HostedEmbeddingProvisionOptions{})
+}
+
+func ProvisionHostedEmbeddingsWithOptions(ctx context.Context, owner *sql.DB, schema, tenant string, recipe HostedEmbeddingRecipe, instanceKey, runtimeRole string, opts HostedEmbeddingProvisionOptions) (HostedEmbeddingGeneration, error) {
 	var g HostedEmbeddingGeneration
+	if opts.ActivationMode != "" && opts.ActivationMode != HostedEmbeddingActivationAutomatic && opts.ActivationMode != HostedEmbeddingActivationManual {
+		return g, fmt.Errorf("invalid embedding activation mode")
+	}
 	var err error
 	recipe, err = CanonicalHostedEmbeddingRecipe(recipe)
 	if err != nil {
@@ -99,7 +106,7 @@ func ProvisionHostedEmbeddings(ctx context.Context, owner *sql.DB, schema, tenan
 	if err = checkHostedBinding(ctx, tx, schema, tenant); err != nil {
 		return g, err
 	}
-	if err = checkHostedCatalog(ctx, tx, schema, tenant); err != nil {
+	if _, err = checkEmbeddingOwnerBaseline(ctx, tx, schema, tenant); err != nil {
 		return g, err
 	}
 	var ext string
@@ -142,6 +149,9 @@ func ProvisionHostedEmbeddings(ctx context.Context, owner *sql.DB, schema, tenan
 	if err = tx.QueryRowContext(ctx, `SELECT singleton FROM raw_corpus_state WHERE tenant_id=$1 AND singleton=1 FOR UPDATE`, tenant).Scan(&one); err != nil {
 		return g, err
 	}
+	if err = upgradeEmbeddingCutover(ctx, tx, schema, tenant); err != nil {
+		return g, err
+	}
 	// Existing runtimes do not require recovery's index. Upgrade it only during
 	// explicit owner provisioning, under the same fence used by requirement
 	// writers, so index creation cannot block a worker that holds the fence.
@@ -159,6 +169,9 @@ func ProvisionHostedEmbeddings(ctx context.Context, owner *sql.DB, schema, tenan
 		if err != nil {
 			return g, err
 		}
+		if opts.ActivationMode != "" && opts.ActivationMode != g.ActivationMode {
+			return g, fmt.Errorf("embedding instance activation mode mismatch")
+		}
 		if g.Recipe != recipe {
 			return g, fmt.Errorf("embedding instance recipe mismatch")
 		}
@@ -166,10 +179,14 @@ func ProvisionHostedEmbeddings(ctx context.Context, owner *sql.DB, schema, tenan
 		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(max(id),0)+1 FROM hosted_embedding_generations`).Scan(&g.ID); err != nil {
 			return g, err
 		}
+		g.ActivationMode = opts.ActivationMode
+		if g.ActivationMode == "" {
+			g.ActivationMode = HostedEmbeddingActivationAutomatic
+		}
 		g.InstanceKey = instanceKey
 		g.Recipe = recipe
 		b, _ := json.Marshal(recipe)
-		if _, err = tx.ExecContext(ctx, `INSERT INTO hosted_embedding_generations(tenant_id,id,instance_key,recipe_fingerprint,recipe_json,dimensions) VALUES($1,$2,$3,$4,$5,$6)`, tenant, g.ID, instanceKey, recipe.Fingerprint, b, recipe.Dimensions); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO hosted_embedding_generations(tenant_id,id,instance_key,recipe_fingerprint,recipe_json,dimensions,activation_mode) VALUES($1,$2,$3,$4,$5,$6,$7)`, tenant, g.ID, instanceKey, recipe.Fingerprint, b, recipe.Dimensions, g.ActivationMode); err != nil {
 			return g, err
 		}
 		name := embeddingChunkTable(g.ID)
@@ -230,11 +247,11 @@ func embeddingNotifierBody(tenant string, messages bool) string {
  END LOOP; RETURN NULL; END; `
 }
 
-const embeddingImmutableBody = `BEGIN IF TG_OP<>'UPDATE' OR ROW(OLD.tenant_id,OLD.id,OLD.instance_key,OLD.recipe_fingerprint,OLD.recipe_json,OLD.dimensions) IS DISTINCT FROM ROW(NEW.tenant_id,NEW.id,NEW.instance_key,NEW.recipe_fingerprint,NEW.recipe_json,NEW.dimensions) THEN RAISE EXCEPTION 'embedding recipe is immutable'; END IF; RETURN NEW; END; `
+const embeddingLegacyImmutableBody = `BEGIN IF TG_OP<>'UPDATE' OR ROW(OLD.tenant_id,OLD.id,OLD.instance_key,OLD.recipe_fingerprint,OLD.recipe_json,OLD.dimensions) IS DISTINCT FROM ROW(NEW.tenant_id,NEW.id,NEW.instance_key,NEW.recipe_fingerprint,NEW.recipe_json,NEW.dimensions) THEN RAISE EXCEPTION 'embedding recipe is immutable'; END IF; RETURN NEW; END; `
 
 func embeddingNotifierDDL(tenant string) string {
 	var out strings.Builder
-	for _, v := range []struct{ name, table, body string }{{"hosted_embedding_session_notify", "sessions", embeddingNotifierBody(tenant, false)}, {"hosted_embedding_message_notify", "messages", embeddingNotifierBody(tenant, true)}, {"hosted_embedding_recipe_immutable", "hosted_embedding_generations", embeddingImmutableBody}} {
+	for _, v := range []struct{ name, table, body string }{{"hosted_embedding_session_notify", "sessions", embeddingNotifierBody(tenant, false)}, {"hosted_embedding_message_notify", "messages", embeddingNotifierBody(tenant, true)}, {"hosted_embedding_recipe_immutable", "hosted_embedding_generations", embeddingLegacyImmutableBody}} {
 		events := "AFTER INSERT OR UPDATE OR DELETE"
 		if v.table == "hosted_embedding_generations" {
 			events = "BEFORE UPDATE OR DELETE"

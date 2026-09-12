@@ -7,9 +7,15 @@ import (
 	"strings"
 )
 
-func checkEmbeddingCatalog(ctx context.Context, q hostedQuerier, schema, tenant string, tables []HostedTable) error {
+func checkEmbeddingCatalogPolicy(ctx context.Context, q hostedQuerier, schema, tenant string, tables []HostedTable, legacyPolicy bool) error {
 	if len(tables) == 0 {
 		return nil
+	}
+	immutableBody := embeddingImmutableBody
+	if legacyPolicy {
+		immutableBody = embeddingLegacyImmutableBody
+	} else if err := checkEmbeddingCutover(ctx, q, schema, tenant); err != nil {
+		return err
 	}
 	qs, _ := quoteIdentifier(schema)
 	if e := checkEmbeddingColumns(ctx, q, schema, tables); e != nil {
@@ -40,9 +46,9 @@ func checkEmbeddingCatalog(ctx context.Context, q hostedQuerier, schema, tenant 
 	for _, v := range []struct {
 		name, table, body string
 		kind              int
-	}{{"hosted_embedding_session_notify", "sessions", embeddingNotifierBody(tenant, false), 29}, {"hosted_embedding_message_notify", "messages", embeddingNotifierBody(tenant, true), 29}, {"hosted_embedding_recipe_immutable", "hosted_embedding_generations", embeddingImmutableBody, 27}} {
+	}{{"hosted_embedding_session_notify", "sessions", embeddingNotifierBody(tenant, false), 29}, {"hosted_embedding_message_notify", "messages", embeddingNotifierBody(tenant, true), 29}, {"hosted_embedding_recipe_immutable", "hosted_embedding_generations", immutableBody, 27}} {
 		var valid bool
-		e := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_namespace n ON n.oid=p.pronamespace WHERE t.tgrelid=to_regclass(format('%I.%I',$1::text,$2::text)) AND t.tgname=$3 AND t.tgenabled='O' AND t.tgtype=$4 AND NOT t.tgisinternal AND t.tgqual IS NULL AND t.tgnargs=0 AND p.prosrc=$5 AND NOT p.prosecdef AND p.proconfig IS NULL AND n.nspname=$1 AND p.proname=$3)`, schema, v.table, v.name, v.kind, v.body).Scan(&valid)
+		e := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_namespace n ON n.oid=p.pronamespace WHERE t.tgrelid=to_regclass(format('%I.%I',$1::text,$2::text)) AND t.tgname=$3 AND t.tgenabled='O' AND t.tgtype=$4 AND t.tgattr=''::int2vector AND NOT t.tgisinternal AND t.tgqual IS NULL AND t.tgnargs=0 AND p.prosrc=$5 AND NOT p.prosecdef AND p.proconfig IS NULL AND n.nspname=$1 AND p.proname=$3)`, schema, v.table, v.name, v.kind, v.body).Scan(&valid)
 		if e != nil {
 			return e
 		}
