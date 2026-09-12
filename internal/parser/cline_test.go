@@ -43,6 +43,46 @@ func TestCleanClinePrompt(t *testing.T) {
 			input: "  <user_input mode=\"act\">\nLine 1\nLine 2\n</user_input>  ",
 			want:  "Line 1\nLine 2",
 		},
+		{
+			name:  "user_input plan with mode_notice",
+			input: `<user_input mode="plan"><mode_notice>The user switched from act mode to plan mode before sending this message.</mode_notice>` + "\n" + `if today is your birthday what would you do</user_input>`,
+			want:  "if today is your birthday what would you do",
+		},
+		{
+			name:  "user_input act with mode_notice",
+			input: `<user_input mode="act"><mode_notice>The user switched from plan mode to act mode before sending this message.</mode_notice>` + "\n" + `Implement the feature</user_input>`,
+			want:  "Implement the feature",
+		},
+		{
+			name:  "empty user_input",
+			input: `<user_input mode="act"></user_input>`,
+			want:  "",
+		},
+		{
+			name:  "empty user_input with whitespace",
+			input: "<user_input mode=\"act\">   \n  </user_input>",
+			want:  "",
+		},
+		{
+			name:  "empty user_input with only mode_notice",
+			input: `<user_input mode="plan"><mode_notice>The user switched from act mode to plan mode before sending this message.</mode_notice></user_input>`,
+			want:  "",
+		},
+		{
+			name:  "standalone mode_notice without user_input",
+			input: `<mode_notice>The user switched from act mode to plan mode before sending this message.</mode_notice> hello world`,
+			want:  "hello world",
+		},
+		{
+			name:  "multiple mode_notices with text in between",
+			input: `<user_input mode="plan"><mode_notice>First notice</mode_notice>Part A <mode_notice>Second notice</mode_notice>Part B</user_input>`,
+			want:  "Part A Part B",
+		},
+		{
+			name:  "unclosed mode_notice preserved fail-visible",
+			input: `<user_input mode="plan"><mode_notice>Partial truncated notice without closing tag</user_input>`,
+			want:  "<mode_notice>Partial truncated notice without closing tag",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1674,4 +1714,114 @@ func TestParseClineTeammates_EmptyFileSuperseded(t *testing.T) {
 	require.Len(t, results, 2)
 	assert.Equal(t, "cline:sess-empty__teammate__worker", results[1].Session.ID)
 	assert.Equal(t, 2, results[1].Session.MessageCount)
+}
+
+func TestParseClineSession_MultiTurnUserInputCleaning(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "1789000000001_multi"
+	taskDir := filepath.Join(dir, sessionID)
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
+
+	metaJSON := `{
+		"session_id": "1789000000001_multi",
+		"prompt": "<user_input mode=\"act\">Initial prompt from user</user_input>",
+		"cwd": "/workspace",
+		"started_at": "2026-09-12T10:00:00.000Z"
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".json"), []byte(metaJSON), 0o644))
+
+	// Turn 0: User prompt in act mode
+	// Turn 1: Assistant reply
+	// Turn 2: User prompt in plan mode with mode_notice
+	// Turn 3: Assistant reply
+	// Turn 4: User empty input with act mode (approval) -> should be omitted
+	// Turn 5: Assistant final reply
+	messagesJSON := `{
+		"version": 1,
+		"messages": [
+			{
+				"id": "msg-0",
+				"role": "user",
+				"ts": 1789200000000,
+				"content": [
+					{"type": "text", "text": "<user_input mode=\"act\">Initial prompt from user</user_input>"}
+				]
+			},
+			{
+				"id": "msg-1",
+				"role": "assistant",
+				"ts": 1789200001000,
+				"content": [
+					{"type": "text", "text": "Understood, working on it."}
+				]
+			},
+			{
+				"id": "msg-2",
+				"role": "user",
+				"ts": 1789200002000,
+				"content": [
+					{"type": "text", "text": "<user_input mode=\"plan\"><mode_notice>The user switched from act mode to plan mode before sending this message.</mode_notice>\nNow investigate the architecture</user_input>"}
+				]
+			},
+			{
+				"id": "msg-3",
+				"role": "assistant",
+				"ts": 1789200003000,
+				"content": [
+					{"type": "text", "text": "Here is the architectural plan."}
+				]
+			},
+			{
+				"id": "msg-4",
+				"role": "user",
+				"ts": 1789200004000,
+				"content": [
+					{"type": "text", "text": "<user_input mode=\"act\"></user_input>"}
+				]
+			},
+			{
+				"id": "msg-5",
+				"role": "assistant",
+				"ts": 1789200005000,
+				"content": [
+					{"type": "text", "text": "Proceeding with execution."}
+				]
+			}
+		]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
+
+	sess, msgs, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "test-proj", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Verify session metadata: empty approval was dropped, so exactly 2 user messages
+	assert.Equal(t, 2, sess.UserMessageCount)
+	assert.Equal(t, 5, sess.MessageCount)
+	assert.Equal(t, "Initial prompt from user", sess.FirstMessage)
+
+	require.Len(t, msgs, 5)
+
+	// Turn 0: stripped
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, 0, msgs[0].Ordinal)
+	assert.Equal(t, "Initial prompt from user", msgs[0].Content)
+
+	// Turn 1: assistant
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(t, 1, msgs[1].Ordinal)
+
+	// Turn 2: stripped user_input and mode_notice
+	assert.Equal(t, RoleUser, msgs[2].Role)
+	assert.Equal(t, 2, msgs[2].Ordinal)
+	assert.Equal(t, "Now investigate the architecture", msgs[2].Content)
+
+	// Turn 3: assistant
+	assert.Equal(t, RoleAssistant, msgs[3].Role)
+	assert.Equal(t, 3, msgs[3].Ordinal)
+
+	// Turn 4: assistant (since the empty user approval at msg-4 was skipped, ordinal remains contiguous)
+	assert.Equal(t, RoleAssistant, msgs[4].Role)
+	assert.Equal(t, 4, msgs[4].Ordinal)
+	assert.Equal(t, "Proceeding with execution.", msgs[4].Content)
 }

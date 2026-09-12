@@ -112,16 +112,24 @@ type clineRawBlock struct {
 	IsError   bool           `json:"is_error,omitempty"`
 }
 
-var clineUserInputRe = regexp.MustCompile(`(?s)^\s*<user_input(?:\s+mode="[^"]*")?\s*>(.*?)</user_input>\s*$`)
+// clineUserInputRe and clineModeNoticeRe strip Cline harness envelopes and internal
+// mode-switch notifications. Both require explicit closing tags (</user_input>, </mode_notice>);
+// truncated or unclosed blocks from a partial write are intentionally left intact to keep
+// mid-stream truncation fail-visible until fully flushed.
+var (
+	clineUserInputRe  = regexp.MustCompile(`(?s)^\s*<user_input(?:\s+mode="[^"]*")?\s*>(.*?)</user_input>\s*$`)
+	clineModeNoticeRe = regexp.MustCompile(`(?s)<mode_notice(?:\s+[^>]*)?>.*?</mode_notice>`)
+)
 
 // cleanClinePrompt strips any outer <user_input mode="...">...</user_input> tags
-// to make session names and prompts clean for display.
+// and internal <mode_notice>...</mode_notice> blocks to make session names and prompts clean for display.
 func cleanClinePrompt(p string) string {
 	trimmed := strings.TrimSpace(p)
 	if m := clineUserInputRe.FindStringSubmatch(trimmed); len(m) > 1 {
-		return strings.TrimSpace(m[1])
+		trimmed = m[1]
 	}
-	return trimmed
+	trimmed = clineModeNoticeRe.ReplaceAllString(trimmed, "")
+	return strings.TrimSpace(trimmed)
 }
 
 // parseClineTimestamp parses ISO 8601 / RFC 3339 timestamps from Cline metadata.
@@ -530,7 +538,7 @@ func parseClineRawMessages(
 		textContent := strings.TrimSpace(strings.Join(textParts, "\n\n"))
 		thinking := strings.TrimSpace(strings.Join(thinkingParts, "\n\n"))
 
-		if ordinal == 0 && rawMsg.Role == "user" && textContent != "" {
+		if rawMsg.Role == "user" && textContent != "" {
 			textContent = cleanClinePrompt(textContent)
 		}
 

@@ -1258,7 +1258,11 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   output, cache read/write tokens). Agentsview consumes the reported cost,
   including explicit zero, and tracks the peak context window across turns.
 - **Agentsview:** `internal/parser/cline.go` and
-  `internal/parser/cline_provider.go`.
+  `internal/parser/cline_provider.go`. User input in `<id>.messages.json` is
+  wrapped in `<user_input mode="...">` envelopes and can contain internal
+  `<mode_notice>` blocks upon mode switching. Agentsview strips these wrapper
+  and notice tags across all turns so operator prompts and session names remain
+  clean human text and empty approvals do not persist empty bubbles.
 
 ## OpenHands (`openhands`)
 
