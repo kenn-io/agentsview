@@ -132,7 +132,11 @@ func toolResultContentLength(content gjson.Result) int {
 	if content.IsArray() {
 		total := 0
 		content.ForEach(func(_, block gjson.Result) bool {
-			total += len(block.Get("text").Str)
+			if t := block.Get("text").Str; t != "" {
+				total += len(t)
+			} else if r := block.Get("result").Str; r != "" {
+				total += len(r)
+			}
 			return true
 		})
 		return total
@@ -163,6 +167,8 @@ func decodeContent(content gjson.Result) string {
 		content.ForEach(func(_, block gjson.Result) bool {
 			if t := block.Get("text").Str; t != "" {
 				parts = append(parts, t)
+			} else if r := block.Get("result").Str; r != "" {
+				parts = append(parts, r)
 			}
 			return true
 		})

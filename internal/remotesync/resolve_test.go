@@ -537,15 +537,28 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	windsurfWorkspaceJSON := filepath.Join(windsurfWorkspaceDir, "workspace.json")
 	poolsideRoot := filepath.Join(home, ".local", "state", "poolside")
 	poolsideTrajectories := filepath.Join(poolsideRoot, "trajectories")
+	clineRoot := filepath.Join(home, ".cline")
+	clineSessionDir := filepath.Join(clineRoot, "data", "sessions", "sess-test")
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
 	require.NoError(t, os.MkdirAll(codexDir, 0o755))
 	require.NoError(t, os.MkdirAll(devinDir, 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Dir(aiderHistory), 0o755))
 	require.NoError(t, os.MkdirAll(windsurfWorkspaceDir, 0o755))
 	require.NoError(t, os.MkdirAll(poolsideTrajectories, 0o755))
+	require.NoError(t, os.MkdirAll(clineSessionDir, 0o755))
 	require.NoError(t, os.WriteFile(aiderHistory, []byte("# aider\n"), 0o644))
 	require.NoError(t, os.WriteFile(windsurfStateDB, []byte("state"), 0o644))
 	require.NoError(t, os.WriteFile(windsurfWorkspaceJSON, []byte("{}\n"), 0o644))
+	clineMeta := filepath.Join(clineSessionDir, "sess-test.json")
+	clineMsg := filepath.Join(clineSessionDir, "sess-test.messages.json")
+	clineTm := filepath.Join(clineSessionDir, "sess-test__teamtask__git-scout__t1.messages.json")
+	require.NoError(t, os.WriteFile(clineMeta, []byte(`{"session_id":"sess-test"}`), 0o644))
+	require.NoError(t, os.WriteFile(clineMsg, []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(clineTm, []byte(`{"messages":[]}`), 0o644))
+	clineSecretDir := filepath.Join(clineRoot, "data", "sessions", ".secret")
+	require.NoError(t, os.MkdirAll(clineSecretDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(clineSecretDir, ".secret.json"), []byte(`{"session_id":".secret"}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(clineSecretDir, ".secret.messages.json"), []byte(`{"messages":[]}`), 0o644))
 	codexIndex := filepath.Join(home, ".codex", parser.CodexSessionIndexFilename)
 	require.NoError(t, os.WriteFile(codexIndex, []byte("{}\n"), 0o644))
 
@@ -564,6 +577,7 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 			parser.AgentAider:    {aiderRoot},
 			parser.AgentWindsurf: {windsurfUserRoot},
 			parser.AgentPoolside: {poolsideRoot},
+			parser.AgentCline:    {clineRoot},
 		},
 	})
 	assert.ElementsMatch(t, sshDirs[parser.AgentClaude], goTargets.Dirs[parser.AgentClaude])
@@ -588,6 +602,11 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	// subdirectory, not the application-data root.
 	assert.ElementsMatch(t, []string{poolsideTrajectories}, sshDirs[parser.AgentPoolside])
 	assert.ElementsMatch(t, sshDirs[parser.AgentPoolside], goTargets.Dirs[parser.AgentPoolside])
+	// Cline: both resolvers must emit only session files.
+	assert.ElementsMatch(t, []string{clineRoot}, sshDirs[parser.AgentCline])
+	assert.ElementsMatch(t, sshDirs[parser.AgentCline], goTargets.Dirs[parser.AgentCline])
+	assert.ElementsMatch(t, []string{clineMeta, clineMsg, clineTm}, sshFiles[parser.AgentCline])
+	assert.ElementsMatch(t, []string{clineMeta, clineMsg, clineTm}, goTargets.Files[parser.AgentCline])
 }
 
 func TestSelectAllowedFiles(t *testing.T) {
@@ -969,6 +988,277 @@ func TestRooCodeRemoteSyncSkipsRootWithoutSessions(t *testing.T) {
 	assert.NotContains(t, targets.Files, parser.AgentRooCode)
 }
 
+func TestClineRemoteSyncExportsOnlySessionFiles(t *testing.T) {
+	root := t.TempDir()
+	clineRoot := filepath.Join(root, ".cline")
+	sess1 := filepath.Join(clineRoot, "data", "sessions", "sess-1")
+	sess2 := filepath.Join(clineRoot, "data", "sessions", "sess-2")
+	settingsDir := filepath.Join(clineRoot, "settings")
+	checkpoints := filepath.Join(clineRoot, "data", "checkpoints")
+	require.NoError(t, os.MkdirAll(sess1, 0o755))
+	require.NoError(t, os.MkdirAll(sess2, 0o755))
+	require.NoError(t, os.MkdirAll(settingsDir, 0o755))
+	require.NoError(t, os.MkdirAll(checkpoints, 0o755))
+
+	sess1Meta := filepath.Join(sess1, "sess-1.json")
+	sess1Messages := filepath.Join(sess1, "sess-1.messages.json")
+	sess2Meta := filepath.Join(sess2, "sess-2.json")
+	mcpSettings := filepath.Join(settingsDir, "mcp_settings.json")
+	checkpointBlob := filepath.Join(checkpoints, "checkpoint.bin")
+	require.NoError(t, os.WriteFile(sess1Meta,
+		[]byte(`{"session_id":"sess-1","started_at":"2026-09-10T10:00:00Z"}`), 0o644))
+	require.NoError(t, os.WriteFile(sess1Messages, []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(sess2Meta,
+		[]byte(`{"session_id":"sess-2","started_at":"2026-09-10T11:00:00Z"}`), 0o644))
+	require.NoError(t, os.WriteFile(mcpSettings,
+		[]byte(`{"mcpServers":{"s":{"env":{"API_KEY":"sk-secret"}}}}`), 0o644))
+	require.NoError(t, os.WriteFile(checkpointBlob, []byte("checkpoint"), 0o644))
+
+	targets := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot},
+		},
+	})
+
+	assert.Equal(t, []string{clineRoot}, targets.Dirs[parser.AgentCline])
+	assert.ElementsMatch(t, []string{
+		sess1Meta,
+		sess1Messages,
+		sess2Meta,
+	}, targets.Files[parser.AgentCline])
+
+	var buf bytes.Buffer
+	require.NoError(t, remotesync.WriteArchive(&buf, targets))
+	names := []string{}
+	tr := tar.NewReader(&buf)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		names = append(names, hdr.Name)
+	}
+	joined := strings.Join(names, "\n")
+	assert.Contains(t, joined, "data/sessions/sess-1/sess-1.json")
+	assert.Contains(t, joined, "data/sessions/sess-1/sess-1.messages.json")
+	assert.Contains(t, joined, "data/sessions/sess-2/sess-2.json")
+	assert.NotContains(t, joined, "mcp_settings.json")
+	assert.NotContains(t, joined, "checkpoint")
+
+	_, ok := remotesync.SelectAllowedFiles(targets, []string{mcpSettings})
+	assert.False(t, ok, "settings under the Cline root must be rejected")
+	_, ok = remotesync.SelectAllowedFiles(targets, []string{checkpointBlob})
+	assert.False(t, ok, "checkpoint data under the Cline root must be rejected")
+	assert.NotContains(t, targets.DeltaAllowedRoots(), clineRoot)
+}
+
+func TestClineRemoteSyncArchiveRejectsBackslashSessionIDs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("backslashes in directory names are not supported on Windows")
+	}
+	root := t.TempDir()
+	clineRoot := filepath.Join(root, ".cline")
+	validSess := filepath.Join(clineRoot, "data", "sessions", "sess-valid")
+	require.NoError(t, os.MkdirAll(validSess, 0o755))
+	validMeta := filepath.Join(validSess, "sess-valid.json")
+	validMsgs := filepath.Join(validSess, "sess-valid.messages.json")
+	require.NoError(t, os.WriteFile(validMeta,
+		[]byte(`{"session_id":"sess-valid","started_at":"2026-09-10T10:00:00Z"}`), 0o644))
+	require.NoError(t, os.WriteFile(validMsgs, []byte(`{"messages":[]}`), 0o644))
+
+	// Hostile session with a backslash in the session directory name
+	hostileSess := filepath.Join(clineRoot, "data", "sessions", `sess\escape`)
+	require.NoError(t, os.MkdirAll(hostileSess, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(hostileSess, `sess\escape.json`),
+		[]byte(`{"session_id":"sess\\escape","started_at":"2026-09-10T10:00:00Z"}`), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(hostileSess, `sess\escape.messages.json`),
+		[]byte(`{"messages":[]}`), 0o644))
+
+	targets := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot},
+		},
+	})
+
+	assert.Contains(t, targets.Files[parser.AgentCline], validMeta)
+	assert.Contains(t, targets.Files[parser.AgentCline], validMsgs)
+	for _, file := range targets.Files[parser.AgentCline] {
+		assert.NotContains(t, file, "escape",
+			"session with backslash in ID must not be resolved as fresh target")
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, remotesync.WriteArchive(&buf, targets))
+	tr := tar.NewReader(&buf)
+	var names []string
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		names = append(names, hdr.Name)
+	}
+	joined := strings.Join(names, "\n")
+	assert.Contains(t, joined, "data/sessions/sess-valid/sess-valid.json")
+	assert.Contains(t, joined, "data/sessions/sess-valid/sess-valid.messages.json")
+	assert.NotContains(t, joined, "escape",
+		"session with backslash in ID must not be archived")
+}
+
+func TestClineRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
+	// 1. Configured-root layout (e.g. ~/.cline)
+	root := t.TempDir()
+	clineRoot := filepath.Join(root, ".cline")
+	sess1 := filepath.Join(clineRoot, "data", "sessions", "sess-1")
+	sess2 := filepath.Join(clineRoot, "data", "sessions", "sess-2")
+	require.NoError(t, os.MkdirAll(sess1, 0o755))
+	require.NoError(t, os.MkdirAll(sess2, 0o755))
+	sess1Meta := filepath.Join(sess1, "sess-1.json")
+	sess1Messages := filepath.Join(sess1, "sess-1.messages.json")
+	sess1Teammate := filepath.Join(sess1, "scout__t1.messages.json")
+	sess2Meta := filepath.Join(sess2, "sess-2.json")
+	require.NoError(t, os.WriteFile(sess1Meta,
+		[]byte(`{"session_id":"sess-1","started_at":"2026-09-10T10:00:00Z"}`), 0o644))
+	require.NoError(t, os.WriteFile(sess1Messages, []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(sess1Teammate, []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(sess2Meta,
+		[]byte(`{"session_id":"sess-2","started_at":"2026-09-10T11:00:00Z"}`), 0o644))
+
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot},
+		},
+	}
+	staleClientTargets := resolveTargetsForTest(t, cfg)
+	require.Contains(t, staleClientTargets.Files[parser.AgentCline], sess1Messages)
+	require.Contains(t, staleClientTargets.Files[parser.AgentCline], sess1Teammate)
+
+	require.NoError(t, os.RemoveAll(sess1))
+	freshServerTargets := resolveTargetsForTest(t, cfg)
+	assert.NotContains(t, freshServerTargets.Files[parser.AgentCline], sess1Messages)
+
+	selected, ok := remotesync.SelectAllowedTargets(
+		freshServerTargets, staleClientTargets,
+	)
+	require.True(t, ok, "a vanished session file under configured root must not fail request")
+	var buf bytes.Buffer
+	require.NoError(t, remotesync.WriteArchive(&buf, selected))
+	names := []string{}
+	tr := tar.NewReader(&buf)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		names = append(names, hdr.Name)
+	}
+	joined := strings.Join(names, "\n")
+	assert.Contains(t, joined, "sess-2/sess-2.json")
+	assert.NotContains(t, joined, "sess-1")
+
+	files, ok := remotesync.SelectAllowedFiles(
+		freshServerTargets, []string{sess1Messages, sess1Teammate},
+	)
+	require.True(t, ok, "vanished session and teammate files must validate as delta request")
+	var delta bytes.Buffer
+	require.NoError(t, remotesync.WriteArchiveFiles(&delta, freshServerTargets, files))
+	dr := tar.NewReader(&delta)
+	_, err := dr.Next()
+	assert.Equal(t, io.EOF, err, "vanished file streams nothing")
+
+	// Non-session paths must stay rejected
+	for _, path := range []string{
+		filepath.Join(clineRoot, "settings", "mcp_settings.json"),
+		filepath.Join(clineRoot, "data", "checkpoints", "checkpoint.bin"),
+		filepath.Join(clineRoot, "data", "sessions", "_meta", "sess-1.json"),
+		filepath.Join(clineRoot, "sessions", "sess-1", "sess-1.json"),
+		filepath.Join(clineRoot, "sess-1.json"),
+	} {
+		_, ok := remotesync.SelectAllowedFiles(freshServerTargets, []string{path})
+		assert.False(t, ok, "non-session path must stay rejected: %s", path)
+	}
+
+	// 2. Direct-sessions-root layout (e.g. ~/.cline/data/sessions)
+	directRoot := filepath.Join(root, "direct", "sessions")
+	directSess1 := filepath.Join(directRoot, "dsess-1")
+	directSess2 := filepath.Join(directRoot, "dsess-2")
+	require.NoError(t, os.MkdirAll(directSess1, 0o755))
+	require.NoError(t, os.MkdirAll(directSess2, 0o755))
+	dsess1Meta := filepath.Join(directSess1, "dsess-1.json")
+	dsess1Teammate := filepath.Join(directSess1, "scout__t1.messages.json")
+	dsess2Meta := filepath.Join(directSess2, "dsess-2.json")
+	require.NoError(t, os.WriteFile(dsess1Meta,
+		[]byte(`{"session_id":"dsess-1","started_at":"2026-09-10T10:00:00Z"}`), 0o644))
+	require.NoError(t, os.WriteFile(dsess1Teammate, []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(dsess2Meta,
+		[]byte(`{"session_id":"dsess-2","started_at":"2026-09-10T11:00:00Z"}`), 0o644))
+
+	directCfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {directRoot},
+		},
+	}
+	staleDirectTargets := resolveTargetsForTest(t, directCfg)
+	require.Contains(t, staleDirectTargets.Files[parser.AgentCline], dsess1Meta)
+	require.Contains(t, staleDirectTargets.Files[parser.AgentCline], dsess1Teammate)
+
+	require.NoError(t, os.RemoveAll(directSess1))
+	freshDirectTargets := resolveTargetsForTest(t, directCfg)
+	assert.NotContains(t, freshDirectTargets.Files[parser.AgentCline], dsess1Meta)
+	assert.NotContains(t, freshDirectTargets.Files[parser.AgentCline], dsess1Teammate)
+
+	_, ok = remotesync.SelectAllowedTargets(freshDirectTargets, staleDirectTargets)
+	require.True(t, ok, "a vanished session file under direct sessions root must not fail request")
+
+	_, ok = remotesync.SelectAllowedFiles(freshDirectTargets, []string{dsess1Teammate})
+	require.True(t, ok, "vanished teammate under direct sessions root must validate")
+
+	// Non-session paths under direct sessions root must stay rejected
+	for _, path := range []string{
+		filepath.Join(directRoot, "sessions", "dsess-1", "dsess-1.json"),
+		filepath.Join(directRoot, "data", "sessions", "dsess-1", "dsess-1.json"),
+		filepath.Join(directRoot, "dsess-1.json"),
+	} {
+		_, ok := remotesync.SelectAllowedFiles(freshDirectTargets, []string{path})
+		assert.False(t, ok, "non-session path under direct root must stay rejected: %s", path)
+	}
+}
+
+func TestClineRemoteSyncPreservesRootWhenEmpty(t *testing.T) {
+	root := t.TempDir()
+	clineRoot := filepath.Join(root, ".cline")
+	sessionsDir := filepath.Join(clineRoot, "data", "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot},
+		},
+	}
+	targets := resolveTargetsForTest(t, cfg)
+	assert.Contains(t, targets.Dirs[parser.AgentCline], clineRoot)
+	require.Contains(t, targets.Files, parser.AgentCline, "must retain files entry for Cline")
+	assert.Empty(t, targets.Files[parser.AgentCline], "file slice must be empty when no sessions exist")
+
+	// Verify a stale client request for a deleted session can still be authorized for eviction
+	staleTargets := remotesync.TargetSet{
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot},
+		},
+		Files: map[parser.AgentType][]string{
+			parser.AgentCline: {filepath.Join(sessionsDir, "old-sess", "old-sess.json")},
+		},
+	}
+	selected, ok := remotesync.SelectAllowedTargets(targets, staleTargets)
+	require.True(t, ok, "stale session file under empty Cline root must remain authorized for eviction")
+	assert.Empty(t, selected.Files[parser.AgentCline])
+}
+
 func TestCursorRemoteTargetsExcludeChatsRoot(t *testing.T) {
 	home, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
@@ -1018,4 +1308,202 @@ func samePathForTest(t *testing.T, a, b string) bool {
 	require.NoError(t, err)
 	return filepath.Clean(aAbs) == filepath.Clean(bAbs) ||
 		strings.EqualFold(filepath.Clean(aAbs), filepath.Clean(bAbs))
+}
+
+func TestClineRemoteSyncRejectsSymlinkedAncestorsAndSessions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	outsideDir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	outsideSessions := filepath.Join(outsideDir, "outside_sessions", "sess-outside")
+	require.NoError(t, os.MkdirAll(outsideSessions, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(outsideSessions, "sess-outside.json"),
+		[]byte(`{"session_id":"sess-outside"}`),
+		0o644,
+	))
+
+	// Case 1: data is a symlink pointing outside targetRoot.
+	root1, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	clineRoot1 := filepath.Join(root1, ".cline")
+	require.NoError(t, os.MkdirAll(clineRoot1, 0o755))
+	outsideData := filepath.Join(outsideDir, "data")
+	require.NoError(t, os.MkdirAll(filepath.Join(outsideData, "sessions", "sess-outside"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(outsideData, "sessions", "sess-outside", "sess-outside.json"),
+		[]byte(`{"session_id":"sess-outside"}`),
+		0o644,
+	))
+	require.NoError(t, os.Symlink(outsideData, filepath.Join(clineRoot1, "data")))
+
+	targets1 := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot1},
+		},
+	})
+	assert.Empty(t, targets1.Dirs[parser.AgentCline])
+	assert.Empty(t, targets1.Files[parser.AgentCline])
+
+	// Case 2: data/sessions is a symlink pointing outside targetRoot.
+	root2, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	clineRoot2 := filepath.Join(root2, ".cline")
+	require.NoError(t, os.MkdirAll(filepath.Join(clineRoot2, "data"), 0o755))
+	require.NoError(t, os.Symlink(filepath.Dir(outsideSessions), filepath.Join(clineRoot2, "data", "sessions")))
+
+	targets2 := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot2},
+		},
+	})
+	assert.Empty(t, targets2.Dirs[parser.AgentCline])
+	assert.Empty(t, targets2.Files[parser.AgentCline])
+
+	// Case 3: session dir within data/sessions is a symlink pointing outside targetRoot.
+	root3, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	clineRoot3 := filepath.Join(root3, ".cline")
+	sessionsDir3 := filepath.Join(clineRoot3, "data", "sessions")
+	validSessionDir := filepath.Join(sessionsDir3, "sess-valid")
+	require.NoError(t, os.MkdirAll(validSessionDir, 0o755))
+	validMeta := filepath.Join(validSessionDir, "sess-valid.json")
+	require.NoError(t, os.WriteFile(validMeta, []byte(`{"session_id":"sess-valid"}`), 0o644))
+	require.NoError(t, os.Symlink(outsideSessions, filepath.Join(sessionsDir3, "sess-outside")))
+
+	targets3 := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot3},
+		},
+	})
+	assert.Contains(t, targets3.Dirs[parser.AgentCline], clineRoot3)
+	assert.Contains(t, targets3.Files[parser.AgentCline], validMeta)
+	for _, file := range targets3.Files[parser.AgentCline] {
+		assert.NotContains(t, file, "sess-outside", "symlinked session escaping root must be rejected")
+	}
+}
+
+func TestClineRootSymlinkParity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	outsideDir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	realCline := filepath.Join(outsideDir, "real-cline")
+	realSessions := filepath.Join(realCline, "data", "sessions", "sess-outside")
+	require.NoError(t, os.MkdirAll(realSessions, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(realSessions, "sess-outside.json"),
+		[]byte(`{"session_id":"sess-outside"}`),
+		0o644,
+	))
+
+	// Case 1: The configured Cline root itself is a symlink.
+	home1, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	symlinkedRoot := filepath.Join(home1, ".cline")
+	require.NoError(t, os.Symlink(realCline, symlinkedRoot))
+
+	goTargets1 := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {symlinkedRoot},
+		},
+	})
+	assert.Empty(t, goTargets1.Dirs[parser.AgentCline])
+	assert.Empty(t, goTargets1.Files[parser.AgentCline])
+
+	cmd1 := exec.Command("sh")
+	cmd1.Stdin = strings.NewReader(ssh.BuildResolveScriptForTest())
+	cmd1.Env = []string{"HOME=" + home1}
+	out1, err := cmd1.CombinedOutput()
+	require.NoError(t, err, "ssh output: %s", out1)
+	sshDirs1, sshFiles1, _, _ := ssh.ParseResolvedTargetsWithFilesForTest(string(out1))
+	assert.Empty(t, sshDirs1[parser.AgentCline])
+	assert.Empty(t, sshFiles1[parser.AgentCline])
+	assert.ElementsMatch(t, sshDirs1[parser.AgentCline], goTargets1.Dirs[parser.AgentCline])
+	assert.ElementsMatch(t, sshFiles1[parser.AgentCline], goTargets1.Files[parser.AgentCline])
+
+	// Case 2: The direct sessions root is a symlink.
+	home2, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	symlinkedDirect := filepath.Join(home2, "direct-sessions")
+	require.NoError(t, os.Symlink(filepath.Join(realCline, "data", "sessions"), symlinkedDirect))
+
+	goTargets2 := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {symlinkedDirect},
+		},
+	})
+	assert.Empty(t, goTargets2.Dirs[parser.AgentCline])
+	assert.Empty(t, goTargets2.Files[parser.AgentCline])
+
+	cmd2 := exec.Command("sh")
+	cmd2.Stdin = strings.NewReader(ssh.BuildResolveScriptForTest())
+	cmd2.Env = []string{"HOME=" + home2, "CLINE_DIR=" + symlinkedDirect}
+	out2, err := cmd2.CombinedOutput()
+	require.NoError(t, err, "ssh output: %s", out2)
+	sshDirs2, sshFiles2, _, _ := ssh.ParseResolvedTargetsWithFilesForTest(string(out2))
+	assert.Empty(t, sshDirs2[parser.AgentCline])
+	assert.Empty(t, sshFiles2[parser.AgentCline])
+	assert.ElementsMatch(t, sshDirs2[parser.AgentCline], goTargets2.Dirs[parser.AgentCline])
+	assert.ElementsMatch(t, sshFiles2[parser.AgentCline], goTargets2.Files[parser.AgentCline])
+}
+
+func TestClineLeafSymlinkParity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	outsideDir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	secretFile := filepath.Join(outsideDir, "secret.json")
+	require.NoError(t, os.WriteFile(secretFile, []byte(`{"secret":true}`), 0o644))
+
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	clineRoot := filepath.Join(home, ".cline")
+	sessionsDir := filepath.Join(clineRoot, "data", "sessions")
+
+	// sess-valid: normal regular metadata and messages, plus teammate messages and symlink.
+	sessValid := filepath.Join(sessionsDir, "sess-valid")
+	require.NoError(t, os.MkdirAll(sessValid, 0o755))
+	validMeta := filepath.Join(sessValid, "sess-valid.json")
+	require.NoError(t, os.WriteFile(validMeta, []byte(`{"session_id":"sess-valid"}`), 0o644))
+	validMsgs := filepath.Join(sessValid, "sess-valid.messages.json")
+	require.NoError(t, os.WriteFile(validMsgs, []byte(`{"messages":[]}`), 0o644))
+	validTm := filepath.Join(sessValid, "sess-valid__team__agent.messages.json")
+	require.NoError(t, os.WriteFile(validTm, []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.Symlink(secretFile, filepath.Join(sessValid, "sess-valid__symlink.messages.json")))
+	require.NoError(t, os.WriteFile(filepath.Join(sessValid, "sess-valid__bad__.messages.json"), []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(sessValid, "_sess-valid__skip.messages.json"), []byte(`{"messages":[]}`), 0o644))
+
+	// sess-symlink-meta: metadata file is a symlink pointing outside root.
+	sessMetaLink := filepath.Join(sessionsDir, "sess-symlink-meta")
+	require.NoError(t, os.MkdirAll(sessMetaLink, 0o755))
+	require.NoError(t, os.Symlink(secretFile, filepath.Join(sessMetaLink, "sess-symlink-meta.json")))
+	require.NoError(t, os.WriteFile(filepath.Join(sessMetaLink, "sess-symlink-meta.messages.json"), []byte(`{"messages":[]}`), 0o644))
+
+	// sess-symlink-msgs: valid metadata, but messages file is a symlink pointing outside root.
+	sessMsgsLink := filepath.Join(sessionsDir, "sess-symlink-msgs")
+	require.NoError(t, os.MkdirAll(sessMsgsLink, 0o755))
+	validMeta2 := filepath.Join(sessMsgsLink, "sess-symlink-msgs.json")
+	require.NoError(t, os.WriteFile(validMeta2, []byte(`{"session_id":"sess-symlink-msgs"}`), 0o644))
+	require.NoError(t, os.Symlink(secretFile, filepath.Join(sessMsgsLink, "sess-symlink-msgs.messages.json")))
+
+	goTargets := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot},
+		},
+	})
+	expectedFiles := []string{validMeta, validMsgs, validTm, validMeta2}
+	assert.ElementsMatch(t, expectedFiles, goTargets.Files[parser.AgentCline])
+
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(ssh.BuildResolveScriptForTest())
+	cmd.Env = []string{"HOME=" + home}
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "ssh output: %s", out)
+	sshDirs, sshFiles, _, _ := ssh.ParseResolvedTargetsWithFilesForTest(string(out))
+	assert.ElementsMatch(t, sshDirs[parser.AgentCline], goTargets.Dirs[parser.AgentCline])
+	assert.ElementsMatch(t, sshFiles[parser.AgentCline], goTargets.Files[parser.AgentCline])
 }

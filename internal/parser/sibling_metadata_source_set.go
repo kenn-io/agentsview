@@ -7,17 +7,17 @@ import (
 )
 
 // siblingMetadataFileInfo stats a companion file that contributes to a JSONL
-// source's freshness fingerprint, returning (nil, nil) when the file is absent
-// or is a directory so callers can skip it without treating it as an error.
+// source's freshness fingerprint, returning (nil, nil) when the file is absent,
+// a symlink, or a directory so callers can skip it without treating it as an error.
 func siblingMetadataFileInfo(path string) (os.FileInfo, error) {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("stat %s: %w", path, err)
 	}
-	if info.IsDir() {
+	if !info.Mode().IsRegular() {
 		return nil, nil
 	}
 	return info, nil
