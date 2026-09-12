@@ -32,9 +32,10 @@ reconciliation, parsing, and raw SQLite capture for this source shape.
 Move the provider-neutral row observation code out of `crush_provider.go` into a
 shared SQLite helper. The helper tracks SQLite container identity and one
 monotonic cursor per configured table. A provider supplies the table name, the
-session-ID expression, and the row-identity expression needed to map new rows to
-logical sessions. The helper supplies locking, cold-start behavior,
-database-replacement detection, cursor validation, and ordered deduplication.
+cursor expression, the session-ID expression, and the row-identity expression
+needed to map new rows to logical sessions. The helper supplies locking,
+cold-start behavior, database-replacement detection, cursor validation, and
+ordered deduplication.
 
 Use `SQLiteContainerState` for physical database identity and SQLite change
 markers. Do not repeat file identity, write-ahead-log, or replacement logic in
@@ -52,6 +53,9 @@ AgentsView remains a persistent archive. Removing a session row from `crush.db`,
 removing a project from `projects.json`, or removing the source database does
 not delete the archived session or mark it missing solely because the producer
 no longer lists it. Session deletion remains an explicit AgentsView action.
+
+Crush declares this through a provider capability so reconciliation and direct
+parse paths apply the same policy without hard-coding Crush in the sync engine.
 
 Root normalization must still accept a Crush registry directory, a project data
 directory, or a direct `crush.db` path. Reconciliation may use those spellings

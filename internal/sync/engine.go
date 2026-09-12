@@ -6876,6 +6876,11 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 				PathRewriter:   e.pathRewriter,
 			})
 		}
+		if provider != nil &&
+			provider.Capabilities().Source.ExplicitDeletionOnly ==
+				parser.CapabilitySupported {
+			continue
+		}
 		for _, scope := range agentScopes {
 			ownershipScopes := storedSourceDBHintScopes(scope.proofScopes)
 			if len(ownershipScopes) == 0 {

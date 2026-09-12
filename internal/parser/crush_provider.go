@@ -5,11 +5,9 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"hash"
 	"maps"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -36,13 +34,13 @@ var (
 
 type crushProviderFactory struct {
 	def     AgentDef
-	tracker *crushChangeTracker
+	tracker *sqliteRowObserver
 }
 
 func newCrushProviderFactory(def AgentDef) ProviderFactory {
 	return &crushProviderFactory{
 		def:     cloneAgentDef(def),
-		tracker: newCrushChangeTracker(),
+		tracker: newCrushRowObserver(),
 	}
 }
 
@@ -100,7 +98,7 @@ func (f *crushProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 
 type crushProvider struct {
 	*dbBackedProvider
-	tracker         *crushChangeTracker
+	tracker         *sqliteRowObserver
 	originalRoots   []string
 	registryMapping map[string][]string
 	projectMapping  map[string]string
@@ -290,18 +288,18 @@ func (p *crushProvider) DiscoverEach(
 // is skipped so healthy roots can still be discovered.
 func (p *crushProvider) captureDiscoveryWatermarks(
 	ctx context.Context,
-) ([]crushDiscoveryWatermark, error) {
-	watermarks := make([]crushDiscoveryWatermark, 0, len(p.sources.roots))
+) ([]sqliteRowObserverWatermark, error) {
+	watermarks := make([]sqliteRowObserverWatermark, 0, len(p.sources.roots))
 	for _, root := range p.sources.roots {
 		dbPath := p.spec.findDB(root)
 		if dbPath == "" {
 			continue
 		}
-		state, err := readCrushTrackedDatabase(ctx, dbPath, p.Config.StableSourceSnapshots)
+		state, err := p.tracker.capture(ctx, dbPath, p.Config.StableSourceSnapshots)
 		if err != nil {
 			continue
 		}
-		watermarks = append(watermarks, crushDiscoveryWatermark{
+		watermarks = append(watermarks, sqliteRowObserverWatermark{
 			dbPath: dbPath,
 			state:  state,
 		})
@@ -359,6 +357,7 @@ func (p *crushProvider) SourcesForChangedPath(
 				root, dbPath, id, VirtualSourcePath(dbPath, id),
 			))
 		}
+		p.tracker.commit(dbPath, snapshot)
 		sort.Slice(sources, func(i, j int) bool {
 			return sources[i].DisplayPath < sources[j].DisplayPath
 		})
@@ -410,6 +409,7 @@ func crushProviderCapabilities() Capabilities {
 	// Crush does not consume stored source hints; scheduling them would
 	// enumerate every session for each WAL event.
 	source.StoredSourceHints = CapabilityUnsupported
+	source.ExplicitDeletionOnly = CapabilitySupported
 	return Capabilities{
 		Source: source,
 		Content: ContentCapabilities{
@@ -695,233 +695,43 @@ func crushWriteFingerprintField(hasher hash.Hash, value string) {
 	_, _ = hasher.Write([]byte(value))
 }
 
-type crushRowCursor struct {
-	id       int64
-	identity string
+func newCrushRowObserver() *sqliteRowObserver {
+	return newSQLiteRowObserver(sqliteRowObserverSpec{
+		open: openCrushDB,
+		schemaIdentity: func(ctx context.Context, db *sql.DB) (string, error) {
+			version, err := crushSchemaVersion(ctx, db)
+			return strconv.Itoa(version), err
+		},
+		tables: crushObservedTables,
+	})
 }
 
-type crushTrackedDatabase struct {
-	schemaVersion int
-	inode         uint64
-	device        uint64
-	sessions      crushRowCursor
-	messages      crushRowCursor
-}
-
-type crushDiscoveryWatermark struct {
-	dbPath string
-	state  crushTrackedDatabase
-}
-
-type crushChangeTracker struct {
-	mu      sync.Mutex
-	entries map[string]*crushTrackedDatabaseEntry
-}
-
-type crushTrackedDatabaseEntry struct {
-	mu    sync.Mutex
-	known bool
-	state crushTrackedDatabase
-}
-
-func newCrushChangeTracker() *crushChangeTracker {
-	return &crushChangeTracker{
-		entries: make(map[string]*crushTrackedDatabaseEntry),
-	}
-}
-
-// entry returns the per-database tracker entry, creating it on first use.
-// Each database has its own lock so a slow or busy crush.db cannot stall
-// watcher classification for other Crush roots.
-func (t *crushChangeTracker) entry(dbPath string) *crushTrackedDatabaseEntry {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	key := filepath.Clean(dbPath)
-	entry, ok := t.entries[key]
-	if !ok {
-		entry = &crushTrackedDatabaseEntry{}
-		t.entries[key] = entry
-	}
-	return entry
-}
-
-func (t *crushChangeTracker) storeDiscoveryWatermarks(
-	watermarks []crushDiscoveryWatermark,
-) {
-	for _, watermark := range watermarks {
-		entry := t.entry(watermark.dbPath)
-		entry.mu.Lock()
-		entry.mergeLocked(watermark.state)
-		entry.mu.Unlock()
-	}
-}
-
-// commit publishes a snapshot that was captured before a full enumeration.
-// Callers invoke it only after that enumeration succeeds, so a failed pass
-// cannot advance the cursors past rows it never delivered.
-func (t *crushChangeTracker) commit(dbPath string, state crushTrackedDatabase) {
-	entry := t.entry(dbPath)
-	entry.mu.Lock()
-	entry.mergeLocked(state)
-	entry.mu.Unlock()
-}
-
-// mergeLocked adopts state without retreating row cursors that a concurrent
-// watcher event already advanced past this snapshot. Callers hold entry.mu.
-func (e *crushTrackedDatabaseEntry) mergeLocked(state crushTrackedDatabase) {
-	if !e.known || crushTrackedDatabaseReplaced(e.state, state) {
-		e.state = state
-		e.known = true
-		return
-	}
-	merged := state
-	merged.sessions = furthestCrushRowCursor(e.state.sessions, state.sessions)
-	merged.messages = furthestCrushRowCursor(e.state.messages, state.messages)
-	e.state = merged
-}
-
-func furthestCrushRowCursor(a, b crushRowCursor) crushRowCursor {
-	if a.id > b.id {
-		return a
-	}
-	return b
-}
-
-// changedSessionIDs lists sessions with rows inserted past the stored
-// cursors. cold reports that the caller must fall back to full enumeration;
-// the returned snapshot must then be published via commit only after that
-// enumeration succeeds. A table whose cursor retreated or was rewritten is
-// skipped — deletions are reconciliation's job — while inserts from the
-// tables whose cursors are intact are still listed.
-func (t *crushChangeTracker) changedSessionIDs(
-	ctx context.Context, dbPath string, stableSnapshot bool,
-) (ids []string, cold bool, snapshot crushTrackedDatabase, err error) {
-	entry := t.entry(dbPath)
-	entry.mu.Lock()
-	previous := entry.state
-	known := entry.known
-	entry.mu.Unlock()
-
-	info, err := os.Stat(dbPath)
-	if err != nil {
-		return nil, false, crushTrackedDatabase{},
-			fmt.Errorf("stat crush sessions database: %w", err)
-	}
-	db, err := openCrushDB(dbPath, stableSnapshot)
-	if err != nil {
-		return nil, false, crushTrackedDatabase{}, err
-	}
-	defer db.Close()
-	current, err := readCrushTrackedDatabaseFrom(ctx, db, info)
-	if err != nil {
-		return nil, false, crushTrackedDatabase{}, err
-	}
-	if !known || crushTrackedDatabaseReplaced(previous, current) {
-		return nil, true, current, nil
-	}
-
-	seen := make(map[string]struct{})
-	for _, check := range []crushCursorCheck{
-		{table: "sessions", previous: previous.sessions, current: current.sessions},
-		{table: "messages", previous: previous.messages, current: current.messages},
+func crushObservedTables(
+	ctx context.Context, db *sql.DB,
+) ([]sqliteObservedTable, error) {
+	observed := make([]sqliteObservedTable, 0, 2)
+	for _, table := range []struct {
+		name      string
+		sessionID string
+	}{
+		{name: "sessions", sessionID: "id"},
+		{name: "messages", sessionID: "session_id"},
 	} {
-		valid, err := crushCursorStillValid(ctx, db, check)
+		columns, err := crushTableColumns(ctx, db, table.name)
 		if err != nil {
-			return nil, false, crushTrackedDatabase{}, err
+			return nil, fmt.Errorf("inspecting crush %s columns: %w", table.name, err)
 		}
-		if !valid {
-			continue
+		identity, ok := crushRowIdentityExpression(table.name, columns)
+		if !ok {
+			return nil, fmt.Errorf("unsupported crush cursor table %q", table.name)
 		}
-		if err := listChangedCrushSessionIDsForTable(
-			ctx, db, check.table, check.previous.id, seen,
-		); err != nil {
-			return nil, false, crushTrackedDatabase{}, err
-		}
+		observed = append(observed, sqliteObservedTable{
+			name: table.name, cursorExpression: "rowid",
+			sessionIDExpression: table.sessionID,
+			identityExpression:  identity,
+		})
 	}
-	entry.mu.Lock()
-	entry.mergeLocked(current)
-	entry.mu.Unlock()
-	ids = make([]string, 0, len(seen))
-	for id := range seen {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids, false, current, nil
-}
-
-func crushTrackedDatabaseReplaced(
-	previous, current crushTrackedDatabase,
-) bool {
-	identityChanged := (previous.inode != 0 || previous.device != 0) &&
-		(previous.inode != current.inode || previous.device != current.device)
-	return identityChanged || previous.schemaVersion != current.schemaVersion
-}
-
-func readCrushTrackedDatabase(
-	ctx context.Context, dbPath string, stableSnapshot bool,
-) (crushTrackedDatabase, error) {
-	info, err := os.Stat(dbPath)
-	if err != nil {
-		return crushTrackedDatabase{}, fmt.Errorf("stat crush sessions database: %w", err)
-	}
-	db, err := openCrushDB(dbPath, stableSnapshot)
-	if err != nil {
-		return crushTrackedDatabase{}, err
-	}
-	defer db.Close()
-	return readCrushTrackedDatabaseFrom(ctx, db, info)
-}
-
-func readCrushTrackedDatabaseFrom(
-	ctx context.Context, db *sql.DB, info os.FileInfo,
-) (crushTrackedDatabase, error) {
-	inode, device := sourceFileIdentity(info)
-	schemaVersion, err := crushSchemaVersion(ctx, db)
-	if err != nil {
-		return crushTrackedDatabase{}, err
-	}
-	sessions, err := latestCrushRowCursor(ctx, db, "sessions")
-	if err != nil {
-		return crushTrackedDatabase{}, err
-	}
-	messages, err := latestCrushRowCursor(ctx, db, "messages")
-	if err != nil {
-		return crushTrackedDatabase{}, err
-	}
-	return crushTrackedDatabase{
-		schemaVersion: schemaVersion,
-		inode:         inode,
-		device:        device,
-		sessions:      sessions,
-		messages:      messages,
-	}, nil
-}
-
-// latestCrushRowCursor reads the newest rowid and a replacement-detecting
-// identity per table. Both Crush tables use TEXT primary keys, so the
-// rowid orders insertion.
-func latestCrushRowCursor(
-	ctx context.Context, db *sql.DB, table string,
-) (crushRowCursor, error) {
-	columns, err := crushTableColumns(ctx, db, table)
-	if err != nil {
-		return crushRowCursor{}, fmt.Errorf("inspecting crush %s columns: %w", table, err)
-	}
-	identityExpr, ok := crushRowIdentityExpression(table, columns)
-	if !ok {
-		return crushRowCursor{}, fmt.Errorf("unsupported crush cursor table %q", table)
-	}
-	query := "SELECT rowid, " + identityExpr + " FROM " + table +
-		" ORDER BY rowid DESC LIMIT 1"
-	var cursor crushRowCursor
-	err = db.QueryRowContext(ctx, query).Scan(&cursor.id, &cursor.identity)
-	if errors.Is(err, sql.ErrNoRows) {
-		return crushRowCursor{}, nil
-	}
-	if err != nil {
-		return crushRowCursor{}, fmt.Errorf("reading latest crush %s row: %w", table, err)
-	}
-	return cursor, nil
+	return observed, nil
 }
 
 func crushRowIdentityExpression(table string, columns map[string]bool) (string, bool) {
@@ -938,80 +748,6 @@ func crushRowIdentityExpression(table string, columns map[string]bool) (string, 
 	default:
 		return "", false
 	}
-}
-
-type crushCursorCheck struct {
-	table    string
-	previous crushRowCursor
-	current  crushRowCursor
-}
-
-func crushCursorStillValid(
-	ctx context.Context, db *sql.DB, check crushCursorCheck,
-) (bool, error) {
-	if check.current.id < check.previous.id {
-		return false, nil
-	}
-	if check.previous.id == 0 {
-		return true, nil
-	}
-	columns, err := crushTableColumns(ctx, db, check.table)
-	if err != nil {
-		return false, fmt.Errorf("inspecting crush %s columns: %w", check.table, err)
-	}
-	identityExpr, ok := crushRowIdentityExpression(check.table, columns)
-	if !ok {
-		return false, fmt.Errorf("unsupported crush cursor table %q", check.table)
-	}
-	var identity string
-	err = db.QueryRowContext(
-		ctx, "SELECT "+identityExpr+" FROM "+check.table+" WHERE rowid = ?",
-		check.previous.id,
-	).Scan(&identity)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("reading crush %s cursor identity: %w", check.table, err)
-	}
-	return identity == check.previous.identity, nil
-}
-
-func listChangedCrushSessionIDsForTable(
-	ctx context.Context,
-	db *sql.DB,
-	table string,
-	after int64,
-	seen map[string]struct{},
-) error {
-	var query string
-	switch table {
-	case "sessions":
-		query = "SELECT id FROM sessions WHERE rowid > ? ORDER BY rowid"
-	case "messages":
-		query = "SELECT session_id FROM messages WHERE rowid > ? ORDER BY rowid"
-	default:
-		return fmt.Errorf("unsupported crush cursor table %q", table)
-	}
-	rows, err := db.QueryContext(ctx, query, after)
-	if err != nil {
-		return fmt.Errorf("listing changed crush sessions: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return fmt.Errorf("scanning changed crush session ID: %w", err)
-		}
-		id = strings.TrimSpace(id)
-		if id != "" {
-			seen[id] = struct{}{}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	return rows.Close()
 }
 
 // crushSchemaVersion reads the vendored goose migration version so a

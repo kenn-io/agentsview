@@ -309,8 +309,8 @@ func (p *dbBackedProvider) Parse(
 			// persistent archive: sessions must be preserved even when their
 			// source file no longer exists on disk. Skip without ForceReplace
 			// so the engine keeps the stored sessions instead of deleting them.
-			// The sql.ErrNoRows / empty-results cases below keep ForceReplace
-			// because the DB is still present and the row was genuinely removed.
+			// A present DB is normally authoritative for missing members below;
+			// ExplicitDeletionOnly providers preserve those members as well.
 			return ParseOutcome{
 				ResultSetComplete: true,
 				SkipReason:        SkipNoSession,
@@ -330,21 +330,13 @@ func (p *dbBackedProvider) Parse(
 	}
 	results, err := p.spec.parse(ctx, src.DBPath, src.SessionID, machine)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ParseOutcome{
-			ResultSetComplete: true,
-			ForceReplace:      true,
-			SkipReason:        SkipNoSession,
-		}, nil
+		return p.missingMemberOutcome(), nil
 	}
 	if err != nil {
 		return ParseOutcome{}, err
 	}
 	if len(results) == 0 {
-		return ParseOutcome{
-			ResultSetComplete: true,
-			ForceReplace:      true,
-			SkipReason:        SkipNoSession,
-		}, nil
+		return p.missingMemberOutcome(), nil
 	}
 	out := make([]ParseResultOutcome, 0, len(results))
 	for _, result := range results {
@@ -361,6 +353,15 @@ func (p *dbBackedProvider) Parse(
 		ResultSetComplete: true,
 		ForceReplace:      true,
 	}, nil
+}
+
+func (p *dbBackedProvider) missingMemberOutcome() ParseOutcome {
+	return ParseOutcome{
+		ResultSetComplete: true,
+		ForceReplace: p.Caps.Source.ExplicitDeletionOnly !=
+			CapabilitySupported,
+		SkipReason: SkipNoSession,
+	}
 }
 
 type dbBackedSource struct {
