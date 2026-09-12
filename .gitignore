@@ -86,3 +86,6 @@ graphify-out/
 .kata.local.toml
 # roborev snapshots
 /.roborev/
+
+# WorkBuddy AI project memory and local agent scratch state
+.workbuddy-ai/

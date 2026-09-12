@@ -2125,5 +2125,23 @@
     }
   ],
   "settings_image_cleanup_compact_note": "ペイロードの削除は保存済み行を書き換えます。agentsview db compact を実行するまでアーカイブファイルのサイズは変わりません。",
-  "appearance_render_unknown_xml_blocks": "不明なXMLブロックを整形済みテキストとして表示"
+  "appearance_render_unknown_xml_blocks": "不明なXMLブロックを整形済みテキストとして表示",
+  "appearance_text_size": "文字サイズ",
+  "settings_notifications_title": "デスクトップ通知",
+  "settings_notifications_description": "エージェントがターンを終えたときや新しい返信を送ったときに通知を受け取る",
+  "settings_notifications_keywords": "通知 デスクトップ 返信 終了 notifications",
+  "settings_notifications_enable": "デスクトップ通知を有効にする",
+  "settings_notifications_turn_end_hint": "エージェントが明確な停止点に達してユーザーの入力を待っているときに通知します（エージェント自身のターン終了シグナルに基づく）。",
+  "settings_notifications_new_reply": "新しい返信ごとにも通知する",
+  "settings_notifications_new_reply_hint": "任意のフォールバック通知：エージェントの作業中也に通知します。連続出力は1件にまとめられ、タスク完了とは表示されません。",
+  "settings_notifications_merge_window": "マージウィンドウ（秒）",
+  "settings_notifications_merge_window_hint": "同じセッションへの通知の最小間隔",
+  "settings_notifications_suppress_subagents": "サブエージェントセッションをミュート",
+  "settings_notifications_agents": "エージェントフィルター",
+  "settings_notifications_agents_hint": "カンマ区切りの許可リスト。空欄ですべてのエージェント",
+  "settings_notifications_projects": "プロジェクトフィルター",
+  "settings_notifications_projects_hint": "カンマ区切りの許可リスト。空欄ですべてのプロジェクト",
+  "settings_notifications_saved": "通知設定を保存しました。",
+  "settings_notifications_saving": "保存中…",
+  "settings_notifications_save": "保存"
 }

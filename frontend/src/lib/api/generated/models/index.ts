@@ -287,6 +287,7 @@ export * from "./machinesResponseMachineAliases.ts";
 export * from "./machinesResponseMachineLabels.ts";
 export * from "./modelTotal.ts";
 export * from "./moneyMoney.ts";
+export * from "./notificationsConfigBody.ts";
 export * from "./opener.ts";
 export * from "./openersResponse.ts";
 export * from "./openRequest.ts";

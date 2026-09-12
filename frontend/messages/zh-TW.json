@@ -795,7 +795,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 個專案" }
+      "match": {
+        "countPlural=other": "{countNumber} 個專案"
+      }
     }
   ],
   "data_summary_sessions": [
@@ -806,7 +808,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 個會話" }
+      "match": {
+        "countPlural=other": "{countNumber} 個會話"
+      }
     }
   ],
   "data_summary_governed": [
@@ -817,7 +821,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 個會話受規則管理" }
+      "match": {
+        "countPlural=other": "{countNumber} 個會話受規則管理"
+      }
     }
   ],
   "data_filter_projects": "篩選專案",
@@ -837,7 +843,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 條已啟用的規則以此專案為目標" }
+      "match": {
+        "countPlural=other": "{countNumber} 條已啟用的規則以此專案為目標"
+      }
     }
   ],
   "data_recorded_original": "已記錄為規則的原始標籤",
@@ -861,7 +869,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 個工作階段" }
+      "match": {
+        "countPlural=other": "{countNumber} 個工作階段"
+      }
     }
   ],
   "data_reclassify_cwd_unavailable": "此資料夾無法安全對應，因為它無法使用或代表檔案系統根目錄。",
@@ -880,7 +890,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "符合 {countNumber} 個工作階段" }
+      "match": {
+        "countPlural=other": "符合 {countNumber} 個工作階段"
+      }
     }
   ],
   "data_reclassify_sessions_changing": [
@@ -891,7 +903,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "將變更 {countNumber} 個工作階段" }
+      "match": {
+        "countPlural=other": "將變更 {countNumber} 個工作階段"
+      }
     }
   ],
   "data_reclassify_projects_affected": [
@@ -902,7 +916,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 個項目" }
+      "match": {
+        "countPlural=other": "{countNumber} 個項目"
+      }
     }
   ],
   "data_reclassify_normalized_target": "將儲存為 {project}",
@@ -915,7 +931,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 個工作階段" }
+      "match": {
+        "countPlural=other": "{countNumber} 個工作階段"
+      }
     }
   ],
   "data_reclassify_zero_matches": "此前綴與封存中的任何工作階段都不符合。",
@@ -2060,5 +2078,23 @@
     }
   ],
   "settings_image_cleanup_compact_note": "刪除有效載荷會改寫儲存的資料列。在執行 agentsview db compact 之前，封存檔大小保持不變。",
-  "appearance_render_unknown_xml_blocks": "將未知 XML 區塊以預格式化文字呈現"
+  "appearance_render_unknown_xml_blocks": "將未知 XML 區塊以預格式化文字呈現",
+  "appearance_text_size": "文字大小",
+  "settings_notifications_title": "桌面通知",
+  "settings_notifications_description": "在 Agent 結束本輪回覆或有新回覆時取得通知",
+  "settings_notifications_keywords": "通知 桌面 提醒 回覆 結束 notifications",
+  "settings_notifications_enable": "啟用桌面通知",
+  "settings_notifications_turn_end_hint": "當 Agent 到達明確的停止點並等待你輸入時通知（根據 Agent 自身的回合結束訊號）。",
+  "settings_notifications_new_reply": "同時提醒每則新回覆",
+  "settings_notifications_new_reply_hint": "可選的後備提醒：Agent 仍在工作時也會通知。連續輸出會合併為一則；不會宣稱任務已完成。",
+  "settings_notifications_merge_window": "合併視窗（秒）",
+  "settings_notifications_merge_window_hint": "同一會話兩次提醒之間的最小間隔",
+  "settings_notifications_suppress_subagents": "忽略子 Agent 會話",
+  "settings_notifications_agents": "Agent 過濾",
+  "settings_notifications_agents_hint": "逗號分隔的白名單，留空表示全部 Agent",
+  "settings_notifications_projects": "專案過濾",
+  "settings_notifications_projects_hint": "逗號分隔的白名單，留空表示全部專案",
+  "settings_notifications_saved": "通知設定已儲存。",
+  "settings_notifications_saving": "儲存中…",
+  "settings_notifications_save": "儲存"
 }

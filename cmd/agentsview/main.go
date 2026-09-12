@@ -23,6 +23,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/notify"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/remotesync"
@@ -261,6 +262,29 @@ func runServe(cfg config.Config, opts serveOptions) {
 
 	broadcaster := server.NewBroadcaster(cfg.EventsCoalesceInterval)
 
+	// Desktop-notification hub. It subscribes to the sync engine's
+	// refresh scopes through the broadcaster, but treats them as
+	// hints only: notify decisions come from the archive
+	// (termination_status plus persisted dedup cursors). Startup
+	// sync is gated by hub.MarkReady after the startup block below.
+	notificationHub := notify.NewHub(
+		database, notify.DefaultConfig, time.Now(),
+		cfg.EventsCoalesceInterval,
+	)
+	notificationScopes := make(chan string, 16)
+	go func() {
+		scopes, unsub := broadcaster.Subscribe()
+		defer unsub()
+		for ev := range scopes {
+			select {
+			case notificationScopes <- ev.Scope:
+			default:
+			}
+		}
+		close(notificationScopes)
+	}()
+	go notificationHub.Run(ctx, notificationScopes)
+
 	vectorServe, err := setupVectorServing(ctx, cfg, database, idleTracker)
 	if err != nil {
 		fatal("setting up vector index: %v", err)
@@ -396,6 +420,11 @@ func runServe(cfg config.Config, opts serveOptions) {
 			}
 		}
 
+		// Startup sync (initial sync, worker reconciliation, or
+		// full resync) has finished: everything the sync touched
+		// before this point must stay notification-silent.
+		notificationHub.MarkReady(time.Now())
+
 		// Backfill runs in the background. On a large DB (e.g.
 		// after copying tens of thousands of orphaned sessions
 		// during a resync), walking every row to recompute
@@ -480,6 +509,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		server.WithDataDir(cfg.DataDir),
 		server.WithBaseContext(ctx),
 		server.WithBroadcaster(broadcaster),
+		server.WithNotificationHub(notificationHub),
 		server.WithIdleTracker(idleTracker),
 		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),

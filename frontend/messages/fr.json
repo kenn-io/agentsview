@@ -2124,5 +2124,23 @@
     }
   ],
   "settings_image_cleanup_compact_note": "La suppression des charges réécrit les lignes stockées. La taille du fichier d'archive reste inchangée jusqu'à ce que vous exécutiez agentsview db compact.",
-  "appearance_render_unknown_xml_blocks": "Afficher les blocs XML inconnus en texte préformaté"
+  "appearance_render_unknown_xml_blocks": "Afficher les blocs XML inconnus en texte préformaté",
+  "appearance_text_size": "Taille du texte",
+  "settings_notifications_title": "Notifications de bureau",
+  "settings_notifications_description": "Être notifié quand un agent termine son tour ou envoie une nouvelle réponse",
+  "settings_notifications_keywords": "notifications bureau alerte réponse notifications",
+  "settings_notifications_enable": "Activer les notifications de bureau",
+  "settings_notifications_turn_end_hint": "Vous êtes notifié quand un agent atteint un point d'arrêt clair et vous attend (selon le signal de fin de tour de l'agent).",
+  "settings_notifications_new_reply": "Notifier aussi chaque nouvelle réponse",
+  "settings_notifications_new_reply_hint": "Rappel facultatif : notifie aussi pendant qu'un agent travaille. Les sorties successives sont fusionnées ; ne prétend jamais qu'une tâche est terminée.",
+  "settings_notifications_merge_window": "Fenêtre de fusion (secondes)",
+  "settings_notifications_merge_window_hint": "Intervalle minimal entre deux rappels pour la même session",
+  "settings_notifications_suppress_subagents": "Ignorer les sessions de sous-agents",
+  "settings_notifications_agents": "Filtre d'agents",
+  "settings_notifications_agents_hint": "Liste d'autorisation séparée par des virgules ; vide signifie tous les agents",
+  "settings_notifications_projects": "Filtre de projets",
+  "settings_notifications_projects_hint": "Liste d'autorisation séparée par des virgules ; vide signifie tous les projets",
+  "settings_notifications_saved": "Paramètres de notification enregistrés.",
+  "settings_notifications_saving": "Enregistrement…",
+  "settings_notifications_save": "Enregistrer"
 }

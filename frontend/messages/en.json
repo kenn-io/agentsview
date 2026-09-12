@@ -2125,5 +2125,23 @@
     }
   ],
   "settings_image_cleanup_compact_note": "Removing payloads rewrites the stored rows. The archive file keeps its size until you run agentsview db compact.",
-  "appearance_render_unknown_xml_blocks": "Render unknown XML blocks as preformatted text"
+  "appearance_render_unknown_xml_blocks": "Render unknown XML blocks as preformatted text",
+  "appearance_text_size": "Text size",
+  "settings_notifications_title": "Desktop Notifications",
+  "settings_notifications_description": "Get notified when an agent finishes its turn or sends a new reply",
+  "settings_notifications_keywords": "notifications alert desktop notify turn reply",
+  "settings_notifications_enable": "Enable desktop notifications",
+  "settings_notifications_turn_end_hint": "You are notified when an agent reaches a clear stopping point and waits for you (based on the agent's own end-of-turn signal).",
+  "settings_notifications_new_reply": "Also notify on every new reply",
+  "settings_notifications_new_reply_hint": "Optional fallback reminder while an agent is still working. Merges bursts into one notification; never claims a task is finished.",
+  "settings_notifications_merge_window": "Merge window (seconds)",
+  "settings_notifications_merge_window_hint": "Minimum seconds between reminders for the same session",
+  "settings_notifications_suppress_subagents": "Mute subagent sessions",
+  "settings_notifications_agents": "Agents",
+  "settings_notifications_agents_hint": "Comma-separated allow list; empty means all agents",
+  "settings_notifications_projects": "Projects",
+  "settings_notifications_projects_hint": "Comma-separated allow list; empty means all projects",
+  "settings_notifications_saved": "Notification settings saved.",
+  "settings_notifications_saving": "Saving…",
+  "settings_notifications_save": "Save"
 }
