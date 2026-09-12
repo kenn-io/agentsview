@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -748,6 +749,60 @@ func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.False(t, found)
+}
+
+func TestCrushFingerprintsLoadChildRelationshipsOncePerContainerState(t *testing.T) {
+	fixture := newCrushTestFixture(t)
+	const sessionCount = 40
+	const created = int64(1_789_093_626)
+	for i := range sessionCount {
+		parentID := fmt.Sprintf("parent-%03d", i)
+		childID := fmt.Sprintf("child-%03d$$tool-call", i)
+		fixture.insertSession(
+			t, parentID, "Parent", "", created, created, 0, 0, 0,
+		)
+		fixture.insertSession(
+			t, childID, "Child", parentID, created, created, 0, 0, 0,
+		)
+	}
+	provider := newCrushProviderFactory(AgentDef{
+		Type: AgentCrush, IDPrefix: "crush:",
+	}).NewProvider(ProviderConfig{Roots: []string{fixture.dataDir}})
+	fingerprintParent := func(parentID string) string {
+		t.Helper()
+		source, found, err := provider.FindSource(
+			t.Context(), FindSourceRequest{RawSessionID: parentID},
+		)
+		require.NoError(t, err)
+		require.True(t, found)
+		fingerprint, err := provider.Fingerprint(t.Context(), source)
+		require.NoError(t, err)
+		return fingerprint.Hash
+	}
+
+	scansBefore := crushChildRelationshipScans.Load()
+	var firstParentFingerprint string
+	for i := range sessionCount {
+		parentID := fmt.Sprintf("parent-%03d", i)
+		fingerprint := fingerprintParent(parentID)
+		if i == 0 {
+			firstParentFingerprint = fingerprint
+		}
+	}
+
+	assert.Equal(t, int64(1), crushChildRelationshipScans.Load()-scansBefore,
+		"fingerprinting one unchanged container must load child relationships once")
+
+	fixture.insertSession(
+		t, "extra-child$$tool-call", "Extra child", "parent-000",
+		created, created, 0, 0, 0,
+	)
+	changedFingerprint := fingerprintParent("parent-000")
+	assert.NotEqual(t, firstParentFingerprint, changedFingerprint,
+		"a changed child relationship must invalidate the parent fingerprint")
+	_ = fingerprintParent("parent-001")
+	assert.Equal(t, int64(2), crushChildRelationshipScans.Load()-scansBefore,
+		"a changed container state must load relationships exactly once again")
 }
 
 func TestCrushParseSessionWithoutOptionalColumns(t *testing.T) {

@@ -15,6 +15,23 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+)
+
+// crushChildRelationshipScans lets the regression test observe full-table
+// relationship loads without relying on query timing.
+var crushChildRelationshipScans atomic.Int64
+
+type crushChildRelationshipsCacheEntry struct {
+	mu       sync.Mutex
+	known    bool
+	state    SQLiteContainerState
+	children map[string][]string
+}
+
+var (
+	crushChildRelationshipsCacheMu sync.Mutex
+	crushChildRelationshipsCache   = map[string]*crushChildRelationshipsCacheEntry{}
 )
 
 type crushProviderFactory struct {
@@ -591,28 +608,85 @@ func crushSessionFingerprint(
 	if err := messageRows.Err(); err != nil {
 		return "", false, err
 	}
-	childRows, err := db.QueryContext(ctx, `
-		SELECT id FROM sessions
-		WHERE parent_session_id = ?
-		ORDER BY id
-	`, sessionID)
+	children, err := crushChildSessionIDsCached(ctx, db, dbPath)
 	if err != nil {
 		return "", false, fmt.Errorf("fingerprinting crush child sessions: %w", err)
 	}
-	defer childRows.Close()
-	for childRows.Next() {
-		var childID string
-		if err := childRows.Scan(&childID); err != nil {
-			return "", false, fmt.Errorf("scanning crush fingerprint child session: %w", err)
-		}
-		if idx := strings.LastIndex(childID, "$$"); idx >= 0 && idx+2 < len(childID) {
-			crushWriteFingerprintField(hasher, childID)
-		}
-	}
-	if err := childRows.Err(); err != nil {
-		return "", false, err
+	for _, childID := range children[sessionID] {
+		crushWriteFingerprintField(hasher, childID)
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), true, nil
+}
+
+// crushChildSessionIDsCached scans the unindexed parent relationship once and
+// reuses the grouped result until SQLiteContainerState proves the DB changed.
+func crushChildSessionIDsCached(
+	ctx context.Context, db *sql.DB, dbPath string,
+) (map[string][]string, error) {
+	entry := crushChildRelationshipsEntry(dbPath)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	state, ok := StatSQLiteContainerState(dbPath)
+	if !ok {
+		return loadCrushChildSessionIDs(ctx, db)
+	}
+	if entry.known && entry.state == state {
+		return entry.children, nil
+	}
+	children, err := loadCrushChildSessionIDs(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	after, unchanged := StatSQLiteContainerState(dbPath)
+	if unchanged && after == state {
+		entry.known = true
+		entry.state = state
+		entry.children = children
+	} else {
+		entry.known = false
+		entry.children = nil
+	}
+	return children, nil
+}
+
+func crushChildRelationshipsEntry(dbPath string) *crushChildRelationshipsCacheEntry {
+	crushChildRelationshipsCacheMu.Lock()
+	defer crushChildRelationshipsCacheMu.Unlock()
+	key := filepath.Clean(dbPath)
+	entry := crushChildRelationshipsCache[key]
+	if entry == nil {
+		entry = &crushChildRelationshipsCacheEntry{}
+		crushChildRelationshipsCache[key] = entry
+	}
+	return entry
+}
+
+func loadCrushChildSessionIDs(
+	ctx context.Context, db *sql.DB,
+) (map[string][]string, error) {
+	crushChildRelationshipScans.Add(1)
+	rows, err := db.QueryContext(ctx, `
+		SELECT parent_session_id, id
+		FROM sessions
+		WHERE parent_session_id IS NOT NULL
+		ORDER BY parent_session_id, id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	children := make(map[string][]string)
+	for rows.Next() {
+		var parentID, childID string
+		if err := rows.Scan(&parentID, &childID); err != nil {
+			return nil, err
+		}
+		if idx := strings.LastIndex(childID, "$$"); idx >= 0 && idx+2 < len(childID) {
+			children[parentID] = append(children[parentID], childID)
+		}
+	}
+	return children, rows.Err()
 }
 
 func crushWriteFingerprintField(hasher hash.Hash, value string) {
