@@ -1122,6 +1122,7 @@ func TestIsClineTeammateMessagesFile(t *testing.T) {
 		{"worker-scout.messages.json", false},
 		{"__sub1abc.messages.json", false},
 		{"worker-scout__.messages.json", false},
+		{"foo__bar__.messages.json", false},
 		{".hidden__t1.messages.json", false},
 		{"_agent__t1.messages.json", false},
 		{"../evil__t1.messages.json", false},
@@ -1311,15 +1312,16 @@ func TestParseClineSession_TeammateSubagents(t *testing.T) {
 	assert.Equal(t, "Task", spawnCall.Category)
 
 	runCall := parent.Messages[3].ToolCalls[0]
-	assert.Equal(t, "cline:sess-parent__teamtask__git-scout__t1abc", runCall.SubagentSessionID)
+	assert.Equal(t, "cline:sess-parent__teammate__git-scout", runCall.SubagentSessionID)
 	assert.Equal(t, "Task", runCall.Category)
 	require.Len(t, runCall.ResultEvents, 1)
-	assert.Equal(t, "cline:sess-parent__teamtask__git-scout__t1abc", runCall.ResultEvents[0].SubagentSessionID)
+	assert.Equal(t, "cline:sess-parent__teammate__git-scout", runCall.ResultEvents[0].SubagentSessionID)
 	assert.Equal(t, "git-scout", runCall.ResultEvents[0].AgentID)
 
 	// Verify Child Subagent
 	child := results[1]
-	assert.Equal(t, "cline:sess-parent__teamtask__git-scout__t1abc", child.Session.ID)
+	assert.Equal(t, "cline:sess-parent__teammate__git-scout", child.Session.ID)
+	assert.Equal(t, "sess-parent__teamtask__git-scout__t1abc", child.Session.SourceSessionID)
 	assert.Equal(t, "cline:sess-parent", child.Session.ParentSessionID)
 	assert.Equal(t, RelSubagent, child.Session.RelationshipType)
 	assert.Equal(t, "Teammate: git-scout", child.Session.SessionName)
@@ -1349,5 +1351,327 @@ func TestParseClineSession_TeammateSubagents(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "cline:sess-parent", sess.ID)
 	assert.Empty(t, msgs[1].ToolCalls[0].SubagentSessionID)
-	assert.Equal(t, "cline:sess-parent__teamtask__git-scout__t1abc", msgs[3].ToolCalls[0].SubagentSessionID)
+	assert.Equal(t, "cline:sess-parent__teammate__git-scout", msgs[3].ToolCalls[0].SubagentSessionID)
+}
+
+func TestParseClineTeammates_ContinuationCoalescing(t *testing.T) {
+	dir := t.TempDir()
+	sessDir := filepath.Join(dir, "sess-cont")
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+
+	metaJSON := `{
+		"session_id": "sess-cont",
+		"started_at": "2026-09-12T10:00:00Z",
+		"cwd": "/workspace",
+		"provider": "anthropic",
+		"model": "claude-3-5-sonnet"
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "sess-cont.json"), []byte(metaJSON), 0o644))
+
+	// Older snapshot: 2 messages, 80 output tokens
+	olderJSON := `{
+		"version": 1,
+		"updated_at": "2026-09-12T15:44:47.850Z",
+		"agent": "teammate",
+		"sessionId": "sess-cont__teamtask__path-guard__60SKaJ",
+		"taskType": "team",
+		"origin": {
+			"source": "cli",
+			"mode": "team",
+			"sessionId": "sess-cont__teamtask__path-guard__60SKaJ",
+			"parentThreadId": "sess-cont",
+			"subagent": "path-guard",
+			"version": "3.0.61"
+		},
+		"messages": [
+			{
+				"id": "msg_1",
+				"role": "user",
+				"content": [{"type": "text", "text": "Initial task prompt"}],
+				"ts": 1789227695000
+			},
+			{
+				"id": "msg_2",
+				"role": "assistant",
+				"content": [{"type": "text", "text": "First response"}],
+				"ts": 1789227700000,
+				"metrics": {
+					"inputTokens": 100,
+					"outputTokens": 80
+				}
+			}
+		]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "path-guard__60SKaJ.messages.json"), []byte(olderJSON), 0o644))
+
+	// Newer continuation snapshot: 4 messages, exact prefix superset of older, 120 output tokens
+	newerJSON := `{
+		"version": 1,
+		"updated_at": "2026-09-12T15:51:50.696Z",
+		"agent": "teammate",
+		"sessionId": "sess-cont__teamtask__path-guard__8saA60",
+		"taskType": "team",
+		"origin": {
+			"source": "cli",
+			"mode": "team",
+			"sessionId": "sess-cont__teamtask__path-guard__8saA60",
+			"parentThreadId": "sess-cont",
+			"subagent": "path-guard",
+			"version": "3.0.61"
+		},
+		"messages": [
+			{
+				"id": "msg_1",
+				"role": "user",
+				"content": [{"type": "text", "text": "Initial task prompt"}],
+				"ts": 1789227695000
+			},
+			{
+				"id": "msg_2",
+				"role": "assistant",
+				"content": [{"type": "text", "text": "First response"}],
+				"ts": 1789227700000,
+				"metrics": {
+					"inputTokens": 100,
+					"outputTokens": 80
+				}
+			},
+			{
+				"id": "msg_3",
+				"role": "user",
+				"content": [{"type": "text", "text": "Continue task"}],
+				"ts": 1789227800000
+			},
+			{
+				"id": "msg_4",
+				"role": "assistant",
+				"content": [{"type": "text", "text": "Final response"}],
+				"ts": 1789227850000,
+				"metrics": {
+					"inputTokens": 150,
+					"outputTokens": 120
+				}
+			}
+		]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "path-guard__8saA60.messages.json"), []byte(newerJSON), 0o644))
+
+	results, err := parseClineSessionWithTeammates(filepath.Join(sessDir, "sess-cont.json"), "proj", "local")
+	require.NoError(t, err)
+	// 1 parent + 1 subagent (coalesced from 2 files)
+	require.Len(t, results, 2)
+
+	sub := results[1]
+	assert.Equal(t, "cline:sess-cont__teammate__path-guard", sub.Session.ID)
+	assert.Equal(t, "sess-cont__teamtask__path-guard__8saA60", sub.Session.SourceSessionID)
+	assert.Equal(t, "Teammate: path-guard", sub.Session.SessionName)
+	assert.Equal(t, 4, sub.Session.MessageCount)
+	assert.Equal(t, 2, sub.Session.UserMessageCount)
+
+	// Usage must come from the winner file ONLY: 80 + 120 = 200, NOT 80 + 80 + 120 = 280 (double counted)
+	assert.Equal(t, 200, sub.Session.TotalOutputTokens)
+
+	// EndedAt must advance to the newer continuation's timestamp
+	wantEndedAt, ok := parseClineTimestamp("2026-09-12T15:51:50.696Z")
+	require.True(t, ok)
+	assert.Equal(t, wantEndedAt.UTC(), sub.Session.EndedAt.UTC())
+}
+
+func TestParseClineTeammates_IdenticalSnapshots(t *testing.T) {
+	dir := t.TempDir()
+	sessDir := filepath.Join(dir, "sess-ident")
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+
+	metaJSON := `{"session_id": "sess-ident", "cwd": "/workspace"}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "sess-ident.json"), []byte(metaJSON), 0o644))
+
+	// Two snapshot files with identical message IDs but different update timestamps
+	snap1 := `{
+		"version": 1,
+		"updated_at": "2026-09-12T15:00:00.000Z",
+		"sessionId": "sess-ident__teamtask__scout__s1",
+		"origin": {"subagent": "scout"},
+		"messages": [{"id": "m1", "role": "user", "content": [{"type": "text", "text": "hi"}], "ts": 1000}]
+	}`
+	snap2 := `{
+		"version": 1,
+		"updated_at": "2026-09-12T15:05:00.000Z",
+		"sessionId": "sess-ident__teamtask__scout__s2",
+		"origin": {"subagent": "scout"},
+		"messages": [{"id": "m1", "role": "user", "content": [{"type": "text", "text": "hi"}], "ts": 1000}]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "scout__s1.messages.json"), []byte(snap1), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "scout__s2.messages.json"), []byte(snap2), 0o644))
+
+	results, err := parseClineSessionWithTeammates(filepath.Join(sessDir, "sess-ident.json"), "proj", "local")
+	require.NoError(t, err)
+	// Exactly 1 subagent session produced
+	require.Len(t, results, 2)
+	assert.Equal(t, "cline:sess-ident__teammate__scout", results[1].Session.ID)
+	// Tiebreaker picks the one with newer updatedAt
+	assert.Equal(t, "sess-ident__teamtask__scout__s2", results[1].Session.SourceSessionID)
+}
+
+func TestParseClineTeammates_DistinctRunsAndForks(t *testing.T) {
+	dir := t.TempDir()
+	sessDir := filepath.Join(dir, "sess-runs")
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+
+	metaJSON := `{"session_id": "sess-runs", "cwd": "/workspace"}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "sess-runs.json"), []byte(metaJSON), 0o644))
+
+	// Run 1: initial task
+	run1 := `{
+		"version": 1,
+		"updated_at": "2026-09-12T15:00:00.000Z",
+		"sessionId": "sess-runs__teamtask__worker__r1",
+		"origin": {"subagent": "worker"},
+		"messages": [
+			{"id": "run1_msg1", "role": "user", "content": [{"type": "text", "text": "task 1"}], "ts": 1000},
+			{"id": "run1_msg2", "role": "assistant", "content": [{"type": "text", "text": "done 1"}], "ts": 1100}
+		]
+	}`
+	// Run 2: distinct run (continueConversation: false), totally different initial message ID
+	run2 := `{
+		"version": 1,
+		"updated_at": "2026-09-12T16:00:00.000Z",
+		"sessionId": "sess-runs__teamtask__worker__r2",
+		"origin": {"subagent": "worker"},
+		"messages": [
+			{"id": "run2_msg1", "role": "user", "content": [{"type": "text", "text": "task 2"}], "ts": 2000},
+			{"id": "run2_msg2", "role": "assistant", "content": [{"type": "text", "text": "done 2"}], "ts": 2100}
+		]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "worker__r1.messages.json"), []byte(run1), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "worker__r2.messages.json"), []byte(run2), 0o644))
+
+	results, err := parseClineSessionWithTeammates(filepath.Join(sessDir, "sess-runs.json"), "proj", "local")
+	require.NoError(t, err)
+	// 1 parent + 2 distinct subagent runs
+	require.Len(t, results, 3)
+
+	assert.Equal(t, "cline:sess-runs__teammate__worker", results[1].Session.ID)
+	assert.Equal(t, "cline:sess-runs__teammate__worker__run2", results[2].Session.ID)
+}
+
+func TestParseClineTeammates_DivergentTailFork(t *testing.T) {
+	dir := t.TempDir()
+	sessDir := filepath.Join(dir, "sess-fork")
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+
+	metaJSON := `{"session_id": "sess-fork", "cwd": "/workspace"}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "sess-fork.json"), []byte(metaJSON), 0o644))
+
+	// Common prefix m1, m2, but fork at m3
+	forkA := `{
+		"version": 1,
+		"updated_at": "2026-09-12T15:00:00.000Z",
+		"sessionId": "sess-fork__teamtask__analyst__fa",
+		"origin": {"subagent": "analyst"},
+		"messages": [
+			{"id": "m1", "role": "user", "content": [{"type": "text", "text": "task"}], "ts": 1000},
+			{"id": "m2", "role": "assistant", "content": [{"type": "text", "text": "step"}], "ts": 1100},
+			{"id": "m3_a", "role": "assistant", "content": [{"type": "text", "text": "branch A"}], "ts": 1200}
+		]
+	}`
+	forkB := `{
+		"version": 1,
+		"updated_at": "2026-09-12T15:05:00.000Z",
+		"sessionId": "sess-fork__teamtask__analyst__fb",
+		"origin": {"subagent": "analyst"},
+		"messages": [
+			{"id": "m1", "role": "user", "content": [{"type": "text", "text": "task"}], "ts": 1000},
+			{"id": "m2", "role": "assistant", "content": [{"type": "text", "text": "step"}], "ts": 1100},
+			{"id": "m3_b", "role": "assistant", "content": [{"type": "text", "text": "branch B"}], "ts": 1250}
+		]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "analyst__fa.messages.json"), []byte(forkA), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "analyst__fb.messages.json"), []byte(forkB), 0o644))
+
+	results, err := parseClineSessionWithTeammates(filepath.Join(sessDir, "sess-fork.json"), "proj", "local")
+	require.NoError(t, err)
+	// Divergent tails are preserved as distinct runs rather than dropping data
+	require.Len(t, results, 3)
+	assert.Equal(t, "cline:sess-fork__teammate__analyst", results[1].Session.ID)
+	assert.Equal(t, "cline:sess-fork__teammate__analyst__run2", results[2].Session.ID)
+}
+
+func TestParseClineTeammates_SafetyValidationAndSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	sessDir := filepath.Join(dir, "sess-safe")
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+
+	metaJSON := `{"session_id": "sess-safe", "cwd": "/workspace"}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "sess-safe.json"), []byte(metaJSON), 0o644))
+
+	// 1. Valid teammate
+	validJSON := `{
+		"version": 1,
+		"origin": {"subagent": "good-scout"},
+		"messages": [{"id": "m1", "role": "user", "content": [{"type": "text", "text": "ok"}], "ts": 1000}]
+	}`
+	validPath := filepath.Join(sessDir, "good-scout__ok.messages.json")
+	require.NoError(t, os.WriteFile(validPath, []byte(validJSON), 0o644))
+
+	// 2. Unsafe subagent name in origin: contains double underscore / __teammate__
+	badTeammate := `{"version": 1, "origin": {"subagent": "agent__teammate__evil"}, "messages": [{"id": "m1", "role": "user", "content": [{"type": "text", "text": "bad"}], "ts": 1000}]}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "evil__1.messages.json"), []byte(badTeammate), 0o644))
+
+	// 3. Unsafe subagent name in origin: starts with underscore
+	badUnderscore := `{"version": 1, "origin": {"subagent": "_hidden"}, "messages": [{"id": "m1", "role": "user", "content": [{"type": "text", "text": "bad"}], "ts": 1000}]}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "hidden__1.messages.json"), []byte(badUnderscore), 0o644))
+
+	// 4. Unsafe subagent name in origin: contains path separators
+	badPath := `{"version": 1, "origin": {"subagent": "../traversal"}, "messages": [{"id": "m1", "role": "user", "content": [{"type": "text", "text": "bad"}], "ts": 1000}]}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "traversal__1.messages.json"), []byte(badPath), 0o644))
+
+	// 5. Symlinked teammate file: must be skipped
+	symlinkPath := filepath.Join(sessDir, "symlink__t1.messages.json")
+	if err := os.Symlink(validPath, symlinkPath); err == nil {
+		defer os.Remove(symlinkPath)
+	}
+
+	results, err := parseClineSessionWithTeammates(filepath.Join(sessDir, "sess-safe.json"), "proj", "local")
+	require.NoError(t, err)
+
+	// Only parent + the one valid subagent should be returned. All invalid names and symlinks skipped.
+	require.Len(t, results, 2)
+	assert.Equal(t, "cline:sess-safe", results[0].Session.ID)
+	assert.Equal(t, "cline:sess-safe__teammate__good-scout", results[1].Session.ID)
+}
+
+func TestParseClineTeammates_EmptyFileSuperseded(t *testing.T) {
+	dir := t.TempDir()
+	sessDir := filepath.Join(dir, "sess-empty")
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+
+	metaJSON := `{"session_id": "sess-empty", "cwd": "/workspace"}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "sess-empty.json"), []byte(metaJSON), 0o644))
+
+	// Empty file with 0 messages
+	emptyJSON := `{
+		"version": 1,
+		"updated_at": "2026-09-12T15:00:00.000Z",
+		"origin": {"subagent": "worker"},
+		"messages": []
+	}`
+	// Non-empty file with 2 messages
+	nonEmptyJSON := `{
+		"version": 1,
+		"updated_at": "2026-09-12T15:05:00.000Z",
+		"origin": {"subagent": "worker"},
+		"messages": [
+			{"id": "m1", "role": "user", "content": [{"type": "text", "text": "start"}], "ts": 1000},
+			{"id": "m2", "role": "assistant", "content": [{"type": "text", "text": "done"}], "ts": 1100}
+		]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "worker__e1.messages.json"), []byte(emptyJSON), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "worker__e2.messages.json"), []byte(nonEmptyJSON), 0o644))
+
+	results, err := parseClineSessionWithTeammates(filepath.Join(sessDir, "sess-empty.json"), "proj", "local")
+	require.NoError(t, err)
+	// Exactly 1 subagent session (non-empty supersedes empty)
+	require.Len(t, results, 2)
+	assert.Equal(t, "cline:sess-empty__teammate__worker", results[1].Session.ID)
+	assert.Equal(t, 2, results[1].Session.MessageCount)
 }

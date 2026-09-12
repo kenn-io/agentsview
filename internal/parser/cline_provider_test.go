@@ -256,9 +256,32 @@ func TestClineFindFile_Teammates(t *testing.T) {
 	metaPath := filepath.Join(sessDir, sessionID+".json")
 	require.NoError(t, os.WriteFile(metaPath, []byte(`{}`), 0o644))
 
-	// Looking up raw teammate session ID resolves to the parent session metadata file
-	rawTeammateID := "sess-find-1__teamtask__scout__t1"
-	match, ok := clineFindFile(root, rawTeammateID)
+	// Looking up stable teammate session ID resolves to the parent session metadata file
+	stableID := "sess-find-1__teammate__scout"
+	match, ok := clineFindFile(root, stableID)
 	require.True(t, ok)
 	assert.Equal(t, metaPath, match.Path)
+
+	// Distinct run suffix also resolves to parent
+	runID := "sess-find-1__teammate__scout__run2"
+	match, ok = clineFindFile(root, runID)
+	require.True(t, ok)
+	assert.Equal(t, metaPath, match.Path)
+
+	// Looking up raw teammate session ID resolves to the parent session metadata file
+	rawTeammateID := "sess-find-1__teamtask__scout__t1"
+	match, ok = clineFindFile(root, rawTeammateID)
+	require.True(t, ok)
+	assert.Equal(t, metaPath, match.Path)
+
+	// Hostile IDs are rejected
+	for _, hostile := range []string{
+		"../sess-find-1__teammate__scout",
+		"sess-find-1/evil__teammate__scout",
+		"sess-find-1\\evil__teammate__scout",
+		"_hidden__teammate__scout",
+	} {
+		_, ok := clineFindFile(root, hostile)
+		assert.False(t, ok, "expected %q to be rejected", hostile)
+	}
 }

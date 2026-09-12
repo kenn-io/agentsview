@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -226,7 +228,7 @@ func parseClineSessionWithTeammates(
 	if startedAt.IsZero() {
 		if len(parsedMessages) > 0 {
 			startedAt = parsedMessages[0].Timestamp
-		} else if info, err := os.Stat(metaPath); err == nil {
+		} else if info, err := os.Lstat(metaPath); err == nil && info.Mode().IsRegular() {
 			startedAt = info.ModTime()
 		}
 	}
@@ -264,14 +266,14 @@ func parseClineSessionWithTeammates(
 		sessionName = projectHint
 	}
 
-	info, err := os.Stat(metaPath)
+	info, err := os.Lstat(metaPath)
 	fileInfo := FileInfo{Path: metaPath}
-	if err == nil {
+	if err == nil && info.Mode().IsRegular() {
 		fileInfo.Size = info.Size()
 		fileInfo.Mtime = info.ModTime().UnixNano()
 	}
 
-	if msgInfo, err := os.Stat(messagesPath); err == nil {
+	if msgInfo, err := os.Lstat(messagesPath); err == nil && msgInfo.Mode().IsRegular() {
 		fileInfo.Size += msgInfo.Size()
 		if msgMtime := msgInfo.ModTime().UnixNano(); msgMtime > fileInfo.Mtime {
 			fileInfo.Mtime = msgMtime
@@ -652,7 +654,76 @@ func parseClineRawMessages(
 	return parsedMessages, peakCtx, maxTS
 }
 
+// isValidClineTeammateSubagentName reports whether name is a safe, valid subagent
+// identifier. It must satisfy ValidClineSessionID and must not contain double
+// underscores ("__") which would collide with session ID delimiters.
+func isValidClineTeammateSubagentName(name string) bool {
+	if name == "" {
+		return false
+	}
+	if !ValidClineSessionID(name) {
+		return false
+	}
+	if strings.Contains(name, "__") {
+		return false
+	}
+	return true
+}
+
+// isMessagePrefixSuperset reports whether longer has shorter as an exact prefix of its message IDs.
+// Both slices must be non-empty, and len(longer) >= len(shorter).
+func isMessagePrefixSuperset(shorter, longer []string) bool {
+	if len(shorter) == 0 || len(longer) < len(shorter) {
+		return false
+	}
+	for i := range shorter {
+		if shorter[i] != longer[i] {
+			return false
+		}
+	}
+	return true
+}
+
+type clineTeammateCandidate struct {
+	filename     string
+	path         string
+	info         os.FileInfo
+	rawFile      clineMessagesFile
+	rawSessionID string
+	subagent     string
+	msgIDs       []string
+	maxTS        time.Time
+	updatedAt    time.Time
+	mtime        int64
+}
+
+// isBetterTeammateCandidate returns true if candidate a is strictly more authoritative
+// than candidate b according to the tiebreak hierarchy:
+// 1. More message IDs (longer transcript)
+// 2. Later max message timestamp (monotonically advances across continuations)
+// 3. Later updated_at timestamp
+// 4. Later file mtime
+// 5. Lexicographical filename tiebreaker (deterministic)
+func isBetterTeammateCandidate(a, b *clineTeammateCandidate) bool {
+	if len(a.msgIDs) != len(b.msgIDs) {
+		return len(a.msgIDs) > len(b.msgIDs)
+	}
+	if !a.maxTS.Equal(b.maxTS) {
+		return a.maxTS.After(b.maxTS)
+	}
+	if !a.updatedAt.Equal(b.updatedAt) {
+		return a.updatedAt.After(b.updatedAt)
+	}
+	if a.mtime != b.mtime {
+		return a.mtime > b.mtime
+	}
+	return a.filename > b.filename
+}
+
 // parseClineTeammates discovers and parses teammate subagent transcripts under sessionDir.
+// Continuations of the same subagent (sharing an exact message ID prefix) are coalesced
+// into a single authoritative session under a stable ID (cline:<parent>__teammate__<subagent>),
+// while distinct runs (e.g. non-continuation restarts) remain separate sessions.
 func parseClineTeammates(
 	sessionDir string,
 	parentSessionID string,
@@ -668,8 +739,7 @@ func parseClineTeammates(
 		return nil, nil, fmt.Errorf("reading cline session directory %s: %w", sessionDir, err)
 	}
 
-	var teammates []ParseResult
-	agentMap := make(map[string]string)
+	bySubagent := make(map[string][]*clineTeammateCandidate)
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -680,13 +750,23 @@ func parseClineTeammates(
 			continue
 		}
 		teammatePath := filepath.Join(sessionDir, filename)
-		info, err := os.Stat(teammatePath)
+		info, err := os.Lstat(teammatePath)
 		if err != nil {
+			// Fail-closed on unreadable teammate files: unlike clineEffectiveStat
+			// (which performs best-effort stat skips to avoid stalling background
+			// sync loops), parseClineTeammates must fail closed on unexpected I/O
+			// errors so that transient read errors do not cause active subagents,
+			// their token usage, or parent tool bindings to be silently dropped.
 			return nil, nil, fmt.Errorf("stat cline teammate %s: %w", teammatePath, err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
 		}
 
 		data, err := os.ReadFile(teammatePath)
 		if err != nil {
+			// Fail-closed on unreadable teammate transcript: ensures transient
+			// read errors do not silently drop active subagent sessions.
 			return nil, nil, fmt.Errorf("reading cline teammate %s: %w", teammatePath, err)
 		}
 
@@ -706,115 +786,189 @@ func parseClineTeammates(
 
 		subagent := ""
 		if rawFile.Origin != nil && rawFile.Origin.Subagent != "" {
+			if !isValidClineTeammateSubagentName(rawFile.Origin.Subagent) {
+				continue
+			}
 			subagent = rawFile.Origin.Subagent
 		} else {
 			parts := strings.Split(strings.TrimSuffix(filename, ".messages.json"), "__")
-			if len(parts) > 0 {
-				subagent = parts[0]
+			if len(parts) == 0 || !isValidClineTeammateSubagentName(parts[0]) {
+				continue
 			}
+			subagent = parts[0]
 		}
 
-		parsedMessages, peakCtx, maxTS := parseClineRawMessages(rawFile.Messages, parentModel, parentProvider)
-
-		var startedAt time.Time
-		if len(parsedMessages) > 0 && !parsedMessages[0].Timestamp.IsZero() {
-			startedAt = parsedMessages[0].Timestamp
-		} else {
-			startedAt = info.ModTime()
-		}
-
-		endedAt := maxTS
-		if rawFile.UpdatedAt != "" {
-			if t, ok := parseClineTimestamp(rawFile.UpdatedAt); ok && (endedAt.IsZero() || t.After(endedAt)) {
-				endedAt = t
+		msgIDs := make([]string, 0, len(rawFile.Messages))
+		var maxTS time.Time
+		for _, m := range rawFile.Messages {
+			if m.ID != "" {
+				msgIDs = append(msgIDs, m.ID)
 			}
-		}
-		for _, msg := range parsedMessages {
-			if msg.Timestamp.After(endedAt) {
-				endedAt = msg.Timestamp
-			}
-		}
-		if endedAt.IsZero() {
-			endedAt = startedAt
-		}
-
-		firstMsg := ""
-		userCount := 0
-		for _, msg := range parsedMessages {
-			if msg.Role == RoleUser && !msg.IsSystem && strings.TrimSpace(msg.Content) != "" {
-				userCount++
-				if firstMsg == "" {
-					firstMsg = truncate(strings.ReplaceAll(msg.Content, "\n", " "), 300)
+			if m.Timestamp > 0 {
+				t := time.UnixMilli(m.Timestamp)
+				if t.After(maxTS) {
+					maxTS = t
 				}
 			}
 		}
 
-		sessionName := ""
-		if subagent != "" {
-			sessionName = "Teammate: " + subagent
-		} else if firstMsg != "" {
-			sessionName = truncate(firstMsg, 80)
-		} else {
-			sessionName = "Teammate"
-		}
-
-		fullSessionID := string(AgentCline) + ":" + rawSessionID
-		parentFullID := string(AgentCline) + ":" + parentSessionID
-		if rawFile.Origin != nil && rawFile.Origin.ParentThreadID != "" {
-			parentFullID = string(AgentCline) + ":" + rawFile.Origin.ParentThreadID
-		}
-
-		fileInfo := FileInfo{
-			Path:  teammatePath,
-			Size:  info.Size(),
-			Mtime: info.ModTime().UnixNano(),
-		}
-
-		subSess := &ParsedSession{
-			ID:                fullSessionID,
-			Project:           parentSess.Project,
-			Machine:           parentSess.Machine,
-			Agent:             AgentCline,
-			Cwd:               parentSess.Cwd,
-			GitBranch:         parentSess.GitBranch,
-			ParentSessionID:   parentFullID,
-			RelationshipType:  RelSubagent,
-			FirstMessage:      firstMsg,
-			SessionName:       sessionName,
-			StartedAt:         startedAt,
-			EndedAt:           endedAt,
-			MessageCount:      len(parsedMessages),
-			UserMessageCount:  userCount,
-			SourceSessionID:   rawSessionID,
-			SourceVersion:     "cline-session-v1",
-			File:              fileInfo,
-			TerminationStatus: classifyClineTermination("", parsedMessages),
-		}
-
-		hasMessageUsage := false
-		for _, m := range parsedMessages {
-			if len(m.TokenUsage) > 0 {
-				hasMessageUsage = true
-				break
+		var updatedAt time.Time
+		if rawFile.UpdatedAt != "" {
+			if t, ok := parseClineTimestamp(rawFile.UpdatedAt); ok {
+				updatedAt = t
 			}
 		}
-		if hasMessageUsage {
-			accumulateMessageTokenUsage(subSess, parsedMessages)
-		} else if peakCtx > 0 {
-			subSess.PeakContextTokens = peakCtx
-			subSess.HasPeakContextTokens = true
-			subSess.aggregateTokenPresenceKnown = true
-		}
 
-		if subagent != "" {
-			agentMap[subagent] = fullSessionID
+		cand := &clineTeammateCandidate{
+			filename:     filename,
+			path:         teammatePath,
+			info:         info,
+			rawFile:      rawFile,
+			rawSessionID: rawSessionID,
+			subagent:     subagent,
+			msgIDs:       msgIDs,
+			maxTS:        maxTS,
+			updatedAt:    updatedAt,
+			mtime:        info.ModTime().UnixNano(),
 		}
+		bySubagent[subagent] = append(bySubagent[subagent], cand)
+	}
 
-		teammates = append(teammates, ParseResult{
-			Session:     *subSess,
-			Messages:    parsedMessages,
-			UsageEvents: subSess.UsageEvents,
+	var teammates []ParseResult
+	agentMap := make(map[string]string)
+
+	subagents := make([]string, 0, len(bySubagent))
+	for sa := range bySubagent {
+		subagents = append(subagents, sa)
+	}
+	sort.Strings(subagents)
+
+	for _, sa := range subagents {
+		cands := bySubagent[sa]
+		sort.SliceStable(cands, func(i, j int) bool {
+			return isBetterTeammateCandidate(cands[i], cands[j])
 		})
+
+		var winners []*clineTeammateCandidate
+		superseded := make(map[*clineTeammateCandidate]bool)
+
+		for _, cand := range cands {
+			if superseded[cand] {
+				continue
+			}
+			winners = append(winners, cand)
+
+			for _, other := range cands {
+				if other == cand || superseded[other] {
+					continue
+				}
+				if len(other.msgIDs) == 0 {
+					superseded[other] = true
+				} else if isMessagePrefixSuperset(other.msgIDs, cand.msgIDs) {
+					superseded[other] = true
+				}
+			}
+		}
+
+		for runIdx, winner := range winners {
+			stableID := parentSessionID + "__teammate__" + sa
+			if runIdx > 0 {
+				stableID = parentSessionID + "__teammate__" + sa + "__run" + strconv.Itoa(runIdx+1)
+			}
+			fullSessionID := string(AgentCline) + ":" + stableID
+
+			parsedMessages, peakCtx, maxTS := parseClineRawMessages(winner.rawFile.Messages, parentModel, parentProvider)
+
+			var startedAt time.Time
+			if len(parsedMessages) > 0 && !parsedMessages[0].Timestamp.IsZero() {
+				startedAt = parsedMessages[0].Timestamp
+			} else {
+				startedAt = winner.info.ModTime()
+			}
+
+			endedAt := maxTS
+			if !winner.updatedAt.IsZero() && (endedAt.IsZero() || winner.updatedAt.After(endedAt)) {
+				endedAt = winner.updatedAt
+			}
+			for _, msg := range parsedMessages {
+				if msg.Timestamp.After(endedAt) {
+					endedAt = msg.Timestamp
+				}
+			}
+			if endedAt.IsZero() {
+				endedAt = startedAt
+			}
+
+			firstMsg := ""
+			userCount := 0
+			for _, msg := range parsedMessages {
+				if msg.Role == RoleUser && !msg.IsSystem && strings.TrimSpace(msg.Content) != "" {
+					userCount++
+					if firstMsg == "" {
+						firstMsg = truncate(strings.ReplaceAll(msg.Content, "\n", " "), 300)
+					}
+				}
+			}
+
+			sessionName := "Teammate: " + sa
+
+			parentFullID := string(AgentCline) + ":" + parentSessionID
+			if winner.rawFile.Origin != nil && winner.rawFile.Origin.ParentThreadID != "" {
+				parentFullID = string(AgentCline) + ":" + winner.rawFile.Origin.ParentThreadID
+			}
+
+			fileInfo := FileInfo{
+				Path:  winner.path,
+				Size:  winner.info.Size(),
+				Mtime: winner.info.ModTime().UnixNano(),
+			}
+
+			subSess := &ParsedSession{
+				ID:                fullSessionID,
+				Project:           parentSess.Project,
+				Machine:           parentSess.Machine,
+				Agent:             AgentCline,
+				Cwd:               parentSess.Cwd,
+				GitBranch:         parentSess.GitBranch,
+				ParentSessionID:   parentFullID,
+				RelationshipType:  RelSubagent,
+				FirstMessage:      firstMsg,
+				SessionName:       sessionName,
+				StartedAt:         startedAt,
+				EndedAt:           endedAt,
+				MessageCount:      len(parsedMessages),
+				UserMessageCount:  userCount,
+				SourceSessionID:   winner.rawSessionID,
+				SourceVersion:     "cline-session-v1",
+				File:              fileInfo,
+				TerminationStatus: classifyClineTermination("", parsedMessages),
+			}
+
+			hasMessageUsage := false
+			for _, m := range parsedMessages {
+				if len(m.TokenUsage) > 0 {
+					hasMessageUsage = true
+					break
+				}
+			}
+			if hasMessageUsage {
+				accumulateMessageTokenUsage(subSess, parsedMessages)
+			} else if peakCtx > 0 {
+				subSess.PeakContextTokens = peakCtx
+				subSess.HasPeakContextTokens = true
+				subSess.aggregateTokenPresenceKnown = true
+			}
+
+			if runIdx == 0 {
+				agentMap[sa] = fullSessionID
+			}
+
+			teammates = append(teammates, ParseResult{
+				Session:     *subSess,
+				Messages:    parsedMessages,
+				UsageEvents: subSess.UsageEvents,
+			})
+		}
 	}
 
 	return teammates, agentMap, nil

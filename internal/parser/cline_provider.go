@@ -70,7 +70,7 @@ func IsClineTeammateMessagesFile(sessionID, filename string) bool {
 		return false
 	}
 	idx := strings.Index(base, "__")
-	if idx <= 0 || idx+2 >= len(base) {
+	if idx <= 0 || idx+2 >= len(base) || strings.HasSuffix(base, "__") {
 		return false
 	}
 	return true
@@ -173,8 +173,10 @@ func clineFindFile(root, rawID string) (singleFileMatch, bool) {
 		return singleFileMatch{}, false
 	}
 	sessionID := rawID
-	if idx := strings.Index(rawID, "__teamtask__"); idx != -1 {
-		sessionID = rawID[:idx]
+	if before, _, found := strings.Cut(rawID, "__teammate__"); found {
+		sessionID = before
+	} else if before, _, found := strings.Cut(rawID, "__teamtask__"); found {
+		sessionID = before
 	}
 	if !ValidClineSessionID(sessionID) {
 		return singleFileMatch{}, false
