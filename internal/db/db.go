@@ -487,7 +487,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Subagent tool calls from Other to Task so delegation renders as a task call
 // and leaves the Other analytics bucket; subagent transcripts themselves are
 // new sources and need no re-parse.)
-const dataVersion = 107
+// (108: OpenCode v2 tool results retain embedded file payloads. Existing
+// sessions need re-parsing to recover files omitted from stored results.)
+const dataVersion = 108
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
