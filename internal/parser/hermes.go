@@ -587,7 +587,7 @@ func hermesStatePaths(root string) (stateDB, sessionsDir string, ok bool) {
 func (p *hermesProvider) parseStateDB(
 	stateDB, sessionsDir, project, machine string,
 ) ([]ParseResult, error) {
-	conn, err := sql.Open("sqlite3", "file:"+sqliteURIPath(stateDB)+"?mode=ro")
+	conn, err := openSQLiteReadOnly(stateDB, sqliteReadOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("open hermes state db: %w", err)
 	}
@@ -819,7 +819,7 @@ func writeHermesStateSessionJSONL(
 func readHermesStateSessionSource(
 	stateDB, rawSessionID string,
 ) (hermesStateSession, []hermesStateMessage, string, error) {
-	conn, err := sql.Open("sqlite3", "file:"+sqliteURIPath(stateDB)+"?mode=ro")
+	conn, err := openSQLiteReadOnly(stateDB, sqliteReadOptions{})
 	if err != nil {
 		return hermesStateSession{}, nil, "", hermesStateLookupError{
 			err: fmt.Errorf("open hermes state db: %w", err),

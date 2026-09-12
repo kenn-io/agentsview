@@ -58,3 +58,55 @@ func TestOpenSQLiteWithSpecialCharPath(t *testing.T) {
 	_, err = db.Exec("INSERT INTO t VALUES (2)")
 	require.Error(t, err, "mode=ro must survive special characters in the path")
 }
+
+func TestOpenSQLiteReadOnlyLiveWAL(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "sessions.db")
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, writer.Close()) })
+	_, err = writer.Exec(`PRAGMA journal_mode=WAL;
+		PRAGMA wal_autocheckpoint=0;
+		CREATE TABLE messages (content TEXT);
+		INSERT INTO messages VALUES ('committed in WAL')`)
+	require.NoError(t, err)
+
+	reader, err := openSQLiteReadOnly(dbPath, sqliteReadOptions{busyTimeoutMS: 3000})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	var content string
+	require.NoError(t, reader.QueryRow("SELECT content FROM messages").Scan(&content))
+	assert.Equal(t, "committed in WAL", content)
+
+	_, err = writer.Exec("UPDATE messages SET content = 'later commit'")
+	require.NoError(t, err)
+	require.NoError(t, reader.QueryRow("SELECT content FROM messages").Scan(&content))
+	assert.Equal(t, "later commit", content)
+	_, err = reader.Exec("DELETE FROM messages")
+	require.Error(t, err)
+}
+
+func TestOpenSQLiteReadOnlyStableSnapshot(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "snapshot.db")
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec(`PRAGMA journal_mode=WAL;
+		CREATE TABLE messages (content TEXT);
+		INSERT INTO messages VALUES ('snapshot content')`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	reader, err := openSQLiteReadOnly(dbPath, sqliteReadOptions{
+		stableSnapshot: true,
+		busyTimeoutMS:  3000,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	var content string
+	require.NoError(t, reader.QueryRow("SELECT content FROM messages").Scan(&content))
+	assert.Equal(t, "snapshot content", content)
+	// Immutable archive copies must not create live WAL coordination files.
+	assert.NoFileExists(t, dbPath+"-wal")
+	assert.NoFileExists(t, dbPath+"-shm")
+	_, err = reader.Exec("DELETE FROM messages")
+	require.Error(t, err)
+}

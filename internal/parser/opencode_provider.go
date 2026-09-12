@@ -17,158 +17,55 @@ import (
 	"sync"
 )
 
-var _ Provider = (*openCodeFormatProvider)(nil)
-
-// A SQLite WAL begins with a 32-byte header. Bytes beyond the header are
-// transaction frames, so a larger WAL can contain source changes worth
-// syncing. Read-only SQLite connections may create an empty WAL and its SHM
-// index simply by opening a quiet WAL-mode database; those sidecars must not
-// make the watcher trigger itself.
-const sqliteWALHeaderSize = int64(32)
-
-type openCodeFormatProviderFactory struct {
-	def   AgentDef
-	spec  openCodeProviderSpec
-	index *openCodeFormatSourceIndex
-}
+var _ SourceSet = openCodeFormatSourceSet{}
 
 func newOpenCodeProviderFactory(def AgentDef) ProviderFactory {
-	return openCodeFormatProviderFactory{
-		def:   cloneAgentDef(def),
-		spec:  openCodeProviderSpecForAgent(AgentOpenCode),
-		index: newOpenCodeFormatSourceIndex(),
-	}
+	return newOpenCodeFormatProviderFactory(def, AgentOpenCode)
 }
 
 func newKiloProviderFactory(def AgentDef) ProviderFactory {
-	return openCodeFormatProviderFactory{
-		def:   cloneAgentDef(def),
-		spec:  openCodeProviderSpecForAgent(AgentKilo),
-		index: newOpenCodeFormatSourceIndex(),
-	}
+	return newOpenCodeFormatProviderFactory(def, AgentKilo)
 }
 
 func newMiMoCodeProviderFactory(def AgentDef) ProviderFactory {
-	return openCodeFormatProviderFactory{
-		def:   cloneAgentDef(def),
-		spec:  openCodeProviderSpecForAgent(AgentMiMoCode),
-		index: newOpenCodeFormatSourceIndex(),
-	}
+	return newOpenCodeFormatProviderFactory(def, AgentMiMoCode)
 }
 
-func (f openCodeFormatProviderFactory) Definition() AgentDef {
-	return cloneAgentDef(f.def)
+func newOpenCodeFormatProviderFactory(def AgentDef, agent AgentType) ProviderFactory {
+	spec := openCodeProviderSpecForAgent(agent)
+	index := newOpenCodeFormatSourceIndex()
+	return NewSourceSetFactory(def, openCodeFormatProviderCapabilities(),
+		func(cfg ProviderConfig) SourceSet {
+			return newOpenCodeFormatSourceSet(
+				cfg.Roots, spec, cfg.SQLiteContainerListsWatermarkOnly, index,
+			)
+		},
+	)
 }
 
-func (f openCodeFormatProviderFactory) Capabilities() Capabilities {
-	return openCodeFormatProviderCapabilities()
-}
-
-func (f openCodeFormatProviderFactory) NewProvider(cfg ProviderConfig) Provider {
-	cfg = cfg.Clone()
-	return &openCodeFormatProvider{
-		Def:    cloneAgentDef(f.def),
-		Caps:   openCodeFormatProviderCapabilities(),
-		Config: cfg,
-		sources: newOpenCodeFormatSourceSet(
-			cfg.Roots, f.spec, cfg.SQLiteContainerListsWatermarkOnly, f.index,
-		),
-	}
-}
-
-type openCodeFormatProvider struct {
-	ProviderBase
-	sources openCodeFormatSourceSet
-}
-
-func (p *openCodeFormatProvider) Discover(ctx context.Context) ([]SourceRef, error) {
-	return p.sources.Discover(ctx)
-}
-
-func (p *openCodeFormatProvider) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
-	return p.sources.DiscoverEach(ctx, yield)
-}
-
-func (p *openCodeFormatProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
-	return p.sources.WatchPlan(ctx)
-}
-
-func (p *openCodeFormatProvider) SourcesForChangedPath(
-	ctx context.Context,
-	req ChangedPathRequest,
-) ([]SourceRef, error) {
-	return p.sources.SourcesForChangedPath(ctx, req)
-}
-
-func (p *openCodeFormatProvider) ChangedPathRelevance(
-	ctx context.Context,
-	req ChangedPathRequest,
-) (ChangedPathRelevance, error) {
-	return p.sources.ChangedPathRelevance(ctx, req)
-}
-
-func (p *openCodeFormatProvider) SourceForReconciliation(
-	ctx context.Context, path, project string,
-) (SourceRef, bool, error) {
-	return p.sources.SourceForReconciliation(ctx, path, project)
-}
-
-// ResolveReconciliationScopes widens a request naming the family database, a
-// WAL or SHM sidecar, or one virtual member to the container itself. The
-// container's membership is atomic: a proof of the bare database path admits
-// no member row, and a proof of one member would let a completed pass promote
-// container-state trust over siblings it never verified.
-func (p *openCodeFormatProvider) ResolveReconciliationScopes(
-	_ context.Context, req ReconciliationScopeRequest,
-) (ReconciliationScopePlan, error) {
-	if err := ValidateReconciliationScopeRoots(
-		p.Def.Type, p.Config.Roots, req.Roots,
-	); err != nil {
-		return ReconciliationScopePlan{}, err
-	}
-	return containerAwareReconciliationScopePlan(
-		p.Config.Roots, req.Roots, p.sources.reconciliationContainer,
-	), nil
-}
-
-func (p *openCodeFormatProvider) FindSource(
-	ctx context.Context,
-	req FindSourceRequest,
-) (SourceRef, bool, error) {
-	req = ProviderFindRequestWithRawSessionID(p.Def, req)
-	return p.sources.FindSource(ctx, req)
-}
-
-func (p *openCodeFormatProvider) Fingerprint(
-	ctx context.Context,
-	source SourceRef,
-) (SourceFingerprint, error) {
-	return p.sources.Fingerprint(ctx, source)
-}
-
-func (p *openCodeFormatProvider) Parse(
+func (s openCodeFormatSourceSet) Parse(
 	ctx context.Context,
 	req ParseRequest,
 ) (ParseOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return ParseOutcome{}, err
 	}
-	path, ok := p.sources.pathFromSource(req.Source)
+	path, ok := s.pathFromSource(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("%s source path unavailable", p.Def.Type)
+		return ParseOutcome{}, fmt.Errorf("%s source path unavailable", s.spec.agent)
 	}
 
-	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
+	machine := req.Machine
 	var (
 		sess *ParsedSession
 		msgs []ParsedMessage
 		err  error
 	)
-	dbPath, sessionID, sqliteSource := p.sources.spec.parseVirtual(path)
+	dbPath, sessionID, sqliteSource := s.spec.parseVirtual(path)
 	if sqliteSource {
-		sess, msgs, err = p.sources.spec.parseSQLite(dbPath, sessionID, machine)
+		sess, msgs, err = s.spec.parseSQLite(dbPath, sessionID, machine)
 	} else {
-		sess, msgs, err = p.sources.spec.parseFile(path, machine)
+		sess, msgs, err = s.spec.parseFile(path, machine)
 	}
 	if err != nil {
 		return ParseOutcome{}, err
@@ -806,14 +703,14 @@ func openCodeStorageWatchDir(root string) string {
 	return filepath.Join(root, "storage")
 }
 
-// reconciliationContainer maps a requested path to the SQLite container that
+// ReconciliationContainer maps a requested path to the SQLite container that
 // atomically owns it, without statting: a deleted database must still resolve
 // so its members remain reclaimable through the container proof. A virtual
 // spelling splits at the raw separator instead of parseVirtual, whose exact
 // basename check would let a Windows case variant of the database name skip
 // widening and admit a single member; the alias comparison below already
 // carries the platform's case rule.
-func (s openCodeFormatSourceSet) reconciliationContainer(
+func (s openCodeFormatSourceSet) ReconciliationContainer(
 	requested string,
 ) (string, bool) {
 	physical := requested
@@ -1538,25 +1435,7 @@ func (s openCodeFormatSourceSet) sqliteSourceRefFromMeta(
 	return ref, true
 }
 
-func (p *openCodeFormatProvider) ReconciliationSourceState(
-	source SourceRef,
-) (ReconciliationSourceState, bool) {
-	return p.sources.reconciliationSourceState(source)
-}
-
-func (p *openCodeFormatProvider) SourceForReconciliationWithState(
-	ctx context.Context, path, project string, state ReconciliationSourceState,
-) (SourceRef, bool, error) {
-	return p.sources.SourceForReconciliationWithState(ctx, path, project, state)
-}
-
-func (p *openCodeFormatProvider) ApplyReconciliationSourceState(
-	source *SourceRef, state ReconciliationSourceState,
-) error {
-	return p.sources.applyReconciliationSourceState(source, state)
-}
-
-func (s openCodeFormatSourceSet) reconciliationSourceState(
+func (s openCodeFormatSourceSet) ReconciliationSourceState(
 	source SourceRef,
 ) (ReconciliationSourceState, bool) {
 	path, ok := s.pathFromSource(source)
@@ -1588,7 +1467,7 @@ func (s openCodeFormatSourceSet) reconciliationSourceState(
 	}, true
 }
 
-func (s openCodeFormatSourceSet) applyReconciliationSourceState(
+func (s openCodeFormatSourceSet) ApplyReconciliationSourceState(
 	source *SourceRef, state ReconciliationSourceState,
 ) error {
 	if source == nil || state.Version == 0 {

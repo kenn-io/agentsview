@@ -1180,7 +1180,7 @@ func (s kiroSourceSet) sourceRefForChangedPath(root, path string) (SourceRef, bo
 		}
 		return s.newSourceRef(root, path, dbPath, sessionID, kiroSourceSQLiteSession), true
 	}
-	if dbPath, ok := kiroDBPathForEvent(root, path); ok {
+	if dbPath, ok := sqliteContainerPathForEvent(root, path, kiroSQLiteDBName, true); ok {
 		if !kiroDBUnderRoot(root, dbPath, false) {
 			return SourceRef{}, false
 		}
@@ -1342,27 +1342,6 @@ func kiroDBUnderRoot(root, dbPath string, requireRegular bool) bool {
 		return false
 	}
 	return !requireRegular || IsRegularFile(dbPath)
-}
-
-func kiroDBPathForEvent(root, path string) (string, bool) {
-	root = filepath.Clean(root)
-	path = filepath.Clean(path)
-	rel, ok := relUnder(root, path)
-	if !ok {
-		return "", false
-	}
-	// A bare "-shm" event is ignored: the provider's own read connections
-	// rewrite that index, and every committed write lands in the main file
-	// or a journal sibling.
-	if strings.HasSuffix(rel, "-shm") {
-		return "", false
-	}
-	if filepath.ToSlash(rel) == kiroSQLiteDBName ||
-		(filepath.Dir(rel) == "." &&
-			strings.HasPrefix(filepath.Base(rel), kiroSQLiteDBName+"-")) {
-		return filepath.Join(root, kiroSQLiteDBName), true
-	}
-	return "", false
 }
 
 func kiroLegacyPathUnderRoot(root, path string) bool {

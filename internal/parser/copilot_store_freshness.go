@@ -172,7 +172,7 @@ func (c *copilotSourceCache) usageHash(ctx context.Context, path, sessionID stri
 	if valid && exists && state == prior.state && !full {
 		return prior.members[sessionID].hash, nil
 	}
-	store, err := sql.Open("sqlite3", "file:"+sqliteURIPath(path)+"?mode=ro&_busy_timeout=3000")
+	store, err := openSQLiteReadOnly(path, sqliteReadOptions{busyTimeoutMS: 3000})
 	if err != nil {
 		return "", err
 	}
