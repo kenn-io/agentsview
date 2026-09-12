@@ -462,7 +462,7 @@ func parseClineRawMessages(
 			}
 		}
 
-		var bodyParts []string
+		var textParts []string
 		var thinkingParts []string
 		var toolCalls []ParsedToolCall
 		var toolResults []ParsedToolResult
@@ -472,13 +472,12 @@ func parseClineRawMessages(
 			case "text":
 				t := strings.TrimSpace(block.Text)
 				if t != "" {
-					bodyParts = append(bodyParts, t)
+					textParts = append(textParts, t)
 				}
 			case "thinking":
 				th := strings.TrimSpace(block.Thinking)
 				if th != "" {
 					thinkingParts = append(thinkingParts, th)
-					bodyParts = append(bodyParts, "[Thinking]\n"+th+"\n[/Thinking]")
 				}
 			case "tool_use":
 				tc := ParsedToolCall{
@@ -526,15 +525,15 @@ func parseClineRawMessages(
 			}
 		}
 
-		content := strings.TrimSpace(strings.Join(bodyParts, "\n\n"))
+		textContent := strings.TrimSpace(strings.Join(textParts, "\n\n"))
 		thinking := strings.TrimSpace(strings.Join(thinkingParts, "\n\n"))
 
-		if ordinal == 0 && rawMsg.Role == "user" && content != "" {
-			content = cleanClinePrompt(content)
+		if ordinal == 0 && rawMsg.Role == "user" && textContent != "" {
+			textContent = cleanClinePrompt(textContent)
 		}
 
 		// Skip empty messages with no content, thinking, or tool calls/results
-		if content == "" && thinking == "" && len(toolCalls) == 0 && len(toolResults) == 0 {
+		if textContent == "" && thinking == "" && len(toolCalls) == 0 && len(toolResults) == 0 {
 			continue
 		}
 
@@ -546,6 +545,39 @@ func parseClineRawMessages(
 		msgProvider := ""
 		if role == RoleAssistant {
 			msgProvider = provider
+		}
+
+		// If an assistant message contains thinking along with tool calls,
+		// emit thinking as its own message first so tool grouping does not
+		// hide it in the UI (matching RooCode and Codebuff).
+		if role == RoleAssistant && thinking != "" && len(toolCalls) > 0 {
+			thinkingUUID := rawMsg.ID
+			if thinkingUUID != "" {
+				thinkingUUID += ":thinking"
+			}
+			parsedMessages = append(parsedMessages, ParsedMessage{
+				Ordinal:       ordinal,
+				Role:          RoleAssistant,
+				Content:       "[Thinking]\n" + thinking + "\n[/Thinking]",
+				ThinkingText:  thinking,
+				Timestamp:     ts,
+				HasThinking:   true,
+				ContentLength: len(thinking),
+				Model:         model,
+				ProviderID:    msgProvider,
+				SourceUUID:    thinkingUUID,
+			})
+			ordinal++
+			thinking = ""
+		}
+
+		content := textContent
+		if thinking != "" {
+			if content != "" {
+				content = "[Thinking]\n" + thinking + "\n[/Thinking]\n\n" + content
+			} else {
+				content = "[Thinking]\n" + thinking + "\n[/Thinking]"
+			}
 		}
 
 		msg := ParsedMessage{

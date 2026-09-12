@@ -196,7 +196,7 @@ func TestParseClineSession_Full(t *testing.T) {
 	assert.Equal(t, "/workspace/astro-spectrometer", sess.Cwd)
 	assert.Equal(t, "instruments/optics", sess.GitBranch)
 	assert.Equal(t, TerminationClean, sess.TerminationStatus)
-	assert.Equal(t, 4, sess.MessageCount)
+	assert.Equal(t, 5, sess.MessageCount)
 	assert.Equal(t, 1, sess.UserMessageCount)
 
 	// Peak context tokens = max(5000+4000, 6000+5000) = 11000
@@ -218,22 +218,28 @@ func TestParseClineSession_Full(t *testing.T) {
 	assert.Zero(t, sess.UsageEvents[0].CacheCreationInputTokens)
 
 	// Messages checks
-	require.Len(t, msgs, 4)
+	require.Len(t, msgs, 5)
 
 	// msg 0: user prompt
 	assert.Equal(t, RoleUser, msgs[0].Role)
 	assert.False(t, msgs[0].IsSystem)
 	assert.Equal(t, "Calibrate orbital telescope spectrometer frequency", msgs[0].Content)
 
-	// msg 1: assistant with thinking and 2 tool calls
+	// msg 1: assistant thinking message (separated from tool calls)
 	assert.Equal(t, RoleAssistant, msgs[1].Role)
 	assert.True(t, msgs[1].HasThinking)
+	assert.False(t, msgs[1].HasToolUse)
 	assert.Equal(t, "I should read the optics definition and run tests.", msgs[1].ThinkingText)
-	assert.Equal(t, "[Thinking]\nI should read the optics definition and run tests.\n[/Thinking]\n\nI will inspect the optics instrumentation files.", msgs[1].Content)
-	assert.True(t, msgs[1].HasToolUse)
-	require.Len(t, msgs[1].ToolCalls, 2)
+	assert.Equal(t, "[Thinking]\nI should read the optics definition and run tests.\n[/Thinking]", msgs[1].Content)
 
-	tc0 := msgs[1].ToolCalls[0]
+	// msg 2: assistant with tool calls and text
+	assert.Equal(t, RoleAssistant, msgs[2].Role)
+	assert.False(t, msgs[2].HasThinking)
+	assert.True(t, msgs[2].HasToolUse)
+	assert.Equal(t, "I will inspect the optics instrumentation files.", msgs[2].Content)
+	require.Len(t, msgs[2].ToolCalls, 2)
+
+	tc0 := msgs[2].ToolCalls[0]
 	assert.Equal(t, "call_001", tc0.ToolUseID)
 	assert.Equal(t, "read_files", tc0.ToolName)
 	assert.Equal(t, "Read", tc0.Category)
@@ -241,7 +247,7 @@ func TestParseClineSession_Full(t *testing.T) {
 	assert.Equal(t, "completed", tc0.ResultEvents[0].Status)
 	assert.Contains(t, tc0.ResultEvents[0].Content, "class Spectrometer")
 
-	tc1 := msgs[1].ToolCalls[1]
+	tc1 := msgs[2].ToolCalls[1]
 	assert.Equal(t, "call_002", tc1.ToolUseID)
 	assert.Equal(t, "Skill", tc1.ToolName)
 	assert.Equal(t, "Tool", tc1.Category)
@@ -250,31 +256,31 @@ func TestParseClineSession_Full(t *testing.T) {
 	assert.Equal(t, "completed", tc1.ResultEvents[0].Status)
 	assert.Equal(t, "Skill loaded successfully.", tc1.ResultEvents[0].Content)
 
-	require.NotEmpty(t, msgs[1].TokenUsage)
-	assert.JSONEq(t, `{"input_tokens":5000,"output_tokens":200,"cache_read_input_tokens":4000,"cache_creation_input_tokens":0}`, string(msgs[1].TokenUsage))
-	assert.True(t, msgs[1].HasOutputTokens)
-	assert.Equal(t, 200, msgs[1].OutputTokens)
-	assert.True(t, msgs[1].HasContextTokens)
-	assert.Equal(t, 9000, msgs[1].ContextTokens)
+	require.NotEmpty(t, msgs[2].TokenUsage)
+	assert.JSONEq(t, `{"input_tokens":5000,"output_tokens":200,"cache_read_input_tokens":4000,"cache_creation_input_tokens":0}`, string(msgs[2].TokenUsage))
+	assert.True(t, msgs[2].HasOutputTokens)
+	assert.Equal(t, 200, msgs[2].OutputTokens)
+	assert.True(t, msgs[2].HasContextTokens)
+	assert.Equal(t, 9000, msgs[2].ContextTokens)
 
-	// msg 2: tool results only -> system flag and subtype
-	assert.Equal(t, RoleUser, msgs[2].Role)
-	assert.True(t, msgs[2].IsSystem)
-	assert.Equal(t, SourceSubtypeToolResult, msgs[2].SourceSubtype)
-	require.Len(t, msgs[2].ToolResults, 2)
-	assert.Equal(t, "call_001", msgs[2].ToolResults[0].ToolUseID)
-	assert.Contains(t, DecodeContent(msgs[2].ToolResults[0].ContentRaw), "class Spectrometer")
-	assert.Equal(t, len(tc0.ResultEvents[0].Content), msgs[2].ToolResults[0].ContentLength)
+	// msg 3: tool results only -> system flag and subtype
+	assert.Equal(t, RoleUser, msgs[3].Role)
+	assert.True(t, msgs[3].IsSystem)
+	assert.Equal(t, SourceSubtypeToolResult, msgs[3].SourceSubtype)
+	require.Len(t, msgs[3].ToolResults, 2)
+	assert.Equal(t, "call_001", msgs[3].ToolResults[0].ToolUseID)
+	assert.Contains(t, DecodeContent(msgs[3].ToolResults[0].ContentRaw), "class Spectrometer")
+	assert.Equal(t, len(tc0.ResultEvents[0].Content), msgs[3].ToolResults[0].ContentLength)
 
-	// msg 3: final assistant text
-	assert.Equal(t, RoleAssistant, msgs[3].Role)
-	assert.Equal(t, "Spectrometer optics calibrated to 432.0nm and telemetry frequency is locked.", msgs[3].Content)
-	require.NotEmpty(t, msgs[3].TokenUsage)
-	assert.JSONEq(t, `{"input_tokens":6000,"output_tokens":100,"cache_read_input_tokens":5000,"cache_creation_input_tokens":0}`, string(msgs[3].TokenUsage))
-	assert.True(t, msgs[3].HasOutputTokens)
-	assert.Equal(t, 100, msgs[3].OutputTokens)
-	assert.True(t, msgs[3].HasContextTokens)
-	assert.Equal(t, 11000, msgs[3].ContextTokens)
+	// msg 4: final assistant text
+	assert.Equal(t, RoleAssistant, msgs[4].Role)
+	assert.Equal(t, "Spectrometer optics calibrated to 432.0nm and telemetry frequency is locked.", msgs[4].Content)
+	require.NotEmpty(t, msgs[4].TokenUsage)
+	assert.JSONEq(t, `{"input_tokens":6000,"output_tokens":100,"cache_read_input_tokens":5000,"cache_creation_input_tokens":0}`, string(msgs[4].TokenUsage))
+	assert.True(t, msgs[4].HasOutputTokens)
+	assert.Equal(t, 100, msgs[4].OutputTokens)
+	assert.True(t, msgs[4].HasContextTokens)
+	assert.Equal(t, 11000, msgs[4].ContextTokens)
 }
 
 func TestParseClineSession_FallbackUsageEvent(t *testing.T) {
@@ -709,6 +715,75 @@ func TestParseClineSession_ThinkingOnlyEnding(t *testing.T) {
 	assert.Equal(t, "[Thinking]\nStill thinking...\n[/Thinking]", messages[1].Content)
 	assert.Equal(t, "Still thinking...", messages[1].ThinkingText)
 	assert.True(t, messages[1].HasThinking)
+}
+
+func TestParseClineSession_ThinkingAndToolSeparated(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "1789000000005_thinking_tool"
+	taskDir := filepath.Join(dir, sessionID)
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
+
+	metaJSON := `{
+		"session_id": "1789000000005_thinking_tool",
+		"status": "completed",
+		"prompt": "run status check"
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".json"), []byte(metaJSON), 0o644))
+
+	messagesJSON := `{
+		"messages": [
+			{
+				"id": "m1",
+				"role": "user",
+				"content": [{"type": "text", "text": "run status check"}],
+				"ts": 1000
+			},
+			{
+				"id": "m2",
+				"role": "assistant",
+				"content": [
+					{
+						"type": "thinking",
+						"thinking": "Checking repository state before executing tools."
+					},
+					{
+						"type": "tool_use",
+						"id": "call_status_1",
+						"name": "run_commands",
+						"input": {"command": "git status"}
+					}
+				],
+				"ts": 2000
+			}
+		]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
+
+	sess, messages, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Thinking and tool call are separated into two distinct messages
+	require.Len(t, messages, 3)
+	assert.Equal(t, 3, sess.MessageCount)
+
+	// Message 1: Thinking block only
+	assert.Equal(t, RoleAssistant, messages[1].Role)
+	assert.True(t, messages[1].HasThinking)
+	assert.False(t, messages[1].HasToolUse)
+	assert.Equal(t, "Checking repository state before executing tools.", messages[1].ThinkingText)
+	assert.Equal(t, "[Thinking]\nChecking repository state before executing tools.\n[/Thinking]", messages[1].Content)
+	assert.Equal(t, "m2:thinking", messages[1].SourceUUID)
+
+	// Message 2: Tool call block (content is empty, ready for tool-group rendering)
+	assert.Equal(t, RoleAssistant, messages[2].Role)
+	assert.False(t, messages[2].HasThinking)
+	assert.True(t, messages[2].HasToolUse)
+	assert.Empty(t, messages[2].Content)
+	assert.Equal(t, "m2", messages[2].SourceUUID)
+	require.Len(t, messages[2].ToolCalls, 1)
+	assert.Equal(t, "call_status_1", messages[2].ToolCalls[0].ToolUseID)
+	assert.Equal(t, "run_commands", messages[2].ToolCalls[0].ToolName)
 }
 
 func TestParseClineSession_EmptyTranscript(t *testing.T) {
@@ -1252,19 +1327,22 @@ func TestParseClineSession_TeammateSubagents(t *testing.T) {
 	assert.Equal(t, "teamproject", child.Session.Project)
 	assert.Equal(t, "/workspace/teamproject", child.Session.Cwd)
 	assert.Equal(t, AgentCline, child.Session.Agent)
-	assert.Equal(t, 2, child.Session.MessageCount)
+	assert.Equal(t, 3, child.Session.MessageCount)
 	assert.Equal(t, 1, child.Session.UserMessageCount)
 	assert.Equal(t, "Collect git status. taskId: task_0001", child.Session.FirstMessage)
 	assert.Equal(t, 80, child.Session.TotalOutputTokens)
 	assert.Equal(t, 250, child.Session.PeakContextTokens)
 
 	// Verify child messages
-	require.Len(t, child.Messages, 2)
+	require.Len(t, child.Messages, 3)
 	assert.True(t, child.Messages[1].HasThinking)
+	assert.False(t, child.Messages[1].HasToolUse)
 	assert.Equal(t, "Executing git commands", child.Messages[1].ThinkingText)
-	require.Len(t, child.Messages[1].ToolCalls, 1)
-	assert.Equal(t, "run_commands", child.Messages[1].ToolCalls[0].ToolName)
-	assert.Equal(t, "Bash", child.Messages[1].ToolCalls[0].Category)
+	assert.False(t, child.Messages[2].HasThinking)
+	assert.True(t, child.Messages[2].HasToolUse)
+	require.Len(t, child.Messages[2].ToolCalls, 1)
+	assert.Equal(t, "run_commands", child.Messages[2].ToolCalls[0].ToolName)
+	assert.Equal(t, "Bash", child.Messages[2].ToolCalls[0].Category)
 
 	// 2. Verify parseClineSession (backwards compatibility) returns parent with annotated tool calls
 	sess, msgs, err := parseClineSession(metaPath, "teamproject", "local")
