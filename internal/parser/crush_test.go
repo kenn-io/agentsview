@@ -652,6 +652,27 @@ func TestCrushProviderParseCarriesUsageEvents(t *testing.T) {
 	require.NotNil(t, event.Cost)
 }
 
+func TestCrushProviderParseDoesNotReplaceMissingArchiveMember(t *testing.T) {
+	fixture := newCrushTestFixture(t)
+	const created = int64(1_789_093_626)
+	fixture.insertSession(t, "sess-gone", "Archived", "",
+		created, created, 0, 0, 0)
+	provider := newCrushProviderFactory(AgentDef{
+		Type: AgentCrush, IDPrefix: "crush:",
+	}).NewProvider(ProviderConfig{Roots: []string{fixture.dataDir}})
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	_, err = fixture.database.Exec(`DELETE FROM sessions WHERE id = 'sess-gone'`)
+	require.NoError(t, err)
+
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	assert.Equal(t, SkipNoSession, outcome.SkipReason)
+	assert.False(t, outcome.ForceReplace,
+		"a missing Crush row must not remove its persistent archive entry")
+}
+
 func TestCrushSummaryMessageIsCompactBoundary(t *testing.T) {
 	fixture := newCrushTestFixture(t)
 	const created = int64(1_789_093_626)
@@ -684,7 +705,7 @@ func TestCrushChangedSessionIDsAreBoundedToNewRows(t *testing.T) {
 	const created = int64(1_789_093_626)
 	fixture.insertSession(t, "sess-a", "A", "", created, created, 0, 0, 0)
 	fixture.insertSession(t, "sess-b", "B", "", created, created, 0, 0, 0)
-	tracker := newCrushChangeTracker()
+	tracker := newCrushRowObserver()
 
 	// Cold start: no stored cursor, full enumeration is expected.
 	ids, cold, snapshot, err := tracker.changedSessionIDs(context.Background(), fixture.dbPath, false)

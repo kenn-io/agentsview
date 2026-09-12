@@ -99,6 +99,59 @@ func TestSyncCrushSkipsUnchangedSessionsAndReparsesChangedOnes(t *testing.T) {
 	assert.Equal(t, "Review complete.", messages[2].Content)
 }
 
+func TestSyncCrushSessionWriteSkipsUnchangedSibling(t *testing.T) {
+	dataDir, _, sourceDB := writeSyncCrushDB(t)
+	_, err := sourceDB.Exec(`
+		INSERT INTO sessions (
+			id, title, created_at, updated_at,
+			prompt_tokens, completion_tokens, cost
+		) VALUES (
+			'sess-002', 'Unchanged sibling', 1789093626, 1789093746, 20, 5, 0.001
+		);
+		INSERT INTO messages (
+			id, session_id, role, parts, model, created_at, updated_at
+		) VALUES (
+			'msg-sibling', 'sess-002', 'user',
+			'[{"type":"text","data":{"text":"Leave this alone."}}]',
+			'', 1789093626, 1789093626
+		);
+	`)
+	require.NoError(t, err)
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCrush: {dataDir},
+		},
+		Machine: "devbox",
+	})
+	t.Cleanup(engine.Close)
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 2, Synced: 2})
+
+	var writtenIDs []string
+	engine.writeBatchOverride = func(
+		batch []pendingWrite, _ syncWriteMode, _ bool,
+	) (int, int, int, int) {
+		for _, write := range batch {
+			writtenIDs = append(writtenIDs, write.sess.ID)
+		}
+		return len(batch), 0, 0, 0
+	}
+	insertSyncCrushMessage(t, sourceDB, "msg-new", "assistant", `[
+		{"type":"text","data":{"text":"Only the first session changed."}}
+	]`, 1_789_093_630, "glm-5.3-flash")
+
+	stats := SyncStats{}
+	aborted := engine.syncProviderDBBackedAgent(
+		context.Background(), parser.AgentCrush, "crush",
+		syncWriteBulk, false,
+		newRootSyncScope([]string{dataDir}), &stats, func(int, int) {},
+	)
+	require.False(t, aborted, "sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced)
+	assert.Equal(t, []string{"crush:sess-001"}, writtenIDs,
+		"a write to one Crush session must not reparse an unchanged sibling")
+}
+
 func TestSyncCrushReparsesWhenRegistryProjectPathChanges(t *testing.T) {
 	dataDir, _, _ := writeSyncCrushDB(t)
 	oldProjectDir := filepath.Join(t.TempDir(), "old-project")
@@ -228,7 +281,7 @@ func TestReconcileProviderRootsCrushRegistryKeepsSiblingWithinTraversal(t *testi
 	assert.Nil(t, sibling.SourceMissingAt)
 }
 
-func TestReconcileProviderRootsCrushDBFileRootTombstonesDeletedSession(t *testing.T) {
+func TestReconcileProviderRootsCrushDBFileRootPreservesDeletedSourceSession(t *testing.T) {
 	_, dbPath, sourceDB := writeSyncCrushDB(t)
 	database := openTestDB(t)
 	// Configure the database-file root that normalizeCrushRoots accepts and
@@ -260,7 +313,36 @@ func TestReconcileProviderRootsCrushDBFileRootTombstonesDeletedSession(t *testin
 	assert.NotNil(t, active)
 	archived, err := database.GetSessionFull(context.Background(), "crush:sess-001")
 	require.NoError(t, err)
-	assertSourceMissingState(t, archived)
+	require.NotNil(t, archived)
+	assert.Nil(t, archived.SourceMissingAt,
+		"source deletion must not hide a session from the persistent archive")
+}
+
+func TestReconcileProviderRootsCrushPreservesSessionWhenDatabaseIsRemoved(t *testing.T) {
+	_, dbPath, sourceDB := writeSyncCrushDB(t)
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCrush: {dbPath},
+		},
+		Machine: "devbox",
+	})
+	t.Cleanup(engine.Close)
+	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
+
+	require.NoError(t, sourceDB.Close())
+	require.NoError(t, os.Remove(dbPath))
+	require.NoError(t, engine.ReconcileProviderRoots(
+		context.Background(), parser.AgentCrush, []string{dbPath},
+	))
+
+	archived, err := database.GetSessionFull(
+		context.Background(), "crush:sess-001",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	assert.Nil(t, archived.SourceMissingAt,
+		"removing crush.db must not hide a session from the persistent archive")
 }
 
 func TestReconcileProviderRootsCrushDataDirSkipsUnchangedSession(t *testing.T) {
