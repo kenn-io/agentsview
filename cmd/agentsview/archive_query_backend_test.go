@@ -216,6 +216,16 @@ func TestLocalSessionUsageRefreshesSubagentTranscripts(t *testing.T) {
 			String()),
 		0o644))
 
+	// Passive reads must leave newly written source transcripts unindexed.
+	archived, _, err := backend.SessionUsage(
+		ctx, sessionUsageQuery{SessionID: "parent-uuid", NoSync: true})
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	assert.Zero(t, archived.SubagentCount)
+	unsynced, err := database.GetSession(ctx, "agent-worker1")
+	require.NoError(t, err)
+	assert.Nil(t, unsynced)
+
 	out, _, err := backend.SessionUsage(
 		ctx, sessionUsageQuery{SessionID: "parent-uuid"})
 	require.NoError(t, err)
@@ -228,6 +238,12 @@ func TestLocalSessionUsageRefreshesSubagentTranscripts(t *testing.T) {
 	require.NotNil(t, child, "subagent session was not synced")
 	require.NotNil(t, child.ParentSessionID)
 	assert.Equal(t, "parent-uuid", *child.ParentSessionID)
+
+	archived, _, err = backend.SessionUsage(
+		ctx, sessionUsageQuery{SessionID: "parent-uuid", NoSync: true})
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	assert.Equal(t, out.SessionUsage, archived.SessionUsage)
 
 	// --own-only skips the subagent refresh and the combined view.
 	own, _, err := backend.SessionUsage(
