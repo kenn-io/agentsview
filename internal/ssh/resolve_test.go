@@ -935,6 +935,78 @@ func TestResolveScriptClineRejectsSymlinkedAncestors(t *testing.T) {
 	}
 }
 
+func TestResolveScriptClineRejectsSymlinkedLeafFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	home := physTempDir(t)
+	clineRoot := filepath.Join(home, ".cline")
+	sessionsDir := filepath.Join(clineRoot, "data", "sessions")
+
+	outsideDir := physTempDir(t)
+	secretFile := filepath.Join(outsideDir, "secret.txt")
+	require.NoError(t, os.WriteFile(secretFile, []byte("sensitive"), 0o600))
+
+	// sess-symlink-meta: metadata file is a symlink pointing outside root.
+	sess1 := filepath.Join(sessionsDir, "sess-symlink-meta")
+	require.NoError(t, os.MkdirAll(sess1, 0o755))
+	require.NoError(t, os.Symlink(secretFile, filepath.Join(sess1, "sess-symlink-meta.json")))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sess1, "sess-symlink-meta.messages.json"),
+		[]byte(`{"messages":[]}`), 0o644,
+	))
+
+	// sess-symlink-msgs: valid metadata, but messages file is a symlink pointing outside root.
+	sess2 := filepath.Join(sessionsDir, "sess-symlink-msgs")
+	require.NoError(t, os.MkdirAll(sess2, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sess2, "sess-symlink-msgs.json"),
+		[]byte(`{"session_id":"sess-symlink-msgs"}`), 0o644,
+	))
+	require.NoError(t, os.Symlink(secretFile, filepath.Join(sess2, "sess-symlink-msgs.messages.json")))
+
+	// sess-regular: valid metadata and messages.
+	sess3 := filepath.Join(sessionsDir, "sess-regular")
+	require.NoError(t, os.MkdirAll(sess3, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sess3, "sess-regular.json"),
+		[]byte(`{"session_id":"sess-regular"}`), 0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sess3, "sess-regular.messages.json"),
+		[]byte(`{"messages":[]}`), 0o644,
+	))
+
+	out := runResolveScriptForTest(t, "HOME="+home)
+	records := resolveOutputRecords(string(out))
+
+	agentFilePrefix := resolveAgentFilePrefix + ":" + string(parser.AgentCline)
+
+	assert.False(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		"data/sessions/sess-symlink-meta/sess-symlink-meta.json"),
+		"symlinked metadata file must not be emitted")
+	assert.False(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		"data/sessions/sess-symlink-meta/sess-symlink-meta.messages.json"),
+		"messages file for session with symlinked metadata must not be emitted")
+
+	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		"data/sessions/sess-symlink-msgs/sess-symlink-msgs.json"),
+		"regular metadata file must be emitted")
+	assert.False(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		"data/sessions/sess-symlink-msgs/sess-symlink-msgs.messages.json"),
+		"symlinked messages file must not be emitted")
+
+	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		"data/sessions/sess-regular/sess-regular.json"))
+	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		"data/sessions/sess-regular/sess-regular.messages.json"))
+
+	for _, record := range records {
+		assert.NotContains(t, record, "secret.txt",
+			"outside symlink target must never appear in records")
+	}
+}
+
 func TestResolveScriptClineRejectsBackslashSessionID(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("backslashes in file names are not allowed on Windows")

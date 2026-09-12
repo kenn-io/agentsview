@@ -322,8 +322,11 @@ func buildResolveScript() string {
 			"case \"$av_cline_id\" in _*|.*|*'\\'*) continue;; esac; " +
 			"av_cline_meta=\"$av_cline_sess/$av_cline_id.json\"; " +
 			"[ -f \"$av_cline_meta\" ] || continue; " +
+			"[ -L \"$av_cline_meta\" ] && continue; " +
 			"av_emit_agent_file \"" + string(parser.AgentCline) + "\" \"$av_cline_meta\"; " +
-			"av_emit_agent_file \"" + string(parser.AgentCline) + "\" \"$av_cline_sess/$av_cline_id.messages.json\"; " +
+			"av_cline_msgs=\"$av_cline_sess/$av_cline_id.messages.json\"; " +
+			"[ -f \"$av_cline_msgs\" ] && [ ! -L \"$av_cline_msgs\" ] && " +
+			"av_emit_agent_file \"" + string(parser.AgentCline) + "\" \"$av_cline_msgs\"; " +
 			"done; " +
 			"}\n" +
 			// Provider-specific narrowing keys on the override's literal

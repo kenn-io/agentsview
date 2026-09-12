@@ -1371,3 +1371,56 @@ func TestClineRootSymlinkParity(t *testing.T) {
 	assert.ElementsMatch(t, sshDirs2[parser.AgentCline], goTargets2.Dirs[parser.AgentCline])
 	assert.ElementsMatch(t, sshFiles2[parser.AgentCline], goTargets2.Files[parser.AgentCline])
 }
+
+func TestClineLeafSymlinkParity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	outsideDir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	secretFile := filepath.Join(outsideDir, "secret.json")
+	require.NoError(t, os.WriteFile(secretFile, []byte(`{"secret":true}`), 0o644))
+
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	clineRoot := filepath.Join(home, ".cline")
+	sessionsDir := filepath.Join(clineRoot, "data", "sessions")
+
+	// sess-valid: normal regular metadata and messages.
+	sessValid := filepath.Join(sessionsDir, "sess-valid")
+	require.NoError(t, os.MkdirAll(sessValid, 0o755))
+	validMeta := filepath.Join(sessValid, "sess-valid.json")
+	require.NoError(t, os.WriteFile(validMeta, []byte(`{"session_id":"sess-valid"}`), 0o644))
+	validMsgs := filepath.Join(sessValid, "sess-valid.messages.json")
+	require.NoError(t, os.WriteFile(validMsgs, []byte(`{"messages":[]}`), 0o644))
+
+	// sess-symlink-meta: metadata file is a symlink pointing outside root.
+	sessMetaLink := filepath.Join(sessionsDir, "sess-symlink-meta")
+	require.NoError(t, os.MkdirAll(sessMetaLink, 0o755))
+	require.NoError(t, os.Symlink(secretFile, filepath.Join(sessMetaLink, "sess-symlink-meta.json")))
+	require.NoError(t, os.WriteFile(filepath.Join(sessMetaLink, "sess-symlink-meta.messages.json"), []byte(`{"messages":[]}`), 0o644))
+
+	// sess-symlink-msgs: valid metadata, but messages file is a symlink pointing outside root.
+	sessMsgsLink := filepath.Join(sessionsDir, "sess-symlink-msgs")
+	require.NoError(t, os.MkdirAll(sessMsgsLink, 0o755))
+	validMeta2 := filepath.Join(sessMsgsLink, "sess-symlink-msgs.json")
+	require.NoError(t, os.WriteFile(validMeta2, []byte(`{"session_id":"sess-symlink-msgs"}`), 0o644))
+	require.NoError(t, os.Symlink(secretFile, filepath.Join(sessMsgsLink, "sess-symlink-msgs.messages.json")))
+
+	goTargets := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot},
+		},
+	})
+	expectedFiles := []string{validMeta, validMsgs, validMeta2}
+	assert.ElementsMatch(t, expectedFiles, goTargets.Files[parser.AgentCline])
+
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(ssh.BuildResolveScriptForTest())
+	cmd.Env = []string{"HOME=" + home}
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "ssh output: %s", out)
+	sshDirs, sshFiles, _, _ := ssh.ParseResolvedTargetsWithFilesForTest(string(out))
+	assert.ElementsMatch(t, sshDirs[parser.AgentCline], goTargets.Dirs[parser.AgentCline])
+	assert.ElementsMatch(t, sshFiles[parser.AgentCline], goTargets.Files[parser.AgentCline])
+}
