@@ -150,6 +150,13 @@ func TestRecentEditsSearchFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, res.Files, 1, "project and search both apply")
 	assert.Equal(t, "proj", res.Files[0].Project)
+
+	// SQLite LOWER is ASCII-only; the shared contract remains Unicode-aware.
+	seedEdit(t, d, "proj", "s6", 1, 0, "src/ÜBER.go", "2026-06-24T05:00:00Z")
+	res, err = d.RecentEdits(ctx, RecentEditsParams{Search: "über"})
+	require.NoError(t, err)
+	require.Len(t, res.Files, 1, "search case-folds non-ASCII paths")
+	assert.Equal(t, "src/ÜBER.go", res.Files[0].FilePath)
 }
 
 func TestRecentEditsTruncationAndHasMore(t *testing.T) {
@@ -180,6 +187,23 @@ func TestRecentEditsTruncationAndHasMore(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "a.go should appear in result")
+}
+
+func TestRecentEditsUnicodeSearchPaginatesMatchedKeys(t *testing.T) {
+	d := testDB(t)
+	seedEdit(t, d, "proj", "u1", 1, 0, "src/ÜBER-one.go", "2026-06-24T10:00:00Z")
+	seedEdit(t, d, "proj", "x1", 1, 0, "src/ordinary.go", "2026-06-24T09:30:00Z")
+	seedEdit(t, d, "proj", "u2", 1, 0, "src/ÜBER-two.go", "2026-06-24T09:00:00Z")
+	seedEdit(t, d, "proj", "u3", 1, 0, "src/ÜBER-three.go", "2026-06-24T08:00:00Z")
+
+	page, err := d.RecentEdits(t.Context(), RecentEditsParams{
+		Project: "proj", Search: "über", Offset: 1, Limit: 1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Files, 1)
+	assert.Equal(t, "src/ÜBER-two.go", page.Files[0].FilePath)
+	assert.True(t, page.HasMore)
 }
 
 func TestRecentEditsNullTimestampsSortLast(t *testing.T) {
