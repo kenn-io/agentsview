@@ -87,8 +87,7 @@ func (p *antigravityProvider) parseSession(
 
 	// Open read-only; SQLite session files have WAL/SHM
 	// sidecars that the driver expects in the same dir.
-	dsn := "file:" + sqliteURIPath(path) + "?mode=ro&immutable=0"
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := openSQLiteReadOnly(path, sqliteReadOptions{})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf(
 			"open antigravity db %s: %w", path, err,

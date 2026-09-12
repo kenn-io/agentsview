@@ -900,9 +900,10 @@ func TestOpenCodeProviderProjectMetadataChangeReportsSessionDirectoryError(
 
 	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	formatProvider, ok := provider.(*openCodeFormatProvider)
-	require.True(t, ok)
-	_, err := formatProvider.sources.sourcesForProject(root, projectID)
+	sources := newOpenCodeFormatSourceSet(
+		[]string{root}, openCodeProviderSpecForAgent(AgentOpenCode), nil,
+	)
+	_, err := sources.sourcesForProject(root, projectID)
 	assert.Error(t, err)
 	_, publicErr := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: projectPath, EventKind: "write",
@@ -1725,7 +1726,7 @@ func TestOpenCodeReconciliationSourceStateRoundTrips(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	state, ok := discoverySources.reconciliationSourceState(discovered)
+	state, ok := discoverySources.ReconciliationSourceState(discovered)
 	require.True(t, ok)
 	rehydrationSources := newOpenCodeFormatSourceSet(
 		[]string{root}, spec, nil,
@@ -1736,7 +1737,7 @@ func TestOpenCodeReconciliationSourceStateRoundTrips(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.NoError(t,
-		rehydrationSources.applyReconciliationSourceState(&source, state),
+		rehydrationSources.ApplyReconciliationSourceState(&source, state),
 	)
 	assert.Equal(t, childDigest, sourceCarriedChildDigest(source))
 
@@ -1777,7 +1778,7 @@ func TestOpenCodeReconciliationRejectsInvalidSourceState(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			assert.Error(t, sources.applyReconciliationSourceState(&source, test.state))
+			assert.Error(t, sources.ApplyReconciliationSourceState(&source, test.state))
 		})
 	}
 }

@@ -144,12 +144,10 @@ func parsePiebaldSessionResults(
 }
 
 func openPiebaldDB(dbPath string, stableSnapshot bool) (*sql.DB, error) {
-	immutable := "0"
-	if stableSnapshot {
-		immutable = "1"
-	}
-	dsn := "file:" + sqliteURIPath(dbPath) + "?mode=ro&immutable=" + immutable + "&_busy_timeout=3000"
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := openSQLiteReadOnly(dbPath, sqliteReadOptions{
+		stableSnapshot: stableSnapshot,
+		busyTimeoutMS:  3000,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("opening piebald db %s: %w", dbPath, err)
 	}
