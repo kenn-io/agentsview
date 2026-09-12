@@ -256,7 +256,6 @@ func TestOpenCodeV2MixedDatabase(t *testing.T) {
 func TestOpenCodeV2ToolStates(t *testing.T) {
 	for _, tc := range []struct{ name, tool, state, status, text string }{
 		{"structured", "custom", `{"status":"completed","input":{},"structured":{"content":[1,2],"exit":"other"},"content":[{"type":"text","text":"Done"}]}`, "completed", "Done"},
-		{"file output", "custom", `{"status":"completed","input":{},"structured":{},"content":[{"type":"text","text":"Created plot"},{"type":"file","uri":"data:image/png;base64,AAAA","mime":"image/png","name":"plot.png"},{"type":"file","uri":"data:application/pdf;base64,AAAA","mime":"application/pdf"}]}`, "completed", "Created plot\n[Attachment: plot.png]\n[Attachment: application/pdf]"},
 		{"pending", "bash", `{"status":"pending","input":"{\"command\":"}`, "", ""},
 		{"streaming", "shell", `{"status":"streaming","input":"{\"command\":"}`, "", ""},
 		{"running", "bash", `{"status":"running","input":{"command":"query"},"structured":{},"content":[]}`, "", ""},
@@ -491,4 +490,61 @@ func TestOpenCodeV2CapturedAttachmentCompaction(t *testing.T) {
 	assert.True(t, msgs[3].IsSystem)
 	assert.True(t, msgs[3].IsCompactBoundary)
 	assert.Contains(t, msgs[3].Content, "The user shared a file `input.txt` containing three lines")
+}
+
+func TestOpenCodeV2ToolFiles(t *testing.T) {
+	// The file records follow the beta read tool's toModelContent output.
+	raw, err := os.ReadFile("testdata/opencode_v2/tool_files.json")
+	require.NoError(t, err)
+	var source struct {
+		Content []struct {
+			State struct {
+				Content []map[string]string `json:"content"`
+			} `json:"state"`
+		} `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &source))
+	for _, status := range []string{"completed", "error"} {
+		t.Run(status, func(t *testing.T) {
+			path, seed, writer := newTestDB(t)
+			seed.AddProject("project-a", "/workspace/project-a")
+			seed.AddSession("ses_files", "project-a", "", "Files", 1700000000000, 1700000002000)
+			_, err := writer.Exec(openCodeV2TestSchema)
+			require.NoError(t, err)
+			data := string(raw)
+			if status == "error" {
+				data = strings.ReplaceAll(data, `"status": "completed"`, `"status": "error", "error": {"message": "Read failed"}`)
+			}
+			_, err = writer.Exec(`INSERT INTO session_message VALUES ('msg_files', 'ses_files', 'assistant', 1, 1700000000000, 1700000002000, ?)`, data)
+			require.NoError(t, err)
+			_, messages, err := parseOpenCodeDBSession(path, "ses_files", "host-a")
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			require.Len(t, messages[0].ToolCalls, 2)
+			for i, call := range messages[0].ToolCalls {
+				require.Len(t, call.ResultEvents, 1)
+				var blocks []map[string]string
+				require.NoError(t, json.Unmarshal([]byte(call.ResultEvents[0].Content), &blocks))
+				want := source.Content[i].State.Content
+				if status == "error" {
+					require.Len(t, blocks, len(want)+1)
+					assert.Equal(t, map[string]string{"type": "text", "text": "Read failed"}, blocks[len(want)])
+					assert.Equal(t, "errored", call.ResultEvents[0].Status)
+				} else {
+					require.Len(t, blocks, len(want))
+					assert.Equal(t, "completed", call.ResultEvents[0].Status)
+				}
+				if i == 0 {
+					assert.Equal(t, want[0], blocks[0])
+					assert.Equal(t, "input_image", blocks[1]["type"])
+					assert.Equal(t, want[1]["uri"], blocks[1]["image_url"])
+					assert.Equal(t, "plot.png", blocks[1]["name"])
+					assert.NotContains(t, blocks[1], "uri", "image policy must own the only payload copy")
+					assert.Equal(t, want[2], blocks[2])
+				} else {
+					assert.Equal(t, want, blocks[:len(want)], "PDF, text payload, and external reference survive unchanged")
+				}
+			}
+		})
+	}
 }

@@ -1,0 +1,77 @@
+{
+  "model": {
+    "id": "example-model",
+    "providerID": "example"
+  },
+  "content": [
+    {
+      "type": "tool",
+      "id": "call_image",
+      "name": "read",
+      "state": {
+        "status": "completed",
+        "input": {
+          "path": "plot.png"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "Image read successfully"
+          },
+          {
+            "type": "file",
+            "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            "mime": "image/png",
+            "name": "plot.png"
+          },
+          {
+            "type": "text",
+            "text": "After the image"
+          }
+        ]
+      },
+      "time": {
+        "created": 1700000000000,
+        "completed": 1700000001000
+      }
+    },
+    {
+      "type": "tool",
+      "id": "call_files",
+      "name": "read",
+      "state": {
+        "status": "completed",
+        "input": {
+          "path": "report.pdf"
+        },
+        "content": [
+          {
+            "type": "text",
+            "text": "PDF read successfully"
+          },
+          {
+            "type": "file",
+            "uri": "data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA3MiA3Ml0gPj4KZW5kb2JqCnhyZWYKMCA0CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA0IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgoxODQKJSVFT0YK",
+            "mime": "application/pdf",
+            "name": "report.pdf"
+          },
+          {
+            "type": "file",
+            "uri": "data:text/plain;base64,YWxwaGEK",
+            "mime": "text/plain"
+          },
+          {
+            "type": "file",
+            "uri": "https://example.com/archive.zip",
+            "mime": "application/zip",
+            "name": "archive.zip"
+          }
+        ]
+      },
+      "time": {
+        "created": 1700000001000,
+        "completed": 1700000002000
+      }
+    }
+  ]
+}

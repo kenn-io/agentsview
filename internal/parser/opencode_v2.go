@@ -188,6 +188,7 @@ type openCodeV2Content struct {
 			Text string `json:"text"`
 			Name string `json:"name"`
 			MIME string `json:"mime"`
+			URI  string `json:"uri"`
 		} `json:"content"`
 		Error struct {
 			Message string `json:"message"`
@@ -253,7 +254,11 @@ func loadOpenCodeV2Messages(db *sql.DB, sessionID, cwd string) ([]ParsedMessage,
 					}
 				case "tool":
 					pm.HasToolUse = true
-					pm.ToolCalls = append(pm.ToolCalls, openCodeV2ToolCall(item, cwd))
+					call, err := openCodeV2ToolCall(item, cwd)
+					if err != nil {
+						return nil, true, "", fmt.Errorf("decoding opencode v2 tool %s: %w", item.ID, err)
+					}
+					pm.ToolCalls = append(pm.ToolCalls, call)
 				}
 			}
 			pm.Content = strings.Join(texts, "\n")
@@ -299,7 +304,7 @@ func loadOpenCodeV2Messages(db *sql.DB, sessionID, cwd string) ([]ParsedMessage,
 	return parsed, present, fmt.Sprintf("opencode-v2:%x", hash.Sum(nil)), rows.Err()
 }
 
-func openCodeV2ToolCall(item openCodeV2Content, cwd string) ParsedToolCall {
+func openCodeV2ToolCall(item openCodeV2Content, cwd string) (ParsedToolCall, error) {
 	call := ParsedToolCall{
 		ToolUseID: item.ID, ToolName: item.Name, Category: NormalizeToolCategory(item.Name),
 		InputJSON: string(item.State.Input),
@@ -314,23 +319,45 @@ func openCodeV2ToolCall(item openCodeV2Content, cwd string) ParsedToolCall {
 	}
 	if item.State.Status == "completed" || item.State.Status == "error" {
 		var texts []string
+		var blocks []map[string]string
+		hasFiles := false
+		for _, content := range item.State.Content {
+			if content.Type == "file" {
+				hasFiles = true
+				break
+			}
+		}
+		appendText := func(text string) {
+			if hasFiles {
+				blocks = append(blocks, map[string]string{"type": "text", "text": text})
+			} else {
+				texts = append(texts, text)
+			}
+		}
 		for _, content := range item.State.Content {
 			switch content.Type {
 			case "text":
-				texts = append(texts, content.Text)
+				appendText(content.Text)
 			case "file":
-				name := content.Name
-				if name == "" {
-					name = content.MIME
+				block := map[string]string{"type": "file", "uri": content.URI, "mime": content.MIME}
+				if content.Name != "" {
+					block["name"] = content.Name
 				}
-				texts = append(texts, "[Attachment: "+name+"]")
+				// Use the shared image representation so storage's keep/drop
+				// policy owns the payload. Other files retain the producer URI,
+				// including inline PDFs; external references are never fetched.
+				if strings.HasPrefix(strings.ToLower(content.URI), "data:image/") {
+					block["type"], block["image_url"] = "input_image", content.URI
+					delete(block, "uri")
+				}
+				blocks = append(blocks, block)
 			}
 		}
 		// The v2 read tool returns text files as structured UTF-8 attachments.
 		structured := string(item.State.Structured)
 		if item.Name == "read" && gjson.Get(structured, "encoding").Str == "utf8" {
 			if content := gjson.Get(structured, "content").Str; content != "" {
-				texts = append(texts, content)
+				appendText(content)
 			}
 		}
 		status := "completed"
@@ -339,13 +366,21 @@ func openCodeV2ToolCall(item openCodeV2Content, cwd string) ParsedToolCall {
 		if item.State.Status == "error" || shellFailed {
 			status = "errored"
 			if item.State.Error.Message != "" {
-				texts = append(texts, item.State.Error.Message)
+				appendText(item.State.Error.Message)
 			}
 		}
+		content := strings.Join(texts, "\n")
+		if hasFiles {
+			encoded, err := json.Marshal(blocks, json.Deterministic(true))
+			if err != nil {
+				return call, err
+			}
+			content = string(encoded)
+		}
 		call.ResultEvents = []ParsedToolResultEvent{{
-			ToolUseID: item.ID, Status: status, Content: strings.Join(texts, "\n"),
+			ToolUseID: item.ID, Status: status, Content: content,
 			Timestamp: millisToTime(item.Time.Completed),
 		}}
 	}
-	return call
+	return call, nil
 }
