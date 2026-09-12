@@ -110,7 +110,6 @@ const LEGACY_FONT_SCALE_STEPS = [90, 100, 110, 120, 130];
 let zoomRequest = 0;
 let nativeZoomQueue = Promise.resolve();
 let confirmedNativeZoom = 1;
-type ZoomSaveCallback = (level: ZoomLevel) => void;
 
 type DesktopTauriWebviewWindow = {
   setZoom(scaleFactor: number): Promise<void>;
@@ -145,17 +144,18 @@ function setCssZoom(factor: number): void {
   document.documentElement.style.setProperty("--agentsview-zoom-compensation", String(1 / factor));
 }
 
-function readStoredZoom(): ZoomLevel {
+function readStoredZoom(): ZoomLevel | undefined {
   try {
     const zoom = Number(localStorage?.getItem(ZOOM_KEY));
     if (isZoomLevel(zoom) && zoom !== ZOOM_DEFAULT) return zoom;
     // Prefer a saved text size over the old store's automatic 100%.
     const legacy = Number(localStorage?.getItem(FONT_SCALE_KEY));
     if (isZoomLevel(legacy) && LEGACY_FONT_SCALE_STEPS.includes(legacy)) return legacy;
+    if (isZoomLevel(zoom)) return zoom;
   } catch {
     // ignore
   }
-  return ZOOM_DEFAULT;
+  return undefined;
 }
 
 const VALID_LAYOUTS: MessageLayout[] = ["default", "compact", "stream", "skim"];
@@ -267,10 +267,8 @@ class UIStore {
   pendingScrollOrdinal: number | null = $state(null);
   pendingScrollSession: string | null = $state(null);
 
-  zoomLevel: ZoomLevel = $state(readStoredZoom());
-  zoomChangeVersion = 0;
-  private persistZoomStorage = true;
-  private zoomSaveCallback: ZoomSaveCallback | null = null;
+  private localZoomLevel = readStoredZoom();
+  zoomLevel: ZoomLevel = $state(this.localZoomLevel ?? ZOOM_DEFAULT);
   renderUnknownXmlBlocksAsPreformatted: boolean = $state(
     readStoredBool(UNKNOWN_XML_PREFORMATTED_KEY, false),
   );
@@ -287,6 +285,7 @@ class UIStore {
   visibleBlocks: Set<BlockType> = $state(readBlockFilters());
 
   constructor() {
+    if (this.localZoomLevel !== undefined) this.persistZoomPreference();
     $effect.root(() => {
       // Theme and high-contrast classes/persistence are owned by kit-ui's
       // theme store (initTheme above); no effects needed here.
@@ -358,9 +357,6 @@ class UIStore {
           );
         } else {
           setCssZoom(factor);
-        }
-        if (this.persistZoomStorage) {
-          this.persistZoomPreference();
         }
       });
 
@@ -569,45 +565,34 @@ class UIStore {
     this.setFollowLatest(!this.followLatest);
   }
 
-  setZoomSaveCallback(callback: ZoomSaveCallback | null) {
-    this.zoomSaveCallback = callback;
-  }
-
   zoomIn() {
     const idx = ZOOM_STEPS.indexOf(this.zoomLevel);
     if (idx < ZOOM_STEPS.length - 1) {
-      this.setUserZoomLevel(ZOOM_STEPS[idx + 1]!);
+      this.setZoomLevel(ZOOM_STEPS[idx + 1]!);
     }
   }
 
   zoomOut() {
     const idx = ZOOM_STEPS.indexOf(this.zoomLevel);
     if (idx > 0) {
-      this.setUserZoomLevel(ZOOM_STEPS[idx - 1]!);
+      this.setZoomLevel(ZOOM_STEPS[idx - 1]!);
     }
   }
 
   resetZoom() {
-    this.setUserZoomLevel(ZOOM_DEFAULT);
+    this.setZoomLevel(ZOOM_DEFAULT);
   }
 
   setZoomLevel(level: number) {
-    if (isZoomLevel(level)) {
-      this.setUserZoomLevel(level);
-    }
+    if (!isZoomLevel(level)) return;
+    this.localZoomLevel = level;
+    this.zoomLevel = level;
+    this.persistZoomPreference();
   }
 
-  applyZoomLevel(level: number) {
-    if (isZoomLevel(level)) {
-      this.persistZoomStorage = false;
-      this.zoomLevel = level;
-      return true;
-    }
-    return false;
-  }
-
-  restoreStoredZoom() {
-    return this.applyZoomLevel(readStoredZoom());
+  applyZoomDefault(level?: number) {
+    this.zoomLevel =
+      this.localZoomLevel ?? (level !== undefined && isZoomLevel(level) ? level : ZOOM_DEFAULT);
   }
 
   private persistZoomPreference() {
@@ -617,15 +602,6 @@ class UIStore {
     } catch {
       // ignore
     }
-  }
-
-  private setUserZoomLevel(level: ZoomLevel) {
-    const changed = this.zoomLevel !== level;
-    this.persistZoomStorage = true;
-    this.zoomLevel = level;
-    if (!changed) this.persistZoomPreference();
-    this.zoomChangeVersion += 1;
-    this.zoomSaveCallback?.(level);
   }
 
   toggleHighContrast() {

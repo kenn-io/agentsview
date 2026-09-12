@@ -900,10 +900,7 @@ describe("UIStore", () => {
 
         mod.ui.toggleUnknownXmlBlocksAsPreformatted();
         await tick();
-        expect(setItem).toHaveBeenLastCalledWith(
-          "agentsview-unknown-xml-preformatted",
-          "false",
-        );
+        expect(setItem).toHaveBeenLastCalledWith("agentsview-unknown-xml-preformatted", "false");
       } finally {
         Object.defineProperty(globalThis, "localStorage", {
           value: original,
@@ -1002,8 +999,12 @@ describe("UIStore", () => {
       stored = new Map();
       storage = {
         getItem: vi.fn((key: string) => stored.get(key) ?? null),
-        setItem: vi.fn((key: string, value: string) => { stored.set(key, value); }),
-        removeItem: vi.fn((key: string) => { stored.delete(key); }),
+        setItem: vi.fn((key: string, value: string) => {
+          stored.set(key, value);
+        }),
+        removeItem: vi.fn((key: string) => {
+          stored.delete(key);
+        }),
       };
       vi.stubGlobal("localStorage", storage);
       vi.stubGlobal("__TAURI__", undefined);
@@ -1019,30 +1020,58 @@ describe("UIStore", () => {
     });
 
     const percentages = [
-      [67, "0.67"], [75, "0.75"], [80, "0.8"], [90, "0.9"],
-      [100, "1"], [110, "1.1"], [120, "1.2"], [125, "1.25"],
-      [130, "1.3"], [150, "1.5"], [175, "1.75"], [200, "2"],
+      [67, "0.67"],
+      [75, "0.75"],
+      [80, "0.8"],
+      [90, "0.9"],
+      [100, "1"],
+      [110, "1.1"],
+      [120, "1.2"],
+      [125, "1.25"],
+      [130, "1.3"],
+      [150, "1.5"],
+      [175, "1.75"],
+      [200, "2"],
     ] as const;
 
-    it.each(percentages)("restores and applies canonical %i in the browser", async (level, factor) => {
-      stored.set("agentsview-zoom-level", String(level));
-      const { ui: zoom } = await import("./ui.svelte.js");
-      await tick();
-      expect(zoom.zoomLevel).toBe(level);
-      expect(document.documentElement.style.getPropertyValue("zoom")).toBe(factor);
-      expect(stored.get("agentsview-zoom-level")).toBe(String(level));
-    });
+    it.each(percentages)(
+      "restores and applies canonical %i in the browser",
+      async (level, factor) => {
+        stored.set("agentsview-zoom-level", String(level));
+        const { ui: zoom } = await import("./ui.svelte.js");
+        await tick();
+        expect(zoom.zoomLevel).toBe(level);
+        expect(document.documentElement.style.getPropertyValue("zoom")).toBe(factor);
+        expect(stored.get("agentsview-zoom-level")).toBe(String(level));
+      },
+    );
 
     describe.each(["/", "/?desktop"])("migration at %s", (url) => {
       it.each([
-        [null, null, 100], ["100", "100", 100], [null, "90", 90],
-        [null, "100", 100], [null, "110", 110], [null, "120", 120],
-        [null, "130", 130], ["100", "120", 120], ["150", "120", 150],
-        ["120", "130", 120], ["150", "100", 150], ["bad", "130", 130],
-        ["133", "120", 120], ["0", "120", 120], ["NaN", "120", 120],
-        ["Infinity", "120", 120], ["-100", "120", 120], ["", "120", 120],
-        ["bad", "bad", 100], ["100", "150", 100], [null, "125", 100],
-        [null, "0", 100], [null, "NaN", 100], [null, "", 100],
+        [null, null, 100],
+        ["100", "100", 100],
+        [null, "90", 90],
+        [null, "100", 100],
+        [null, "110", 110],
+        [null, "120", 120],
+        [null, "130", 130],
+        ["100", "120", 120],
+        ["150", "120", 150],
+        ["120", "130", 120],
+        ["150", "100", 150],
+        ["bad", "130", 130],
+        ["133", "120", 120],
+        ["0", "120", 120],
+        ["NaN", "120", 120],
+        ["Infinity", "120", 120],
+        ["-100", "120", 120],
+        ["", "120", 120],
+        ["bad", "bad", 100],
+        ["100", "150", 100],
+        [null, "125", 100],
+        [null, "0", 100],
+        [null, "NaN", 100],
+        [null, "", 100],
       ])("chooses %s plus legacy %s as %i", async (canonical, legacy, expected) => {
         window.history.replaceState({}, "", url);
         if (canonical !== null) stored.set("agentsview-zoom-level", String(canonical));
@@ -1050,10 +1079,13 @@ describe("UIStore", () => {
         const { ui: zoom } = await import("./ui.svelte.js");
         await tick();
         expect(zoom.zoomLevel).toBe(expected);
-        expect(stored.get("agentsview-zoom-level")).toBe(String(expected));
-        expect(stored.has("agentsview-font-scale")).toBe(false);
-        expect(storage.setItem).toHaveBeenCalledWith("agentsview-zoom-level", String(expected));
-        expect(storage.removeItem).toHaveBeenCalledWith("agentsview-font-scale");
+        if (expected !== 100 || canonical === "100" || legacy === "100") {
+          expect(stored.get("agentsview-zoom-level")).toBe(String(expected));
+          expect(stored.has("agentsview-font-scale")).toBe(false);
+        } else {
+          zoom.applyZoomDefault(120);
+          expect(zoom.zoomLevel).toBe(120);
+        }
       });
     });
 
@@ -1065,7 +1097,10 @@ describe("UIStore", () => {
     ])("applies each selection once in %s", async (_mode, url, bridge, native) => {
       window.history.replaceState({}, "", url);
       const setZoom = vi.fn(() => Promise.resolve());
-      if (bridge) vi.stubGlobal("__TAURI__", { webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) } });
+      if (bridge)
+        vi.stubGlobal("__TAURI__", {
+          webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) },
+        });
       const { ui: zoom } = await import("./ui.svelte.js");
       await tick();
       for (const [level, factor] of percentages) {
@@ -1109,7 +1144,9 @@ describe("UIStore", () => {
     it("ignores invalid setters without persisting or calling the bridge", async () => {
       window.history.replaceState({}, "", "/?desktop");
       const setZoom = vi.fn(() => Promise.resolve());
-      vi.stubGlobal("__TAURI__", { webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) } });
+      vi.stubGlobal("__TAURI__", {
+        webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) },
+      });
       const { ui: zoom } = await import("./ui.svelte.js");
       zoom.setZoomLevel(120);
       await tick();
@@ -1127,30 +1164,37 @@ describe("UIStore", () => {
       expect(stored.get("agentsview-zoom-level")).toBe("120");
     });
 
-    it("saves user changes but not server hydration", async () => {
+    it("uses server zoom only until a local value is chosen", async () => {
       const { ui: zoom } = await import("./ui.svelte.js");
-      const save = vi.fn();
-      zoom.setZoomSaveCallback(save);
-      stored.set("agentsview-zoom-level", "120");
-
-      zoom.setZoomLevel(120);
-      zoom.applyZoomLevel(150);
       await tick();
+      zoom.applyZoomDefault(120);
+      await tick();
+      expect(zoom.zoomLevel).toBe(120);
+      expect(stored.has("agentsview-zoom-level")).toBe(false);
+      zoom.setZoomLevel(120);
+      zoom.applyZoomDefault(150);
+      expect(zoom.zoomLevel).toBe(120);
       expect(stored.get("agentsview-zoom-level")).toBe("120");
-      zoom.setZoomLevel(150);
-      expect(stored.get("agentsview-zoom-level")).toBe("150");
       zoom.resetZoom();
-
-      expect(save.mock.calls).toEqual([[120], [150], [100]]);
+      zoom.applyZoomDefault(150);
       expect(zoom.zoomLevel).toBe(100);
-      zoom.setZoomSaveCallback(null);
+      expect(stored.get("agentsview-zoom-level")).toBe("100");
+    });
+
+    it.each([100, 150])("prefers stored %i to the server default", async (level) => {
+      stored.set("agentsview-zoom-level", String(level));
+      const { ui: zoom } = await import("./ui.svelte.js");
+      zoom.applyZoomDefault(120);
+      expect(zoom.zoomLevel).toBe(level);
     });
 
     it("falls back to CSS zoom when native zoom rejects", async () => {
       window.history.replaceState({}, "", "/?desktop");
       stored.set("agentsview-font-scale", "120");
       const setZoom = vi.fn(() => Promise.reject(new Error("webview unavailable")));
-      vi.stubGlobal("__TAURI__", { webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) } });
+      vi.stubGlobal("__TAURI__", {
+        webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) },
+      });
       await import("./ui.svelte.js");
       await tick();
       await Promise.resolve();
@@ -1165,8 +1209,12 @@ describe("UIStore", () => {
     it("falls back to CSS zoom when native zoom throws synchronously", async () => {
       window.history.replaceState({}, "", "/?desktop");
       stored.set("agentsview-font-scale", "120");
-      const setZoom = vi.fn(() => { throw new Error("webview unavailable"); });
-      vi.stubGlobal("__TAURI__", { webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) } });
+      const setZoom = vi.fn(() => {
+        throw new Error("webview unavailable");
+      });
+      vi.stubGlobal("__TAURI__", {
+        webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) },
+      });
       await import("./ui.svelte.js");
       await tick();
       await Promise.resolve();
@@ -1184,7 +1232,9 @@ describe("UIStore", () => {
       const setZoom = vi.fn(async (factor: number) => {
         if (factor === 1.2) throw new Error("webview unavailable");
       });
-      vi.stubGlobal("__TAURI__", { webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) } });
+      vi.stubGlobal("__TAURI__", {
+        webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) },
+      });
       const { ui: zoom } = await import("./ui.svelte.js");
       await tick();
       zoom.setZoomLevel(120);
@@ -1209,7 +1259,9 @@ describe("UIStore", () => {
         if (factor === 1.5) return initial;
         return Promise.reject(new Error("webview unavailable"));
       });
-      vi.stubGlobal("__TAURI__", { webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) } });
+      vi.stubGlobal("__TAURI__", {
+        webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom }) },
+      });
       const { ui: zoom } = await import("./ui.svelte.js");
       await tick();
       zoom.setZoomLevel(120);
@@ -1226,7 +1278,9 @@ describe("UIStore", () => {
     });
 
     it("defaults when storage reads throw and still applies later selections", async () => {
-      vi.mocked(storage.getItem).mockImplementation(() => { throw new Error("blocked"); });
+      vi.mocked(storage.getItem).mockImplementation(() => {
+        throw new Error("blocked");
+      });
       const { ui: zoom } = await import("./ui.svelte.js");
       await tick();
       expect(zoom.zoomLevel).toBe(100);
@@ -1238,7 +1292,9 @@ describe("UIStore", () => {
 
     it("retains legacy storage when the canonical write fails", async () => {
       stored.set("agentsview-font-scale", "120");
-      vi.mocked(storage.setItem).mockImplementation(() => { throw new Error("quota"); });
+      vi.mocked(storage.setItem).mockImplementation(() => {
+        throw new Error("quota");
+      });
       const { ui: zoom } = await import("./ui.svelte.js");
       await tick();
       expect(zoom.zoomLevel).toBe(120);

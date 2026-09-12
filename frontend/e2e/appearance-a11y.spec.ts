@@ -309,7 +309,7 @@ async function openAppearance(page: Page, url: string) {
   await expect(page.getByTitle("Zoom", { exact: true })).toBeVisible();
 }
 
-async function expectZoom(page: Page, label: string, css: string, stored: string) {
+async function expectZoom(page: Page, label: string, css: string, stored: string | null) {
   await expect(page.getByTitle("Zoom", { exact: true })).toHaveText(`Zoom ${label}`);
   await expect.poll(() => readZoom(page)).toBe(css);
   expect(await page.evaluate(() => localStorage.getItem("agentsview-zoom-level"))).toBe(stored);
@@ -321,14 +321,15 @@ for (const desktop of [false, true]) {
     const url = desktop ? "/settings?desktop" : "/settings";
 
     for (const state of [
-      { canonical: null, legacy: null, label: "100%", css: "1", stored: "100" },
+      { canonical: null, legacy: null, label: "100%", css: "1", stored: null },
       { canonical: null, legacy: "120", label: "120%", css: "1.2", stored: "120" },
       { canonical: "100", legacy: "130", label: "130%", css: "1.3", stored: "130" },
       { canonical: "150", legacy: "120", label: "150%", css: "1.5", stored: "150" },
       { canonical: "bad", legacy: "90", label: "90%", css: "0.9", stored: "90" },
-      { canonical: "133", legacy: "150", label: "100%", css: "1", stored: "100" },
     ]) {
-      test(`restores canonical ${state.canonical} and legacy ${state.legacy} through reload`, async ({ page }) => {
+      test(`restores canonical ${state.canonical} and legacy ${state.legacy} through reload`, async ({
+        page,
+      }) => {
         await page.addInitScript(({ canonical, legacy }) => {
           if (sessionStorage.getItem("zoom-seeded")) return;
           if (canonical !== null) localStorage.setItem("agentsview-zoom-level", canonical);
@@ -350,15 +351,31 @@ for (const desktop of [false, true]) {
         await expect(page.getByText("Desktop zoom", { exact: true })).toHaveCount(0);
         await page.getByTitle("Zoom", { exact: true }).click();
         await expect(page.getByRole("option")).toHaveText([
-          "67%", "75%", "80%", "90%", "100%", "110%", "120%", "125%", "130%", "150%", "175%", "200%",
+          "67%",
+          "75%",
+          "80%",
+          "90%",
+          "100%",
+          "110%",
+          "120%",
+          "125%",
+          "130%",
+          "150%",
+          "175%",
+          "200%",
         ]);
         await page.getByRole("option", { name: "120%", exact: true }).click();
         await expectZoom(page, "120%", "1.2", "120");
-        await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(2);
+        await expect
+          .poll(() => page.evaluate(() => document.documentElement.scrollWidth - innerWidth))
+          .toBeLessThanOrEqual(2);
         await page.reload();
         await expectZoom(page, "120%", "1.2", "120");
         await page.getByTitle("Zoom", { exact: true }).click();
-        await expect(page.getByRole("option", { name: "120%", exact: true })).toHaveAttribute("aria-selected", "true");
+        await expect(page.getByRole("option", { name: "120%", exact: true })).toHaveAttribute(
+          "aria-selected",
+          "true",
+        );
         await page.getByRole("combobox", { name: "Zoom", exact: true }).fill("133");
         await expect(page.getByText("No matches", { exact: true })).toBeVisible();
         await page.keyboard.press("Enter");
@@ -374,16 +391,28 @@ for (const desktop of [false, true]) {
         const calls: number[] = [];
         Object.assign(window, {
           zoomCalls: calls,
-          __TAURI__: { webviewWindow: { getCurrentWebviewWindow: () => ({ setZoom: async (factor: number) => { calls.push(factor); } }) } },
+          __TAURI__: {
+            webviewWindow: {
+              getCurrentWebviewWindow: () => ({
+                setZoom: async (factor: number) => {
+                  calls.push(factor);
+                },
+              }),
+            },
+          },
         });
       });
       await openAppearance(page, url);
       await expectZoom(page, "150%", desktop ? "1" : "1.5", "150");
-      expect(await page.evaluate(() => (window as Window & { zoomCalls?: number[] }).zoomCalls)).toEqual(desktop ? [1.5] : []);
+      expect(
+        await page.evaluate(() => (window as Window & { zoomCalls?: number[] }).zoomCalls),
+      ).toEqual(desktop ? [1.5] : []);
       await page.getByTitle("Zoom", { exact: true }).click();
       await page.getByRole("option", { name: "120%", exact: true }).click();
       await expectZoom(page, "120%", desktop ? "1" : "1.2", "120");
-      expect(await page.evaluate(() => (window as Window & { zoomCalls?: number[] }).zoomCalls)).toEqual(desktop ? [1.5, 1.2] : []);
+      expect(
+        await page.evaluate(() => (window as Window & { zoomCalls?: number[] }).zoomCalls),
+      ).toEqual(desktop ? [1.5, 1.2] : []);
     });
   });
 }
@@ -393,7 +422,10 @@ test("Shared zoom synchronizes Appearance, desktop status bar, and shortcuts", a
   await page.getByTitle("Zoom", { exact: true }).click();
   await page.getByRole("option", { name: "120%", exact: true }).click();
   await expect(page.locator(".zoom-level")).toHaveText("120%");
-  await page.locator(".zoom-controls").getByTitle(/Zoom in/).click();
+  await page
+    .locator(".zoom-controls")
+    .getByTitle(/Zoom in/)
+    .click();
   await expectZoom(page, "125%", "1.25", "125");
   await page.keyboard.press("ControlOrMeta+-");
   await expectZoom(page, "120%", "1.2", "120");
@@ -406,16 +438,97 @@ test("Shared zoom synchronizes Appearance, desktop status bar, and shortcuts", a
   await expectZoom(page, "100%", "1", "100");
 });
 
-test("Shared zoom keeps desktop controls and shortcut interception out of the browser", async ({ page }) => {
+test("Shared zoom keeps desktop controls and shortcut interception out of the browser", async ({
+  page,
+}) => {
   await openAppearance(page, "/settings");
   await page.getByTitle("Zoom", { exact: true }).click();
   await page.getByRole("option", { name: "120%", exact: true }).click();
   await expect(page.locator(".zoom-controls")).toHaveCount(0);
   const prevented = await page.evaluate(() => {
-    const event = new KeyboardEvent("keydown", { key: "0", ctrlKey: true, metaKey: true, bubbles: true, cancelable: true });
+    const event = new KeyboardEvent("keydown", {
+      key: "0",
+      ctrlKey: true,
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
     document.dispatchEvent(event);
     return event.defaultPrevented;
   });
   expect(prevented).toBe(false);
   await expectZoom(page, "120%", "1.2", "120");
+});
+
+test("Zoom menus keep the interface scale and stay aligned with their trigger", async ({
+  page,
+}) => {
+  await openAppearance(page, "/settings");
+  const trigger = page.getByTitle("Zoom", { exact: true });
+  const option = page.getByRole("option", { name: "100%", exact: true });
+  await trigger.click();
+  const normal = (await option.boundingBox())!;
+  await page.getByRole("option", { name: "120%", exact: true }).click();
+  await expect.poll(() => readZoom(page)).toBe("1.2");
+  await trigger.click();
+  const enlarged = (await option.boundingBox())!;
+  expect(enlarged.height / normal.height).toBeCloseTo(1.2, 1);
+  const panel = (await page.locator(".kit-typeahead__panel").boundingBox())!;
+  const button = (await page.getByRole("combobox", { name: "Zoom", exact: true }).boundingBox())!;
+  expect(Math.abs(panel.x - button.x)).toBeLessThanOrEqual(2);
+  expect(Math.abs(panel.width - button.width)).toBeLessThanOrEqual(2);
+  expect(
+    Math.min(
+      Math.abs(panel.y - button.y - button.height),
+      Math.abs(panel.y + panel.height - button.y),
+    ),
+  ).toBeLessThanOrEqual(4);
+});
+
+test("configured zoom is a default and browser choices stay independent", async ({
+  page,
+  browser,
+}) => {
+  const response = await page.request.get("/api/v1/settings");
+  const defaults = { ...(await response.json()), zoom_level: 120 };
+  const other = await browser.newPage();
+  const writes: string[] = [];
+  try {
+    for (const client of [page, other]) {
+      await client.route("**/api/v1/settings", (route) => {
+        if (route.request().method() === "PUT") writes.push(route.request().postData() ?? "");
+        return route.fulfill({ json: defaults });
+      });
+      await openAppearance(client, "/settings");
+      await expectZoom(client, "120%", "1.2", null);
+    }
+    await page.getByTitle("Zoom", { exact: true }).click();
+    await page.getByRole("option", { name: "150%", exact: true }).click();
+    await expectZoom(page, "150%", "1.5", "150");
+    await expectZoom(other, "120%", "1.2", null);
+    await other.getByTitle("Zoom", { exact: true }).click();
+    await other.getByRole("option", { name: "100%", exact: true }).click();
+    await expectZoom(other, "100%", "1", "100");
+    for (const client of [page, other]) await client.reload();
+    await expectZoom(page, "150%", "1.5", "150");
+    await expectZoom(other, "100%", "1", "100");
+    expect(writes).toEqual([]);
+  } finally {
+    await other.close();
+  }
+});
+
+test("the date picker contains its calendar at 200% zoom", async ({ page }) => {
+  await page.setViewportSize({ width: 2200, height: 1400 });
+  await page.addInitScript(() => localStorage.setItem("agentsview-zoom-level", "200"));
+  await page.goto("/activity");
+  await page.locator(".kit-date-range-picker__trigger").click();
+  await page.getByRole("radio", { name: "Custom", exact: true }).click();
+  const panel = page.locator(".kit-date-range-picker__panel");
+  const calendar = panel.locator(".kit-calendar");
+  await expect(calendar).toBeVisible();
+  const shell = (await panel.boundingBox())!;
+  const grid = (await calendar.boundingBox())!;
+  expect(grid.x).toBeGreaterThanOrEqual(shell.x);
+  expect(grid.x + grid.width).toBeLessThanOrEqual(shell.x + shell.width);
 });

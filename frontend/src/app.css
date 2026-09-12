@@ -7,7 +7,8 @@
   padding: 0;
 }
 
-/* Fixed kit-ui menus need the inverse root zoom for viewport coordinates. */
+/* Keep fixed overlay shells in viewport coordinates; scale their contents
+ * with the interface. kit-ui measures shell dimensions when positioning. */
 .kit-typeahead__panel,
 .kit-select-dropdown__list,
 .kit-filter-dropdown__panel,
@@ -16,6 +17,12 @@
 .context-menu,
 .tooltip {
   zoom: var(--agentsview-zoom-compensation, 1);
+
+  /* ponytail: DateRangePicker fixes its shell at 360px; keep its current
+   * scale until kit-ui sizes and positions that shell for zoom. */
+  &:not(.kit-date-range-picker__panel) > * {
+    zoom: calc(1 / var(--agentsview-zoom-compensation, 1));
+  }
 }
 
 /*

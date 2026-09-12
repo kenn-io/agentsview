@@ -47,7 +47,7 @@ describe("AppearanceSettings", () => {
   });
 
   afterEach(() => {
-    ui.applyZoomLevel(100);
+    ui.setZoomLevel(100);
     ui.renderUnknownXmlBlocksAsPreformatted = false;
     if (ui.highContrast) ui.toggleHighContrast();
     settings.chartPalette = "agentsview";
@@ -62,8 +62,12 @@ describe("AppearanceSettings", () => {
   });
 
   it.each([false, true])("shares one Zoom selector with desktop=%s", async (isDesktop) => {
-    Object.defineProperty(sync, "isDesktop", { value: isDesktop, writable: true, configurable: true });
-    ui.applyZoomLevel(120);
+    Object.defineProperty(sync, "isDesktop", {
+      value: isDesktop,
+      writable: true,
+      configurable: true,
+    });
+    ui.setZoomLevel(120);
     const { getByTitle, getByRole, getAllByRole, queryByText } = render(AppearanceSettings);
     expect(getByTitle("Zoom").textContent).toContain("120%");
     expect(getByRole("button", { name: "Zoom 120%" })).toBeTruthy();
@@ -71,7 +75,18 @@ describe("AppearanceSettings", () => {
     expect(queryByText("Desktop zoom")).toBeNull();
     await fireEvent.click(getByTitle("Zoom"));
     expect(getAllByRole("option").map((option) => option.textContent?.trim())).toEqual([
-      "67%", "75%", "80%", "90%", "100%", "110%", "120%", "125%", "130%", "150%", "175%", "200%",
+      "67%",
+      "75%",
+      "80%",
+      "90%",
+      "100%",
+      "110%",
+      "120%",
+      "125%",
+      "130%",
+      "150%",
+      "175%",
+      "200%",
     ]);
     expect(getByRole("option", { name: "120%" }).getAttribute("aria-selected")).toBe("true");
     await fireEvent.mouseDown(getByRole("option", { name: "150%" }));
@@ -96,7 +111,7 @@ describe("AppearanceSettings", () => {
     expect(settingsService.putApiV1Settings).not.toHaveBeenCalled();
   });
 
-  it("queues a Zoom selection behind another settings save", async () => {
+  it("keeps Zoom local while another setting saves", async () => {
     const paletteResponse = {
       agent_dirs: {},
       chart_palette: "matplotlib" as const,
@@ -108,11 +123,11 @@ describe("AppearanceSettings", () => {
       terminal: { mode: "auto" as const },
     };
     let finishPalette!: (value: typeof paletteResponse) => void;
-    settingsService.putApiV1Settings
-      .mockReturnValueOnce(new Promise((resolve) => {
+    settingsService.putApiV1Settings.mockReturnValueOnce(
+      new Promise((resolve) => {
         finishPalette = resolve;
-      }))
-      .mockResolvedValueOnce({ ...paletteResponse, zoom_level: 120 });
+      }),
+    );
 
     const paletteSave = settings.save({ chart_palette: "matplotlib" });
     const { getByRole, getByTitle } = render(AppearanceSettings);
@@ -125,8 +140,8 @@ describe("AppearanceSettings", () => {
 
     finishPalette(paletteResponse);
     await paletteSave;
-    await waitFor(() => expect(settingsService.putApiV1Settings).toHaveBeenCalledTimes(2));
-    expect(settingsService.putApiV1Settings).toHaveBeenNthCalledWith(2, { zoom_level: 120 });
+    expect(settingsService.putApiV1Settings).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem("agentsview-zoom-level")).toBe("120");
     await waitFor(() => expect(settings.saving).toBe(false));
   });
 

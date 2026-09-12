@@ -234,7 +234,7 @@
 
   {#if tooltip}
     <div class="tooltip" style="left: {tooltip.x}px; top: {tooltip.y}px;">
-      {tooltip.text}
+      <span>{tooltip.text}</span>
     </div>
   {/if}
 </div>

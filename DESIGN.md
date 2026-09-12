@@ -95,6 +95,12 @@ App-level glue that remains local:
   selectors as a version-pinned integration contract: kit-ui dependency bumps
   that touch settings must pass the settings browser coverage in CI before
   adoption.
+- Fixed overlay rules in `frontend/src/app.css` keep kit-ui positioning shells
+  in viewport coordinates and restore interface zoom on their direct children.
+  These class selectors and child boundaries are a version-pinned integration
+  contract. Dependency updates must pass the zoom menu geometry coverage in
+  `frontend/e2e/appearance-a11y.spec.ts`. The date picker retains its current
+  scale until kit-ui can size its fixed-width panel for zoom.
 
 Relative date ranges follow kit-ui semantics: "Last N days" spans N calendar
 days inclusive of today. `presetRange()` (dateRangeSelector.ts) and

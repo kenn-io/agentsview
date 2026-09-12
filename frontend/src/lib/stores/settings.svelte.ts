@@ -54,7 +54,6 @@ function forbiddenMessage(serverMessage: string): string {
 
 class SettingsStore {
   private mutationQueue: Promise<void> | null = null;
-  private pendingZoomSave = false;
   private loadVersion = 0;
   agentDirs: Record<string, string[]> = $state({});
   sessionProviders: SessionProvider[] = $state([]);
@@ -79,26 +78,13 @@ class SettingsStore {
    *  to provide an auth token before the app can load. */
   needsAuth: boolean = $state(false);
 
-  constructor() {
-    ui.setZoomSaveCallback((level) => {
-      if (!this.loaded || this.error || this.needsAuth) {
-        this.pendingZoomSave = true;
-      } else if (!this.readOnly) {
-        void this.save({ zoom_level: level });
-      }
-    });
-  }
-
   async load(): Promise<void> {
     if (this.saving && this.mutationQueue) {
       await this.mutationQueue;
       return this.load();
     }
     const loadVersion = ++this.loadVersion;
-    const zoomChangeVersion = ui.zoomChangeVersion;
-    const pendingZoomSave = this.pendingZoomSave;
     const isCurrentLoad = () => loadVersion === this.loadVersion;
-    let loadedData = false;
     this.loading = true;
     this.loaded = false;
     this.error = null;
@@ -123,13 +109,7 @@ class SettingsStore {
       this.requireAuth = data.require_auth ?? false;
       this.readOnly = data.read_only === true;
       this.chartPalette = data.chart_palette;
-      if (ui.zoomChangeVersion === zoomChangeVersion && !pendingZoomSave) {
-        if (data.zoom_level !== undefined) {
-          ui.applyZoomLevel(data.zoom_level);
-        } else {
-          ui.restoreStoredZoom();
-        }
-      }
+      ui.applyZoomDefault(data.zoom_level);
       // A response without the field, including every fixture that predates
       // it, reads as the default keep policy instead of failing the load.
       this.toolResultImages = data.tool_result_images === "drop" ? "drop" : "keep";
@@ -139,7 +119,6 @@ class SettingsStore {
       if (data.auth_token && !isRemoteConnection()) {
         setAuthToken(data.auth_token);
       }
-      loadedData = true;
     } catch (e) {
       if (!isCurrentLoad()) return;
       if (e instanceof ApiError && e.status === 401) {
@@ -150,12 +129,9 @@ class SettingsStore {
         this.error = e instanceof Error ? e.message : "Failed to load settings";
       }
     } finally {
-      if (!isCurrentLoad()) return;
-      this.loading = false;
-      this.loaded = true;
-      if (loadedData && this.pendingZoomSave) {
-        this.pendingZoomSave = false;
-        if (!this.readOnly) void this.save({ zoom_level: ui.zoomLevel });
+      if (isCurrentLoad()) {
+        this.loading = false;
+        this.loaded = true;
       }
     }
   }
