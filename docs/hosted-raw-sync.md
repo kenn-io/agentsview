@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-11
+last_edited: 2026-09-12
 title: Hosted Raw Sync
 description: Keep original session files in hosted custody with authenticated, resumable uploads
 ---
@@ -264,10 +264,43 @@ requires a new instance key.
 
 Failed and exhausted requirements are durable. Raising
 `hosted_embeddings_max_attempts`, restarting, or selecting the same instance
-again does not reset them. After fixing provider or profile configuration,
-start a fresh rebuild with a new instance key. Set
-`hosted_embeddings_enabled = false` and restart to stop encoding while keeping
-a valid active generation available to HTTP, direct CLI and MCP searches.
+again does not reset them. Repair the provider, credential, resource limit, or
+profile problem first, then inspect the failed count and explicitly queue a
+bounded retry:
+
+```bash
+agentsview pg embeddings status hosted --json
+agentsview pg embeddings retry-failed hosted --generation 1 --batch-size 64
+```
+
+The generation ID is required. Each call examines 1–256 failed requirements
+(64 by default) and reports only the generation ID plus examined, retried, and
+skipped counts. Skipped failures are stale or no longer eligible; they stay
+unchanged until the normal worker reconciliation handles their source state.
+Run the command again to process another bounded batch. An immediate repeat
+before worker activity reports zero counts for requirements already queued.
+
+Retrying resets the normal attempt cap for the selected requirements. Repeated
+manual retries can therefore consume more encoding budget. The command does not
+start the worker, resolve encoder credentials, send encoder requests, open the
+local SQLite archive, rebuild successful vectors, or change the active
+generation. With `hosted_embeddings_enabled = false`, recovered requirements
+remain queued until a separately running enabled worker claims them.
+
+Fresh provisioning includes the failed-recovery index. After upgrading an
+older hosted embedding schema, use `status` to identify the current desired
+instance and reprovision that same profile and instance key with the owner
+target before using retry. If status has no desired generation, reprovision the
+active instance instead. Provisioning always reselects the supplied instance as
+desired, so reprovisioning the active instance while a different desired
+generation is building would interrupt that build's selection. The owner
+upgrade installs the index and can wait for an index build lock; the restricted
+runtime command never creates or repairs database objects.
+
+Set `hosted_embeddings_enabled = false` and restart to stop encoding while
+keeping a valid active generation available to HTTP, direct CLI and MCP
+searches. Retention, garbage collection, raw parse recovery, and disaster
+rebuilds remain future operator workflows.
 
 With `archive_content = "usage"`, writable hosted startup clears documents,
 chunks and reusable vector values from every generation before any worker could

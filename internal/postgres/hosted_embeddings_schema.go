@@ -142,6 +142,15 @@ func ProvisionHostedEmbeddings(ctx context.Context, owner *sql.DB, schema, tenan
 	if err = tx.QueryRowContext(ctx, `SELECT singleton FROM raw_corpus_state WHERE tenant_id=$1 AND singleton=1 FOR UPDATE`, tenant).Scan(&one); err != nil {
 		return g, err
 	}
+	// Existing runtimes do not require recovery's index. Upgrade it only during
+	// explicit owner provisioning, under the same fence used by requirement
+	// writers, so index creation cannot block a worker that holds the fence.
+	if _, err = tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS hosted_embedding_failed ON hosted_embedding_requirements(tenant_id,generation_id,session_id) WHERE state='failed'`); err != nil {
+		return g, err
+	}
+	if err = checkEmbeddingRecoveryIndex(ctx, tx, schema); err != nil {
+		return g, err
+	}
 	var existing int64
 	err = tx.QueryRowContext(ctx, `SELECT id FROM hosted_embedding_generations WHERE tenant_id=$1 AND instance_key=$2`, tenant, instanceKey).Scan(&existing)
 	switch err {

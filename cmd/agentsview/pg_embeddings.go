@@ -25,6 +25,7 @@ func newPGEmbeddingsCommand() *cobra.Command {
 	cmd.AddCommand(newPGEmbeddingGenerationCommand("provision"))
 	cmd.AddCommand(newPGEmbeddingGenerationCommand("rebuild"))
 	cmd.AddCommand(newPGEmbeddingStatusCommand())
+	cmd.AddCommand(newPGEmbeddingRetryFailedCommand())
 	return cmd
 }
 

@@ -269,6 +269,15 @@ func appendConnParams(
 // tenant schema. Startup parameters override caller values on every connection;
 // checkout reset restores context after connection reuse or caller SET commands.
 func OpenHosted(dsn, schema, tenant string, allowInsecure bool) (*sql.DB, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return OpenHostedContext(ctx, dsn, schema, tenant, allowInsecure)
+}
+
+// OpenHostedContext opens a restricted hosted pool and uses ctx for its initial
+// connection and tenant verification. Operations on the returned pool use the
+// contexts supplied by their callers.
+func OpenHostedContext(ctx context.Context, dsn, schema, tenant string, allowInsecure bool) (*sql.DB, error) {
 	if err := validateHostedBinding(schema, tenant); err != nil {
 		return nil, err
 	}
@@ -305,8 +314,6 @@ func OpenHosted(dsn, schema, tenant string, allowInsecure bool) (*sql.DB, error)
 	database.SetMaxIdleConns(5)
 	database.SetConnMaxLifetime(30 * time.Minute)
 	database.SetConnMaxIdleTime(5 * time.Minute)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	if err = CheckHostedTenant(ctx, database, schema, tenant); err != nil {
 		database.Close()
 		return nil, err

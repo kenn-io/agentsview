@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-12
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -24,6 +25,11 @@ description: Release history for AgentsView
   files unchanged. Shared roots are scanned once. (#1611, #1681)
 
 **Improvements**
+
+- Retry a bounded batch of failed hosted embedding jobs after repairing their
+  cause, while preserving completed vectors and the active generation. The new
+  operator command reports aggregate counts and leaves encoding to the normal
+  hosted worker.
 
 - Expand a **Cursor CLI** session in the sidebar to read the transcripts of
   the subagents it delegated to. Transcripts stored in a parent session's
