@@ -424,6 +424,56 @@ Keep PostgreSQL metadata and the immutable raw repository together in backups.
 Automated retention, garbage collection, disaster rebuilds, enrollment UX and
 automatic migration cutover tooling remain outside this release.
 
+## Backfill existing laptop sources
+
+Run a finite backfill before starting the watcher on a laptop that already has
+session history. The command reads the same configured filesystem roots as local
+sync. It captures and uploads original provider files without opening, parsing,
+or changing the local SQLite archive. S3 roots are not accepted.
+
+Use a stable run ID and select every provider included in this migration:
+
+```bash
+export AGENTSVIEW_RAW_SYNC_URL=https://agents.example.com
+export AGENTSVIEW_RAW_SYNC_DEVICE_ID=device-id
+export AGENTSVIEW_RAW_SYNC_CREDENTIAL=device-credential
+
+agentsview raw-sync backfill \
+  --run-id laptop-history-1 \
+  --provider claude \
+  --provider codex \
+  --batch-size 128 \
+  --format json
+```
+
+Batch size may be 1–512 and can change between attempts. The run ID is bound to
+the device, server, selected providers, and configured roots. Reordered or
+duplicate provider flags describe the same selection. A changed destination,
+device, provider set, or root set needs a new run ID.
+
+Each invocation is finite. It does not sleep until a failed or deferred upload
+becomes eligible. An incomplete attempt prints current aggregate progress and
+exits nonzero; repair the unavailable root, local spool capacity, device
+authorization, network, or server rejection, then run the same command again.
+JSON output is one object with `captured`, `acknowledged`, `pending`, failure
+counters, and an explicit `complete` field. Human output states `complete` or
+`incomplete` directly. Output and errors do not include source paths, transcript
+content, credentials, receipts, or raw server responses.
+
+When the same immutable run reports `"complete":true`, its saved result is
+historical proof. Repeating it does not rediscover sources, contact the server,
+or create another generation, even if files were appended or the old root is no
+longer mounted. Start the watcher after that result to capture later changes:
+
+```bash
+agentsview raw-sync watch
+```
+
+Keep the same device ID, credential, server, and provider configuration for the
+handoff. The watcher owns the same checkpoint writer and continues from the
+acknowledged source heads left by the backfill, so do not run both commands at
+the same time.
+
 ## Laptop raw watch daemon
 
 `agentsview raw-sync watch` watches supported local provider roots, captures

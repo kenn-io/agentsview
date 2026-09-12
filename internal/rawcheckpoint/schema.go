@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const schemaVersion = 8
+const schemaVersion = 9
 
 func (s *Store) init(ctx context.Context) error {
 	var version int
@@ -76,6 +76,13 @@ func (s *Store) init(ctx context.Context) error {
 		for _, statement := range versionEightMigrationStatements {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return fmt.Errorf("rawcheckpoint: migrate schema to version 8: %w", err)
+			}
+		}
+	}
+	if version < 9 {
+		for _, statement := range versionNineMigrationStatements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("rawcheckpoint: migrate schema to version 9: %w", err)
 			}
 		}
 	}

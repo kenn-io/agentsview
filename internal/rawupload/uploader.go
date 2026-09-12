@@ -75,7 +75,26 @@ func New(
 func (u *Uploader) UploadNext(
 	ctx context.Context,
 ) (Result, bool, error) {
-	manifest, found, err := u.store.FinalizeNextManifest(ctx, u.deviceID)
+	return u.uploadNext(ctx, "")
+}
+
+// UploadNextForBackfill shares the upload pipeline while limiting selection to
+// the run's bound captures and any unacknowledged predecessors.
+func (u *Uploader) UploadNextForBackfill(ctx context.Context, runID string) (Result, bool, error) {
+	if runID == "" {
+		return Result{}, false, rawcheckpoint.ErrBackfillConflict
+	}
+	return u.uploadNext(ctx, runID)
+}
+func (u *Uploader) uploadNext(ctx context.Context, runID string) (Result, bool, error) {
+	var manifest rawsync.Manifest
+	var found bool
+	var err error
+	if runID == "" {
+		manifest, found, err = u.store.FinalizeNextManifest(ctx, u.deviceID)
+	} else {
+		manifest, found, err = u.store.FinalizeNextManifestForBackfill(ctx, u.deviceID, runID)
+	}
 	if err != nil || !found {
 		return Result{}, false, err
 	}

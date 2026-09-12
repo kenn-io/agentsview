@@ -16,16 +16,21 @@ import (
 
 // AuditResult summarizes bounded work for one provider pass.
 type AuditResult struct {
-	Visited    int
-	Captured   int
-	Unchanged  int
-	Tombstoned int
-	Degraded   int
-	Complete   bool
+	Candidates   int
+	Changed      int
+	Unsupported  int
+	PassFinished bool
+	Visited      int
+	Captured     int
+	Unchanged    int
+	Tombstoned   int
+	Degraded     int
+	Complete     bool
 }
 
 // Auditor rotates capture work and repairs sources missed by watcher events.
 type Auditor struct {
+	runID         string
 	store         *rawcheckpoint.Store
 	capturer      *rawcapture.Capturer
 	maxWork       int
@@ -79,13 +84,18 @@ type auditDiscoveryEvent struct {
 }
 
 type auditDiscoveryScan struct {
-	events       <-chan auditDiscoveryEvent
-	cancel       context.CancelFunc
-	resume       chan struct{}
-	terminal     *auditDiscoveryEvent
-	known        []rawcheckpoint.SourceCheckpoint
-	presentKnown map[string]bool
-	knownRoot    *parser.WatchRoot
+	done          chan struct{}
+	roots         []parser.WatchRoot
+	checkedBefore int
+	checkedAfter  int
+	failed        bool
+	events        <-chan auditDiscoveryEvent
+	cancel        context.CancelFunc
+	resume        chan struct{}
+	terminal      *auditDiscoveryEvent
+	known         []rawcheckpoint.SourceCheckpoint
+	presentKnown  map[string]bool
+	knownRoot     *parser.WatchRoot
 }
 
 func (a *Auditor) auditProviderBounded(
@@ -98,6 +108,11 @@ func (a *Auditor) auditProviderBounded(
 	scan, err := a.discoveryScan(ctx, provider, &traversalRemaining)
 	if err != nil {
 		return result, err
+	}
+	if a.runID != "" && scan.failed && scan.events == nil {
+		result.PassFinished = true
+		a.stopDiscoveryScan(providerType)
+		return result, nil
 	}
 	if scan.events == nil {
 		return result, nil
@@ -133,6 +148,7 @@ func (a *Auditor) auditProviderBounded(
 		case event, ok = <-scan.events:
 		}
 		if !ok {
+			result.PassFinished = true
 			a.stopDiscoveryScan(providerType)
 			return result, nil
 		}
@@ -150,12 +166,21 @@ func (a *Auditor) auditProviderBounded(
 			close(event.resume)
 			continue
 		}
+		result.Candidates++
+		// All emitted candidates consume work, including duplicates, unsupported
+		// plans and durable resume skips. Sources cannot bypass the batch bound.
+		remaining--
 		identity, supported, err := a.rawCaptureSourceIdentity(ctx, provider, event.source)
 		if err != nil {
 			a.stopDiscoveryScan(providerType)
 			return result, err
 		}
 		if !supported {
+			result.Unsupported++
+			scan.failed = true
+			if remaining == 0 {
+				return result, nil
+			}
 			continue
 		}
 		key := auditSourceIdentityKey(identity)
@@ -164,13 +189,35 @@ func (a *Auditor) auditProviderBounded(
 		}
 		physicalKey := rawWatchSourceDedupKey(event.source)
 		if _, duplicate := seenPhysical[physicalKey]; duplicate {
+			if remaining == 0 {
+				return result, nil
+			}
 			continue
 		}
 		seenPhysical[physicalKey] = struct{}{}
-		capture, err := a.capturer.Capture(ctx, provider, event.source)
-		remaining--
+		var capture rawcapture.Result
+		if a.runID != "" {
+			member, found, lookupErr := a.store.BackfillSource(ctx, a.runID, identity)
+			if lookupErr != nil {
+				a.stopDiscoveryScan(providerType)
+				return result, lookupErr
+			}
+			if found {
+				if member.Status == "invalidated" {
+					a.stopDiscoveryScan(providerType)
+					return result, rawcheckpoint.ErrBackfillIncomplete
+				}
+				capture = rawcapture.Result{Status: rawcapture.StatusUnchanged, CaptureID: member.CaptureID, Source: identity}
+			} else {
+				capture, err = a.capturer.CaptureForBackfill(ctx, provider, event.source, a.runID)
+			}
+		} else {
+			capture, err = a.capturer.Capture(ctx, provider, event.source)
+		}
 		result.Visited++
 		if errors.Is(err, rawcapture.ErrSourceChanged) {
+			result.Changed++
+			scan.failed = true
 			if remaining == 0 {
 				return result, nil
 			}
@@ -186,6 +233,7 @@ func (a *Auditor) auditProviderBounded(
 		case rawcapture.StatusUnchanged:
 			result.Unchanged++
 		case rawcapture.StatusDegraded:
+			scan.failed = true
 			result.Degraded++
 		}
 		if remaining == 0 {
@@ -201,10 +249,28 @@ func (a *Auditor) discoveryScan(
 ) (*auditDiscoveryScan, error) {
 	providerType := provider.Definition().Type
 	if scan := a.scans[providerType]; scan != nil {
+		if a.runID != "" {
+			return a.prepareBackfillScan(ctx, provider, scan, traversalRemaining), nil
+		}
 		if scan.events == nil && *traversalRemaining > 0 {
 			a.startDiscoveryScan(ctx, provider, scan)
 		}
 		return scan, nil
+	}
+	if a.runID != "" {
+		roots, err := a.store.BackfillRoots(ctx, a.runID, providerType)
+		if err != nil {
+			return nil, err
+		}
+		scan := &auditDiscoveryScan{}
+		for _, root := range roots {
+			scan.roots = append(scan.roots, parser.WatchRoot{Path: root.LocalPath})
+		}
+		if len(roots) == 0 {
+			scan.failed = true
+		}
+		a.scans[providerType] = scan
+		return a.prepareBackfillScan(ctx, provider, scan, traversalRemaining), nil
 	}
 	watchPlan, err := provider.WatchPlan(ctx)
 	if err != nil {
@@ -241,7 +307,9 @@ func (a *Auditor) startDiscoveryScan(
 	events := make(chan auditDiscoveryEvent)
 	scan.events = events
 	scan.cancel = cancel
+	scan.done = make(chan struct{})
 	go func() {
+		defer close(scan.done)
 		defer close(events)
 		progressCtx := parser.WithRawCaptureDiscoveryProgress(scanCtx, func() error {
 			resume := make(chan struct{})
@@ -285,6 +353,23 @@ func (a *Auditor) finishDiscoveryScan(
 	remaining int,
 	traversalRemaining *int,
 ) (AuditResult, error) {
+	if a.runID != "" {
+		for scan.checkedAfter < len(scan.roots) {
+			if *traversalRemaining == 0 {
+				scan.terminal = &event
+				return result, nil
+			}
+			*traversalRemaining--
+			if !rawAuditRootsComplete(ctx, scan.roots[scan.checkedAfter:scan.checkedAfter+1]) {
+				scan.failed = true
+			}
+			scan.checkedAfter++
+		}
+		result.PassFinished = true
+		result.Complete = event.complete && event.err == nil && !scan.failed
+		a.stopDiscoveryScan(providerType)
+		return result, event.err
+	}
 	discoveryComplete := event.complete
 	if _, ok := errors.AsType[parser.DiscoveryIncompleteError](event.err); ok {
 		discoveryComplete = false
@@ -304,6 +389,7 @@ func (a *Auditor) finishDiscoveryScan(
 			discoveryComplete = false
 		}
 	}
+	result.PassFinished = true
 	result.Complete = discoveryComplete
 	if result.Complete {
 		for _, checkpoint := range scan.known {
@@ -339,6 +425,9 @@ func (a *Auditor) stopDiscoveryScan(provider parser.AgentType) {
 	if scan := a.scans[provider]; scan != nil {
 		if scan.cancel != nil {
 			scan.cancel()
+		}
+		if scan.done != nil {
+			<-scan.done
 		}
 		delete(a.scans, provider)
 	}
@@ -544,4 +633,33 @@ func rawAuditRootsComplete(ctx context.Context, roots []parser.WatchRoot) bool {
 		}
 	}
 	return true
+}
+
+// Close cancels and joins all suspended discovery workers. The caller must not
+// call Close concurrently with an audit batch.
+func (a *Auditor) Close() {
+	for provider := range a.scans {
+		a.stopDiscoveryScan(provider)
+	}
+}
+
+func (a *Auditor) prepareBackfillScan(ctx context.Context, provider parser.Provider, scan *auditDiscoveryScan, remaining *int) *auditDiscoveryScan {
+	if scan.events != nil || scan.failed {
+		return scan
+	}
+	for scan.checkedBefore < len(scan.roots) {
+		if *remaining == 0 {
+			return scan
+		}
+		*remaining--
+		if !rawAuditRootsComplete(ctx, scan.roots[scan.checkedBefore:scan.checkedBefore+1]) {
+			scan.failed = true
+			return scan
+		}
+		scan.checkedBefore++
+	}
+	if *remaining > 0 {
+		a.startDiscoveryScan(ctx, provider, scan)
+	}
+	return scan
 }

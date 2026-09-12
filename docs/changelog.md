@@ -8,6 +8,11 @@ description: Release history for AgentsView
 
 **New features**
 
+- Upload existing Claude Code, Codex, and other supported local session roots
+  with `agentsview raw-sync backfill` before starting continuous raw sync. The
+  finite command saves resumable progress, reports incomplete work without
+  waiting through retry delays, and reuses completed migration proof without
+  uploading duplicate generations.
 - See recorded reasoning effort beside the model in Claude Code and Codex
   session headers. Upgrading triggers a full session resync to populate
   existing rows, which can take time for large archives. Sessions whose source
