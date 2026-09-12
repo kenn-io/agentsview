@@ -54,12 +54,20 @@ func ValidClineSessionID(sessionID string) bool {
 	return true
 }
 
-func clineResolveSessionsDir(root string) string {
+// ClineResolveSessionsDir resolves the directory containing Cline session
+// folders. If root is already a direct sessions directory (named "sessions"
+// or ending with "data/sessions"), root is returned; otherwise, "data/sessions"
+// under root is returned.
+func ClineResolveSessionsDir(root string) string {
 	clean := filepath.Clean(root)
 	if strings.HasSuffix(filepath.ToSlash(clean), "data/sessions") || filepath.Base(clean) == "sessions" {
 		return clean
 	}
 	return filepath.Join(clean, "data", "sessions")
+}
+
+func clineResolveSessionsDir(root string) string {
+	return ClineResolveSessionsDir(root)
 }
 
 func clineDiscoverEach(

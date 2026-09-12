@@ -1058,33 +1058,28 @@ func validClineSessionID(sessionID string) bool {
 
 // clineSessionFileShape reports whether rel — a slash-separated path
 // relative to a Cline root — names exactly a session file the
-// provider would discover: data/sessions/<sessionID>/<sessionID>.json,
-// data/sessions/<sessionID>/<sessionID>.messages.json, or relative to
-// a direct sessions root, <sessionID>/<sessionID>.json or
-// <sessionID>/<sessionID>.messages.json. Session IDs starting with "_"
+// provider would discover: data/sessions/<sessionID>/<sessionID>.json or
+// data/sessions/<sessionID>/<sessionID>.messages.json for an application
+// root, or <sessionID>/<sessionID>.json, <sessionID>/<sessionID>.messages.json
+// relative to a direct sessions root. Session IDs starting with "_"
 // or "." are rejected, matching discovery's marker-directory skip.
 func clineSessionFileShape(root, rel string) bool {
+	cleanRoot := filepath.Clean(root)
+	sessionsDir := parser.ClineResolveSessionsDir(root)
+	isDirectSessionsRoot := sessionsDir == cleanRoot
+
 	parts := strings.Split(rel, "/")
 	var sessionID, filename string
-	switch len(parts) {
-	case 4:
-		if parts[0] != "data" || parts[1] != "sessions" {
-			return false
-		}
-		sessionID, filename = parts[2], parts[3]
-	case 3:
-		if parts[0] != "sessions" {
-			return false
-		}
-		sessionID, filename = parts[1], parts[2]
-	case 2:
-		base := filepath.Base(filepath.Clean(root))
-		if base != "sessions" && !strings.HasSuffix(filepath.ToSlash(filepath.Clean(root)), "data/sessions") {
+	if isDirectSessionsRoot {
+		if len(parts) != 2 {
 			return false
 		}
 		sessionID, filename = parts[0], parts[1]
-	default:
-		return false
+	} else {
+		if len(parts) != 4 || parts[0] != "data" || parts[1] != "sessions" {
+			return false
+		}
+		sessionID, filename = parts[2], parts[3]
 	}
 	if !validClineSessionID(sessionID) {
 		return false

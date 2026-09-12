@@ -1172,6 +1172,7 @@ func TestClineRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 		filepath.Join(clineRoot, "settings", "mcp_settings.json"),
 		filepath.Join(clineRoot, "data", "checkpoints", "checkpoint.bin"),
 		filepath.Join(clineRoot, "data", "sessions", "_meta", "sess-1.json"),
+		filepath.Join(clineRoot, "sessions", "sess-1", "sess-1.json"),
 		filepath.Join(clineRoot, "sess-1.json"),
 	} {
 		_, ok := remotesync.SelectAllowedFiles(freshServerTargets, []string{path})
@@ -1205,6 +1206,16 @@ func TestClineRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 
 	_, ok = remotesync.SelectAllowedTargets(freshDirectTargets, staleDirectTargets)
 	require.True(t, ok, "a vanished session file under direct sessions root must not fail request")
+
+	// Non-session paths under direct sessions root must stay rejected
+	for _, path := range []string{
+		filepath.Join(directRoot, "sessions", "dsess-1", "dsess-1.json"),
+		filepath.Join(directRoot, "data", "sessions", "dsess-1", "dsess-1.json"),
+		filepath.Join(directRoot, "dsess-1.json"),
+	} {
+		_, ok := remotesync.SelectAllowedFiles(freshDirectTargets, []string{path})
+		assert.False(t, ok, "non-session path under direct root must stay rejected: %s", path)
+	}
 }
 
 func TestClineRemoteSyncPreservesRootWhenEmpty(t *testing.T) {
