@@ -107,6 +107,18 @@ func (c *Capturer) Capture(
 	provider parser.Provider,
 	source parser.SourceRef,
 ) (result Result, resultErr error) {
+	return c.capture(ctx, provider, source, "")
+}
+
+// CaptureForBackfill uses the ordinary capture pipeline and binds membership at
+// publication. Already-bound sources keep their exact generation after appends.
+func (c *Capturer) CaptureForBackfill(ctx context.Context, provider parser.Provider, source parser.SourceRef, runID string) (Result, error) {
+	if runID == "" {
+		return Result{}, rawcheckpoint.ErrBackfillConflict
+	}
+	return c.capture(ctx, provider, source, runID)
+}
+func (c *Capturer) capture(ctx context.Context, provider parser.Provider, source parser.SourceRef, runID string) (result Result, resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
@@ -127,6 +139,18 @@ func (c *Capturer) Capture(
 		Provider:         source.Provider,
 		ConfiguredRootID: root.ID,
 		SourceKey:        plan.SourceKey,
+	}
+	if runID != "" {
+		member, found, err := c.store.BackfillSource(ctx, runID, identity)
+		if err != nil {
+			return Result{}, err
+		}
+		if found {
+			if member.Status == "invalidated" {
+				return Result{}, rawcheckpoint.ErrBackfillIncomplete
+			}
+			return Result{Status: StatusUnchanged, CaptureID: member.CaptureID, Source: identity}, nil
+		}
 	}
 	var reservation rawcheckpoint.Reservation
 	committed := false
@@ -299,13 +323,21 @@ func (c *Capturer) Capture(
 				return Result{}, err
 			}
 		}
-		if err := c.store.CompleteUnchangedCapture(
-			ctx, reservation.ID, identity, base.CaptureID, base.ObservationRevision,
-		); err != nil {
-			return Result{}, err
+		var publishErr error
+		if runID == "" {
+			publishErr = c.store.CompleteUnchangedCapture(ctx, reservation.ID, identity, base.CaptureID, base.ObservationRevision)
+		} else {
+			publishErr = c.store.CompleteUnchangedCaptureForBackfill(ctx, reservation.ID, identity, base.CaptureID, base.ObservationRevision, runID)
+		}
+		if publishErr != nil {
+			return Result{}, publishErr
 		}
 		committed = true
-		return Result{Status: StatusUnchanged, Source: identity}, nil
+		unchanged := Result{Status: StatusUnchanged, Source: identity}
+		if runID != "" {
+			unchanged.CaptureID = base.CaptureID
+		}
+		return unchanged, nil
 	}
 	if base.PermanentlyRejected {
 		assessment = c.fullAssessment(observed, sourceBytes)
@@ -405,8 +437,14 @@ func (c *Capturer) Capture(
 		Kind:                 rawsync.ManifestSnapshot,
 		Entries:              entries,
 	}
-	if err := c.store.CommitCapture(ctx, reservation.ID, generation); err != nil {
-		return Result{}, err
+	var publishErr error
+	if runID == "" {
+		publishErr = c.store.CommitCapture(ctx, reservation.ID, generation)
+	} else {
+		publishErr = c.store.CommitCaptureForBackfill(ctx, reservation.ID, generation, runID)
+	}
+	if publishErr != nil {
+		return Result{}, publishErr
 	}
 	committed = true
 	finishPublication()
