@@ -120,9 +120,12 @@ func (s *BunStore) ListSessions(
 		order := bunOrderByClause(orderBuilder, resolvedSort, filter)
 		var rows []bunmodel.Session
 		query = query.ExcludeColumn(
-			"file_path", "file_size", "file_mtime", "file_inode",
-			"file_device", "file_hash", "local_modified_at",
+			"file_size", "file_mtime", "file_inode", "file_device",
+			"file_hash", "local_modified_at",
 		)
+		if !filter.IncludeSource {
+			query = query.ExcludeColumn("file_path")
+		}
 		if len(orderBuilder.values()) == 0 {
 			query = query.OrderExpr(order)
 		} else {
@@ -134,7 +137,11 @@ func (s *BunStore) ListSessions(
 		page := SessionPage{Total: total}
 		page.Sessions = make([]Session, 0, min(len(rows), filter.Limit))
 		for _, row := range rows[:min(len(rows), filter.Limit)] {
-			page.Sessions = append(page.Sessions, baseSessionFromBunRow(row))
+			session := baseSessionFromBunRow(row)
+			if filter.IncludeSource {
+				session.FilePath = row.FilePath
+			}
+			page.Sessions = append(page.Sessions, session)
 		}
 		if len(rows) > filter.Limit {
 			last := page.Sessions[len(page.Sessions)-1]

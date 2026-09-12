@@ -1318,8 +1318,11 @@ func TestPostgresSessionReplicationFingerprintUsesCommittedProjection(t *testing
 			ID: 1, SessionID: "session", MessageID: 2, Ordinal: 2,
 		}},
 	}
-	want, err := postgresSessionReplicationFingerprint(base, "owner")
+	want, err := postgresSessionReplicationFingerprint(base, "owner", "full")
 	require.NoError(t, err)
+	usageFingerprint, err := postgresSessionReplicationFingerprint(base, "owner", "usage")
+	require.NoError(t, err)
+	assert.NotEqual(t, want, usageFingerprint, "a stricter policy must republish even identical source rows")
 
 	targetOwnedChanged := base
 	targetModifiedAt := "2026-08-04T11:00:00Z"
@@ -1327,7 +1330,7 @@ func TestPostgresSessionReplicationFingerprintUsesCommittedProjection(t *testing
 	targetOwnedChanged.PinnedMessages = []db.PinnedMessage{{
 		ID: 9, SessionID: "session", MessageID: 7, Ordinal: 7,
 	}}
-	got, err := postgresSessionReplicationFingerprint(targetOwnedChanged, "owner")
+	got, err := postgresSessionReplicationFingerprint(targetOwnedChanged, "owner", "full")
 	require.NoError(t, err)
 	assert.Equal(t, want, got,
 		"target-owned pins and modification time must not trigger source pushes")
@@ -1335,7 +1338,7 @@ func TestPostgresSessionReplicationFingerprintUsesCommittedProjection(t *testing
 	portableChanged := base
 	changedHash := "hash-b"
 	portableChanged.Session.FileHash = &changedHash
-	got, err = postgresSessionReplicationFingerprint(portableChanged, "owner")
+	got, err = postgresSessionReplicationFingerprint(portableChanged, "owner", "full")
 	require.NoError(t, err)
 	assert.NotEqual(t, want, got,
 		"portable file metadata is part of the canonical PostgreSQL row")

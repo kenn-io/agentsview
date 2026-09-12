@@ -116,6 +116,7 @@ func TestCodexCheckpointAdoptionIsLazyForUpgradedArchive(t *testing.T) {
 		stored[i].SessionID = ""
 		for j := range stored[i].ToolCalls {
 			stored[i].ToolCalls[j].MessageID = 0
+			stored[i].ToolCalls[j].MessageOrdinal = 0
 			stored[i].ToolCalls[j].SessionID = ""
 		}
 	}

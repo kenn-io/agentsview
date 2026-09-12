@@ -234,6 +234,13 @@ func (db *DB) MessageRoleTimeFingerprintsWithTimestampNormalizer(
 			); err != nil {
 				return err
 			}
+			timestamp, err = canonicalStoredMessageTimestamp(timestamp)
+			if err != nil {
+				return fmt.Errorf(
+					"fingerprinting message %s ordinal %d timestamp: %w",
+					sessionID, ordinal, err,
+				)
+			}
 			appendRoleTimeFingerprintRow(
 				builders.get(sessionID), ordinal, role, timestamp,
 				normalizeTimestamp,

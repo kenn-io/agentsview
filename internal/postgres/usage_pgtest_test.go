@@ -4,10 +4,13 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/dlclark/regexp2/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -380,7 +383,7 @@ func TestStoreUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testi
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
+		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, '2026-01-01T00:00:00Z');
 		INSERT INTO sessions (
 			id, machine, project, agent, display_name, started_at,
 			message_count, user_message_count
@@ -476,7 +479,7 @@ func TestStoreGetDailyUsagePrefersTimestampedEqualClaudeSnapshot(t *testing.T) {
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
+		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, '2026-01-01T00:00:00Z');
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
 			message_count, user_message_count
@@ -512,7 +515,7 @@ func TestStoreUsageRanksNumericStringClaudeSnapshot(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
+		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, '2026-01-01T00:00:00Z');
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
 			message_count, user_message_count
@@ -541,35 +544,6 @@ func TestStoreUsageRanksNumericStringClaudeSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1000, result.Totals.InputTokens)
 	assert.Equal(t, 631, result.Totals.OutputTokens)
-}
-
-func TestPGSnapshotRankedDailyUsageRowsPrefersLatestEqualOutput(t *testing.T) {
-	_, store := prepareUsageSchema(
-		t, "agentsview_daily_usage_snapshot_tie_test")
-	pb := &paramBuilder{}
-	rowsSQL := `
-		SELECT 'z-snapshot' AS session_id, 0 AS message_ordinal,
-			'message' AS usage_source,
-			'2026-05-20T10:31:00Z'::timestamptz AS ts,
-			'{"input_tokens":900,"output_tokens":100}' AS token_usage,
-			0 AS output_tokens, 'msg-tie' AS claude_message_id,
-			'req-tie' AS claude_request_id
-		UNION ALL
-		SELECT 'a-snapshot', 0, 'message',
-			'2026-05-20T10:30:00Z'::timestamptz,
-			'{"input_tokens":10,"output_tokens":100}', 0,
-			'msg-tie', 'req-tie'`
-	ranked := pgSnapshotRankedDailyUsageRowsSQL(
-		pb, rowsSQL, db.UsageFilter{})
-	var sessionID, attributionSessionID, tokenJSON string
-	err := store.DB().QueryRow(`
-		SELECT session_id, snapshot_attribution_session_id, token_usage
-		FROM (`+ranked+`)`, pb.args...).Scan(
-		&sessionID, &attributionSessionID, &tokenJSON)
-	require.NoError(t, err)
-	assert.Equal(t, "z-snapshot", sessionID)
-	assert.Equal(t, "a-snapshot", attributionSessionID)
-	assert.JSONEq(t, `{"input_tokens":900,"output_tokens":100}`, tokenJSON)
 }
 
 func TestStoreGetSessionUsagePricedModel(t *testing.T) {
@@ -802,7 +776,7 @@ func TestStoreGetSessionUsagePrefersCompleteClaudeSnapshot(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed');
+		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, '2026-01-01T00:00:00Z');
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
 			message_count, user_message_count,
@@ -1773,9 +1747,9 @@ func TestPushRetiresOpenRouterPricingRows(t *testing.T) {
 
 	var meta string
 	require.NoError(t, store.DB().QueryRowContext(context.Background(), `
-		SELECT updated_at FROM model_pricing WHERE model_pattern = $1`,
+		SELECT value FROM sync_metadata WHERE key = $1`,
 		pricing.OpenRouterModelsMetaKey).Scan(&meta))
-	assert.Equal(t, `[]`, meta, "ownership sentinel mirrored by value")
+	assert.Equal(t, `[]`, meta, "ownership metadata mirrored by value")
 }
 
 func TestPushFallsBackToBuiltinPricingWhenLocalTableEmpty(t *testing.T) {
@@ -1979,7 +1953,7 @@ func TestStoreSessionUsageWithSubagentsParity(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('test-opus', 2000000, 10000000, 0, 0, 'seed')`)
+		) VALUES ('test-opus', 2000000, 10000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -2119,4 +2093,69 @@ func TestStoreGetSessionUsage_CodebuffCostOnlyReported(t *testing.T) {
 		"the reported cost must flow through unchanged")
 	assert.Equal(t, []string{"base2-deepseek"}, u.Models,
 		"the parser-attributed template name must surface in Models")
+}
+
+func TestStoreDailyUsageActiveSincePreservesMicrosecondsBeforeDedup(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_microseconds_test")
+	_, err := store.bun.NewRaw(`
+  INSERT INTO sessions (id, project, machine, agent, started_at, ended_at, message_count, user_message_count)
+  VALUES ('a-outside', 'a-outside', 'host', 'codex', '2026-08-05T12:00:00.000001Z', '2026-08-05T12:00:00.000001Z', 1, 1),
+         ('b-inside', 'b-inside', 'host', 'codex', '2026-08-05T12:00:00.000002Z', '2026-08-05T12:00:00.000002Z', 1, 1)`).Exec(t.Context())
+	require.NoError(t, err)
+	_, err = store.bun.NewRaw(`
+  INSERT INTO messages (session_id, ordinal, role, content, timestamp, content_length, model, source_uuid, token_usage)
+  VALUES ('a-outside', 0, 'assistant', '', '2026-08-05T11:00:00Z', 0, 'usage-model', 'shared-source', '{"input_tokens":99}'),
+         ('b-inside', 0, 'assistant', '', '2026-08-05T11:00:00Z', 0, 'usage-model', 'shared-source', '{"input_tokens":7}')`).Exec(t.Context())
+	require.NoError(t, err)
+	filter := db.UsageFilter{
+		From: "2026-08-05", To: "2026-08-05", Timezone: "UTC",
+		ActiveSince: "2026-08-05T12:00:00.000002Z",
+	}
+	result, err := store.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 7, result.Totals.InputTokens)
+	counts, err := store.GetUsageSessionCounts(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int{"b-inside": 1}, counts.ByProject)
+}
+
+func TestStoreUsageTerminationPreservesMicrosecondCandidates(t *testing.T) {
+	for _, tc := range []struct{ status, cutoff, inside string }{
+		{"active", "2026-08-05T11:50:00Z", "2026-08-05T11:50:00.000001Z"},
+		{"stale", "2026-08-05T11:00:00Z", "2026-08-05T11:00:00.000001Z"},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			_, store := prepareUsageSchema(t, "agentsview_usage_termination_precision_test")
+			for _, row := range []struct {
+				id, ended string
+				tokens    int
+			}{
+				{"a-outside", tc.cutoff, 99}, {"b-inside", tc.inside, 7},
+			} {
+				_, err := store.bun.NewRaw(`INSERT INTO sessions
+     (id, project, machine, agent, started_at, ended_at, message_count, user_message_count, termination_status)
+     VALUES (?0, ?0, 'host', 'codex', ?1, ?1, 1, 1, 'tool_call_pending')`, row.id, row.ended).Exec(t.Context())
+				require.NoError(t, err)
+				_, err = store.bun.NewRaw(`INSERT INTO messages
+     (session_id, ordinal, role, content, timestamp, content_length, model, source_uuid, token_usage)
+     VALUES (?, 0, 'assistant', '', '2026-08-05T10:00:00Z', 0, 'usage-model', 'shared-source', ?)`,
+					row.id, fmt.Sprintf(`{"input_tokens":%d}`, row.tokens)).Exec(t.Context())
+				require.NoError(t, err)
+			}
+			synctest.Test(t, func(t *testing.T) {
+				t.Cleanup(regexp2.StopTimeoutClock)
+				time.Sleep(time.Until(time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)))
+				filter := db.UsageFilter{Termination: tc.status, Timezone: "UTC"}
+				daily, err := store.GetDailyUsage(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, 7, daily.Totals.InputTokens)
+				counts, err := store.GetUsageSessionCounts(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, map[string]int{"b-inside": 1}, counts.ByProject)
+				matching, err := store.GetUsageMatchingSessionCount(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, 1, matching)
+			})
+		})
+	}
 }

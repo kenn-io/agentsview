@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/secrets"
 )
 
@@ -136,7 +137,7 @@ type SignalQuery interface {
 // signalTxQuery implements SignalQuery over the incremental write
 // transaction.
 type signalTxQuery struct {
-	tx                          *sql.Tx
+	tx                          bun.Tx
 	sessionID                   string
 	insertedResultEvents        map[ToolCallPosition][]ToolResultEvent
 	updatedMessageUsageOrdinals map[int]struct{}
@@ -545,7 +546,7 @@ func (db *DB) ReplaceSessionSignalsIfInputsMatch(
 		}
 	}
 
-	if err := replaceSecretFindingsTx(
+	if err := replaceSessionSecretFindingsBunTx(context.Background(),
 		tx, sessionID, findings, update.SecretLeakCount,
 		update.SecretsRulesVersion,
 	); err != nil {
@@ -596,7 +597,7 @@ func (db *DB) ReplaceSessionSignalsIfRevision(
 }
 
 func sessionSignalInputSnapshotMatchesTx(
-	tx *sql.Tx, sessionID string,
+	tx bun.Tx, sessionID string,
 	expected SessionSignalInputSnapshot,
 ) (bool, error) {
 	var (
@@ -636,7 +637,7 @@ func sessionSignalInputSnapshotMatchesTx(
 }
 
 func applySignalDeltaTx(
-	tx *sql.Tx, sessionID string, d SignalDelta,
+	tx bun.Tx, sessionID string, d SignalDelta,
 ) error {
 	// Remove stale findings by natural coordinates, counting definite
 	// removals toward the leak-count adjustment.
@@ -677,7 +678,7 @@ func applySignalDeltaTx(
 	addedDefinite := 0
 	for i := range d.InsertFindings {
 		f := &d.InsertFindings[i]
-		// Unlike replaceSecretFindingsTx (which overrides RulesVersion
+		// Unlike replaceSessionSecretFindingsBunTx (which overrides RulesVersion
 		// with the caller's stamp), this path inserts f.RulesVersion
 		// verbatim. Default an un-stamped finding to the current definite
 		// version so it stays visible to current-version listings.
@@ -764,7 +765,7 @@ func coalesceInt(p *int, fallback int) int {
 }
 
 func upsertSessionSignalStateTx(
-	tx *sql.Tx, st SessionSignalState,
+	tx bun.Tx, st SessionSignalState,
 ) error {
 	if st.UpdatedAt == "" {
 		st.UpdatedAt = time.Now().UTC().Format(time.RFC3339)

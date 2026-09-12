@@ -57,16 +57,19 @@ const (
 // BackendCapabilities describes features that cannot be inferred from a
 // store's coarse public ReadOnly value.
 type BackendCapabilities struct {
-	Recall           bool
-	FullText         FullTextCapability
-	SessionSearch    SessionSearchCapability
-	ContentSearch    ContentSearchCapability
-	Semantic         SemanticCapability
-	HybridLexical    HybridLexicalCapability
-	SearchDialect    BunSearchDialect
-	Writes           map[WriteOperation]bool
-	ArchiveWrites    ArchiveWriteAdapter
-	SessionMutations SessionMutationAdapter
+	// MachineMetadataTable names adapter-local machine labels and aliases.
+	MachineMetadataTable string
+	AnalyticsDialect     BunAnalyticsDialect
+	Recall               bool
+	FullText             FullTextCapability
+	SessionSearch        SessionSearchCapability
+	ContentSearch        ContentSearchCapability
+	Semantic             SemanticCapability
+	HybridLexical        HybridLexicalCapability
+	SearchDialect        BunSearchDialect
+	Writes               map[WriteOperation]bool
+	ArchiveWrites        ArchiveWriteAdapter
+	SessionMutations     SessionMutationAdapter
 }
 
 // ArchiveWriteAdapter owns SQLite's archive-only ingestion behavior while the
@@ -74,6 +77,9 @@ type BackendCapabilities struct {
 type ArchiveWriteAdapter interface {
 	UpsertSession(Session) error
 	ReplaceSessionMessages(string, []Message) error
+	WriteSessionAtomic(
+		SessionBatchWrite, ...func() error,
+	) (SessionBatchResult, error)
 	WriteSessionBatchAtomic(
 		[]SessionBatchWrite, ...func() error,
 	) (SessionBatchResult, error)
@@ -106,7 +112,9 @@ func (b *sqliteBunBackend) ReadOnly() bool { return b.store.readOnly }
 func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 	if b.store.readOnly {
 		return BackendCapabilities{
-			Recall: true, FullText: sqliteFullTextCapability{store: b.store},
+			MachineMetadataTable: "pg_sync_state",
+			AnalyticsDialect:     SQLiteBunAnalyticsDialect(),
+			Recall:               true, FullText: sqliteFullTextCapability{store: b.store},
 			SessionSearch: sqliteFullTextCapability{store: b.store},
 			ContentSearch: sqliteFullTextCapability{store: b.store},
 			HybridLexical: sqliteFullTextCapability{store: b.store},
@@ -118,12 +126,14 @@ func (b *sqliteBunBackend) Capabilities() BackendCapabilities {
 		}
 	}
 	return BackendCapabilities{
-		Recall:        true,
-		FullText:      sqliteFullTextCapability{store: b.store},
-		SessionSearch: sqliteFullTextCapability{store: b.store},
-		ContentSearch: sqliteFullTextCapability{store: b.store},
-		HybridLexical: sqliteFullTextCapability{store: b.store},
-		SearchDialect: SQLiteBunSearchDialect(),
+		MachineMetadataTable: "pg_sync_state",
+		AnalyticsDialect:     SQLiteBunAnalyticsDialect(),
+		Recall:               true,
+		FullText:             sqliteFullTextCapability{store: b.store},
+		SessionSearch:        sqliteFullTextCapability{store: b.store},
+		ContentSearch:        sqliteFullTextCapability{store: b.store},
+		HybridLexical:        sqliteFullTextCapability{store: b.store},
+		SearchDialect:        SQLiteBunSearchDialect(),
 		Semantic: NewVectorSemanticCapability(
 			b.store.getVectorSearcher,
 			func() error { return ErrSemanticUnavailable },
@@ -171,6 +181,14 @@ func (a sqliteArchiveWriteAdapter) WriteSessionBatchAtomic(
 	return a.store.writeArchiveSessionBatchAtomic(writes, beforeCommit...)
 }
 
+func (a sqliteArchiveWriteAdapter) WriteSessionAtomic(
+	write SessionBatchWrite, beforeCommit ...func() error,
+) (SessionBatchResult, error) {
+	return a.store.writeArchiveSessionBatchAtomic(
+		[]SessionBatchWrite{write}, beforeCommit...,
+	)
+}
+
 type sqliteSessionMutationAdapter struct{}
 
 func (sqliteSessionMutationAdapter) ApplyTouch(
@@ -206,7 +224,7 @@ func (sqliteSessionMutationAdapter) BeforeDelete(
 	_ context.Context, tx bun.Tx, ids []string,
 ) error {
 	for _, id := range ids {
-		if err := deleteSessionMessagesTx(tx.Tx, id); err != nil {
+		if err := deleteSessionMessagesTx(tx, id); err != nil {
 			return fmt.Errorf("pre-deleting session %s messages: %w", id, err)
 		}
 	}
@@ -277,10 +295,10 @@ func (b *sqliteBunBackend) Update(
 	if b.store.readOnly {
 		return ErrReadOnly
 	}
+	if b.store.writerClosed.Load() {
+		return ErrWriterClosed
+	}
 	if b.store.bunWriter == nil {
-		if b.store.writerClosed.Load() {
-			return ErrWriterClosed
-		}
 		return ErrReadOnly
 	}
 	return fn(b.store.bunWriter)

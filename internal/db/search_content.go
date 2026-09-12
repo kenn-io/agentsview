@@ -134,16 +134,6 @@ func contentSessionFilter(f ContentSearchFilter) SessionFilter {
 	}
 }
 
-// sessionScopeSubquery returns "session_id IN (SELECT id FROM sessions
-// WHERE <buildSessionFilter where>)" plus its args, reusing the session
-// filter machinery. The Limit/Cursor on the inner filter are irrelevant
-// (no LIMIT in a SELECT id subquery), so they are left unset.
-func sessionScopeSubquery(f ContentSearchFilter) (string, []any) {
-	where, args := buildSessionFilter(contentSessionFilter(f))
-	where, args = AppendExcludeSessionIDs(where, args, "id", f.ExcludeSessionIDs)
-	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
-}
-
 // NormalizeExcludeSessionIDs trims, drops empty entries, and de-duplicates
 // session IDs while preserving first-seen order. An empty result means no
 // exclusion filter should be applied.
@@ -171,7 +161,7 @@ func NormalizeExcludeSessionIDs(ids []string) []string {
 }
 
 // AppendExcludeSessionIDs adds `<col> NOT IN (...)` to a WHERE clause using
-// `?` placeholders (SQLite and DuckDB). It is a no-op when ids is empty.
+// Bun bind placeholders. It is a no-op when ids is empty.
 func AppendExcludeSessionIDs(
 	where string, args []any, col string, ids []string,
 ) (string, []any) {

@@ -155,6 +155,12 @@ otherwise follows the same transaction, revision, and publication sequence as
   DuckDB `USE`, handle swap/drain/close lifecycle, connector state, and
   unavoidable compatibility or capability probes. Keep each such seam inside
   its backend adapter and document why Bun cannot own it.
+- Attached archive recovery pins a guarded `bun.Conn`: the adapter owns
+  `ATTACH`/`DETACH` and temporary-table lifecycle on that connection, while
+  canonical child copies use registry-derived `INSERT ... SELECT` projections
+  through the connection's `bun.Tx`. Explicit SQLite transforms remain only
+  where physical IDs, pins, provenance, legacy relationships, or legacy
+  content sanitization must be remapped.
 - Backend-specific query construction is limited to this closed set of seams:
   lifecycle and connection-local operations; canonical schema creation,
   convergence, and validation; replication or mirror synchronization and
@@ -170,6 +176,10 @@ otherwise follows the same transaction, revision, and publication sequence as
 - Write Bun placeholders (`?` or indexed `?0`, `?1`, and so on) in every query
   executed through Bun. Never pass driver-native placeholders such as
   PostgreSQL `$1`; Bun must format values for the active dialect.
+- SQLite handles use the archive dialect's string formatter so internal NUL
+  separators survive SQL literal formatting. Bun's default formatter removes
+  them. Preserve cache identities with a blob-to-text literal; do not change
+  provider-content sanitization to accommodate internal keys.
 - Escape a literal question mark as `\?` so Bun does not consume it as a
   placeholder. Use indexed placeholders when one argument is referenced more
   than once.
@@ -182,6 +192,27 @@ otherwise follows the same transaction, revision, and publication sequence as
   driver-side bind array. Chunk bounded reads and writes, keep sensitive
   values out of ad hoc logging, and inspect the formatted query when
   diagnosing placeholder or dialect failures.
+- Canonical slice writes use a 1 MiB approximate dynamic-payload budget to limit
+  transient SQL buffers while retaining the surrounding transaction. This is a
+  pre-format row-payload target, not a statement-length, row-count, or
+  bind-variable guarantee: SQL syntax, escaping, and Bun's intermediate copies
+  add overhead. One larger logical row is written alone rather than split
+  across statements.
+
+### Timestamp compatibility
+
+- Canonical non-empty timestamps use the layouts accepted by
+  `bunmodel.ParseTimestamp`, normalize to UTC, and persist at microsecond
+  precision on every backend. Empty timestamps are unavailable.
+- Unsupported provider message timestamps are blanked during archive ingestion
+  and counted as a validation repair. The data-version 84 rebuild repairs
+  already archived live, orphaned, and trashed sessions so all backends read
+  the same canonical timestamp shape.
+- PostgreSQL, DuckDB, SQLite tool-result rows, and other common timestamp models
+  remain strict: unsupported non-empty values reject the session write or
+  replication transaction. Correcting the source value makes the next
+  canonical rewrite eligible to succeed; failed target transactions do not
+  advance their synchronization cursor.
 
 ### Usage cache divergence
 

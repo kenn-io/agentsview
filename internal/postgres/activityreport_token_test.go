@@ -11,7 +11,7 @@ import (
 )
 
 func TestActivityReportTokenRequiresConfiguredSecret(t *testing.T) {
-	store := &Store{}
+	store := &Store{BunStore: db.NewBunStore(nil)}
 	_, err := store.EncodeActivityReportToken([]byte(`{"query":"month"}`))
 	assert.ErrorIs(t, err, db.ErrInvalidActivityReportToken)
 

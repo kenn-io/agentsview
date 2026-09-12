@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/uptrace/bun"
+
 	corerecall "go.kenn.io/agentsview/internal/recall"
 )
 
@@ -149,7 +151,7 @@ func (db *DB) GetRecallQueryEvent(
 
 func copyRecallQueryEventsFromAttachedTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 ) error {
 	eventsExist, err := attachedRecallTableExistsTx(
 		ctx, tx, "recall_query_events",
@@ -196,7 +198,7 @@ func copyRecallQueryEventsFromAttachedTx(
 
 func attachedRecallTableExistsTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	table string,
 ) (bool, error) {
 	var exists bool

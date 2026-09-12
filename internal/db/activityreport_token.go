@@ -64,16 +64,16 @@ func DecodeSignedActivityReportToken(secret []byte, token string) ([]byte, error
 	return payload, nil
 }
 
-func (db *DB) EncodeActivityReportToken(payload []byte) (string, error) {
-	db.cursorMu.RLock()
-	secret := append([]byte(nil), db.cursorSecret...)
-	db.cursorMu.RUnlock()
+func (s *BunStore) EncodeActivityReportToken(payload []byte) (string, error) {
+	s.cursorMu.RLock()
+	secret := append([]byte(nil), s.cursorSecret...)
+	s.cursorMu.RUnlock()
 	return EncodeSignedActivityReportToken(secret, payload)
 }
 
-func (db *DB) DecodeActivityReportToken(token string) ([]byte, error) {
-	db.cursorMu.RLock()
-	secret := append([]byte(nil), db.cursorSecret...)
-	db.cursorMu.RUnlock()
+func (s *BunStore) DecodeActivityReportToken(token string) ([]byte, error) {
+	s.cursorMu.RLock()
+	secret := append([]byte(nil), s.cursorSecret...)
+	s.cursorMu.RUnlock()
 	return DecodeSignedActivityReportToken(secret, token)
 }

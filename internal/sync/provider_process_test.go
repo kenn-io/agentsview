@@ -614,16 +614,22 @@ func TestSyncSingleSessionKeepsRetryStatePerResult(t *testing.T) {
 		"the retrying session must remain stale")
 }
 
-func TestSyncSingleSessionPartialFullWritesQueueNewChild(t *testing.T) {
+func TestSyncSingleSessionAtomicFullWritesQueueCommittedChildren(t *testing.T) {
 	for _, tc := range []struct {
-		name         string
-		includeLater bool
-		failureSQL   string
-		wantError    string
+		name            string
+		includeLater    bool
+		failureSQL      string
+		wantError       string
+		wantRepairError bool
+		wantEdgeCount   int
+		wantQueueCount  int
 	}{
 		{
-			name:         "later member fails",
-			includeLater: true,
+			name:            "later member fails",
+			includeLater:    true,
+			wantRepairError: true,
+			wantEdgeCount:   1,
+			wantQueueCount:  1,
 			failureSQL: `
 				CREATE TRIGGER fail_later_member_write
 				BEFORE INSERT ON sessions
@@ -634,7 +640,7 @@ func TestSyncSingleSessionPartialFullWritesQueueNewChild(t *testing.T) {
 			wantError: "injected later member write failure",
 		},
 		{
-			name: "spawner completion fails after content commit",
+			name: "spawner completion fails atomically",
 			failureSQL: fmt.Sprintf(`
 				CREATE TRIGGER fail_spawner_write_completion
 				BEFORE UPDATE OF data_version ON sessions
@@ -708,28 +714,32 @@ func TestSyncSingleSessionPartialFullWritesQueueNewChild(t *testing.T) {
 			syncErr := engine.SyncSingleSession("cowork:spawner")
 
 			require.ErrorContains(t, syncErr, tc.wantError)
-			assert.ErrorContains(t, syncErr, "injected partial parent repair failure",
-				"committed message content must activate deferred repair")
+			if tc.wantRepairError {
+				assert.ErrorContains(t, syncErr, "injected partial parent repair failure",
+					"a committed spawn edge must activate deferred repair")
+			} else {
+				assert.NotContains(t, syncErr.Error(),
+					"injected partial parent repair failure",
+					"a rolled-back spawn edge must not activate deferred repair")
+			}
 			var edgeCount int
 			require.NoError(t, database.Reader().QueryRow(`
 				SELECT count(*) FROM tool_calls
 				WHERE session_id = 'cowork:spawner'
 				  AND subagent_session_id = 'cowork:child'`,
 			).Scan(&edgeCount))
-			assert.Equal(t, 1, edgeCount,
-				"the partial write must commit its new spawn edge")
+			assert.Equal(t, tc.wantEdgeCount, edgeCount)
 			var queuedRepairs int
 			require.NoError(t, database.Reader().QueryRow(`
 				SELECT count(*) FROM subagent_parent_repair_queue
 				WHERE session_id = 'cowork:child'`,
 			).Scan(&queuedRepairs))
-			assert.Equal(t, 1, queuedRepairs,
-				"the new child must remain durable after partial failure")
+			assert.Equal(t, tc.wantQueueCount, queuedRepairs)
 		})
 	}
 }
 
-func TestSyncSingleSessionPartialFullWriteRepairsAttemptedSession(t *testing.T) {
+func TestSyncSingleSessionAtomicFailurePreservesExistingParent(t *testing.T) {
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(
 		t, root, "partial-parent-write.jsonl",
@@ -793,7 +803,80 @@ func TestSyncSingleSessionPartialFullWriteRepairsAttemptedSession(t *testing.T) 
 	require.NotNil(t, stored)
 	require.NotNil(t, stored.ParentSessionID)
 	assert.Equal(t, actualParent, *stored.ParentSessionID,
-		"deferred repair must reconcile the partially written session itself")
+		"the failed atomic write must preserve the existing relationship")
+}
+
+func TestSyncSingleSessionLaterFailureRepairsCommittedSessionParent(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(
+		t, root, "partial-parent-repair.jsonl",
+	)
+	child := processFixtureResult(
+		"cowork:child", parser.AgentCowork, "fixture-project",
+		sourcePath, fingerprint,
+	)
+	child.Session.ParentSessionID = "cowork:path-parent"
+	child.Session.RelationshipType = parser.RelSubagent
+	provider := newProcessFixtureProvider(
+		processFixtureSource(sourcePath), fingerprint,
+		parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{
+				{Result: child, DataVersion: parser.DataVersionCurrent},
+				{
+					Result: processFixtureResult(
+						"cowork:later", parser.AgentCowork, "fixture-project",
+						sourcePath, fingerprint,
+					),
+					DataVersion: parser.DataVersionCurrent,
+				},
+			},
+			ResultSetComplete: true,
+			ForceReplace:      true,
+		},
+	)
+	provider.Caps.Source.MultiSessionSource = parser.CapabilitySupported
+	engine := newProcessFixtureEngine(t, root, provider)
+	database := engine.db
+	actualParent := "cowork:spawner"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: actualParent, Agent: string(parser.AgentCowork),
+		Project: "fixture-project", Machine: "devbox", MessageCount: 1,
+	}))
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "cowork:child", Agent: string(parser.AgentCowork),
+		Project: "fixture-project", Machine: "devbox",
+		ParentSessionID: &actualParent, RelationshipType: string(parser.RelSubagent),
+	}))
+	require.NoError(t, database.InsertMessages([]db.Message{{
+		SessionID: actualParent, Ordinal: 0, Role: string(parser.RoleAssistant),
+		Content: "spawn child", HasToolUse: true,
+		ToolCalls: []db.ToolCall{{
+			ToolUseID: "spawn-child", ToolName: "Agent",
+			SubagentSessionID: "cowork:child",
+		}},
+	}}))
+
+	raw, err := sql.Open("sqlite3", database.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	_, err = raw.Exec(`
+		CREATE TRIGGER fail_later_parent_member_write
+		BEFORE INSERT ON sessions
+		WHEN NEW.id = 'cowork:later'
+		BEGIN
+			SELECT RAISE(FAIL, 'injected later parent member failure');
+		END`)
+	require.NoError(t, err)
+
+	syncErr := engine.SyncSingleSession("cowork:child")
+
+	require.ErrorContains(t, syncErr, "injected later parent member failure")
+	stored, err := database.GetSession(t.Context(), "cowork:child")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.NotNil(t, stored.ParentSessionID)
+	assert.Equal(t, actualParent, *stored.ParentSessionID,
+		"a later member failure must not strand a committed parser-derived parent")
 }
 
 func TestProcessFileProviderAuthoritativeSuppressesUncleanSkipCache(t *testing.T) {

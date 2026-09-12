@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -144,7 +144,7 @@ func TestDBStripAndMigratePartialFailureReportsCommittedWork(t *testing.T) {
 			}
 			// Sessions run in id order, one transaction each. Aborting the second
 			// session's revision bump commits the first and stops the run mid-selection.
-			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+			require.NoError(t, database.Update(func(tx bun.Tx) error {
 				_, err := tx.Exec(`
 					CREATE TRIGGER fail_mig_pf_b
 					AFTER UPDATE OF transcript_revision ON sessions
@@ -237,7 +237,7 @@ func TestDBMigrateReachesTrashedAndOrphanRows(t *testing.T) {
 	// This exercises the UNION ALL branch that reads tool_result_events directly.
 	insertSessionForStripTest(t, database, "mig-orphan")
 	orphanContent := `[{"type":"input_image","image_url":"data:image/gif;base64,AAEC"}]`
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			INSERT INTO tool_result_events
 				(session_id, tool_call_message_ordinal, call_index,

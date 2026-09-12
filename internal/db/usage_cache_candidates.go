@@ -90,14 +90,14 @@ func (db *DB) captureUsageQuery(
 	}
 	var snapshot usageQuerySnapshot
 	snapshot.location = filter.location()
-	err := db.BunStore.consistentView(ctx, func(store bun.IDB) error {
+	err := db.consistentView(ctx, func(store bun.IDB) error {
 		if err := store.QueryRowContext(ctx,
 			`SELECT value FROM archive_metadata WHERE key = ?`,
 			archiveMetadataDatabaseIDKey,
 		).Scan(&snapshot.DatabaseID); err != nil {
 			return fmt.Errorf("reading usage snapshot database id: %w", err)
 		}
-		pricingRows, err := db.BunStore.loadPricingMapFrom(ctx, store)
+		pricingRows, err := db.loadPricingMapFrom(ctx, store)
 		if err != nil {
 			return fmt.Errorf("reading usage snapshot pricing: %w", err)
 		}

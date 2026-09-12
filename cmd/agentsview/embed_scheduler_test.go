@@ -19,6 +19,8 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -931,7 +933,7 @@ func TestRecallSchedulerBackstopRemovesArchivedEntryVectors(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	dbtest.SeedSession(t, database, "s1", "agentsview")
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			INSERT INTO recall_extract_generations
 				(fingerprint, state, model, segmenter, params_json)
@@ -975,7 +977,7 @@ func TestRecallSchedulerBackstopRemovesArchivedEntryVectors(t *testing.T) {
 	waitForSchedulerCondition(t, func() bool { return embeddedCount() == 1 },
 		"recall backstop never embedded the accepted entry")
 
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE recall_entries SET status = 'archived' WHERE id = 'recall-entry'",
 		)
@@ -1027,7 +1029,7 @@ func TestRecallSchedulerSyncRemovesDeletedEntryWithoutExtraction(t *testing.T) {
 	waitForSchedulerCondition(t, func() bool { return embeddedCount() == 1 },
 		"startup reconciliation did not embed the accepted entry")
 
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, deleteErr := tx.Exec("DELETE FROM recall_entries WHERE id = 'recall-entry'")
 		return deleteErr
 	}))
@@ -1246,7 +1248,7 @@ func TestRecallSearchRejectsCorpusMutationUntilRefresh(t *testing.T) {
 	searcher.enc = func(
 		ctx context.Context, texts []string,
 	) ([][]float32, error) {
-		if updateErr := database.Update(func(tx *sql.Tx) error {
+		if updateErr := database.Update(func(tx bun.Tx) error {
 			_, execErr := tx.Exec(`
 				UPDATE recall_entries
 				SET title = 'Connection policy',
@@ -1350,7 +1352,7 @@ func TestRecallSchedulerRequiresExplicitOptInForAutomaticBuilds(t *testing.T) {
 func TestRecallImportSchedulesEmbeddingRefresh(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			INSERT INTO recall_extract_generations
 				(fingerprint, state, model, segmenter, params_json)

@@ -289,7 +289,7 @@ func (db *DB) rewriteStoredToolResultRows(
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	if err := replaceSecretFindingsTx(tx, sessionID, findings, leakCount, secrets.RulesVersion()); err != nil {
+	if err := replaceSessionSecretFindingsBunTx(ctx, tx, sessionID, findings, leakCount, secrets.RulesVersion()); err != nil {
 		return false, err
 	}
 	if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {

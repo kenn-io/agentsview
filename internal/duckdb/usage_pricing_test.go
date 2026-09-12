@@ -501,8 +501,7 @@ func TestDuckPositBillingPublicAPIReproduction(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("1.1"), report.Totals.Cost)
 }
 
-func TestPriceModelCasePreservesQualifiedBedrockModels(t *testing.T) {
-	syncer := newInMemoryTestSync(t, newLocalDB(t), SyncOptions{})
+func TestDailyUsagePreservesQualifiedBedrockModels(t *testing.T) {
 	for _, tt := range []struct{ model, want string }{
 		{"openai.gpt-6-astra", "bedrock_mantle/openai.gpt-6-astra"},
 		{"openai.gpt-5.4", "bedrock_mantle/openai.gpt-5.4"},
@@ -511,13 +510,32 @@ func TestPriceModelCasePreservesQualifiedBedrockModels(t *testing.T) {
 		{"daimon/k2d6-agent", "moonshot/kimi-k2.6"},
 	} {
 		t.Run(tt.model, func(t *testing.T) {
-			var got string
-			err := syncer.DB().QueryRowContext(t.Context(),
-				"SELECT "+duckPriceModelCaseSQL()+
-					" FROM (SELECT ? AS model, TIMESTAMP '2026-09-09' AS pricing_ts)",
-				tt.model).Scan(&got)
+			local := newLocalDB(t)
+			require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+				ModelPattern: tt.want, InputPerMTok: money.MustParseDollars("2"),
+			}}))
+			session := syncSession("qualified-model", "project", "pricing", "2026-09-09T12:00:00Z", 1)
+			session.Agent = "codex"
+			_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+				Session: session, DataVersion: 1, ReplaceMessages: true,
+				Messages: []db.Message{{SessionID: session.ID, Ordinal: 0, Role: "assistant",
+					Timestamp: "2026-09-09T12:00:00Z", Model: tt.model,
+					TokenUsage: jsontext.Value(`{"input_tokens":1000000}`),
+				}},
+			}})
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
+			syncer := newInMemoryTestSync(t, local, SyncOptions{})
+			require.NoError(t, createSchema(t.Context(), syncer.DB()))
+			_, err = syncer.pushEverything(t.Context(), nil)
+			require.NoError(t, err)
+			got, err := NewStoreFromDB(syncer.DB()).GetDailyUsage(t.Context(), db.UsageFilter{
+				From: "2026-09-09", To: "2026-09-09", Timezone: "UTC",
+			})
+			require.NoError(t, err)
+			require.NotNil(t, got.Pricing)
+			resolutions := got.Pricing.Models[tt.model].Resolutions
+			require.Len(t, resolutions, 1)
+			assert.Equal(t, tt.want, resolutions[0].PricedModel)
 		})
 	}
 }

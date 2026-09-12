@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -94,7 +94,7 @@ func (f *failingStagedResults) ResolveSummary(
 }
 
 func (f *failingStagedResults) InsertEventsTx(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, tx bun.Tx, sessionID string,
 	positions map[string]db.StagedToolCallPosition,
 ) error {
 	f.eventsCalls++

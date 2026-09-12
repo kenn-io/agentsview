@@ -19,6 +19,7 @@ type CoreStore interface {
 	GetSession(context.Context, string) (*db.Session, error)
 	GetSessionFull(context.Context, string) (*db.Session, error)
 	FindSessionIDsByPartial(context.Context, string, int) ([]string, error)
+	HasFTS() bool
 	Search(context.Context, db.SearchFilter) (db.SearchPage, error)
 	GetChildSessions(context.Context, string) ([]db.Session, error)
 	GetSessionVersion(string) (int, int64, bool)
@@ -123,13 +124,15 @@ func runSessionContract(t *testing.T, store CoreStore, fixture Fixture) {
 	partial, err := store.FindSessionIDsByPartial(ctx, "root", 10)
 	require.NoError(t, err)
 	assert.Equal(t, []string{fixture.RootNewID, fixture.RootOldID}, partial)
-	search, err := store.Search(ctx, db.SearchFilter{
-		Query: "visibilityneedle", Limit: 10,
-	})
-	require.NoError(t, err)
-	require.Len(t, search.Results, 1)
-	assert.Equal(t, fixture.RootOldID, search.Results[0].SessionID,
-		"search returns one hydrated result per visible session")
+	if store.HasFTS() {
+		search, err := store.Search(ctx, db.SearchFilter{
+			Query: "visibilityneedle", Limit: 10,
+		})
+		require.NoError(t, err)
+		require.Len(t, search.Results, 1)
+		assert.Equal(t, fixture.RootOldID, search.Results[0].SessionID,
+			"search returns one hydrated result per visible session")
+	}
 	children, err := store.GetChildSessions(ctx, fixture.RootNewID)
 	require.NoError(t, err)
 	require.Len(t, children, 2)

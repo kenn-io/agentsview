@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/uptrace/bun"
+
 	"github.com/gofrs/flock"
 )
 
@@ -238,7 +240,7 @@ CREATE INDEX usage_rollup_exceptions_window
     );`
 
 type usageCache struct {
-	db         *sql.DB
+	db         *bun.DB
 	path       string
 	temporary  bool
 	databaseID string
@@ -631,7 +633,7 @@ func openUsageCache(
 	}, nil
 }
 
-func openUsageCacheDatabase(path string) (*sql.DB, error) {
+func openUsageCacheDatabase(path string) (*bun.DB, error) {
 	database, err := sql.Open(sqliteUsageDriverName, makeDSN(path, false))
 	if err != nil {
 		return nil, fmt.Errorf("opening usage cache %s: %w", path, err)
@@ -642,7 +644,7 @@ func openUsageCacheDatabase(path string) (*sql.DB, error) {
 		_ = database.Close()
 		return nil, fmt.Errorf("opening usage cache %s: %w", path, err)
 	}
-	return database, nil
+	return bun.NewDB(database, NewSQLiteArchiveDialect()), nil
 }
 
 func probeUsageCache(ctx context.Context, path string) usageCacheProbe {

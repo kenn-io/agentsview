@@ -33,7 +33,7 @@ func mirrorWorkDirPath(path string) string {
 
 // ensureMirrorWorkDir creates the mirror's work directory if needed and
 // returns its path. Callers may only invoke it once real work is starting —
-// a rebuild creating its temp file, a serve process hardlinking a reopen
+// a push acquiring its lock, a serve process hardlinking a reopen
 // alias — never from probe/status/sweep paths, which must stay create-free.
 //
 // The directory must be private: rebuild temp files and reopen aliases
@@ -80,10 +80,10 @@ func ensureMirrorWorkDir(path string) (string, error) {
 
 // rebuildMirror builds a fresh DuckDB mirror file from scratch in a
 // temporary file inside the mirror's work directory, then atomically swaps
-// it over path. It is
-// the only way a schema v9 mirror is created or repaired: unlike Sync.Push,
-// it never touches an existing mirror file in place, so a rebuild that
-// fails at any point leaves the previous mirror (if any) fully intact.
+// it over path. Schema and content changes happen only in the new file.
+// Before swapping, any previous mirror WAL is checkpointed into its own
+// file so reopening cannot replay old transactions onto the replacement.
+// A failed rebuild preserves the previous mirror's data.
 func rebuildMirror(
 	ctx context.Context, path string, local *db.DB, machine string,
 	opts SyncOptions, onProgress func(PushProgress),
@@ -112,6 +112,9 @@ func rebuildMirror(
 	}
 
 	if err := validateBuiltMirror(ctx, tmpPath, result.SessionsPushed); err != nil {
+		return result, err
+	}
+	if err := checkpointReplacedMirror(ctx, path); err != nil {
 		return result, err
 	}
 	if err := swapMirrorFile(tmpPath, path); err != nil {
@@ -157,17 +160,8 @@ func createMirrorTempPath(path string) (string, error) {
 // and rebuildMirror's deferred cleanup, which only fires for that process's
 // own file and never runs at all if the process is killed outright).
 //
-// The age is a heuristic, not proof of liveness: pushes are not serialized
-// across processes, so a second push's sweep could in principle run while a
-// first push's rebuild has genuinely been in progress for longer than this
-// threshold (a very large archive, a slow disk) and race-remove its still-
-// live temp file. 24 hours makes that window large enough that hitting it
-// in practice would already be a surprising rebuild duration on its own.
-// The worst case if it does happen is bounded and self-healing: the
-// in-progress rebuild's own rename fails with an actionable "temp file
-// missing" error, that one push attempt fails, and the caller retries — the
-// existing mirror file is never touched (rebuildMirror never writes to it
-// in place), so there is no risk of corruption, only a failed push.
+// Push holds the mirror's process lock before sweeping, so another push
+// cannot remove a running rebuild's temp file.
 const staleTempFileAge = 24 * time.Hour
 
 // sweepStaleTempFiles removes <base>.tmp-<digits> rebuild temp files older
@@ -497,6 +491,37 @@ func validateBuiltMirror(ctx context.Context, tmpPath string, wantSessions int) 
 		return fmt.Errorf(
 			"rebuilt duckdb mirror has %d sessions, want %d", count, wantSessions,
 		)
+	}
+	return nil
+}
+
+// checkpointReplacedMirror folds a previous mirror's WAL into its own file
+// before replacement. Otherwise DuckDB replays those old transactions onto
+// the rebuilt file when it next opens the destination path.
+func checkpointReplacedMirror(ctx context.Context, path string) error {
+	if _, err := os.Stat(path + ".wal"); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("checking replaced duckdb mirror WAL: %w", err)
+	}
+	conn, err := Open(path)
+	if err != nil {
+		return fmt.Errorf("opening replaced duckdb mirror for checkpoint: %w", err)
+	}
+	// CHECKPOINT controls the native database's file lifecycle.
+	_, checkpointErr := conn.ExecContext(ctx, "CHECKPOINT")
+	closeErr := conn.Close()
+	if checkpointErr != nil {
+		return fmt.Errorf("checkpointing replaced duckdb mirror: %w", checkpointErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("closing replaced duckdb mirror: %w", closeErr)
+	}
+	if _, err := os.Stat(path + ".wal"); !os.IsNotExist(err) {
+		if err != nil {
+			return fmt.Errorf("checking checkpointed duckdb mirror WAL: %w", err)
+		}
+		return fmt.Errorf("replaced duckdb mirror WAL remains after checkpoint; refusing to replay it over the rebuilt mirror")
 	}
 	return nil
 }

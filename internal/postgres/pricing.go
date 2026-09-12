@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ccoveille/go-safecast/v2"
+	"github.com/uptrace/bun"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
@@ -151,28 +152,68 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if len(prices) == 0 {
 		prices = fallbackPricingRows()
 	}
-	existing, err := listPGModelPricing(ctx, s.bunDB())
+	localOwnership, err := s.local.GetPricingMeta(pricing.OpenRouterModelsMetaKey)
 	if err != nil {
-		return fmt.Errorf("listing pg model pricing: %w", err)
+		return fmt.Errorf("reading local pricing ownership: %w", err)
 	}
-	_, changedPrices := db.FilterChangedModelPricing(
-		existing, prices,
-	)
-	if len(changedPrices) == 0 {
-		return nil
-	}
-	defaultUpdatedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	for i := range changedPrices {
-		if changedPrices[i].UpdatedAt == "" {
-			changedPrices[i].UpdatedAt = defaultUpdatedAt
+	if err := s.bunDB().RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if err := lockPGModelPricing(ctx, tx); err != nil {
+			return err
 		}
+		existing, err := listPGModelPricing(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("listing pg model pricing: %w", err)
+		}
+		targetOwnership, err := db.ReadSyncMetadata(
+			ctx, tx, pricing.OpenRouterModelsMetaKey,
+		)
+		if err != nil {
+			return err
+		}
+		changedPrices, removePatterns, ownership, err := db.PlanModelPricingSync(
+			existing, prices, targetOwnership, localOwnership,
+		)
+		if err != nil {
+			return fmt.Errorf("planning pg model pricing sync: %w", err)
+		}
+		if len(changedPrices) == 0 && len(removePatterns) == 0 && ownership.Key == "" {
+			return nil
+		}
+		defaultUpdatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+		for i := range changedPrices {
+			if changedPrices[i].UpdatedAt == "" {
+				changedPrices[i].UpdatedAt = defaultUpdatedAt
+			}
+		}
+		rows, bands, err := db.CanonicalModelPricingRows(changedPrices)
+		if err != nil {
+			return fmt.Errorf("converting pg model pricing: %w", err)
+		}
+		if err := db.ApplyModelPricingRows(
+			ctx, tx, rows, bands, removePatterns,
+		); err != nil {
+			return fmt.Errorf("syncing model pricing to pg: %w", err)
+		}
+		return db.WriteSyncMetadata(ctx, tx, ownership)
+	}); err != nil {
+		return err
 	}
-	rows, bands, err := db.CanonicalModelPricingRows(changedPrices)
-	if err != nil {
-		return fmt.Errorf("converting pg model pricing: %w", err)
+	return nil
+}
+
+const pricingSyncLockKey = "model_pricing_sync_lock"
+
+func lockPGModelPricing(ctx context.Context, tx bun.IDB) error {
+	if _, err := tx.NewRaw(`
+		INSERT INTO sync_metadata (key, value) VALUES (?, '')
+		ON CONFLICT (key) DO NOTHING`, pricingSyncLockKey).Exec(ctx); err != nil {
+		return fmt.Errorf("creating pg model pricing lock row: %w", err)
 	}
-	if err := db.UpsertModelPricingRows(ctx, s.bunDB(), rows, bands); err != nil {
-		return fmt.Errorf("syncing model pricing to pg: %w", err)
+	if _, err := tx.NewRaw(`
+		SELECT value FROM sync_metadata WHERE key = ? FOR UPDATE`,
+		pricingSyncLockKey,
+	).Exec(ctx); err != nil {
+		return fmt.Errorf("locking pg model pricing: %w", err)
 	}
 	return nil
 }

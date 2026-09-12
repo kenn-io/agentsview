@@ -153,6 +153,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     deleted_at         TIMESTAMPTZ,
     source_deleted_at  TIMESTAMPTZ,
     deletion_cause     TEXT,
+    source_missing_at  TIMESTAMPTZ,
     message_count      INT NOT NULL DEFAULT 0,
     user_message_count INT NOT NULL DEFAULT 0,
     parent_session_id  TEXT,
@@ -987,6 +988,11 @@ func EnsureSchema(
 			"adding sessions.deletion_cause",
 		},
 		{
+			"sessions", "source_missing_at",
+			`source_missing_at TIMESTAMPTZ`,
+			"adding sessions.source_missing_at",
+		},
+		{
 			"sessions", "parser_parent_session_id",
 			`parser_parent_session_id TEXT`,
 			"adding sessions.parser_parent_session_id",
@@ -1672,11 +1678,19 @@ func validateStampedPostgresCommonSchema(
 
 func convergePostgresPricingTimestamps(ctx context.Context, store bun.IDB) error {
 	if _, err := store.ExecContext(ctx, `
+		INSERT INTO sync_metadata (key, value)
+		SELECT model_pattern, updated_at FROM model_pricing
+		WHERE model_pattern = '_openrouter_models'
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`); err != nil {
+		return fmt.Errorf("moving PostgreSQL pricing ownership metadata: %w", err)
+	}
+	if _, err := store.ExecContext(ctx, `
 		DELETE FROM model_pricing
 		WHERE model_pattern IN (
 			'_fallback_version',
 			'_litellm_last_attempt',
-			'_pricing_storage_version'
+			'_pricing_storage_version',
+			'_openrouter_models'
 		)`); err != nil {
 		return fmt.Errorf("removing PostgreSQL pricing metadata sentinels: %w", err)
 	}
@@ -1907,7 +1921,7 @@ func createContentSearchIndexesPG(ctx context.Context, db bun.IConn) {
 // complete integrity marker: rows can arrive from stale clients
 // after the hash was stamped.
 func backfillIsAutomatedPG(
-	ctx context.Context, pg bun.IConn,
+	ctx context.Context, pg bun.IDB,
 ) error {
 	_, err := backfillIsAutomatedPGWithProgress(ctx, pg)
 	return err
@@ -1948,14 +1962,14 @@ func runSchemaDataRepairsPG(ctx context.Context, db bun.IDB) error {
 // repairLegacySourceMissingDeletionPG restores mirror rows written while
 // source absence was represented as deletion. Source availability is local
 // SQLite sync state; PostgreSQL retains only user-owned deletion state.
-func repairLegacySourceMissingDeletionPG(ctx context.Context, pg *sql.DB) error {
-	_, err := pg.ExecContext(ctx, `
+func repairLegacySourceMissingDeletionPG(ctx context.Context, pg bun.IDB) error {
+	_, err := pg.NewRaw(`
 		UPDATE sessions
 		SET deleted_at = NULL,
 		    source_deleted_at = NULL,
 		    deletion_cause = NULL,
 		    updated_at = NOW()
-		WHERE deletion_cause = 'source_missing'`)
+		WHERE deletion_cause = 'source_missing'`).Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("repairing legacy PG source-missing deletions: %w", err)
 	}
@@ -2182,7 +2196,7 @@ func markProjectIdentityRemoteScrubDone(
 }
 
 func batchUpdateAutomatedPG(
-	ctx context.Context, pg bun.IConn,
+	ctx context.Context, pg bun.IDB,
 	ids []string, val bool,
 ) error {
 	const batchSize = 500
@@ -2195,13 +2209,13 @@ func batchUpdateAutomatedPG(
 		for j, id := range batch {
 			phs[j] = pb.add(id)
 		}
-		_, err := pg.ExecContext(ctx,
+		_, err := pg.NewRaw(
 			"UPDATE sessions SET is_automated = "+valPh+
 				" WHERE id IN ("+
 				strings.Join(phs, ",")+
 				")",
 			pb.args...,
-		)
+		).Exec(ctx)
 		if err != nil {
 			return fmt.Errorf(
 				"updating is_automated in PG: %w", err,
@@ -2993,20 +3007,10 @@ func checkSchemaCompat(ctx context.Context, db bun.IConn) error {
 		)
 	}
 	rows.Close()
-	return nil
-}
-
-// checkPushSchemaCompat verifies schema elements that only push needs. PG serve
-// never reads sync_metadata or sessions.owner_marker, so they live outside
-// CheckSchemaCompat (which gates read-only serve startup and now probes the
-// serve-read sessions.source_archive_id/file_path provenance columns itself)
-// and are checked only on the push fast path.
-func checkPushSchemaCompat(ctx context.Context, db bun.IConn) error {
-	rows, err := db.QueryContext(ctx,
+	rows, err = db.QueryContext(ctx,
 		`SELECT key, value FROM sync_metadata LIMIT 0`)
 	if err != nil {
-		return fmt.Errorf(
-			"sync_metadata table missing required columns: %w", err)
+		return fmt.Errorf("sync_metadata table missing required columns: %w", err)
 	}
 	rows.Close()
 	return nil
@@ -3015,7 +3019,7 @@ func checkPushSchemaCompat(ctx context.Context, db bun.IConn) error {
 // checkPushSchemaCompat verifies session ownership columns used only by push.
 // CheckSchemaCompat also checks sync_metadata because PG serve reads machine
 // display labels from it.
-func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
+func checkPushSchemaCompat(ctx context.Context, db bun.IConn) error {
 	rows, err := db.QueryContext(ctx,
 		`SELECT owner_marker, prompt_evidence_discarded FROM sessions LIMIT 0`)
 	if err != nil {

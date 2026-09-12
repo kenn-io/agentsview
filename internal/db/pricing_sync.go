@@ -23,20 +23,23 @@ import (
 // row now supplies, so no machine strips ownership another machine
 // recorded.
 func PlanModelPricingSync(
-	existing, desired []ModelPricing,
-) (changed []ModelPricing, remove []string, err error) {
-	targetValue, targetOwned, err := openRouterModels(existing)
+	existing, desired []ModelPricing, targetValue, localValue string,
+) (changed []ModelPricing, remove []string, meta PricingMeta, err error) {
+	targetOwned, err := pricing.DecodeOpenRouterModels(targetValue)
 	if err != nil {
-		return nil, nil, fmt.Errorf("target OpenRouter models: %w", err)
+		return nil, nil, PricingMeta{}, fmt.Errorf(
+			"target OpenRouter models: %w", err,
+		)
 	}
-	localValue, localOwned, err := openRouterModels(desired)
+	localOwned, err := pricing.DecodeOpenRouterModels(localValue)
 	if err != nil {
-		return nil, nil, fmt.Errorf("local OpenRouter models: %w", err)
+		return nil, nil, PricingMeta{}, fmt.Errorf(
+			"local OpenRouter models: %w", err,
+		)
 	}
 	targetForeign := make([]string, 0, len(existing))
 	for _, row := range existing {
-		if !isPricingMetaPattern(row.ModelPattern) &&
-			!slices.Contains(targetOwned, row.ModelPattern) {
+		if !slices.Contains(targetOwned, row.ModelPattern) {
 			targetForeign = append(targetForeign, row.ModelPattern)
 		}
 	}
@@ -45,8 +48,7 @@ func PlanModelPricingSync(
 	local := make([]string, 0, len(desired))
 	models := make([]ModelPricing, 0, len(desired))
 	for _, row := range desired {
-		if isPricingMetaPattern(row.ModelPattern) ||
-			slices.Contains(withheld, row.ModelPattern) {
+		if slices.Contains(withheld, row.ModelPattern) {
 			continue
 		}
 		local = append(local, row.ModelPattern)
@@ -73,27 +75,10 @@ func PlanModelPricingSync(
 
 	_, changed = FilterChangedModelPricing(existing, models)
 	if targetValue == "" && localValue == "" {
-		return changed, remove, nil
+		return changed, remove, PricingMeta{}, nil
 	}
 	if merged := pricing.EncodeOpenRouterModels(owned); merged != targetValue {
-		changed = append(changed, ModelPricing{
-			ModelPattern: pricing.OpenRouterModelsMetaKey,
-			UpdatedAt:    merged,
-		})
+		meta = PricingMeta{Key: pricing.OpenRouterModelsMetaKey, Value: merged}
 	}
-	return changed, remove, nil
-}
-
-// openRouterModels finds the OpenRouter ownership sentinel in rows and
-// returns its raw value and decoded patterns; both are empty when rows
-// carry no sentinel.
-func openRouterModels(rows []ModelPricing) (string, []string, error) {
-	for _, row := range rows {
-		if row.ModelPattern != pricing.OpenRouterModelsMetaKey {
-			continue
-		}
-		patterns, err := pricing.DecodeOpenRouterModels(row.UpdatedAt)
-		return row.UpdatedAt, patterns, err
-	}
-	return "", nil, nil
+	return changed, remove, meta, nil
 }

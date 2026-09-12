@@ -648,9 +648,10 @@ func claudeSnapshotSelectionContext(
 	for i := range canonical {
 		canonical[i] = -1
 	}
-	best := make(map[claudeUsageSnapshotToken]int)
-	earliest := make(map[claudeUsageSnapshotToken]int)
-	maximumWebSearchRequests := make(map[claudeUsageSnapshotToken]int)
+	type snapshotSelection struct {
+		best, earliest, maximumWebSearchRequests int
+	}
+	selection := make(map[claudeUsageSnapshotToken]snapshotSelection)
 	for i, u := range usage {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, nil, nil, err
@@ -669,24 +670,25 @@ func claudeSnapshotSelectionContext(
 			messageID: u.ClaudeMessageID,
 			requestID: u.ClaudeRequestID,
 		}
-		previous, ok := best[key]
-		if first, exists := earliest[key]; !exists ||
-			earlierClaudeSnapshotAttribution(u, usage[first]) {
-			earliest[key] = i
+		selected, ok := selection[key]
+		if !ok || earlierClaudeSnapshotAttribution(u, usage[selected.earliest]) {
+			selected.earliest = i
 		}
-		if !ok || laterClaudeSnapshot(u, usage[previous]) {
-			best[key] = i
+		if !ok || laterClaudeSnapshot(u, usage[selected.best]) {
+			selected.best = i
 		}
-		maximumWebSearchRequests[key] = max(
-			maximumWebSearchRequests[key], u.WebSearchRequests)
+		selected.maximumWebSearchRequests = max(
+			selected.maximumWebSearchRequests, u.WebSearchRequests)
+		selection[key] = selected
 	}
-	for key, i := range best {
+	for _, selected := range selection {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, nil, nil, err
 		}
+		i := selected.best
 		mask[i] = true
-		attribution[i] = usage[earliest[key]].SessionID
-		webSearchRequests[i] = maximumWebSearchRequests[key]
+		attribution[i] = usage[selected.earliest].SessionID
+		webSearchRequests[i] = selected.maximumWebSearchRequests
 	}
 	for i, u := range usage {
 		if err := ctx.Err(); err != nil {
@@ -698,10 +700,10 @@ func claudeSnapshotSelectionContext(
 		if u.ClaudeMessageID == "" || u.ClaudeRequestID == "" {
 			continue
 		}
-		canonical[i] = best[claudeUsageSnapshotToken{
+		canonical[i] = selection[claudeUsageSnapshotToken{
 			messageID: u.ClaudeMessageID,
 			requestID: u.ClaudeRequestID,
-		}]
+		}].best
 	}
 	return mask, attribution, webSearchRequests, canonical, nil
 }
@@ -762,6 +764,48 @@ func CanonicalSessionTokenCoverageContext(
 	}
 	return coverage, nil
 }
+
+// ClaudeSnapshotSelection incrementally selects one message/request group's
+// token row, earliest attribution, and maximum billed web-search count.
+// The zero value is ready for use. Callers keep the payload when Consider returns true.
+type ClaudeSnapshotSelection struct {
+	best, earliest    claudeSnapshotRank
+	webSearchRequests int
+	initialized       bool
+}
+
+type claudeSnapshotRank struct {
+	sessionID, timestamp string
+	ordinal              int64
+	outputTokens         int
+}
+
+func (r claudeSnapshotRank) usageRow() UsageRow {
+	return UsageRow{SessionID: r.sessionID, Timestamp: r.timestamp,
+		MessageOrdinal: r.ordinal, OutputTokens: r.outputTokens}
+}
+
+// Consider reports whether row replaces the selected token row. All rows
+// supplied to a selection must have the same non-empty Claude identity pair.
+func (s *ClaudeSnapshotSelection) Consider(row UsageRow) bool {
+	rank := claudeSnapshotRank{row.SessionID, row.Timestamp, row.MessageOrdinal, row.OutputTokens}
+	if !s.initialized || earlierClaudeSnapshotAttribution(row, s.earliest.usageRow()) {
+		s.earliest = rank
+	}
+	selected := !s.initialized || laterClaudeSnapshot(row, s.best.usageRow())
+	if selected {
+		s.best = rank
+	}
+	s.webSearchRequests = max(s.webSearchRequests, row.WebSearchRequests)
+	s.initialized = true
+	return selected
+}
+
+// AttributionSessionID returns the earliest snapshot's session.
+func (s *ClaudeSnapshotSelection) AttributionSessionID() string { return s.earliest.sessionID }
+
+// WebSearchRequests returns the largest billed search count across snapshots.
+func (s *ClaudeSnapshotSelection) WebSearchRequests() int { return s.webSearchRequests }
 
 func earlierClaudeSnapshotAttribution(candidate, current UsageRow) bool {
 	candidateTS, candidateErr := time.Parse(time.RFC3339Nano, candidate.Timestamp)

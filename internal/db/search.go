@@ -387,15 +387,16 @@ func (capability sqliteFullTextCapability) Search(
 		nameProjectArgs = []any{f.Project}
 	}
 
-	dateBuilder := NewQueryBuilder(SQLiteQueryDialect(), 0)
-	datePreds := dateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s2." + col })
-	innerWhere = append(innerWhere, datePreds...)
-	ftsArgs = append(ftsArgs, dateBuilder.Args()...)
-	nameDateBuilder := NewQueryBuilder(SQLiteQueryDialect(), 0)
-	for _, pred := range nameDateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s." + col }) {
-		nameProjectClause += " AND " + pred
+	if f.DateFrom != "" || f.DateTo != "" {
+		innerWhere = append(innerWhere, "(?)")
+		ftsArgs = append(ftsArgs, BunSessionDateRangePredicate(
+			f.DateFrom, f.DateTo, "", "s2", sqliteTimestampOrderExpr,
+		))
+		nameProjectClause += " AND (?)"
+		nameProjectArgs = append(nameProjectArgs, BunSessionDateRangePredicate(
+			f.DateFrom, f.DateTo, "", "s", sqliteTimestampOrderExpr,
+		))
 	}
-	nameProjectArgs = append(nameProjectArgs, nameDateBuilder.Args()...)
 
 	innerWhereSQL := strings.Join(innerWhere, " AND ")
 	// Strip FTS quoting before substring operations. PrepareFTSQuery wraps
@@ -581,9 +582,14 @@ func (capability sqliteFullTextCapability) SearchSession(
 func (capability sqliteFullTextCapability) SearchContent(
 	ctx context.Context, store bun.IDB, filter ContentSearchFilter,
 ) ([]ContentSearchHit, error) {
+	ftsQuery, err := capability.store.prepareMessageFTSQuery(ctx, filter.Pattern)
+	if err != nil {
+		return nil, err
+	}
 	where, scopeArgs := buildBunSessionFilter(
 		contentSessionFilter(filter), sqliteTimestampOrderExpr,
 	)
+	where, scopeArgs = AppendExcludeSessionIDs(where, scopeArgs, "session.id", filter.ExcludeSessionIDs)
 	system := "1=1"
 	if filter.ExcludeSystem {
 		system = "message.is_system = FALSE AND " +
@@ -601,7 +607,8 @@ func (capability sqliteFullTextCapability) SearchContent(
 			NULLIF(session.started_at, ''), session.created_at)) DESC,
 			message.session_id ASC, message.ordinal ASC, message.id ASC
 		LIMIT ? OFFSET ?`
-	args := []any{PrepareFTSQuery(filter.Pattern)}
+	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
+	args := []any{ftsQuery.match}
 	args = append(args, scopeArgs...)
 	args = append(args, filter.Limit, filter.Cursor)
 	var rows []bunContentCandidate
@@ -610,7 +617,7 @@ func (capability sqliteFullTextCapability) SearchContent(
 	}
 	hits := make([]ContentSearchHit, len(rows))
 	for i, row := range rows {
-		hits[i] = bunContentHitFromCandidate(row, filter.ftsSnippet(row.Body))
+		hits[i] = bunContentHitFromCandidate(row, filter.ftsSnippet(row.Body, ftsQuery.snippetTerm))
 	}
 	return hits, nil
 }
@@ -618,9 +625,14 @@ func (capability sqliteFullTextCapability) SearchContent(
 func (capability sqliteFullTextCapability) SearchHybridContent(
 	ctx context.Context, store bun.IDB, filter ContentSearchFilter,
 ) ([]ContentSearchHit, error) {
+	ftsQuery, err := capability.store.prepareMessageFTSQuery(ctx, filter.Pattern)
+	if err != nil {
+		return nil, err
+	}
 	where, scopeArgs := buildBunSessionBaseFilter(
 		semanticContentSessionFilter(filter), sqliteTimestampOrderExpr,
 	)
+	where, scopeArgs = AppendExcludeSessionIDs(where, scopeArgs, "session.id", filter.ExcludeSessionIDs)
 	query := `SELECT message.session_id, message.ordinal,
 		'message' AS location, '' AS tool_name,
 		snippet(messages_fts, 0, '', '', '...', 32) AS body,
@@ -634,7 +646,8 @@ func (capability sqliteFullTextCapability) SearchHybridContent(
 			AND message.session_id IN (SELECT id FROM sessions AS session WHERE ` + where + `)
 		ORDER BY messages_fts.rank, message.id
 		LIMIT ? OFFSET ?`
-	args := []any{PrepareFTSQuery(filter.Pattern)}
+	query = strings.ReplaceAll(query, "messages_fts", ftsQuery.table)
+	args := []any{ftsQuery.match}
 	args = append(args, scopeArgs...)
 	args = append(args, filter.Limit, filter.Cursor)
 	var rows []bunContentCandidate

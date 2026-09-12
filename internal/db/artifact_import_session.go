@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/uptrace/bun"
 )
 
 // ArtifactImportedSessionResult reports whether an import replaced normalized
@@ -77,19 +79,15 @@ func (db *DB) applyArtifactImportedSession(
 		return result, err
 	}
 	stampSessionArchiveIdentity(&write.Session, identity)
-	write = sanitizeSessionBatchWrite(write)
-	write.Session, write.Messages = db.sessionAndMessagesForStorage(
-		write.Session, write.Messages,
-	)
-	switch {
-	case db.usageOnlyStorage():
-		write.Signals = usageOnlySignalUpdate()
-		write.Findings = nil
-		write.SkipSignalUpdates = false
-	case db.ArchiveContent().OmitsToolContent():
-		// The manifest computed signals and findings over payloads this
-		// archive does not keep. Leave them cleared at version zero so the
-		// startup backfill recomputes both from the projected rows.
+	write, sanitization := sanitizeSessionBatchWrite(write)
+	defer sanitization.release()
+	write, err = db.projectSessionBatchWrite(write)
+	if err != nil {
+		return result, err
+	}
+	if db.ArchiveContent().OmitsToolContent() && !db.usageOnlyStorage() {
+		// Imported findings describe discarded payloads. Recompute from the
+		// retained transcript rather than publishing the manifest's values.
 		write.Signals = SessionSignalUpdate{}
 		write.Findings = nil
 		write.SkipSignalUpdates = false
@@ -102,20 +100,19 @@ func (db *DB) applyArtifactImportedSession(
 		return result, fmt.Errorf("beginning artifact imported session: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	rawTx := tx.Tx
 
 	var machine string
-	err = rawTx.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		SELECT machine FROM sessions WHERE id = ?`,
 		write.Session.ID,
 	).Scan(&machine)
 	switch {
 	case err == nil && machine != imported.Origin:
-		if err := recordArtifactImportedSessionTx(ctx, rawTx, imported); err != nil {
+		if err := recordArtifactImportedSessionTx(ctx, tx, imported); err != nil {
 			return result, err
 		}
 		if err := satisfyArtifactCheckpointImportTx(
-			ctx, rawTx, landing, staged, imported,
+			ctx, tx, landing, staged, imported,
 		); err != nil {
 			return result, err
 		}
@@ -131,9 +128,8 @@ func (db *DB) applyArtifactImportedSession(
 	}
 
 	var pendingRecallRevocations recallEvidenceRevocationEvents
-	ctxTx := contextTransaction{ctx: ctx, tx: rawTx}
 	messagesWritten, err := writeOneSessionBatchTx(
-		ctx, rawTx, ctxTx, tx, write, &pendingRecallRevocations,
+		ctx, tx, write, &pendingRecallRevocations,
 		db.usageOnlyStorage(),
 	)
 	switch {
@@ -147,11 +143,11 @@ func (db *DB) applyArtifactImportedSession(
 	default:
 		return result, err
 	}
-	if err := recordArtifactImportedSessionTx(ctx, rawTx, imported); err != nil {
+	if err := recordArtifactImportedSessionTx(ctx, tx, imported); err != nil {
 		return ArtifactImportedSessionResult{}, err
 	}
 	if err := satisfyArtifactCheckpointImportTx(
-		ctx, rawTx, landing, staged, imported,
+		ctx, tx, landing, staged, imported,
 	); err != nil {
 		return ArtifactImportedSessionResult{}, err
 	}
@@ -165,7 +161,7 @@ func (db *DB) applyArtifactImportedSession(
 
 func satisfyArtifactCheckpointImportTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	landing *ArtifactCheckpointLanding,
 	staged *ArtifactCheckpointSession,
 	imported ArtifactImportedSession,
@@ -225,7 +221,7 @@ func satisfyArtifactCheckpointImportTx(
 
 func satisfyAllArtifactCheckpointStagesTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	imported ArtifactImportedSession,
 ) error {
 	rows, err := tx.QueryContext(ctx, `

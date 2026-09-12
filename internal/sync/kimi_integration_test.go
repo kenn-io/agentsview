@@ -1,10 +1,11 @@
 package sync_test
 
 import (
-	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/uptrace/bun"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -91,7 +92,7 @@ func TestSyncPathsAndSingleSession_KimiNewLayout(t *testing.T) {
 
 	// Force a single-session resync by clearing file_mtime; the
 	// project must remain the decoded workdir, not "agents".
-	require.NoError(t, testDB.Update(func(tx *sql.Tx) error {
+	require.NoError(t, testDB.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET file_mtime = NULL WHERE id = ?",
 			sessionID,

@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/uptrace/bun"
-	"github.com/uptrace/bun/dialect/sqlitedialect"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -490,7 +490,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Subagent tool calls from Other to Task so delegation renders as a task call
 // and leaves the Other analytics bucket; subagent transcripts themselves are
 // new sources and need no re-parse.)
-const dataVersion = 107
+// (108: Canonical message timestamps. Re-parse live sessions and blank unsupported
+// timestamps in orphaned and trashed sessions before strict Bun reads.)
+const dataVersion = 108
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -794,18 +796,7 @@ type DB struct {
 	vectorSearcher VectorSearcher
 	recallSearcher RecallVectorSearcher
 
-	// messagesLoadCount counts GetAllMessages calls. Tests use it to gate
-	// the incremental signal path: a maintained delta must not load
-	// session history.
-	messagesLoadCount atomic.Int64
-
 	chineseFTSUnavailableLog sync.Once
-}
-
-// MessagesLoadCount returns the total number of GetAllMessages calls the
-// database has served. Monotonic; used by the incremental-path gates.
-func (db *DB) MessagesLoadCount() int64 {
-	return db.messagesLoadCount.Load()
 }
 
 // Reader exposes guarded read-only query operations through the current Bun
@@ -850,6 +841,12 @@ func (r *readerHandle) Exec(
 	return r.currentBun().Exec(query, args...)
 }
 
+func (r *readerHandle) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	r.owner.connMu.RLock()
+	defer r.owner.connMu.RUnlock()
+	return r.currentBun().ExecContext(ctx, query, args...)
+}
+
 func (r *readerHandle) Query(
 	query string, args ...any,
 ) (*sql.Rows, error) {
@@ -884,20 +881,17 @@ func (r *readerHandle) QueryRowContext(
 
 func (r *readerHandle) BeginTx(
 	ctx context.Context, opts *sql.TxOptions,
-) (*sql.Tx, error) {
+) (bun.Tx, error) {
 	r.owner.connMu.RLock()
 	defer r.owner.connMu.RUnlock()
-	// Bun owns transaction creation. The raw view remains only for local
-	// archive operational helpers whose callback contracts still use sql.Tx;
-	// shared Store reads use BunBackend.ConsistentView directly.
 	tx, err := r.currentBun().BeginTx(ctx, opts)
-	return tx.Tx, err
+	return tx, err
 }
 
-func (r *readerHandle) Conn(ctx context.Context) (*sql.Conn, error) {
+func (r *readerHandle) Conn(ctx context.Context) (bun.Conn, error) {
 	r.owner.connMu.RLock()
 	defer r.owner.connMu.RUnlock()
-	return r.owner.reader.Load().Conn(ctx)
+	return r.currentBun().Conn(ctx)
 }
 
 func (w *writerHandle) currentRaw() (*sql.DB, error) {
@@ -995,43 +989,37 @@ func (w *writerHandle) QueryRowContext(
 	return db.QueryRowContext(ctx, query, args...)
 }
 
-func (w *writerHandle) Begin() (*sql.Tx, error) {
+func (w *writerHandle) Begin() (bun.Tx, error) {
 	w.owner.connMu.RLock()
 	defer w.owner.connMu.RUnlock()
 	db, err := w.currentBun()
 	if err != nil {
-		return nil, err
+		return bun.Tx{}, err
 	}
-	// Bun owns transaction creation; expose the embedded sql.Tx only to
-	// SQLite-specific archive operations, never to a common Store method.
 	tx, err := db.Begin()
-	return tx.Tx, err
+	return tx, err
 }
 
 func (w *writerHandle) BeginTx(
 	ctx context.Context, opts *sql.TxOptions,
-) (*sql.Tx, error) {
+) (bun.Tx, error) {
 	w.owner.connMu.RLock()
 	defer w.owner.connMu.RUnlock()
 	db, err := w.currentBun()
 	if err != nil {
-		return nil, err
+		return bun.Tx{}, err
 	}
-	// See Begin: canonical/common writes retain bun.Tx, while archive-only
-	// operational helpers may use the embedded driver transaction.
 	tx, err := db.BeginTx(ctx, opts)
-	return tx.Tx, err
+	return tx, err
 }
 
-func (w *writerHandle) Conn(ctx context.Context) (*sql.Conn, error) {
-	// A raw dedicated connection is reserved for SQLite connection-local
-	// control such as ATTACH/DETACH and extension registration. Ordinary
-	// archive queries use the Bun-backed methods above.
+func (w *writerHandle) Conn(ctx context.Context) (bun.Conn, error) {
+	// Keep pinned archive operations on the same guarded Bun connection.
 	w.owner.connMu.RLock()
 	defer w.owner.connMu.RUnlock()
-	db, err := w.currentRaw()
+	db, err := w.currentBun()
 	if err != nil {
-		return nil, err
+		return bun.Conn{}, err
 	}
 	return db.Conn(ctx)
 }
@@ -1176,6 +1164,12 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	}
 	if _, err := d.GetOrCreateArchiveSalt(ctx); err != nil {
 		return closeOnError(fmt.Errorf("initializing archive salt: %w", err))
+	}
+	d.mu.Lock()
+	err = d.convergeSQLiteCommonSchemaLocked(ctx, nil)
+	d.mu.Unlock()
+	if err != nil {
+		return closeOnError(fmt.Errorf("initializing common schema: %w", err))
 	}
 	if err := d.EnsureProjectIdentityBackfillQueued(ctx); err != nil {
 		return closeOnError(fmt.Errorf("queueing project identity backfill: %w", err))
@@ -1417,7 +1411,7 @@ func exportSchemaUpgradeTarget(err error) (*SchemaUpgradeRequiredError, bool) {
 }
 
 func exportSchemaUpgradeEligible(
-	ctx context.Context, tx *sql.Tx, target *SchemaUpgradeRequiredError,
+	ctx context.Context, tx bun.Tx, target *SchemaUpgradeRequiredError,
 ) (bool, error) {
 	var tableExists bool
 	if err := tx.QueryRowContext(ctx, `
@@ -1468,7 +1462,7 @@ func UpgradeExportSchemaInPlace(path string, cause error) (retErr error) {
 		return fmt.Errorf("opening schema upgrade writer: %w", err)
 	}
 
-	tx, err := writer.BeginTx(context.Background(), nil)
+	tx, err := bun.NewDB(writer, NewSQLiteArchiveDialect()).BeginTx(context.Background(), nil)
 	if err != nil {
 		return fmt.Errorf("starting schema upgrade transaction: %w", err)
 	}
@@ -1508,7 +1502,7 @@ func UpgradeExportSchemaInPlace(path string, cause error) (retErr error) {
 	return nil
 }
 
-func initializeSchemaUpgradeMetadata(tx *sql.Tx) error {
+func initializeSchemaUpgradeMetadata(tx bun.Tx) error {
 	databaseID, err := newUUIDv4()
 	if err != nil {
 		return fmt.Errorf("generating database id: %w", err)
@@ -1603,7 +1597,7 @@ func OpenReadOnly(path string) (*DB, error) {
 	}
 	db.usageCache.attachArchive(db)
 	db.reader.Store(reader)
-	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
+	db.bunReader = bun.NewDB(reader, NewSQLiteArchiveDialect())
 	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
 	cursorSecret := make([]byte, 32)
 	if _, err := rand.Read(cursorSecret); err != nil {
@@ -1685,7 +1679,7 @@ func readOnlyRequiredSchema() (map[string][]string, error) {
 			)
 			return
 		}
-		store := bun.NewDB(conn, sqlitedialect.New())
+		store := bun.NewDB(conn, NewSQLiteArchiveDialect())
 		if err := CreateCommonSchema(context.Background(), store); err != nil {
 			readOnlyRequiredSchemaErr = fmt.Errorf(
 				"loading common schema probe: %w", err,
@@ -3054,7 +3048,7 @@ func requeueInvalidArtifactPublicationsLocked(w *writerHandle) error {
 	return nil
 }
 
-var populateArtifactOriginQueueTx = func(tx *sql.Tx, origin string, requeue bool) error {
+var populateArtifactOriginQueueTx = func(tx bun.Tx, origin string, requeue bool) error {
 	statement := bootstrapArtifactExportQueueSQL
 	action := "bootstrapping"
 	args := []any(nil)
@@ -3087,7 +3081,7 @@ func (db *DB) AdoptArtifactOrigin(origin string) error {
 
 func (db *DB) setArtifactOrigin(origin string, adopt bool) (string, error) {
 	resolved := origin
-	err := db.Update(func(tx *sql.Tx) error {
+	err := db.Update(func(tx bun.Tx) error {
 		if err := lockArtifactPublicationTx(context.Background(), tx); err != nil {
 			return err
 		}
@@ -3816,21 +3810,13 @@ func (db *DB) backfillMessageTokenCoverageLocked(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.Prepare(
-		`UPDATE messages
+	stmt := `UPDATE messages
 		 SET has_context_tokens = ?, has_output_tokens = ?
-		 WHERE id = ?`,
-	)
-	if err != nil {
-		return 0, fmt.Errorf(
-			"preparing message token backfill update: %w", err,
-		)
-	}
-	defer stmt.Close()
+		 WHERE id = ?`
 
 	sessions := make(map[string]struct{})
 	for _, candidate := range candidates {
-		if _, err := stmt.Exec(
+		if _, err := tx.Exec(stmt,
 			candidate.hasContext, candidate.hasOutput, candidate.id,
 		); err != nil {
 			return 0, fmt.Errorf(
@@ -4058,22 +4044,14 @@ func (db *DB) applySessionCoverageUpdates(
 	// sync_marker signal, so this one-time repair would otherwise leave
 	// already-pushed rows stale until an unrelated change re-selected them
 	// (see updateSessionSignalsTx for the same pattern).
-	stmt, err := tx.Prepare(
-		`UPDATE sessions
+	stmt := `UPDATE sessions
 		 SET has_total_output_tokens = ?,
 		     has_peak_context_tokens = ?,
 		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		 WHERE id = ?`,
-	)
-	if err != nil {
-		return 0, fmt.Errorf(
-			"preparing session token backfill update: %w", err,
-		)
-	}
-	defer stmt.Close()
+		 WHERE id = ?`
 
 	for _, u := range updates {
-		if _, err := stmt.Exec(
+		if _, err := tx.Exec(stmt,
 			u.HasTotal, u.HasPeak, u.ID,
 		); err != nil {
 			return 0, fmt.Errorf(
@@ -4154,8 +4132,8 @@ func openAndInit(
 	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
 	db.reader.Store(reader)
-	db.bunWriter = bun.NewDB(writer, sqlitedialect.New())
-	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
+	db.bunWriter = bun.NewDB(writer, NewSQLiteArchiveDialect())
+	db.bunReader = bun.NewDB(reader, NewSQLiteArchiveDialect())
 	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
 
 	cursorSecret := make([]byte, 32)
@@ -4947,8 +4925,8 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	retired := append([]*sql.DB(nil), db.retired...)
 	oldWriter := db.writer.Swap(writer)
 	oldReader := db.reader.Swap(reader)
-	db.bunWriter = bun.NewDB(writer, sqlitedialect.New())
-	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
+	db.bunWriter = bun.NewDB(writer, NewSQLiteArchiveDialect())
+	db.bunReader = bun.NewDB(reader, NewSQLiteArchiveDialect())
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set unless the caller keeps it. Without the clear a
 	// resync swap that ran behind the worker write barrier would reopen the
@@ -5074,7 +5052,7 @@ func (db *DB) ReopenWriter() error {
 
 	db.connMu.Lock()
 	old := db.writer.Swap(writer)
-	db.bunWriter = bun.NewDB(writer, sqlitedialect.New())
+	db.bunWriter = bun.NewDB(writer, NewSQLiteArchiveDialect())
 	db.writerClosed.Store(false)
 	db.connMu.Unlock()
 
@@ -5097,11 +5075,11 @@ func (db *DB) WriterClosed() bool {
 // Update executes fn within a write lock and transaction.
 // The transaction is committed if fn returns nil, rolled back
 // otherwise.
-func (db *DB) Update(fn func(tx *sql.Tx) error) error {
+func (db *DB) Update(fn func(tx bun.Tx) error) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Fail fast before handing out a raw *sql.Tx: while the writer is closed
+	// Fail fast before handing out a Bun transaction: while the writer is closed
 	// for a worker maintenance pass the pool pointer is nil, and a caller must
 	// see ErrWriterClosed rather than a transaction from a torn-down pool.
 	if db.writerClosed.Load() {

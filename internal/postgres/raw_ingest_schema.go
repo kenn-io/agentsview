@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 )
 
 // Source keys and entry paths may be up to 4096 bytes, which exceeds the
@@ -270,8 +272,8 @@ WITH required_table_privileges(table_name, privilege) AS (
         ('raw_ingest_jobs', 'UPDATE')
 ), job_table(table_name, table_ref) AS (
     SELECT
-        format('%I.%I', $1::text, 'raw_ingest_jobs'),
-        to_regclass(format('%I.%I', $1::text, 'raw_ingest_jobs'))
+        format('%I.%I', ?0::text, 'raw_ingest_jobs'),
+        to_regclass(format('%I.%I', ?0::text, 'raw_ingest_jobs'))
 ), job_sequence(sequence_name) AS (
     SELECT CASE
         WHEN table_ref IS NULL THEN NULL
@@ -285,7 +287,7 @@ FROM (
     FROM required_table_privileges
     WHERE NOT COALESCE(has_table_privilege(
         current_user,
-        to_regclass(format('%I.%I', $1::text, table_name)),
+        to_regclass(format('%I.%I', ?0::text, table_name)),
         privilege
     ), false)
     UNION ALL
@@ -312,7 +314,8 @@ func CanWriteRawSyncSchema(
 		return false, errors.New("raw sync write probe requires a schema")
 	}
 	var missing string
-	if err := db.QueryRowContext(ctx, rawSyncWritePrivilegeSQL, schema).Scan(&missing); err != nil {
+	probe := bun.NewDB(db, pgdialect.New())
+	if err := probe.QueryRowContext(ctx, rawSyncWritePrivilegeSQL, schema).Scan(&missing); err != nil {
 		return false, fmt.Errorf("probing raw sync write privileges: %w", err)
 	}
 	if missing != "" {
@@ -321,11 +324,11 @@ func CanWriteRawSyncSchema(
 	return missing == "", nil
 }
 
-func ensureRawIngestSchemaPG(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, rawIngestDDL); err != nil {
+func ensureRawIngestSchemaPG(ctx context.Context, db bun.IDB) error {
+	if _, err := db.NewRaw(rawIngestDDL).Exec(ctx); err != nil {
 		return fmt.Errorf("creating raw ingest schema: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, rawIngestAppendOnlyDDL); err != nil {
+	if _, err := db.NewRaw(rawIngestAppendOnlyDDL).Exec(ctx); err != nil {
 		if !rawIngestAppendOnlyUnsupported(err) {
 			return fmt.Errorf("installing raw ingest append-only guards: %w", err)
 		}

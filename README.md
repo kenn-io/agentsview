@@ -37,6 +37,21 @@ docker run --rm -p 127.0.0.1:8080:8080 \
   ghcr.io/kenn-io/agentsview:latest
 ```
 
+## Storage upgrade
+
+The Bun storage transition updates the SQLite archive schema on the first
+writable open and requires a parser resync. Stop the daemon and other writers
+and keep a complete pre-upgrade archive backup before opening it with this
+version. The resync preserves archived sessions whose source files no longer
+exist. PostgreSQL mirrors must be upgraded with the matching binary; DuckDB
+mirrors are rebuilt from the archive.
+
+Downgrading an upgraded archive in place is unsupported. To return to an older
+binary, restore the pre-upgrade backup first. A read-only open cannot perform
+the upgrade. See the
+[storage upgrade procedure](docs/internal/storage-upgrade.md) for backup,
+restoration, temporary disk space, and resync completion checks.
+
 ## Quick Start
 
 ```bash

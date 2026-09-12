@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -11,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/uptrace/bun"
 
 	corerecall "go.kenn.io/agentsview/internal/recall"
 )
@@ -301,15 +302,14 @@ func (db *DB) ingestEvalTrajectoryChunks(
 	stampSessionArchiveIdentity(&session, identity)
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	bunTx, err := db.beginBunWriteTx(ctx)
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin eval trajectory ingest: %w", err)
 	}
-	defer func() { _ = bunTx.Rollback() }()
-	if err := insertArchiveSessionIfAbsentRow(ctx, bunTx, session); err != nil {
+	defer func() { _ = tx.Rollback() }()
+	if err := insertArchiveSessionIfAbsentRow(ctx, tx, session); err != nil {
 		return 0, fmt.Errorf("preparing eval session: %w", err)
 	}
-	tx := bunTx.Tx
 	indexed := 0
 	for idx, entry := range entries {
 		inserted, err := insertEvalRecallEntryIfAbsentTx(ctx, tx, entry)
@@ -320,14 +320,14 @@ func (db *DB) ingestEvalTrajectoryChunks(
 			indexed++
 		}
 	}
-	if err := bunTx.Commit(); err != nil {
+	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit eval trajectory ingest: %w", err)
 	}
 	return indexed, nil
 }
 
 func insertEvalRecallEntryIfAbsentTx(
-	ctx context.Context, tx *sql.Tx, entry RecallEntry,
+	ctx context.Context, tx bun.Tx, entry RecallEntry,
 ) (bool, error) {
 	result, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO recall_entries (

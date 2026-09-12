@@ -406,6 +406,7 @@ func (db *DB) CopyArchiveIdentityFrom(sourcePath string) error {
 		if err := rekeyLocalArchiveRows(
 			ctx, tx, previousArchiveID,
 			metadata[archiveMetadataArchiveIDKey].value,
+			metadata[archiveMetadataArchiveSaltKey].value,
 		); err != nil {
 			return err
 		}
@@ -726,7 +727,7 @@ func (db *DB) SetArchiveIdentityForTest(ctx context.Context, id, salt string) er
 	}
 	if previousArchiveID != id {
 		if err := rekeyLocalArchiveRows(
-			ctx, tx, previousArchiveID, id,
+			ctx, tx, previousArchiveID, id, salt,
 		); err != nil {
 			return err
 		}
@@ -818,31 +819,15 @@ func (db *DB) UpsertSessionWithProjectIdentity(
 	snapshotProject string,
 ) error {
 	_, err := db.upsertSessionWithProjectIdentity(
-		s, obs, snapshotProject, true,
+		s, obs, snapshotProject,
 	)
 	return err
-}
-
-// UpsertSessionPendingContentWithProjectIdentity atomically updates a session
-// and its parser-time project identity without reviving a source-missing
-// tombstone. The returned bool reports whether retained content must be
-// replaced before the caller makes the session visible again.
-func (db *DB) UpsertSessionPendingContentWithProjectIdentity(
-	s Session,
-	obs export.ProjectIdentityObservation,
-	snapshotProject string,
-) (bool, error) {
-	result, err := db.upsertSessionWithProjectIdentity(
-		s, obs, snapshotProject, false,
-	)
-	return result.sourceMissing, err
 }
 
 func (db *DB) upsertSessionWithProjectIdentity(
 	s Session,
 	obs export.ProjectIdentityObservation,
 	snapshotProject string,
-	reviveSourceMissing bool,
 ) (sessionUpsertResult, error) {
 	s = db.sessionForStorage(s)
 	if err := db.requireWritable(); err != nil {
@@ -885,14 +870,12 @@ func (db *DB) upsertSessionWithProjectIdentity(
 			fmt.Errorf("beginning session identity upsert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := upsertArchiveSessionRow(
-		context.Background(), tx, s, reviveSourceMissing,
-	)
+	result, err := upsertArchiveSessionRow(context.Background(), tx, s)
 	if err != nil {
 		return sessionUpsertResult{}, err
 	}
 	if db.usageOnlyStorage() {
-		if err := settleUsageOnlySessionTx(tx.Tx, s.ID); err != nil {
+		if err := settleUsageOnlySessionTx(tx, s.ID); err != nil {
 			return sessionUpsertResult{}, err
 		}
 	}
@@ -921,20 +904,6 @@ func (db *DB) upsertSessionWithProjectIdentity(
 func upsertProjectIdentityObservationWithSnapshotProjectBun(
 	ctx context.Context,
 	store bun.IDB,
-	obs export.ProjectIdentityObservation,
-	snapshotProject string,
-	sessionInserted bool,
-	allowSnapshotProjectCorrection bool,
-) error {
-	return upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-		context.Background(), tx, obs, snapshotProject, sessionInserted,
-		allowSnapshotProjectCorrection,
-	)
-}
-
-func upsertProjectIdentityObservationWithSnapshotProjectTxContext(
-	ctx context.Context,
-	tx *sql.Tx,
 	obs export.ProjectIdentityObservation,
 	snapshotProject string,
 	sessionInserted bool,
@@ -1128,14 +1097,13 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	bunTx, err := db.beginBunWriteTx(ctx)
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return 0, fmt.Errorf(
 			"beginning session project identity restore: %w", err,
 		)
 	}
-	defer func() { _ = bunTx.Rollback() }()
-	tx := bunTx.Tx
+	defer func() { _ = tx.Rollback() }()
 
 	type projectRestore struct {
 		sessionID       string
@@ -1220,13 +1188,13 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 	}
 	for _, restore := range restores {
 		if err := reconcileSessionProjectIdentityAggregatesTx(
-			ctx, bunTx, restore.sessionID,
+			ctx, tx, restore.sessionID,
 			[]string{restore.previousProject, restore.currentProject},
 		); err != nil {
 			return 0, err
 		}
 	}
-	if err := bunTx.Commit(); err != nil {
+	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf(
 			"committing session project identity restore: %w", err,
 		)
@@ -1351,7 +1319,7 @@ func reconcileSessionProjectIdentityAggregatesTx(
 // Bun helpers above.
 func upsertScrubbedProjectIdentityObservationTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	obs export.ProjectIdentityObservation,
 	excludeRemote string,
 ) error {
@@ -1514,7 +1482,7 @@ func normalizeProjectIdentityObservation(
 }
 
 func scrubProjectIdentityGitRemoteCredentialsTx(
-	ctx context.Context, tx *sql.Tx,
+	ctx context.Context, tx bun.Tx,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT source_archive_id, source_archive_salt,

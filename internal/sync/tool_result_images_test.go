@@ -2,9 +2,9 @@ package sync
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/uptrace/bun"
 	"os"
 	"path/filepath"
 	"testing"
@@ -189,18 +189,19 @@ func TestEngineImagePolicyOverridesDatabaseForBulkAppendAndLink(t *testing.T) {
 	assert.Equal(t, want, messages[0].ToolCalls[0].ResultContent)
 	assert.Equal(t, len(want), messages[0].ToolCalls[0].ResultContentLength)
 
-	appendMessages := append([]db.Message(nil), messages...)
-	appendMessages = append(appendMessages, db.Message{
-		SessionID: bulkID, Ordinal: 1, Role: "assistant",
-		ToolCalls: []db.ToolCall{{
-			ToolUseID: "append-call", ResultContent: raw,
-			ResultEvents: []db.ToolResultEvent{{
-				ToolUseID: "append-call", Source: "tool", Status: "completed",
-				Content: raw,
+	require.NoError(t, engine.writeIncremental(&incrementalUpdate{
+		sessionID: bulkID, agent: parser.AgentClaude, msgCount: 2, nextOrdinal: 2,
+		msgs: []parser.ParsedMessage{{
+			Ordinal: 1, Role: parser.RoleAssistant,
+			ToolCalls: []parser.ParsedToolCall{{
+				ToolUseID: "append-call", ToolName: "Bash", Category: "Bash",
+				ResultEvents: []parser.ParsedToolResultEvent{{
+					ToolUseID: "append-call", Source: "tool", Status: "completed",
+					Content: raw,
+				}},
 			}},
 		}},
-	})
-	require.NoError(t, engine.writeMessages(bulkID, appendMessages))
+	}))
 
 	messages, err = database.GetAllMessages(t.Context(), bulkID)
 	require.NoError(t, err)
@@ -360,7 +361,7 @@ func TestReadOnlyResyncReplacementCarriesDropPolicy(t *testing.T) {
 		}}))
 	}
 	require.NoError(t, writable.SoftDeleteSession("trashed"))
-	require.NoError(t, writable.Update(func(tx *sql.Tx) error {
+	require.NoError(t, writable.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET source_missing_at = ? WHERE id = ?",
 			"2026-01-01T00:00:00Z", "source-missing",

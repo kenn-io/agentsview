@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/uptrace/bun"
 	"testing"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -34,7 +35,7 @@ func (s *checkpointSpy) checkpointAfterPush(ctx context.Context, duck *sql.DB) e
 // an incremental push and stays stale until the next full rebuild.
 func mutateSessionStatColumns(t *testing.T, local *db.DB, sessionID string) {
 	t.Helper()
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			`UPDATE sessions
 			 SET file_size = COALESCE(file_size, 0) + 1,

@@ -2,7 +2,6 @@ package storetest
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -175,7 +174,7 @@ func InsertBunInsightFixture(
 }
 
 func InsertSQLiteInsightFixture(
-	ctx context.Context, tx *sql.Tx,
+	ctx context.Context, tx bun.IDB,
 ) (InsightFixture, error) {
 	project := "insight-project"
 	const id int64 = 4101

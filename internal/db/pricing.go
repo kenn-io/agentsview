@@ -3,10 +3,11 @@ package db
 import (
 	"cmp"
 	"context"
-	"database/sql"
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/uptrace/bun"
 
 	"go.kenn.io/agentsview/internal/money"
 )
@@ -318,7 +319,7 @@ func (db *DB) ReconcileModelPricingContext(
 }
 
 func deleteModelPricingTx(
-	ctx context.Context, tx *sql.Tx, patterns []string,
+	ctx context.Context, tx bun.Tx, patterns []string,
 ) error {
 	for i := 0; i < len(patterns); i += pricingWriteBatch {
 		end := min(i+pricingWriteBatch, len(patterns))
@@ -346,7 +347,7 @@ func deleteModelPricingTx(
 }
 
 func replaceModelPricingBands(
-	ctx context.Context, tx *sql.Tx, prices []ModelPricing,
+	ctx context.Context, tx bun.Tx, prices []ModelPricing,
 ) error {
 	for _, price := range prices {
 		if _, err := tx.ExecContext(ctx,
@@ -436,19 +437,7 @@ func (db *DB) GetPricingMeta(key string) (string, error) {
 
 // GetPricingMetaContext is GetPricingMeta with caller cancellation.
 func (db *DB) GetPricingMetaContext(ctx context.Context, key string) (string, error) {
-	var val string
-	err := db.getReader().QueryRowContext(ctx,
-		`SELECT value FROM pricing_metadata WHERE key = ?`, key,
-	).Scan(&val)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf(
-			"reading pricing meta %q: %w", key, err,
-		)
-	}
-	return val, nil
+	return db.BunStore.GetPricingMetaContext(ctx, key)
 }
 
 const setPricingMetaSQL = `INSERT INTO pricing_metadata (key, value)
@@ -510,14 +499,46 @@ func (db *DB) CopyModelPricingFrom(sourcePath string) error {
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx, `
+		INSERT OR REPLACE INTO pricing_metadata (key, value, updated_at)
+		SELECT key, value, updated_at FROM old_db.pricing_metadata`,
+	); err != nil {
+		return fmt.Errorf("copying pricing metadata: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO pricing_metadata (key, value)
+		SELECT model_pattern, updated_at FROM old_db.model_pricing
+		WHERE model_pattern IN (
+			'_fallback_version',
+			'_litellm_last_attempt',
+			'_pricing_storage_version',
+			'_openrouter_models'
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM old_db.pricing_metadata AS metadata
+			WHERE metadata.key = old_db.model_pricing.model_pattern
+		)
+		ON CONFLICT(key) DO UPDATE SET
+			value = excluded.value,
+			updated_at = excluded.updated_at`,
+	); err != nil {
+		return fmt.Errorf("copying legacy pricing metadata: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
 		INSERT OR REPLACE INTO model_pricing
 			(model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			 cache_creation_microdollars_per_mtok, cache_creation_1h_microdollars_per_mtok,
 			 cache_read_microdollars_per_mtok, updated_at)
 		SELECT model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_creation_1h_microdollars_per_mtok,
-			cache_read_microdollars_per_mtok, updated_at
-		FROM old_db.model_pricing`,
+			cache_read_microdollars_per_mtok,
+			updated_at
+		FROM old_db.model_pricing
+		WHERE model_pattern NOT IN (
+			'_fallback_version',
+			'_litellm_last_attempt',
+			'_pricing_storage_version',
+			'_openrouter_models'
+		)`,
 	); err != nil {
 		return fmt.Errorf("copying model pricing: %w", err)
 	}
@@ -533,7 +554,13 @@ func (db *DB) CopyModelPricingFrom(sourcePath string) error {
 			cache_creation_microdollars_per_mtok,
 			cache_creation_1h_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		FROM old_db.model_pricing_bands`,
+		FROM old_db.model_pricing_bands
+		WHERE model_pattern NOT IN (
+			'_fallback_version',
+			'_litellm_last_attempt',
+			'_pricing_storage_version',
+			'_openrouter_models'
+		)`,
 	); err != nil {
 		return fmt.Errorf("copying model pricing bands: %w", err)
 	}
@@ -552,12 +579,6 @@ func (db *DB) CopyModelPricingFrom(sourcePath string) error {
 			FROM old_db.genai_pricing`); err != nil {
 			return fmt.Errorf("copying GenAI pricing document: %w", err)
 		}
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT OR REPLACE INTO pricing_metadata (key, value, updated_at)
-		SELECT key, value, updated_at FROM old_db.pricing_metadata`,
-	); err != nil {
-		return fmt.Errorf("copying pricing metadata: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing model pricing copy: %w", err)

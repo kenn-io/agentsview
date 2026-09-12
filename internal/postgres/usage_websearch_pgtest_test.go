@@ -27,7 +27,7 @@ func seedWebSearchUsage(t *testing.T, store *Store, model string) {
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-websearch-test', 1000000, 2000000, 0, 0, 'seed')`)
+		) VALUES ('claude-websearch-test', 1000000, 2000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -146,7 +146,7 @@ func TestPGUsageJSONExtractionUsesExactPathsAndMalformedFallback(t *testing.T) {
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-json-path-test', 0, 1000000, 0, 0, 'seed');
+		) VALUES ('claude-json-path-test', 0, 1000000, 0, 0, '2026-01-01T00:00:00Z');
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
 			message_count, user_message_count
@@ -193,7 +193,7 @@ func TestPGUsageJSONExtractionUsesExactPathsAndMalformedFallback(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 600000, daily.Totals.OutputTokens)
-	assert.Equal(t, money.MustParseDollars("0.65"), daily.Totals.TotalCost)
+	assert.Equal(t, money.MustParseDollars("0.63"), daily.Totals.TotalCost)
 }
 
 // An unpriced model still owes the flat fee, which does not depend on token

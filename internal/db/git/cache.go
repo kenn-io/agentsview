@@ -14,26 +14,31 @@ import (
 	"github.com/mattn/go-sqlite3"
 )
 
+type cacheQueries interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
 // Cache is a small TTL-backed key-value store for git aggregation results.
 //
-// Reads and writes go through the provided *sql.DB. The caller is expected
+// Reads and writes go through the provided query handle. The caller is expected
 // to have created the `git_cache` table (see internal/db/schema.sql) before
 // using the cache; Cache itself never issues DDL.
 type Cache struct {
-	db    *sql.DB
+	db    cacheQueries
 	write bool
 }
 
 // NewCache wraps db as a git TTL cache. db must be a handle on a SQLite
 // database that already contains the `git_cache` table.
-func NewCache(db *sql.DB) *Cache {
+func NewCache(db cacheQueries) *Cache {
 	return &Cache{db: db, write: true}
 }
 
 // NewReadOnlyCache wraps db as a TTL cache that reads existing rows but does
 // not attempt to persist freshly computed values. It is used by commands that
 // intentionally open SQLite read-only.
-func NewReadOnlyCache(db *sql.DB) *Cache {
+func NewReadOnlyCache(db cacheQueries) *Cache {
 	return &Cache{db: db}
 }
 
@@ -115,15 +120,19 @@ func (c *Cache) lookup(
 	ctx context.Context, key string, ttl time.Duration,
 ) ([]byte, bool, error) {
 	var payload, computedAt string
-	err := c.db.QueryRowContext(
+	rows, err := c.db.QueryContext(
 		ctx,
 		`SELECT payload, computed_at FROM git_cache WHERE cache_key = ?`,
 		key,
-	).Scan(&payload, &computedAt)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, false, nil
-	}
+	)
 	if err != nil {
+		return nil, false, fmt.Errorf("git_cache lookup: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, false, rows.Err()
+	}
+	if err := rows.Scan(&payload, &computedAt); err != nil {
 		return nil, false, fmt.Errorf("git_cache lookup: %w", err)
 	}
 	t, parseErr := time.Parse(time.RFC3339Nano, computedAt)

@@ -3,18 +3,18 @@
 package duckdb
 
 import (
-	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 )
 
 func TestPushInstallationAdoptionRebuildsWithoutSplittingHistory(t *testing.T) {
 	const owner = "oldhost.example"
 	const identity = "0123456789abcdef0123456789abcdef"
 	local, path := newPushFixture(t, 1)
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`UPDATE sessions SET machine = ?`, owner)
 		return err
 	}))

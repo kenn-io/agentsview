@@ -22,8 +22,11 @@ import (
 // migrations between versions. A version mismatch means the mirror file
 // must be rebuilt with 'agentsview duckdb push --full'. v12 adds the 1h
 // cache-write rate columns, v13 adds row-level provider identity, and v14
-// adds reasoning effort. v15 adds the canonical Bun physical keys.
-const SchemaVersion = 15
+// combines the raw GenAI pricing document, canonical Bun physical keys, and
+// an opaque mirror generation token for coherent multi-query Quack reads. v15
+// rebuilds pricing timestamps written before canonical PostgreSQL-compatible
+// microsecond normalization. v16 includes message reasoning effort.
+const SchemaVersion = 16
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 

@@ -2,7 +2,6 @@ package storetest
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -82,7 +81,7 @@ func InsertBunCoreFixture(
 // shipped SQLite aliases, including tool_calls.message_id.
 func InsertSQLiteCoreFixture(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.IDB,
 	archiveID string,
 	generation string,
 ) error {

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/uptrace/bun/dialect/pgdialect"
+
 	"github.com/uptrace/bun"
 )
 
@@ -564,8 +566,8 @@ func (s *Sync) lookupVectorGeneration(
 ) (vectorGeneration, bool, error) {
 	var genID int64
 	var createdAt time.Time
-	err := s.pg.QueryRowContext(ctx,
-		`SELECT id, created_at FROM vector_generations WHERE fingerprint = $1`,
+	err := s.bunDB().QueryRowContext(ctx,
+		`SELECT id, created_at FROM vector_generations WHERE fingerprint = ?0`,
 		fingerprint,
 	).Scan(&genID, &createdAt)
 	if err == sql.ErrNoRows {
@@ -582,10 +584,10 @@ func (s *Sync) lookupVectorGeneration(
 		return vectorGeneration{}, false, err
 	}
 	var machineRecorded bool
-	if err := s.pg.QueryRowContext(ctx, `
+	if err := s.bunDB().QueryRowContext(ctx, `
 SELECT EXISTS (
     SELECT 1 FROM vector_generation_machines
-     WHERE generation_id = $1 AND machine = $2)`,
+     WHERE generation_id = ?0 AND machine = ?1)`,
 		genID, witnessKey).Scan(&machineRecorded); err != nil {
 		return vectorGeneration{}, false, fmt.Errorf(
 			"reading vector push machine record: %w", err,
@@ -878,7 +880,7 @@ func (s *Sync) outOfScopeVectorSessions(
 	query, args := vectorOutOfScopeQuery(
 		candidateIDs, s.projects, s.excludeProjects,
 	)
-	rows, err := s.pg.QueryContext(ctx, query, args...)
+	rows, err := s.bunDB().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("reading out-of-scope vector sessions: %w", err)
 	}
@@ -909,12 +911,12 @@ func vectorOutOfScopeQuery(
 ) (string, []any) {
 	if len(projects) > 0 {
 		return `SELECT id FROM sessions
-		         WHERE id = ANY($1) AND NOT (project = ANY($2))`,
-			[]any{ids, projects}
+		         WHERE id = ANY(?0) AND NOT (project = ANY(?1))`,
+			[]any{pgdialect.Array(ids), pgdialect.Array(projects)}
 	}
 	return `SELECT id FROM sessions
-	         WHERE id = ANY($1) AND project = ANY($2)`,
-		[]any{ids, excludeProjects}
+	         WHERE id = ANY(?0) AND project = ANY(?1)`,
+		[]any{pgdialect.Array(ids), pgdialect.Array(excludeProjects)}
 }
 
 // resolveVectorGeneration registers the generation, creates its chunk table,
@@ -942,16 +944,16 @@ func (s *Sync) resolveVectorGeneration(
 		return vectorGeneration{}, err
 	}
 	var createdAt time.Time
-	if err := s.pg.QueryRowContext(ctx,
-		`SELECT created_at FROM vector_generations WHERE id = $1`, genID,
+	if err := s.bunDB().QueryRowContext(ctx,
+		`SELECT created_at FROM vector_generations WHERE id = ?0`, genID,
 	).Scan(&createdAt); err != nil {
 		return vectorGeneration{}, fmt.Errorf("reading vector generation created_at: %w", err)
 	}
 	var machineRecorded bool
-	if err := s.pg.QueryRowContext(ctx, `
+	if err := s.bunDB().QueryRowContext(ctx, `
 SELECT EXISTS (
     SELECT 1 FROM vector_generation_machines
-     WHERE generation_id = $1 AND machine = $2)`,
+     WHERE generation_id = ?0 AND machine = ?1)`,
 		genID, witnessKey).Scan(&machineRecorded); err != nil {
 		return vectorGeneration{}, fmt.Errorf("reading vector push machine record: %w", err)
 	}
@@ -974,11 +976,11 @@ func (s *Sync) vectorGenerationWitnessKey() (string, error) {
 func (s *Sync) recordVectorGenerationMachine(
 	ctx context.Context, fingerprint string, gen vectorGeneration, witnessKey string,
 ) (bool, error) {
-	res, err := s.pg.ExecContext(ctx, `
+	res, err := s.bunDB().ExecContext(ctx, `
 INSERT INTO vector_generation_machines (generation_id, machine, last_push_at)
-SELECT id, $4, now()
+SELECT id, ?3, now()
   FROM vector_generations
- WHERE id = $1 AND fingerprint = $2 AND created_at = $3
+ WHERE id = ?0 AND fingerprint = ?1 AND created_at = ?2
 ON CONFLICT (generation_id, machine) DO UPDATE SET last_push_at = EXCLUDED.last_push_at`,
 		gen.id, fingerprint, gen.createdAt, witnessKey)
 	if err != nil {
@@ -999,12 +1001,12 @@ ON CONFLICT (generation_id, machine) DO UPDATE SET last_push_at = EXCLUDED.last_
 func (s *Sync) readVectorPushState(
 	ctx context.Context, genID int64,
 ) (map[string]vectorPushStateRow, error) {
-	rows, err := s.pg.QueryContext(ctx, `
+	rows, err := s.bunDB().QueryContext(ctx, `
 SELECT ps.session_id, ps.doc_agg_hash, s.owner_marker, s.machine,
        (s.id IS NOT NULL)
   FROM vector_push_state ps
   LEFT JOIN sessions s ON s.id = ps.session_id
- WHERE ps.generation_id = $1`, genID)
+ WHERE ps.generation_id = ?0`, genID)
 	if err != nil {
 		return nil, fmt.Errorf("reading vector push state: %w", err)
 	}
@@ -1018,13 +1020,13 @@ SELECT ps.session_id, ps.doc_agg_hash, s.owner_marker, s.machine,
 func (s *Sync) readVectorPushStateForSessions(
 	ctx context.Context, genID int64, sessionIDs []string,
 ) (map[string]vectorPushStateRow, error) {
-	rows, err := s.pg.QueryContext(ctx, `
+	rows, err := s.bunDB().QueryContext(ctx, `
 SELECT ps.session_id, ps.doc_agg_hash, s.owner_marker, s.machine,
        (s.id IS NOT NULL)
   FROM vector_push_state ps
   LEFT JOIN sessions s ON s.id = ps.session_id
- WHERE ps.generation_id = $1
-   AND ps.session_id = ANY($2)`, genID, sessionIDs)
+ WHERE ps.generation_id = ?0
+   AND ps.session_id = ANY(?1)`, genID, pgdialect.Array(sessionIDs))
 	if err != nil {
 		return nil, fmt.Errorf("reading scoped vector push state: %w", err)
 	}
@@ -1107,8 +1109,8 @@ func (s *Sync) pushVectorSession(
 	// primary key) before its own vector-table writes — a single, consistent
 	// lock so two vector pushes cannot form a cycle.
 	var ownerMarker, machine sql.NullString
-	err = tx.Tx.QueryRowContext(ctx,
-		`SELECT owner_marker, machine FROM sessions WHERE id = $1 FOR UPDATE`,
+	err = tx.QueryRowContext(ctx,
+		`SELECT owner_marker, machine FROM sessions WHERE id = ?0 FOR UPDATE`,
 		sessionID,
 	).Scan(&ownerMarker, &machine)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1143,7 +1145,7 @@ func (s *Sync) pushVectorSession(
 		return vectorSessionOutcome{deferred: true}, nil
 	}
 
-	if err := parkSessionVectorDocs(ctx, tx.Tx, sessionID); err != nil {
+	if err := parkSessionVectorDocs(ctx, tx, sessionID); err != nil {
 		return vectorSessionOutcome{}, err
 	}
 	if err := upsertVectorDocs(ctx, tx, docs); err != nil {
@@ -1153,7 +1155,7 @@ func (s *Sync) pushVectorSession(
 	if err != nil {
 		return vectorSessionOutcome{}, err
 	}
-	deleted, err := deleteParkedVectorDocs(ctx, tx.Tx, sessionID, scope.genIDs)
+	deleted, err := deleteParkedVectorDocs(ctx, tx, sessionID, scope.genIDs)
 	if err != nil {
 		return vectorSessionOutcome{}, err
 	}
@@ -1183,14 +1185,14 @@ func (s *Sync) pushVectorSession(
 // mirroring the local mirror's parkingFloor (internal/vector/mirror.go). The
 // transform is injective, so the single statement never violates the index at
 // any intermediate row.
-func parkSessionVectorDocs(ctx context.Context, tx *sql.Tx, sessionID string) error {
+func parkSessionVectorDocs(ctx context.Context, tx bun.Tx, sessionID string) error {
 	if _, err := tx.ExecContext(ctx, `
 WITH floor AS (
     SELECT COALESCE(MIN(ordinal), 0) AS f
-      FROM vector_documents WHERE session_id = $1 AND ordinal < 0
+      FROM vector_documents WHERE session_id = ?0 AND ordinal < 0
 ), parked AS (
     SELECT doc_key, row_number() OVER (ORDER BY ordinal) AS rn
-      FROM vector_documents WHERE session_id = $1 AND ordinal >= 0
+      FROM vector_documents WHERE session_id = ?0 AND ordinal >= 0
 )
 UPDATE vector_documents d
    SET ordinal = (SELECT f FROM floor) - parked.rn
@@ -1230,9 +1232,9 @@ func replaceVectorChunks(
 	sessionID string, docs []VectorPushDoc,
 ) (int, error) {
 	table := vectorChunkTable(gen.id)
-	if _, err := tx.Tx.ExecContext(ctx, fmt.Sprintf(`
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
 DELETE FROM %s WHERE doc_key IN (
-    SELECT doc_key FROM vector_documents WHERE session_id = $1)`, table),
+    SELECT doc_key FROM vector_documents WHERE session_id = ?0)`, table),
 		sessionID); err != nil {
 		return 0, fmt.Errorf("clearing chunks for session %s: %w", sessionID, err)
 	}
@@ -1268,14 +1270,14 @@ DELETE FROM %s WHERE doc_key IN (
 				values.WriteByte(',')
 			}
 			base := i * 3
-			fmt.Fprintf(&values, "($%d,$%d,$%d::%s)",
-				base+1, base+2, base+3, gen.halfvecType)
+			fmt.Fprintf(&values, "(?%d,?%d,?%d::%s)",
+				base, base+1, base+2, gen.halfvecType)
 			args = append(args, r.docKey, r.chunkIndex, r.embedding)
 		}
 		stmt := fmt.Sprintf(
 			`INSERT INTO %s (doc_key, chunk_index, embedding) VALUES %s`,
 			table, values.String())
-		if _, err := tx.Tx.ExecContext(ctx, stmt, args...); err != nil {
+		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
 			return 0, fmt.Errorf("inserting chunks for session %s: %w", sessionID, err)
 		}
 	}
@@ -1306,8 +1308,8 @@ func (s *Sync) evictVectorSessions(
 			return fmt.Errorf("begin vector evict tx: %w", err)
 		}
 		var ownerMarker, machine sql.NullString
-		err = tx.Tx.QueryRowContext(ctx,
-			`SELECT owner_marker, machine FROM sessions WHERE id = $1 FOR UPDATE`,
+		err = tx.QueryRowContext(ctx,
+			`SELECT owner_marker, machine FROM sessions WHERE id = ?0 FOR UPDATE`,
 			sessionID,
 		).Scan(&ownerMarker, &machine)
 		switch {
@@ -1322,9 +1324,9 @@ func (s *Sync) evictVectorSessions(
 			res.Conflicts++
 			continue
 		}
-		if _, err := tx.Tx.ExecContext(ctx, fmt.Sprintf(`
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
 DELETE FROM %s WHERE doc_key IN (
-    SELECT doc_key FROM vector_documents WHERE session_id = $1)`, table),
+    SELECT doc_key FROM vector_documents WHERE session_id = ?0)`, table),
 			sessionID); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("evicting chunks for session %s: %w", sessionID, err)
@@ -1335,7 +1337,7 @@ DELETE FROM %s WHERE doc_key IN (
 			_ = tx.Rollback()
 			return fmt.Errorf("evicting push state for session %s: %w", sessionID, err)
 		}
-		deleted, err := deleteOrphanVectorDocs(ctx, tx.Tx, sessionID, scope.genIDs)
+		deleted, err := deleteOrphanVectorDocs(ctx, tx, sessionID, scope.genIDs)
 		if err != nil {
 			_ = tx.Rollback()
 			return err
@@ -1365,7 +1367,7 @@ func (s *Sync) existingChunkGenerations(
 	var existing []int64
 	for _, id := range genIDs {
 		var present bool
-		if err := s.pg.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`,
+		if err := s.bunDB().QueryRowContext(ctx, `SELECT to_regclass(?0) IS NOT NULL`,
 			quotedSchema+"."+vectorChunkTable(id)).Scan(&present); err != nil {
 			return nil, fmt.Errorf(
 				"probing chunk table for generation %d: %w", id, err)
@@ -1380,7 +1382,7 @@ func (s *Sync) existingChunkGenerations(
 // allVectorGenerationIDs lists every registered generation so eviction can
 // check each generation's chunk table before removing a shared doc row.
 func (s *Sync) allVectorGenerationIDs(ctx context.Context) ([]int64, error) {
-	rows, err := s.pg.QueryContext(ctx, `SELECT id FROM vector_generations`)
+	rows, err := s.bunDB().QueryContext(ctx, `SELECT id FROM vector_generations`)
 	if err != nil {
 		return nil, fmt.Errorf("listing vector generations: %w", err)
 	}
@@ -1411,20 +1413,20 @@ func (s *Sync) allVectorGenerationIDs(ctx context.Context) ([]int64, error) {
 // existingChunkGenerations) so a missing table cannot abort the tx. Returns
 // the number of doc rows deleted.
 func deleteParkedVectorDocs(
-	ctx context.Context, tx *sql.Tx, sessionID string, genIDs []int64,
+	ctx context.Context, tx bun.Tx, sessionID string, genIDs []int64,
 ) (int, error) {
 	for _, id := range genIDs {
 		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
 DELETE FROM %s WHERE doc_key IN (
     SELECT doc_key FROM vector_documents
-     WHERE session_id = $1 AND ordinal < 0)`, vectorChunkTable(id)),
+     WHERE session_id = ?0 AND ordinal < 0)`, vectorChunkTable(id)),
 			sessionID); err != nil {
 			return 0, fmt.Errorf(
 				"clearing parked chunks for session %s: %w", sessionID, err)
 		}
 	}
 	result, err := tx.ExecContext(ctx,
-		`DELETE FROM vector_documents WHERE session_id = $1 AND ordinal < 0`,
+		`DELETE FROM vector_documents WHERE session_id = ?0 AND ordinal < 0`,
 		sessionID)
 	if err != nil {
 		return 0, fmt.Errorf("pruning parked docs for session %s: %w", sessionID, err)
@@ -1446,7 +1448,7 @@ DELETE FROM %s WHERE doc_key IN (
 // pre-filtered to existing chunk tables (see existingChunkGenerations) so a
 // missing table cannot abort the tx. Returns the number of doc rows deleted.
 func deleteOrphanVectorDocs(
-	ctx context.Context, tx *sql.Tx, sessionID string, genIDs []int64,
+	ctx context.Context, tx bun.Tx, sessionID string, genIDs []int64,
 ) (int, error) {
 	var conds strings.Builder
 	for _, id := range genIDs {
@@ -1455,7 +1457,7 @@ func deleteOrphanVectorDocs(
 			vectorChunkTable(id))
 	}
 	stmt := fmt.Sprintf(
-		`DELETE FROM vector_documents d WHERE d.session_id = $1%s`,
+		`DELETE FROM vector_documents d WHERE d.session_id = ?0%s`,
 		conds.String())
 	result, err := tx.ExecContext(ctx, stmt, sessionID)
 	if err != nil {
@@ -1496,7 +1498,7 @@ func halfvecLiteral(v []float32) (string, error) {
 // that are no longer active. Other archives' sessions remain untouched.
 func (s *Sync) clearUsageOnlyVectorSessions(ctx context.Context) error {
 	var exists bool
-	if err := s.pg.QueryRowContext(ctx, `SELECT to_regclass('vector_documents') IS NOT NULL`).Scan(&exists); err != nil {
+	if err := s.bunDB().QueryRowContext(ctx, `SELECT to_regclass('vector_documents') IS NOT NULL`).Scan(&exists); err != nil {
 		return err
 	}
 	if !exists {
@@ -1506,7 +1508,7 @@ func (s *Sync) clearUsageOnlyVectorSessions(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	rows, err := s.pg.QueryContext(ctx, `
+	rows, err := s.bunDB().QueryContext(ctx, `
 		SELECT s.id, s.owner_marker, s.machine
 		FROM sessions s
 		JOIN (
@@ -1544,7 +1546,7 @@ func (s *Sync) clearUsageOnlyVectorSessions(ctx context.Context) error {
 }
 
 func (s *Sync) clearOwnedSessionVectors(ctx context.Context, owner vectorOwnerIdentity, id string) error {
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.bunDB().BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -1553,7 +1555,7 @@ func (s *Sync) clearOwnedSessionVectors(ctx context.Context, owner vectorOwnerId
 	// session since discovery. A missing owner cannot authorize this deletion.
 	var marker, machine sql.NullString
 	err = tx.QueryRowContext(ctx,
-		`SELECT owner_marker, machine FROM sessions WHERE id = $1 FOR UPDATE`, id,
+		`SELECT owner_marker, machine FROM sessions WHERE id = ? FOR UPDATE`, id,
 	).Scan(&marker, &machine)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
@@ -1572,7 +1574,7 @@ func (s *Sync) clearOwnedSessionVectors(ctx context.Context, owner vectorOwnerId
 
 // clearSessionVectorsTx removes every generation's content for an owned
 // session in the same transaction that applies its usage-only projection.
-func clearSessionVectorsTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
+func clearSessionVectorsTx(ctx context.Context, tx bun.IDB, sessionID string) error {
 	var exists bool
 	if err := tx.QueryRowContext(ctx, `SELECT to_regclass('vector_documents') IS NOT NULL`).Scan(&exists); err != nil {
 		return err
@@ -1585,12 +1587,12 @@ func clearSessionVectorsTx(ctx context.Context, tx *sql.Tx, sessionID string) er
 		return err
 	}
 	for _, id := range generations {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM `+vectorChunkTable(id)+` WHERE doc_key IN (SELECT doc_key FROM vector_documents WHERE session_id = $1)`, sessionID); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+vectorChunkTable(id)+` WHERE doc_key IN (SELECT doc_key FROM vector_documents WHERE session_id = ?)`, sessionID); err != nil {
 			return fmt.Errorf("clearing usage-only vector chunks: %w", err)
 		}
 	}
 	for _, table := range []string{"vector_documents", "vector_push_state"} {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE session_id = $1`, sessionID); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE session_id = ?`, sessionID); err != nil {
 			return fmt.Errorf("clearing usage-only vector content: %w", err)
 		}
 	}

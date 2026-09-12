@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -10228,7 +10230,7 @@ func TestSyncSingleSessionPostFilterCounts(t *testing.T) {
 
 	// Corrupt stored counts and clear mtime so
 	// SyncSingleSession re-parses via writeSessionFull.
-	err := env.db.Update(func(tx *sql.Tx) error {
+	err := env.db.Update(func(tx bun.Tx) error {
 		res, err := tx.Exec(
 			"UPDATE sessions"+
 				" SET message_count = 999,"+
@@ -10625,7 +10627,7 @@ func TestResyncAllReplacesMessageContent(t *testing.T) {
 	// content in the DB. This mirrors what happens when the Go
 	// parser is updated (e.g. thinking format change) but the
 	// source files on disk are unchanged.
-	err := env.db.Update(func(tx *sql.Tx) error {
+	err := env.db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE messages SET content = ?"+
 				" WHERE session_id = ? AND ordinal = 1",
@@ -10781,7 +10783,7 @@ func TestResyncAllSurfacesQueuedCommands(t *testing.T) {
 	// Simulate an old-parser DB by removing the queued_command
 	// row directly. Older versions of the parser would never
 	// have stored it.
-	err := env.db.Update(func(tx *sql.Tx) error {
+	err := env.db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"DELETE FROM messages WHERE session_id = ?"+
 				" AND source_subtype = 'queued_command'",
@@ -10921,7 +10923,7 @@ func TestResyncAllAbortsWhenCopiedHierarchyRepairFails(t *testing.T) {
 				Ephemeral: true,
 			},
 			AfterSync: func(_ *sync.Engine, tempDB *db.DB) error {
-				return tempDB.Update(func(tx *sql.Tx) error {
+				return tempDB.Update(func(tx bun.Tx) error {
 					_, triggerErr := tx.Exec(`
 						CREATE TRIGGER fail_copied_hierarchy_repair
 						BEFORE DELETE ON subagent_parent_repair_queue
@@ -14311,7 +14313,7 @@ func TestIncrementalSync_CodexStaleProjectForcesFullReparse(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, before)
 	require.Equal(t, "agentsview", before.Project)
-	require.NoError(t, env.db.Update(func(tx *sql.Tx) error {
+	require.NoError(t, env.db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET project = ? WHERE id = ?",
 			"roborev_ci_28293_3831737461", "codex:"+uuid,
@@ -16409,7 +16411,7 @@ func setupSingleSessionParentRepairRetry(
 	return env, orchaPath
 }
 
-func TestSyncSingleSessionWriteFailureStillRepairsFormerChild(t *testing.T) {
+func TestSyncSingleSessionWriteFailurePreservesFormerChildRelationship(t *testing.T) {
 	env, _ := setupSingleSessionParentRepairRetry(t)
 	raw, err := sql.Open("sqlite3", env.db.Path())
 	require.NoError(t, err)
@@ -16426,8 +16428,8 @@ func TestSyncSingleSessionWriteFailureStillRepairsFormerChild(t *testing.T) {
 	syncErr := env.engine.SyncSingleSession("agent-orcha")
 
 	require.ErrorContains(t, syncErr, "injected post-replacement failure")
-	assert.Equal(t, "agent-orchb", parentSessionIDOf(t, env, "agent-kid"),
-		"a later write failure must not skip repair after removing an edge")
+	assert.Equal(t, "agent-orcha", parentSessionIDOf(t, env, "agent-kid"),
+		"the failed atomic write must preserve the prior edge and parent")
 }
 
 func TestSyncSingleSessionRepairFailurePersistsFormerChildForRetry(t *testing.T) {

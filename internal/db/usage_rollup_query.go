@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/uptrace/bun"
+
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -116,7 +118,7 @@ func (cache *usageCache) usageRollupQuery(
 }
 
 func verifyUsageRollupQuery(
-	ctx context.Context, conn *sql.Conn, timezoneKey string,
+	ctx context.Context, conn bun.Conn, timezoneKey string,
 	snapshot usageQuerySnapshot, installs map[string]usageRollupInstall,
 ) (int64, error) {
 	var timezoneID int64
@@ -142,7 +144,7 @@ func verifyUsageRollupQuery(
 }
 
 func verifyUsageRollupInstall(
-	ctx context.Context, conn *sql.Conn, timezoneID int64, sessionID string,
+	ctx context.Context, conn bun.Conn, timezoneID int64, sessionID string,
 	installs map[string]usageRollupInstall,
 ) error {
 	required, ok := installs[sessionID]
@@ -170,7 +172,7 @@ func verifyUsageRollupInstall(
 }
 
 func readUsageDailyRollups(
-	ctx context.Context, conn *sql.Conn, timezoneID int64,
+	ctx context.Context, conn bun.Conn, timezoneID int64,
 	snapshot usageQuerySnapshot, filter UsageFilter,
 ) (usageFactsResult, error) {
 	from, to := usageRollupDateBounds(snapshot)
@@ -235,7 +237,7 @@ func readUsageDailyRollups(
 }
 
 func readUsageRollupExceptions(
-	ctx context.Context, conn *sql.Conn, timezoneID int64,
+	ctx context.Context, conn bun.Conn, timezoneID int64,
 	snapshot usageQuerySnapshot, filter UsageFilter,
 ) ([]usageRollupFact, error) {
 	from, to := usageRollupDateBounds(snapshot)
@@ -425,7 +427,7 @@ func aggregateUsageRollupExceptions(
 		}
 		itemKey := key{fact.AttributionSessionID, fact.LocalDate, fact.Model,
 			fact.Fact.ProviderID,
-			priced.PricedModel, priced.MatchedPattern, priced.RateHash,
+			priced.PricedModel, priced.MatchedPattern, priced.rateHash(),
 			priced.RateOK, band}
 		group := groups[itemKey]
 		if group == nil {

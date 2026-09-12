@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 )
 
 func TestStagedToolCallKeyIsSQLiteTextSafeAndUnambiguous(t *testing.T) {
@@ -143,7 +144,7 @@ func (s *scratchStagedResults) ResolveSummary(
 }
 
 func (s *scratchStagedResults) InsertEventsTx(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, tx bun.Tx, sessionID string,
 	positions map[string]StagedToolCallPosition,
 ) error {
 	for _, pos := range positions {
@@ -568,7 +569,65 @@ type failInsertStagedResults struct {
 }
 
 func (f *failInsertStagedResults) InsertEventsTx(
-	context.Context, *sql.Tx, string, map[string]StagedToolCallPosition,
+	context.Context, bun.Tx, string, map[string]StagedToolCallPosition,
 ) error {
 	return errors.New("injected staged failure")
+}
+
+func TestWriteSessionAtomicStagedKeepsContentAndCompletionTogether(t *testing.T) {
+	database := testDB(t)
+	const sessionID = "codex:atomic-staged"
+	staged := newScratchStagedResults(t)
+	staged.AddEvent(t, "call_1", "stored output")
+	write := SessionBatchWrite{
+		Session: Session{ID: sessionID, Project: "project", Machine: "local", Agent: "codex", MessageCount: 1},
+		Messages: []Message{{SessionID: sessionID, Ordinal: 0, Role: "assistant", Content: "running", HasToolUse: true,
+			ToolCalls: []ToolCall{{ToolName: "exec_command", Category: "Bash", ToolUseID: "call_1"}}}},
+		UsageEvents: []UsageEvent{{SessionID: sessionID, Source: "codex", Model: "gpt-5", InputTokens: 10, DedupKey: "usage-1"}},
+		Staged:      staged, ReplaceMessages: true, DataVersion: CurrentDataVersion(),
+		Checkpoint:      &ParserCheckpoint{SessionID: sessionID, Version: ParserCheckpointVersion},
+		CheckpointBlobs: &ParserCheckpointBlobs{SessionID: sessionID, Cursor: []byte("cursor")},
+	}
+	_, err := database.WriteSessionAtomic(write)
+	require.NoError(t, err)
+	first, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, first, 1)
+	require.Len(t, first[0].ToolCalls, 1)
+	require.Len(t, first[0].ToolCalls[0].ResultEvents, 1)
+	require.Equal(t, "stored output", first[0].ToolCalls[0].ResultEvents[0].Content)
+	var revision string
+	require.NoError(t, database.getReader().QueryRow("SELECT transcript_revision FROM sessions WHERE id = ?", sessionID).Scan(&revision))
+	_, err = database.WriteSessionAtomic(write)
+	require.NoError(t, err)
+	equal, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Equal(t, first, equal)
+	var repeatedRevision string
+	require.NoError(t, database.getReader().QueryRow("SELECT transcript_revision FROM sessions WHERE id = ?", sessionID).Scan(&repeatedRevision))
+	require.Equal(t, revision, repeatedRevision)
+
+	write.Messages[0].Content = "replacement"
+	write.Session.Project = "changed-project"
+	write.UsageEvents[0].InputTokens = 999
+	write.CheckpointBlobs.Cursor = []byte("changed-cursor")
+	failure := errors.New("signal computation failed")
+	write.StagedSignals = func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
+		return SessionSignalUpdate{}, nil, failure
+	}
+	_, err = database.WriteSessionAtomic(write)
+	require.ErrorIs(t, err, failure)
+	after, err := database.GetAllMessages(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Equal(t, first, after)
+	var project string
+	var tokens int
+	require.NoError(t, database.getReader().QueryRow("SELECT project FROM sessions WHERE id = ?", sessionID).Scan(&project))
+	require.Equal(t, "project", project)
+	require.NoError(t, database.getReader().QueryRow("SELECT input_tokens FROM usage_events WHERE session_id = ?", sessionID).Scan(&tokens))
+	require.Equal(t, 10, tokens)
+	checkpoint, ok, err := database.GetParserCheckpointBlobs(sessionID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []byte("cursor"), checkpoint.Cursor)
 }

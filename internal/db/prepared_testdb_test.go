@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/uptrace/bun"
-	"github.com/uptrace/bun/dialect/sqlitedialect"
 )
 
 // OpenPreparedTestDB opens a private test database file that has already been
@@ -38,8 +37,8 @@ func OpenPreparedTestDB(path string) (*DB, error) {
 	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
 	db.reader.Store(reader)
-	db.bunWriter = bun.NewDB(writer, sqlitedialect.New())
-	db.bunReader = bun.NewDB(reader, sqlitedialect.New())
+	db.bunWriter = bun.NewDB(writer, NewSQLiteArchiveDialect())
+	db.bunReader = bun.NewDB(reader, NewSQLiteArchiveDialect())
 	db.BunStore = NewBunStore(&sqliteBunBackend{store: db})
 
 	cursorSecret := make([]byte, 32)

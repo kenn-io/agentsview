@@ -142,7 +142,9 @@ func TestBackfillIsAutomatedPGPreservesDurableClassification(t *testing.T) {
 	)
 	require.NoError(t, err, "insert durably classified session")
 
-	require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()), "backfill automation")
+	require.NoError(t, backfillIsAutomatedPG(
+		ctx, bun.NewDB(ps.DB(), pgdialect.New()),
+	), "backfill automation")
 
 	var got bool
 	require.NoError(t, ps.DB().QueryRowContext(ctx,
@@ -323,7 +325,7 @@ func TestBackfillIsAutomatedPGPreservesUsageOnlyClassification(t *testing.T) {
 			// Full-content rows lacking evidence must still have stale flags corrected.
 			_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, user_message_count, is_automated) VALUES ('empty-full', 'other-machine', 'project', 'claude', 1, true)`)
 			require.NoError(t, err)
-			require.NoError(t, backfillIsAutomatedPG(ctx, ps.DB()))
+			require.NoError(t, backfillIsAutomatedPG(ctx, bun.NewDB(ps.DB(), pgdialect.New())))
 			for id, want := range map[string]bool{"automated": true, "interactive": false, "empty-full": false} {
 				var got bool
 				require.NoError(t, ps.DB().QueryRowContext(ctx,

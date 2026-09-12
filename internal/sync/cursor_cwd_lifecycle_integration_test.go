@@ -2,12 +2,13 @@ package sync_test
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/uptrace/bun"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -143,7 +144,7 @@ func TestSyncEngineCursorUnavailableChangedTranscriptPreservesCwd(t *testing.T) 
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Empty(t, stored.Cwd)
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec("UPDATE sessions SET cwd = ? WHERE id = ?", workspace, fullID)
 		return err
 	}))
@@ -281,9 +282,9 @@ func TestParseDiffCursorCwdDoesNotWriteOnParseError(t *testing.T) {
 	})
 	initial.SyncAll(context.Background(), nil)
 	initial.Close()
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
-			"UPDATE sessions SET local_modified_at = 'before' WHERE id = ?",
+			"UPDATE sessions SET local_modified_at = '2026-08-01T00:00:00Z' WHERE id = ?",
 			"cursor:"+sessionID,
 		)
 		return err
@@ -340,7 +341,7 @@ func TestSyncEngineCursorResolvedFilteredCwdIsReconciled(t *testing.T) {
 	initial.SyncAll(context.Background(), nil)
 	initial.Close()
 	fullID := "cursor:" + sessionID
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec("UPDATE sessions SET cwd = ? WHERE id = ?", oldWorkspace, fullID)
 		return err
 	}))
@@ -391,7 +392,7 @@ func TestSyncEngineCursorOversizedTranscriptReconcilesWorkspace(t *testing.T) {
 
 	// Seed the hash-empty state before the final workspace-only transition.
 	require.NoError(t, os.Truncate(path, 10<<20+1))
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET file_hash = '' WHERE id = ?", fullID,
 		)
@@ -435,7 +436,7 @@ func TestSyncEngineCursorNoneSingleSessionClearsFilteredCwd(t *testing.T) {
 	e.SyncAll(context.Background(), nil)
 	e.Close()
 	fullID := "cursor:" + sessionID
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec("UPDATE sessions SET cwd = ? WHERE id = ?", workspace, fullID)
 		return err
 	}))
@@ -528,9 +529,9 @@ func TestSyncEngineCursorSourceMissingRevivalPreservesCwd(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, workspace, stored.Cwd)
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
-			"UPDATE sessions SET source_missing_at = 'now' WHERE id = ?",
+			"UPDATE sessions SET source_missing_at = '2026-08-01T00:00:00Z' WHERE id = ?",
 			fullID,
 		)
 		return err

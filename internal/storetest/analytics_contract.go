@@ -158,6 +158,9 @@ func assertAnalyticsBreakdowns(t *testing.T, store AnalyticsStore, filter db.Ana
 		{Category: "Edit", Count: 1, Pct: 33.3},
 		{Category: "Write", Count: 1, Pct: 33.3},
 	}, tools.ByCategory)
+	assert.Equal(t, []db.ToolTrendEntry{{
+		Date: "2026-07-27", ByCat: map[string]int{"Bash": 1, "Edit": 1, "Write": 1},
+	}}, tools.Trend)
 
 	skills, err := store.GetAnalyticsSkills(t.Context(), filter, "day")
 	require.NoError(t, err)
