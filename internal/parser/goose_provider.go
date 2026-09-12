@@ -5,185 +5,23 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
 // GooseDBName is the SQLite filename inside Goose's sessions directory.
 const GooseDBName = "sessions.db"
 
-type gooseProviderFactory struct {
-	def     AgentDef
-	tracker *sqliteChangeTracker
-}
-
 func newGooseProviderFactory(def AgentDef) ProviderFactory {
-	return &gooseProviderFactory{
-		def:     cloneAgentDef(def),
-		tracker: newGooseChangeTracker(),
+	return dbBackedProviderFactory{
+		def:            cloneAgentDef(def),
+		spec:           gooseProviderSpec,
+		normalizeRoots: normalizeGooseRoots,
+		tracker: &sqliteChangeTracker{
+			agent:  AgentGoose,
+			open:   openGooseDB,
+			schema: gooseCursorSchema,
+		},
 	}
-}
-
-func (f *gooseProviderFactory) Definition() AgentDef {
-	return cloneAgentDef(f.def)
-}
-
-func (f *gooseProviderFactory) Capabilities() Capabilities {
-	return withDBBackedRawCapture(gooseProviderCapabilities())
-}
-
-func (f *gooseProviderFactory) NewProvider(cfg ProviderConfig) Provider {
-	cfg = cfg.Clone()
-	cfg.Roots = normalizeGooseRoots(cfg.Roots)
-	spec := gooseProviderSpec(cfg.StableSourceSnapshots)
-	base := &dbBackedProvider{
-		Def:     cloneAgentDef(f.def),
-		Caps:    withDBBackedRawCapture(spec.caps),
-		Config:  cfg,
-		spec:    spec,
-		sources: newDBBackedSourceSet(spec, cfg.Roots),
-	}
-	return &gooseProvider{dbBackedProvider: base, tracker: f.tracker}
-}
-
-type gooseProvider struct {
-	*dbBackedProvider
-	tracker *sqliteChangeTracker
-}
-
-func (p *gooseProvider) Discover(ctx context.Context) ([]SourceRef, error) {
-	watermarks, err := p.captureDiscoveryWatermarks(ctx)
-	if err != nil {
-		return nil, err
-	}
-	sources, err := p.dbBackedProvider.Discover(ctx)
-	if err != nil {
-		return nil, err
-	}
-	p.tracker.storeDiscoveryWatermarks(watermarks)
-	return sources, nil
-}
-
-func (p *gooseProvider) DiscoverEach(
-	ctx context.Context, yield func(SourceRef) error,
-) error {
-	watermarks, err := p.captureDiscoveryWatermarks(ctx)
-	if err != nil {
-		return err
-	}
-	if err := p.dbBackedProvider.DiscoverEach(ctx, yield); err != nil {
-		return err
-	}
-	p.tracker.storeDiscoveryWatermarks(watermarks)
-	return nil
-}
-
-// captureDiscoveryWatermarks reads the change cursors before enumeration.
-// Publishing them only after a successful pass leaves rows committed during
-// discovery available to the next watcher event.
-func (p *gooseProvider) captureDiscoveryWatermarks(
-	ctx context.Context,
-) ([]sqliteDiscoveryWatermark, error) {
-	watermarks := make([]sqliteDiscoveryWatermark, 0, len(p.sources.roots))
-	for _, root := range p.sources.roots {
-		dbPath := p.spec.findDB(root)
-		if dbPath == "" {
-			continue
-		}
-		state, err := p.tracker.read(ctx, dbPath, p.Config.StableSourceSnapshots)
-		if err != nil {
-			return nil, err
-		}
-		watermarks = append(watermarks, sqliteDiscoveryWatermark{
-			dbPath: dbPath,
-			state:  state,
-		})
-	}
-	return watermarks, nil
-}
-
-// SourcesForChangedPath returns only Goose sessions with newly inserted
-// session, message, or usage rows. Metadata-only updates and row deletes are
-// intentionally handled by the provider's scheduled reconciliation pass.
-func (p *gooseProvider) SourcesForChangedPath(
-	ctx context.Context, req ChangedPathRequest,
-) ([]SourceRef, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	for _, root := range p.sources.roots {
-		if req.WatchRoot != "" && !samePath(req.WatchRoot, root) {
-			continue
-		}
-		if ref, ok := p.sources.sourceRef(root, req.Path, true); ok {
-			return []SourceRef{ref}, nil
-		}
-		dbPath, ok := p.sources.dbPathForEvent(root, req.Path)
-		if !ok {
-			continue
-		}
-		if !IsRegularFile(dbPath) {
-			// The SQLite archive is persistent. A vanished physical database
-			// cannot prove that any archived Goose member was deleted.
-			return nil, nil
-		}
-		ids, cold, snapshot, err := p.tracker.changedSessionIDs(ctx, dbPath, p.Config.StableSourceSnapshots)
-		if err != nil {
-			return nil, err
-		}
-		if cold {
-			sources, err := p.dbBackedProvider.SourcesForChangedPath(ctx, ChangedPathRequest{
-				Path:      req.Path,
-				EventKind: req.EventKind,
-				WatchRoot: req.WatchRoot,
-			})
-			if err != nil {
-				return nil, err
-			}
-			p.tracker.commit(dbPath, snapshot)
-			return sources, nil
-		}
-
-		sources := make([]SourceRef, 0, len(ids))
-		for _, id := range ids {
-			meta, found, err := gooseSessionMeta(ctx, dbPath, id, p.Config.StableSourceSnapshots)
-			if err != nil {
-				return nil, err
-			}
-			if !found {
-				continue
-			}
-			sources = append(sources, p.sources.newSourceRef(
-				root, dbPath, meta.SessionID, meta.VirtualPath,
-			))
-		}
-		sort.Slice(sources, func(i, j int) bool {
-			return sources[i].DisplayPath < sources[j].DisplayPath
-		})
-		return sources, nil
-	}
-	return nil, nil
-}
-
-func (p *gooseProvider) Fingerprint(
-	ctx context.Context, source SourceRef,
-) (SourceFingerprint, error) {
-	fingerprint, err := p.dbBackedProvider.Fingerprint(ctx, source)
-	if err != nil {
-		return SourceFingerprint{}, err
-	}
-	src, ok := p.sources.sourceFromRef(source)
-	if !ok || !IsRegularFile(src.DBPath) {
-		return fingerprint, nil
-	}
-	hash, found, err := gooseSessionFingerprint(ctx, src.DBPath, src.SessionID, p.Config.StableSourceSnapshots)
-	if err != nil {
-		return SourceFingerprint{}, err
-	}
-	if found {
-		fingerprint.Hash = hash
-	}
-	return fingerprint, nil
 }
 
 func gooseProviderCapabilities() Capabilities {
@@ -236,6 +74,9 @@ func gooseProviderSpec(stableSnapshot bool) dbBackedProviderSpec {
 				return nil, err
 			}
 			return []ParseResult{*result}, nil
+		},
+		fingerprintHash: func(ctx context.Context, dbPath, sessionID string) (string, bool, error) {
+			return gooseSessionFingerprint(ctx, dbPath, sessionID, stableSnapshot)
 		},
 		caps: gooseProviderCapabilities(),
 	}
@@ -327,14 +168,6 @@ func openGooseDB(dbPath string, stableSnapshot bool) (*sql.DB, error) {
 		return nil, fmt.Errorf("opening goose sessions database %s: %w", dbPath, err)
 	}
 	return db, nil
-}
-
-func newGooseChangeTracker() *sqliteChangeTracker {
-	return &sqliteChangeTracker{
-		agent:  AgentGoose,
-		open:   openGooseDB,
-		schema: gooseCursorSchema,
-	}
 }
 
 func gooseCursorSchema(

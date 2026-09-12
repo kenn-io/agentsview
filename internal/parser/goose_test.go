@@ -334,10 +334,11 @@ func TestGooseChangedPathWorkStaysProportionalToNewRows(t *testing.T) {
 				fixture.insertSession(t, id, id, "user", "")
 				fixture.insertMessage(t, id, "user", `[{"type":"text","text":"seed"}]`, 1_700_000_000)
 			}
-			provider, ok := NewProvider(AgentGoose, ProviderConfig{
+			factory, ok := ProviderFactoryByType(AgentGoose)
+			require.True(t, ok)
+			provider := factory.NewProvider(ProviderConfig{
 				Roots: []string{fixture.pathRoot}, Machine: "devbox",
 			})
-			require.True(t, ok)
 			scans := 0
 			ctx := WithSharedContainerScanObserver(context.Background(), func() { scans++ })
 			_, err := provider.Discover(ctx)
@@ -346,6 +347,9 @@ func TestGooseChangedPathWorkStaysProportionalToNewRows(t *testing.T) {
 			scans = 0
 
 			fixture.insertMessage(t, "session-000", "assistant", `[{"type":"text","text":"changed"}]`, 1_700_000_001)
+			// The engine creates short-lived providers; the factory must retain
+			// the discovery cursor rather than making each event a cold scan.
+			provider = factory.NewProvider(ProviderConfig{Roots: []string{fixture.pathRoot}})
 			sources, err := provider.SourcesForChangedPath(
 				ctx, ChangedPathRequest{
 					Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
