@@ -2911,22 +2911,40 @@ func TestActivateExtractGenerationSkipsSupersededEntries(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	seedCoveredExtractSession(t, d, "sess-1", "fp-a")
+	seedCoveredExtractSession(t, d, "sess-live", "fp-a")
+	seedCoveredExtractSession(t, d, "sess-super", "fp-a")
 	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
 		{
 			ID: "e-live", Type: "fact", ReviewState: "unreviewed_auto",
 			Status: "archived", Title: "t", Body: "b",
-			SourceSessionID: "sess-1", SourceRunID: "fp-a", ProvenanceOK: true,
+			SourceSessionID: "sess-live", SourceRunID: "fp-a", ProvenanceOK: true,
 		},
 		{
 			ID: "e-super", Type: "fact", ReviewState: "unreviewed_auto",
 			Status: "archived", Title: "old", Body: "old",
-			SourceSessionID: "sess-1", SourceRunID: "fp-a", ProvenanceOK: true,
-			SupersededByEntryID: "e-repl",
+			SourceSessionID: "sess-super", SourceRunID: "fp-a", ProvenanceOK: true,
 		},
 	})
 	require.NoError(t, err)
 
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+	_, err = d.SupersedeRecallEntry(ctx, "e-super", RecallEntry{
+		ID: "e-repl", Type: "fact", ReviewState: "human_reviewed",
+		Status: "accepted", Title: "Replacement", Body: "Updated fact",
+		SourceSessionID: "sess-super", ProvenanceOK: true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.RetireExtractGeneration(ctx, "fp-a", true))
+
+	// A failed revisit leaves the superseded entry intact. It cannot be
+	// promoted, even when a later session write makes the coverage stale.
+	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID: "sess-super", Fingerprint: "fp-a",
+		ExpectedDigest: "dg", ExpectedCursor: 0,
+		LastError: "session read failed", Reopen: true,
+	}))
+	require.NoError(t, d.BumpLocalModifiedAt("sess-super"))
 	require.NoError(t, d.ActivateExtractGeneration(
 		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
 
@@ -2940,6 +2958,8 @@ func TestActivateExtractGenerationSkipsSupersededEntries(t *testing.T) {
 	require.NotNil(t, super)
 	assert.Equal(t, "archived", super.Status,
 		"a superseded entry must not be promoted back into service")
+	assert.Equal(t, "unreviewed_auto", super.ReviewState)
+	assert.Equal(t, "e-repl", super.SupersededByEntryID)
 }
 
 // TestActivateExtractGenerationRefusesEmptyPromotion pins the replacement

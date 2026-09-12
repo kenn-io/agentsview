@@ -470,6 +470,7 @@ func verifyExtractActivationCoverageTx(
 			  AND e.source_run_id = p.generation_fingerprint
 			  AND e.status = 'archived'
 			  AND e.review_state = 'unreviewed_auto'
+			  AND e.superseded_by_entry_id = ''
 		  )`,
 		failedArgs...,
 	).Scan(&staleFailed); err != nil {

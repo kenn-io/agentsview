@@ -418,8 +418,8 @@ machine lifecycle paths.
 Accepted, provenance-verified human-approved entries without a superseding
 replacement count toward a generation's servable entries, so a retired
 generation can reactivate even if all its entries have been approved. Archived
-human-rejected entries are not staged output and do not block activation when a
-failed extraction's coverage becomes stale.
+human-rejected entries and superseded automatic entries are not staged output
+and do not block activation when a failed extraction's coverage becomes stale.
 
 ## Entry mapping
 
