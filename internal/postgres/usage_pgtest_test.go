@@ -146,8 +146,8 @@ func TestStoreGetDailyUsageWithBreakdowns(t *testing.T) {
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
 		) VALUES
-			('test-model-a', 1000000, 2000000, 3000000, 500000, 'seed'),
-			('test-model-b', 2000000, 4000000, 0, 0, 'seed')`)
+			('test-model-a', 1000000, 2000000, 3000000, 500000, '2026-01-01T00:00:00Z'),
+			('test-model-b', 2000000, 4000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -218,14 +218,14 @@ func TestStoreGetDailyUsageAppliesPricingBandsOnlyToRequests(t *testing.T) {
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('banded-model', 1000000, 0, 0, 0, 'seed');
+		) VALUES ('banded-model', 1000000, 0, 0, 0, '2026-01-01T00:00:00Z');
 		INSERT INTO model_pricing_bands (
 			model_pattern, above_input_tokens,
 			input_microdollars_per_mtok,
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('banded-model', 200000, 2000000, 0, 0, 0, 'seed');
+		) VALUES ('banded-model', 200000, 2000000, 0, 0, 0, '2026-01-01T00:00:00Z');
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
 			message_count, user_message_count
@@ -280,14 +280,14 @@ func TestStoreGetDailyUsagePricesGooseRequestAsRequestScoped(t *testing.T) {
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('banded-model', 1000000, 0, 0, 0, 'seed');
+		) VALUES ('banded-model', 1000000, 0, 0, 0, '2026-01-01T00:00:00Z');
 		INSERT INTO model_pricing_bands (
 			model_pattern, above_input_tokens,
 			input_microdollars_per_mtok,
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('banded-model', 200000, 2000000, 0, 0, 0, 'seed');
+		) VALUES ('banded-model', 200000, 2000000, 0, 0, 0, '2026-01-01T00:00:00Z');
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
 			message_count, user_message_count
@@ -332,7 +332,7 @@ func TestStoreGetDailyUsageDedupesBySourceUUIDWhenClaudePairIncomplete(t *testin
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('test-model-source-daily', 1000000, 2000000, 3000000, 500000, 'seed')`)
+		) VALUES ('test-model-source-daily', 1000000, 2000000, 3000000, 500000, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -580,7 +580,7 @@ func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('priced-model', 3000000, 15000000, 3750000, 300000, 'seed')`)
+		) VALUES ('priced-model', 3000000, 15000000, 3750000, 300000, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -648,7 +648,7 @@ func TestStoreSessionUsageRollupParity(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('rollup-model', 3000000, 15000000, 3750000, 300000, 'seed')`)
+		) VALUES ('rollup-model', 3000000, 15000000, 3750000, 300000, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -683,7 +683,7 @@ func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('gpt-5.1', 3000000, 15000000, 3750000, 300000, 'seed')`)
+		) VALUES ('gpt-5.1', 3000000, 15000000, 3750000, 300000, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -723,7 +723,7 @@ func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('gpt-5.6-luna', 3000000, 15000000, 3750000, 300000, 'seed')`)
+		) VALUES ('gpt-5.6-luna', 3000000, 15000000, 3750000, 300000, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -757,7 +757,7 @@ func TestStoreGetSessionUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testin
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, 'seed')`)
+		) VALUES ('claude-opus-4-6', 5000000, 25000000, 6250000, 500000, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -881,7 +881,7 @@ func TestStoreGetTopSessionsByCostDedupesClaudeKeys(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('test-model-top', 1000000, 0, 0, 0, 'seed')`)
+		) VALUES ('test-model-top', 1000000, 0, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -924,7 +924,7 @@ func TestStoreGetTopSessionsByCostDedupesSourceUUIDFallback(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('test-model-top-source', 1000000, 0, 0, 0, 'seed')`)
+		) VALUES ('test-model-top-source', 1000000, 0, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -1370,8 +1370,8 @@ func TestPostgresUsageQueriesUnionUsageEvents(t *testing.T) {
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
 		) VALUES
-			('claude-sonnet-4-20250514', 1000000, 1000000, 1000000, 1000000, 'seed'),
-			('gpt-5.4', 1000000, 1000000, 1000000, 1000000, 'seed')`)
+			('claude-sonnet-4-20250514', 1000000, 1000000, 1000000, 1000000, '2026-01-01T00:00:00Z'),
+			('gpt-5.4', 1000000, 1000000, 1000000, 1000000, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -1442,7 +1442,7 @@ func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('summary-event-model', 1000000, 2000000, 0, 0, 'seed')`)
+		) VALUES ('summary-event-model', 1000000, 2000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -1508,7 +1508,7 @@ func TestPostgresUsageCostsMessageReasoningTokens(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('reasoning-model', 1000000, 2000000, 0, 0, 'seed')`)
+		) VALUES ('reasoning-model', 1000000, 2000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -1678,10 +1678,6 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 	assert.Equal(t, int64(5_000_000), bandOutput)
 	assert.Equal(t, int64(7_000_000), bandCacheCreation)
 	assert.Equal(t, int64(1_000_000), bandCacheRead)
-	_, err = store.DB().ExecContext(context.Background(), `
-		UPDATE model_pricing SET updated_at = ''
-		WHERE model_pattern = 'test-model-sync'`)
-	require.NoError(t, err, "set legacy empty pricing revision")
 
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:         "test-model-sync",

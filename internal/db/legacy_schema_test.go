@@ -3,13 +3,317 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/export"
 )
+
+func priorCommonSQLiteSchema() string {
+	return strings.NewReplacer(
+		"    source_archive_id TEXT NOT NULL DEFAULT '',\n"+
+			"    source_database_generation TEXT NOT NULL DEFAULT '',\n", "",
+		"    call_index INTEGER,\n    message_ordinal INTEGER\n",
+		"    call_index INTEGER\n",
+		"    ordinal     INTEGER NOT NULL,\n"+
+			"    source_uuid TEXT NOT NULL DEFAULT '',\n",
+		"    ordinal     INTEGER NOT NULL,\n",
+		"CREATE TABLE IF NOT EXISTS pricing_metadata (\n"+
+			"    key        TEXT PRIMARY KEY,\n"+
+			"    value      TEXT NOT NULL,\n"+
+			"    updated_at TEXT NOT NULL\n"+
+			"        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))\n"+
+			");\n\n",
+		"",
+	).Replace(schemaSQL)
+}
+
+const priorCommonSQLiteRows = `
+INSERT INTO sessions (
+    id, project, machine, agent, first_message, message_count, created_at
+) VALUES (
+    'common-legacy-session', 'legacy-project', 'legacy-machine', 'claude',
+    'named legacy session', 1, '2026-08-01T12:00:00Z'
+);
+INSERT INTO messages (
+    id, session_id, ordinal, role, content, has_tool_use, content_length
+) VALUES (
+    41, 'common-legacy-session', 7, 'assistant', 'legacy answer', 1, 13
+);
+INSERT INTO tool_calls (
+    id, message_id, session_id, tool_name, category, call_index
+) VALUES (
+    51, 41, 'common-legacy-session', 'Read', 'Read', 0
+);
+INSERT INTO pinned_messages (
+    id, session_id, message_id, ordinal, note, created_at
+) VALUES (
+    61, 'common-legacy-session', 41, 7, 'keep this pin',
+    '2026-08-01T12:01:00Z'
+);
+INSERT INTO project_identity_observations (
+    session_id, project, machine, root_path, git_remote, observed_at,
+    normalized_remote, key_source, key
+) VALUES (
+    'common-legacy-session', 'legacy-project', 'legacy-machine',
+    '/work/legacy', 'https://example.invalid/legacy.git',
+    '2026-08-01T12:02:00Z', 'example.invalid/legacy', 'git', 'legacy-key'
+);
+INSERT OR REPLACE INTO session_project_identity_snapshots (
+    session_id, project, machine, root_path, git_remote, observed_at,
+    normalized_remote, key_source, key
+) VALUES (
+    'common-legacy-session', 'legacy-project', 'legacy-machine',
+    '/work/legacy', 'https://example.invalid/legacy.git',
+    '2026-08-01T12:02:00Z', 'example.invalid/legacy', 'git', 'legacy-key'
+);
+INSERT INTO worktree_project_mappings (
+    id, machine, path_prefix, layout, project, enabled
+) VALUES (
+    71, 'legacy-machine', '/work/legacy', 'explicit', 'legacy-project', 1
+);
+INSERT INTO model_pricing (
+    model_pattern, input_microdollars_per_mtok,
+    output_microdollars_per_mtok, updated_at
+) VALUES
+    ('_fallback_version', 0, 0, 'legacy-v42'),
+    ('_private-model', 1250000, 2500000, '2026-08-05T12:00:00Z');`
+
+func createPriorCommonSQLiteArchive(t *testing.T, path string) {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", makeDSN(path, false))
+	require.NoError(t, err)
+	conn.SetMaxOpenConns(1)
+	_, err = conn.Exec(priorCommonSQLiteSchema())
+	require.NoError(t, err)
+	_, err = conn.Exec(priorCommonSQLiteRows)
+	require.NoError(t, err)
+	_, err = conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", dataVersion))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+}
+
+func TestLegacySchemaCommonConvergenceRetainsRowsAndBackfillsProvenance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-common.db")
+	createPriorCommonSQLiteArchive(t, path)
+
+	database, err := Open(path)
+	require.NoError(t, err)
+	defer database.Close()
+
+	session := requireSessionExists(t, database, "common-legacy-session")
+	assert.Equal(t, "named legacy session", *session.FirstMessage)
+	var archiveID, databaseGeneration string
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT source_archive_id, source_database_generation
+		FROM sessions WHERE id = 'common-legacy-session'`,
+	).Scan(&archiveID, &databaseGeneration))
+	assert.NotEmpty(t, archiveID)
+	assert.NotEmpty(t, databaseGeneration)
+
+	var toolOrdinal, pinOrdinal int
+	var pinNote, pinSourceUUID string
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT message_ordinal FROM tool_calls WHERE id = 51`,
+	).Scan(&toolOrdinal))
+	assert.Equal(t, 7, toolOrdinal)
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT ordinal, note, source_uuid FROM pinned_messages WHERE id = 61`,
+	).Scan(&pinOrdinal, &pinNote, &pinSourceUUID))
+	assert.Equal(t, 7, pinOrdinal)
+	assert.Equal(t, "keep this pin", pinNote)
+	assert.Empty(t, pinSourceUUID)
+
+	var observationArchive, observationSalt string
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT source_archive_id, source_archive_salt
+		FROM source_project_identity_observations
+		WHERE project = 'legacy-project'`,
+	).Scan(&observationArchive, &observationSalt))
+	assert.Equal(t, archiveID, observationArchive)
+	assert.NotEmpty(t, observationSalt)
+
+	var snapshotArchive, snapshotGeneration string
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT source_archive_id, source_database_generation
+		FROM source_session_project_identity_snapshots
+		WHERE source_session_id = 'common-legacy-session'`,
+	).Scan(&snapshotArchive, &snapshotGeneration))
+	assert.Equal(t, archiveID, snapshotArchive)
+	assert.Equal(t, databaseGeneration, snapshotGeneration)
+
+	var mappingArchive string
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT source_archive_id FROM source_worktree_project_mappings
+		WHERE machine = 'legacy-machine' AND path_prefix = '/work/legacy'`,
+	).Scan(&mappingArchive))
+	assert.Equal(t, archiveID, mappingArchive)
+
+	var stamp string
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT value FROM archive_metadata WHERE key = ?`,
+		CommonSchemaCompatibilityMetadataKey,
+	).Scan(&stamp))
+	assert.Equal(t, "1", stamp)
+
+	var pricingMetadataValue, pricingMetadataUpdatedAt string
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT value, updated_at FROM pricing_metadata
+		WHERE key = '_fallback_version'`,
+	).Scan(&pricingMetadataValue, &pricingMetadataUpdatedAt))
+	assert.Equal(t, "legacy-v42", pricingMetadataValue)
+	_, err = time.Parse(time.RFC3339Nano, pricingMetadataUpdatedAt)
+	require.NoError(t, err)
+	var pricingSentinelCount int
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT count(*) FROM model_pricing
+		WHERE model_pattern = '_fallback_version'`,
+	).Scan(&pricingSentinelCount))
+	assert.Zero(t, pricingSentinelCount)
+	var privateInput, privateOutput int64
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT input_microdollars_per_mtok, output_microdollars_per_mtok
+		FROM model_pricing WHERE model_pattern = '_private-model'`,
+	).Scan(&privateInput, &privateOutput))
+	assert.Equal(t, int64(1250000), privateInput)
+	assert.Equal(t, int64(2500000), privateOutput)
+}
+
+func TestLegacySchemaCommonCutoverWritesCanonicalRowsAndDoesNotReplay(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-common-cutover.db")
+	createPriorCommonSQLiteArchive(t, path)
+
+	database, err := Open(path)
+	require.NoError(t, err)
+	observation := export.ProjectIdentityObservation{
+		SessionID: "common-legacy-session", Project: "runtime-project",
+		Machine: "legacy-machine", RootPath: "/work/runtime",
+		GitRemote:  "https://example.invalid/runtime.git",
+		ObservedAt: time.Date(2026, 8, 2, 13, 0, 0, 0, time.UTC),
+	}
+	require.NoError(t, database.UpsertProjectIdentityObservation(
+		t.Context(), observation,
+	))
+	_, err = database.CreateWorktreeProjectMapping(t.Context(), WorktreeProjectMapping{
+		Machine: "legacy-machine", PathPrefix: "/work/runtime",
+		Layout: WorktreeMappingLayoutExplicit, Project: "runtime-project",
+		Enabled: true,
+	})
+	require.NoError(t, err)
+
+	for table, want := range map[string]int{
+		"project_identity_observations":             1,
+		"session_project_identity_snapshots":        1,
+		"worktree_project_mappings":                 1,
+		"source_project_identity_observations":      2,
+		"source_session_project_identity_snapshots": 1,
+		"source_worktree_project_mappings":          2,
+	} {
+		var count int
+		require.NoError(t, database.getReader().QueryRowContext(t.Context(),
+			"SELECT count(*) FROM "+table,
+		).Scan(&count))
+		assert.Equal(t, want, count, table)
+	}
+	require.NoError(t, database.Close())
+
+	conn, err := sql.Open("sqlite3", makeDSN(path, false))
+	require.NoError(t, err)
+	conn.SetMaxOpenConns(1)
+	_, err = conn.ExecContext(t.Context(), `
+		UPDATE project_identity_observations
+		SET key = 'stale-legacy'
+		WHERE project = 'legacy-project';
+		UPDATE source_project_identity_observations
+		SET key = 'canonical-after-cutover'
+		WHERE project = 'legacy-project';
+		UPDATE worktree_project_mappings
+		SET project = 'stale-legacy'
+		WHERE path_prefix = '/work/legacy';
+		UPDATE source_worktree_project_mappings
+		SET project = 'canonical-after-cutover'
+		WHERE path_prefix = '/work/legacy';
+	`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	database, err = Open(path)
+	require.NoError(t, err)
+	defer database.Close()
+	var identityKey, mappingProject string
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT key FROM source_project_identity_observations
+		WHERE project = 'legacy-project'`,
+	).Scan(&identityKey))
+	assert.Equal(t, "canonical-after-cutover", identityKey)
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `
+		SELECT project FROM source_worktree_project_mappings
+		WHERE path_prefix = '/work/legacy'`,
+	).Scan(&mappingProject))
+	assert.Equal(t, "canonical-after-cutover", mappingProject)
+}
+
+func TestLegacySchemaCommonConvergenceRollsBackDDLDataAndStamp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-common-rollback.db")
+	createPriorCommonSQLiteArchive(t, path)
+
+	database, err := openAndInit(t.Context(), path, false, false)
+	require.NoError(t, err)
+	_, err = database.GetOrCreateDatabaseID(t.Context())
+	require.NoError(t, err)
+	_, err = database.GetOrCreateArchiveID(t.Context())
+	require.NoError(t, err)
+	_, err = database.GetOrCreateArchiveSalt(t.Context())
+	require.NoError(t, err)
+
+	injected := errors.New("injected common convergence failure")
+	database.mu.Lock()
+	err = database.convergeSQLiteCommonSchemaLocked(t.Context(), func() error {
+		return injected
+	})
+	database.mu.Unlock()
+	require.ErrorIs(t, err, injected)
+	require.NoError(t, database.Close())
+
+	conn, err := sql.Open("sqlite3", makeDSN(path, false))
+	require.NoError(t, err)
+	conn.SetMaxOpenConns(1)
+	defer conn.Close()
+	for table, column := range map[string]string{
+		"sessions":        "source_archive_id",
+		"tool_calls":      "message_ordinal",
+		"pinned_messages": "source_uuid",
+	} {
+		var count int
+		require.NoError(t, conn.QueryRow(`
+			SELECT count(*) FROM pragma_table_info(?) WHERE name = ?`,
+			table, column,
+		).Scan(&count))
+		assert.Zero(t, count, "%s.%s", table, column)
+	}
+	var sourceTableCount, stampCount int
+	require.NoError(t, conn.QueryRow(`
+		SELECT count(*) FROM sqlite_master
+		WHERE type = 'table' AND name = 'source_archives'`,
+	).Scan(&sourceTableCount))
+	assert.Zero(t, sourceTableCount)
+	require.NoError(t, conn.QueryRow(`
+		SELECT count(*) FROM archive_metadata WHERE key = ?`,
+		CommonSchemaCompatibilityMetadataKey,
+	).Scan(&stampCount))
+	assert.Zero(t, stampCount)
+	var sessionCount int
+	require.NoError(t, conn.QueryRow(`
+		SELECT count(*) FROM sessions WHERE id = 'common-legacy-session'`,
+	).Scan(&sessionCount))
+	assert.Equal(t, 1, sessionCount)
+}
 
 const legacyMessagesAndToolCallsSchema = `
 CREATE TABLE messages (

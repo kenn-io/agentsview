@@ -18,8 +18,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/duckdb/bundialect"
 	"go.kenn.io/agentsview/internal/secrets"
 )
 
@@ -37,9 +39,12 @@ var _ db.Store = (*Store)(nil)
 // openMirrorAlias); it is "" for the original connection NewStore opens
 // directly on path.
 type Store struct {
+	*db.BunStore
+
 	path      string
 	handleMu  sync.RWMutex
 	duck      *sql.DB
+	bun       *bun.DB
 	fileInfo  os.FileInfo
 	aliasPath string
 	closed    bool
@@ -57,6 +62,54 @@ type Store struct {
 	cursorMu       sync.RWMutex
 	cursorSecret   []byte
 	customPricing  map[string]config.CustomModelRate
+}
+
+type duckBunBackend struct {
+	store *Store
+}
+
+var _ db.BunBackend = (*duckBunBackend)(nil)
+
+func (*duckBunBackend) Name() string { return "duckdb" }
+
+func (*duckBunBackend) ReadOnly() bool { return true }
+
+func (*duckBunBackend) Capabilities() db.BackendCapabilities {
+	return db.BackendCapabilities{}
+}
+
+func (b *duckBunBackend) View(
+	_ context.Context, fn func(bun.IDB) error,
+) error {
+	b.store.handleMu.RLock()
+	defer b.store.handleMu.RUnlock()
+	return fn(b.store.bun)
+}
+
+func (*duckBunBackend) Update(
+	context.Context, func(bun.IDB) error,
+) error {
+	return db.ErrReadOnly
+}
+
+func (s *Store) initializeBun() {
+	var options []bun.DBOption
+	if s.connectionKind == duckDBQuackClientConnection {
+		options = append(options, bun.WithConnResolver(newQuackBunResolver(
+			s.duck,
+			func(ctx context.Context, query string) (*sql.Rows, error) {
+				return s.quack.queryRemote(ctx, query, true)
+			},
+		)))
+	}
+	s.bun = bun.NewDB(s.duck, bundialect.New(), options...)
+	s.BunStore = db.NewBunStore(&duckBunBackend{store: s})
+}
+
+func (s *Store) viewBun(
+	ctx context.Context, fn func(bun.IDB) error,
+) error {
+	return (&duckBunBackend{store: s}).View(ctx, fn)
 }
 
 // NewStore opens a local DuckDB mirror file as a db.Store. The handle is
@@ -83,11 +136,17 @@ func NewStore(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{path: path, duck: conn, fileInfo: info}, nil
+	store := &Store{path: path, duck: conn, fileInfo: info}
+	store.initializeBun()
+	return store, nil
 }
 
 // NewStoreFromDB wraps an existing DuckDB connection.
-func NewStoreFromDB(conn *sql.DB) *Store { return &Store{duck: conn} }
+func NewStoreFromDB(conn *sql.DB) *Store {
+	store := &Store{duck: conn}
+	store.initializeBun()
+	return store
+}
 
 // DB returns the current handle under a read lock. Callers that hold onto
 // the returned *sql.DB across a mirror replacement keep using the old
@@ -219,10 +278,16 @@ func (r duckSingleRow) Scan(dest ...any) error {
 }
 
 func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
+	if s.BunStore != nil {
+		s.BunStore.SetCustomPricing(p)
+	}
 	s.customPricing = p
 }
 
 func (s *Store) SetCursorSecret(secret []byte) {
+	if s.BunStore != nil {
+		s.BunStore.SetCursorSecret(secret)
+	}
 	s.cursorMu.Lock()
 	defer s.cursorMu.Unlock()
 	s.cursorSecret = append([]byte(nil), secret...)

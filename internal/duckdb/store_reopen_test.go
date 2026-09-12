@@ -15,8 +15,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 // countReopenAliasFiles counts the hardlink files openMirrorAlias creates
@@ -97,6 +99,17 @@ func listMirrorSessionIDs(t *testing.T, store *Store) []string {
 	return ids
 }
 
+func listMirrorSessionIDsWithBun(t *testing.T, store *Store) []string {
+	t.Helper()
+	var ids []string
+	err := store.viewBun(t.Context(), func(q bun.IDB) error {
+		return q.NewSelect().Model((*bunmodel.Session)(nil)).
+			Column("id").Order("id").Scan(t.Context(), &ids)
+	})
+	require.NoError(t, err)
+	return ids
+}
+
 func skipReopenTestOnWindows(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -104,7 +117,7 @@ func skipReopenTestOnWindows(t *testing.T) {
 	}
 }
 
-func TestStoreReopensAfterMirrorReplacement(t *testing.T) {
+func TestStoreBunReopensAfterMirrorReplacement(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "m.duckdb")
@@ -118,6 +131,7 @@ func TestStoreReopensAfterMirrorReplacement(t *testing.T) {
 	store.WatchMirrorReplacement(ctx, 50*time.Millisecond, nil)
 
 	assert.Equal(t, []string{"old-session"}, listMirrorSessionIDs(t, store))
+	assert.Equal(t, []string{"old-session"}, listMirrorSessionIDsWithBun(t, store))
 
 	nextPath := filepath.Join(dir, "next.duckdb")
 	buildMirrorFixtureAt(t, nextPath, "new-session")
@@ -127,6 +141,52 @@ func TestStoreReopensAfterMirrorReplacement(t *testing.T) {
 		ids := listMirrorSessionIDs(t, store)
 		return len(ids) == 1 && ids[0] == "new-session"
 	}, 5*time.Second, 100*time.Millisecond)
+	assert.Equal(t, []string{"new-session"}, listMirrorSessionIDsWithBun(t, store))
+}
+
+func TestStoreBunViewKeepsHandleSwapBehindInFlightCallback(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.duckdb")
+	nextPath := filepath.Join(dir, "next.duckdb")
+	buildMirrorFixture(t, oldPath, "old-session")
+	buildMirrorFixture(t, nextPath, "new-session")
+
+	store, err := NewStore(oldPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	next, err := Open(nextPath)
+	require.NoError(t, err)
+	info, err := os.Stat(nextPath)
+	require.NoError(t, err)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	viewDone := make(chan error, 1)
+	go func() {
+		viewDone <- store.viewBun(t.Context(), func(bun.IDB) error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+
+	swapDone := make(chan struct{})
+	go func() {
+		store.swapHandle(next, "", info)
+		close(swapDone)
+	}()
+	select {
+	case <-swapDone:
+		close(release)
+		require.Fail(t, "handle swap returned during guarded Bun view")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	require.NoError(t, <-viewDone)
+	<-swapDone
+	assert.Equal(t, []string{"new-session"}, listMirrorSessionIDsWithBun(t, store))
 }
 
 func TestStoreKeepsOldHandleWhenReplacementIncompatible(t *testing.T) {

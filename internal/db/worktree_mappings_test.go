@@ -146,10 +146,14 @@ func TestSchemaColumnMigrationAddsWorktreeOriginalProject(t *testing.T) {
 	migrated, err := Open(path)
 	require.NoError(t, err, "open and migrate archive")
 	defer migrated.Close()
-	mappings, err := migrated.ListWorktreeProjectMappings(ctx, "host-a.example")
-	require.NoError(t, err, "list migrated mapping")
-	require.Len(t, mappings, 1)
-	assert.Empty(t, mappings[0].OriginalProject,
+	var originalProject string
+	err = migrated.getReader().QueryRowContext(ctx, `
+		SELECT original_project FROM worktree_project_mappings
+		WHERE machine = 'host-a.example'
+		  AND path_prefix = '/srv/worktrees/service'`,
+	).Scan(&originalProject)
+	require.NoError(t, err, "read migrated legacy mapping")
+	assert.Empty(t, originalProject,
 		"legacy mappings default original project to empty")
 }
 
@@ -1099,8 +1103,8 @@ func TestApplyWorktreeProjectMappingToSessionReconcilesOnlyMovedIdentityKey(
 
 		var sourceSnapshots int
 		require.NoError(t, d.getReader().QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM session_project_identity_snapshots
-			WHERE project = ? AND session_id IN (?, ?)`,
+			SELECT COUNT(*) FROM source_session_project_identity_snapshots
+			WHERE project = ? AND source_session_id IN (?, ?)`,
 			"source_project", "retained", "moved",
 		).Scan(&sourceSnapshots))
 		assert.Equal(t, 2, sourceSnapshots,
@@ -1300,9 +1304,11 @@ func TestWorktreeProjectMappingsFinalMetadataCopyRefreshesStalePrecopy(
 	require.NoError(t, srcDB.CloseConnections(), "CloseConnections src")
 
 	_, err = dstDB.getWriter().ExecContext(ctx, `
-		UPDATE worktree_project_mappings
+		UPDATE source_worktree_project_mappings
 		SET updated_at = '9999-12-31T23:59:59.999Z'
-		WHERE machine = ? AND path_prefix = ?`,
+		WHERE source_archive_id = (
+			SELECT value FROM archive_metadata WHERE key = 'archive_id'
+		) AND machine = ? AND path_prefix = ?`,
 		"laptop",
 		prefix,
 	)

@@ -291,6 +291,13 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// ArchiveIdentity is the stable provenance stamped on canonical session and
+// identity rows before they enter a shared store.
+type ArchiveIdentity struct {
+	SourceArchiveID          string
+	SourceDatabaseGeneration string
+}
+
 // Session represents a row in the sessions table.
 type Session struct {
 	ID                    string  `json:"id"`
@@ -351,6 +358,8 @@ type Session struct {
 	GitBranch                   string          `json:"git_branch,omitempty"`
 	SourceSessionID             string          `json:"source_session_id,omitempty"`
 	SourceVersion               string          `json:"source_version,omitempty"`
+	SourceArchiveID             string          `json:"-"`
+	SourceDatabaseGeneration    string          `json:"-"`
 	TranscriptFidelity          string          `json:"transcript_fidelity,omitempty"`
 	ParserMalformedLines        int             `json:"parser_malformed_lines,omitzero"`
 	IsTruncated                 bool            `json:"is_truncated,omitzero"`
@@ -1376,8 +1385,9 @@ const insertSessionSQL = `
 			last_write_incremental,
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
-			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			file_inode, file_device, file_hash,
+			source_archive_id, source_database_generation
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1438,7 +1448,9 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 				excluded.claude_linear_parse, sessions.claude_linear_parse),
 			file_inode = excluded.file_inode,
 			file_device = excluded.file_device,
-			file_hash = excluded.file_hash`
+			file_hash = excluded.file_hash,
+			source_archive_id = excluded.source_archive_id,
+			source_database_generation = excluded.source_database_generation`
 
 const upsertSessionSQL = upsertSessionBaseSQL + `,
 			source_missing_at = NULL`
@@ -1481,7 +1493,32 @@ func upsertSessionArgs(s Session) []any {
 		s.FilePath, s.FileSize, s.FileMtime,
 		s.NextOrdinal, s.LastEntryUUID, s.ClaudeLinearParse,
 		s.FileInode, s.FileDevice, s.FileHash,
+		s.SourceArchiveID, s.SourceDatabaseGeneration,
 	}
+}
+
+func (db *DB) localArchiveIdentity(ctx context.Context) (ArchiveIdentity, error) {
+	archiveID, err := db.GetArchiveID(ctx)
+	if err != nil {
+		return ArchiveIdentity{}, err
+	}
+	databaseGeneration, err := db.GetDatabaseID(ctx)
+	if err != nil {
+		return ArchiveIdentity{}, err
+	}
+	identity := ArchiveIdentity{
+		SourceArchiveID:          strings.TrimSpace(archiveID),
+		SourceDatabaseGeneration: strings.TrimSpace(databaseGeneration),
+	}
+	if identity.SourceArchiveID == "" || identity.SourceDatabaseGeneration == "" {
+		return ArchiveIdentity{}, fmt.Errorf("SQLite archive identity is required")
+	}
+	return identity, nil
+}
+
+func stampSessionArchiveIdentity(session *Session, identity ArchiveIdentity) {
+	session.SourceArchiveID = identity.SourceArchiveID
+	session.SourceDatabaseGeneration = identity.SourceDatabaseGeneration
 }
 
 // UpsertSession inserts or updates a session.
@@ -1506,6 +1543,11 @@ func (db *DB) upsertSession(
 	s Session, reviveSourceMissing bool,
 ) (sessionUpsertResult, error) {
 	s = db.sessionForStorage(s)
+	identity, err := db.localArchiveIdentity(context.Background())
+	if err != nil {
+		return sessionUpsertResult{}, err
+	}
+	stampSessionArchiveIdentity(&s, identity)
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	writer := db.getWriter()
@@ -1653,6 +1695,11 @@ func (db *DB) ClearSessionSourceMissing(id string) error {
 // session synced concurrently. Permanently-excluded sessions are still
 // rejected so a placeholder cannot resurrect them.
 func (db *DB) insertSessionIfAbsent(ctx context.Context, s Session) error {
+	identity, err := db.localArchiveIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	stampSessionArchiveIdentity(&s, identity)
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -2847,8 +2894,10 @@ func (db *DB) GetSessionForIncremental(
 			 ORDER BY m.ordinal DESC
 			 LIMIT 1)
 		 FROM sessions s
-		 LEFT JOIN session_project_identity_snapshots snap
-		   ON snap.session_id = s.id
+		 LEFT JOIN source_session_project_identity_snapshots snap
+		   ON snap.source_archive_id = s.source_archive_id
+		  AND snap.source_database_generation = s.source_database_generation
+		  AND snap.source_session_id = s.id
 		 WHERE s.file_path = ?
 		   AND s.agent = ?
 		   AND s.deleted_at IS NULL
