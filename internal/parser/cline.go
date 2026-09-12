@@ -404,7 +404,7 @@ func parseClineMessages(
 			}
 		}
 
-		var textParts []string
+		var bodyParts []string
 		var thinkingParts []string
 		var toolCalls []ParsedToolCall
 		var toolResults []ParsedToolResult
@@ -414,12 +414,13 @@ func parseClineMessages(
 			case "text":
 				t := strings.TrimSpace(block.Text)
 				if t != "" {
-					textParts = append(textParts, t)
+					bodyParts = append(bodyParts, t)
 				}
 			case "thinking":
 				th := strings.TrimSpace(block.Thinking)
 				if th != "" {
 					thinkingParts = append(thinkingParts, th)
+					bodyParts = append(bodyParts, "[Thinking]\n"+th+"\n[/Thinking]")
 				}
 			case "tool_use":
 				tc := ParsedToolCall{
@@ -467,7 +468,7 @@ func parseClineMessages(
 			}
 		}
 
-		content := strings.TrimSpace(strings.Join(textParts, "\n\n"))
+		content := strings.TrimSpace(strings.Join(bodyParts, "\n\n"))
 		thinking := strings.TrimSpace(strings.Join(thinkingParts, "\n\n"))
 
 		if ordinal == 0 && rawMsg.Role == "user" && content != "" {
@@ -661,6 +662,67 @@ func clineLastAssistantEndsWithTerminalTool(messages []ParsedMessage) bool {
 	return false
 }
 
+// hasClineOrphanedToolCall reports whether the last assistant message has
+// any tool_use blocks that lack a matching tool_result or completion event,
+// special-casing terminal tools (such as attempt_completion) as resolved.
+func hasClineOrphanedToolCall(messages []ParsedMessage) bool {
+	if len(messages) == 0 {
+		return false
+	}
+	lastAssistantIdx := -1
+	for i, v := range slices.Backward(messages) {
+		if v.IsSystem {
+			continue
+		}
+		if v.Role == RoleAssistant {
+			lastAssistantIdx = i
+			break
+		}
+	}
+	if lastAssistantIdx == -1 {
+		return false
+	}
+	last := messages[lastAssistantIdx]
+	if len(last.ToolCalls) == 0 {
+		return false
+	}
+
+	resolved := make(map[string]bool)
+	for _, m := range messages[lastAssistantIdx+1:] {
+		for _, tr := range m.ToolResults {
+			if tr.ToolUseID != "" {
+				resolved[tr.ToolUseID] = true
+			}
+		}
+	}
+	for i := range last.ToolCalls {
+		tc := &last.ToolCalls[i]
+		if tc.ToolUseID == "" {
+			continue
+		}
+		// Special-case Cline terminal tools (e.g. attempt_completion)
+		// as resolved since they signal normal completion without
+		// requiring a follow-up user tool_result.
+		if clineTerminalTools[tc.ToolName] {
+			resolved[tc.ToolUseID] = true
+			continue
+		}
+		for _, ev := range tc.ResultEvents {
+			if ev.Status != "running" {
+				resolved[tc.ToolUseID] = true
+				break
+			}
+		}
+	}
+
+	for _, tc := range last.ToolCalls {
+		if tc.ToolUseID != "" && !resolved[tc.ToolUseID] {
+			return true
+		}
+	}
+	return false
+}
+
 // classifyClineTermination classifies session termination from the metadata status
 // and transcript messages.
 func classifyClineTermination(
@@ -670,14 +732,14 @@ func classifyClineTermination(
 	if len(messages) == 0 {
 		return ""
 	}
+	if hasClineOrphanedToolCall(messages) {
+		return TerminationToolCallPending
+	}
 	if clineLastAssistantEndsWithTerminalTool(messages) {
 		if status == "failed" || status == "error" {
 			return TerminationTruncated
 		}
 		return TerminationClean
-	}
-	if hasOrphanedToolCall(messages) {
-		return TerminationToolCallPending
 	}
 	if clineLastMessageIsThinkingOnly(messages) {
 		return TerminationToolCallPending

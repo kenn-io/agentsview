@@ -229,7 +229,7 @@ func TestParseClineSession_Full(t *testing.T) {
 	assert.Equal(t, RoleAssistant, msgs[1].Role)
 	assert.True(t, msgs[1].HasThinking)
 	assert.Equal(t, "I should read the optics definition and run tests.", msgs[1].ThinkingText)
-	assert.Equal(t, "I will inspect the optics instrumentation files.", msgs[1].Content)
+	assert.Equal(t, "[Thinking]\nI should read the optics definition and run tests.\n[/Thinking]\n\nI will inspect the optics instrumentation files.", msgs[1].Content)
 	assert.True(t, msgs[1].HasToolUse)
 	require.Len(t, msgs[1].ToolCalls, 2)
 
@@ -490,6 +490,180 @@ func TestParseClineSession_AttemptCompletionEnding(t *testing.T) {
 	assert.Equal(t, TerminationClean, sess.TerminationStatus)
 }
 
+func TestParseClineSession_AttemptCompletionWithUnresolvedPrecedingToolCall(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "1789000000008_unresolved"
+	taskDir := filepath.Join(dir, sessionID)
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
+
+	metaJSON := `{
+		"session_id": "1789000000008_unresolved",
+		"status": "completed",
+		"prompt": "run command"
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".json"), []byte(metaJSON), 0o644))
+
+	messagesJSON := `{
+		"messages": [
+			{
+				"id": "m1",
+				"role": "user",
+				"content": [{"type": "text", "text": "run command"}],
+				"ts": 1000
+			},
+			{
+				"id": "m2",
+				"role": "assistant",
+				"content": [
+					{
+						"type": "tool_use",
+						"id": "call_cmd",
+						"name": "execute_command",
+						"input": {"command": "go test ./..."}
+					},
+					{
+						"type": "tool_use",
+						"id": "call_done",
+						"name": "attempt_completion",
+						"input": {"result": "Done"}
+					}
+				],
+				"ts": 2000
+			}
+		]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
+
+	sess, _, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Preceding unresolved tool call flags termination as pending despite attempt_completion
+	assert.Equal(t, TerminationToolCallPending, sess.TerminationStatus)
+}
+
+func TestParseClineSession_AttemptCompletionWithResolvedPrecedingToolCall(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "1789000000009_resolved"
+	taskDir := filepath.Join(dir, sessionID)
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
+
+	metaJSON := `{
+		"session_id": "1789000000009_resolved",
+		"status": "completed",
+		"prompt": "run command"
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".json"), []byte(metaJSON), 0o644))
+
+	messagesJSON := `{
+		"messages": [
+			{
+				"id": "m1",
+				"role": "user",
+				"content": [{"type": "text", "text": "run command"}],
+				"ts": 1000
+			},
+			{
+				"id": "m2",
+				"role": "assistant",
+				"content": [
+					{
+						"type": "tool_use",
+						"id": "call_cmd",
+						"name": "execute_command",
+						"input": {"command": "go test ./..."}
+					}
+				],
+				"ts": 2000
+			},
+			{
+				"id": "m3",
+				"role": "user",
+				"content": [
+					{
+						"type": "tool_result",
+						"tool_use_id": "call_cmd",
+						"content": "ok"
+					}
+				],
+				"ts": 3000
+			},
+			{
+				"id": "m4",
+				"role": "assistant",
+				"content": [
+					{
+						"type": "tool_use",
+						"id": "call_done",
+						"name": "attempt_completion",
+						"input": {"result": "Done"}
+					}
+				],
+				"ts": 4000
+			}
+		]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
+
+	sess, _, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// All preceding tool calls resolved, attempt_completion marks session clean
+	assert.Equal(t, TerminationClean, sess.TerminationStatus)
+}
+
+func TestParseClineSession_ThinkingContentInlining(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "1789000000010_thinking_inline"
+	taskDir := filepath.Join(dir, sessionID)
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
+
+	metaJSON := `{
+		"session_id": "1789000000010_thinking_inline",
+		"status": "completed",
+		"prompt": "explain this"
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".json"), []byte(metaJSON), 0o644))
+
+	messagesJSON := `{
+		"messages": [
+			{
+				"id": "m1",
+				"role": "user",
+				"content": [{"type": "text", "text": "explain this"}],
+				"ts": 1000
+			},
+			{
+				"id": "m2",
+				"role": "assistant",
+				"content": [
+					{
+						"type": "thinking",
+						"thinking": "Let me think about how to explain this."
+					},
+					{
+						"type": "text",
+						"text": "Here is the explanation."
+					}
+				],
+				"ts": 2000
+			}
+		]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
+
+	sess, messages, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, messages, 2)
+
+	asst := messages[1]
+	assert.True(t, asst.HasThinking)
+	assert.Equal(t, "Let me think about how to explain this.", asst.ThinkingText)
+	assert.Equal(t, "[Thinking]\nLet me think about how to explain this.\n[/Thinking]\n\nHere is the explanation.", asst.Content)
+}
+
 func TestParseClineSession_ThinkingOnlyEnding(t *testing.T) {
 	dir := t.TempDir()
 	sessionID := "1789000000003_thinking"
@@ -526,12 +700,15 @@ func TestParseClineSession_ThinkingOnlyEnding(t *testing.T) {
 	}`
 	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
 
-	sess, _, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "", "local")
+	sess, messages, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
 	// Interrupted mid-thought detected
 	assert.Equal(t, TerminationToolCallPending, sess.TerminationStatus)
+	assert.Equal(t, "[Thinking]\nStill thinking...\n[/Thinking]", messages[1].Content)
+	assert.Equal(t, "Still thinking...", messages[1].ThinkingText)
+	assert.True(t, messages[1].HasThinking)
 }
 
 func TestParseClineSession_EmptyTranscript(t *testing.T) {
