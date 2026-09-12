@@ -237,7 +237,7 @@ func BuildCandidateArtifactsFromSource(
 	usage []UsageRow,
 ) (CandidateArtifacts, error) {
 	return buildCandidateArtifactsFromSource(
-		ctx, p, sessions, source, usage, false,
+		ctx, p, sessions, source, usage, false, nil,
 	)
 }
 
@@ -253,7 +253,7 @@ func BuildCandidateArtifactsFromSourceWithSurvivorUsage(
 	usage []UsageRow,
 ) (CandidateArtifacts, error) {
 	return buildCandidateArtifactsFromSource(
-		ctx, p, sessions, source, usage, true,
+		ctx, p, sessions, source, usage, true, nil,
 	)
 }
 
@@ -264,6 +264,7 @@ func buildCandidateArtifactsFromSource(
 	source CandidateSource,
 	usage []UsageRow,
 	usageIsSurvivorSet bool,
+	joint *jointActivityAccumulator,
 ) (CandidateArtifacts, error) {
 	windows := rangeWindows(p)
 	membershipWindows := secondPrecisionWindows(windows)
@@ -316,6 +317,9 @@ func buildCandidateArtifactsFromSource(
 			&report, windows, membershipWindows, aggregates, membership, words,
 			kindBy, iv,
 		)
+		if joint != nil {
+			joint.add(iv)
+		}
 		return nil
 	})
 	if err != nil {

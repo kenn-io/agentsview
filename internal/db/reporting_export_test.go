@@ -280,6 +280,17 @@ func TestReportingExportAllocatesAuthoritativeSessionCostBeforeHourPartition(
 	}
 	assert.Equal(t, existing.Totals.TotalCost, hourlyCost)
 	assert.Equal(t, int64(existing.Totals.InputTokens), hourlyInputTokens)
+
+	joint, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
+		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC), SchemaVersion: 4,
+	})
+	require.NoError(t, err)
+	require.Len(t, joint.Hours[10].Joint.Cells, 1)
+	require.Len(t, joint.Hours[11].Joint.Cells, 1)
+	assert.Equal(t, int64(10_000), joint.Hours[10].Joint.Cells[0].Pricing.AllocatedCost.Microdollars)
+	assert.Equal(t, int64(20_000), joint.Hours[11].Joint.Cells[0].Pricing.AllocatedCost.Microdollars)
+	assert.Zero(t, joint.Hours[10].Joint.Cells[0].Pricing.ComputedCost.Microdollars)
 }
 
 func TestReportingExportAllocatesAuthoritativeCostByDailyBreakdownKey(
