@@ -155,7 +155,6 @@ type openCodeV2Message struct {
 	ShellID string         `json:"shellID"`
 	Exit    int            `json:"exit"`
 	Status  string         `json:"status"`
-	Finish  string         `json:"finish"`
 	Files   []struct {
 		Name string `json:"name"`
 		MIME string `json:"mime"`
@@ -239,7 +238,7 @@ func loadOpenCodeV2Messages(db *sql.DB, sessionID, cwd string) ([]ParsedMessage,
 				pm.Content += attachment
 			}
 		case "assistant":
-			pm.Role, pm.StopReason = RoleAssistant, data.Finish
+			pm.Role = RoleAssistant
 			var texts []string
 			for _, item := range data.Content {
 				switch item.Type {

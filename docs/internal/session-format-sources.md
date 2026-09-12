@@ -887,17 +887,15 @@ add an archived or maintained mirror without replacing the original identity.
 ## OpenCode (`opencode`)
 
 **Projection detail check (2026-09-12):** Rechecked the pinned
-[assistant schema](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/schema/src/session-message.ts),
 [tool content schema](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/schema/src/llm.ts),
 and
 [message updater](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/core/src/session/message-updater.ts).
-Step completion stores the assistant's `finish` value, which Agentsview now
-retains as the parsed stop reason. Tool results can contain file items with a
-URI, MIME type, and optional name. These retain attachment labels in result
-text, using the MIME type when no name is present, without expanding the URI.
-Isolated parser fixtures verify both mappings. These details extend the
-existing v2 reader; session discovery and upgrade behavior are unchanged.
-Data version 108 makes existing imports eligible to recover the result labels.
+Tool results can contain file items with a URI, MIME type, and optional name.
+These retain attachment labels in result text, using the MIME type when no name
+is present, without expanding the URI. Isolated parser fixtures verify named and
+unnamed file results. This extends the existing v2 reader; session discovery and
+upgrade behavior are unchanged. Data version 108 makes existing imports eligible
+to recover the result labels.
 
 **V2 projection check (2026-09-08):** Cloned upstream at
 `dff8fbc149fb7492e4f07b713ac31ea70d9a541c` and checked the

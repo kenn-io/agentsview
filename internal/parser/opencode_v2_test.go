@@ -346,22 +346,6 @@ func TestOpenCodeV2MessageKinds(t *testing.T) {
 	}
 }
 
-func TestOpenCodeV2StopReason(t *testing.T) {
-	path, seed, writer := newTestDB(t)
-	seed.AddProject("project-a", "/workspace/project-a")
-	seed.AddSession("ses_a", "project-a", "", "", 1700000000000, 1700000001000)
-	_, err := writer.Exec(openCodeV2TestSchema)
-	require.NoError(t, err)
-	_, err = writer.Exec(`INSERT INTO session_message VALUES ('msg_a', 'ses_a', 'assistant', 1, 1700000000000, 1700000001000,
- '{"finish":"length","content":[{"type":"text","id":"txt_a","text":"Partial reply"}]}')`)
-	require.NoError(t, err)
-	_, msgs, err := parseOpenCodeDBSession(path, "ses_a", "host-a")
-	require.NoError(t, err)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, "Partial reply", msgs[0].Content)
-	assert.Equal(t, "length", msgs[0].StopReason)
-}
-
 func TestOpenCodeV2CrossPathHistory(t *testing.T) {
 	// Reproduced with 1.18.25: the v2 API accepts an existing CLI session
 	// and appends projections without converting its older message/part rows.
