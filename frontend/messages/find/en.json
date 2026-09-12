@@ -1,0 +1,38 @@
+{
+  "session_find_whole_word": "Match whole word",
+  "session_find_loading_history": "Loading older messages…",
+  "session_find_announce_match": "Match {current} of {total}",
+  "session_find_block_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "{count} match", "countPlural=other": "{count} matches" }
+    }
+  ],
+  "session_find_results_group_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "{count} match", "countPlural=other": "{count} matches" }
+    }
+  ],
+  "session_find_results_title": "Search results",
+  "session_find_results_empty": "No matches in this session",
+  "session_find_toggle_results": "Show search results",
+  "session_find_hide_results": "Hide search results",
+  "session_find_subagent_excluded": "Inline subagent messages are excluded.",
+  "session_find_rail_label": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} match in this session",
+        "countPlural=other": "{count} matches in this session"
+      }
+    }
+  ],
+  "session_find_raw_output": "Raw output while searching",
+  "session_find_history_incomplete": "Older messages could not be loaded. Results are incomplete.",
+  "session_find_retry_history": "Retry loading history",
+  "session_find_partial_results": "Partial results"
+}

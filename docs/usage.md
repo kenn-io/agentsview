@@ -741,6 +741,17 @@ Use the arrow buttons or `Enter` / `Shift+Enter` to jump between matches. The
 matching message scrolls into view and the search term is highlighted. Press
 `Esc` to close the search bar.
 
+Search follows the transcript's active scope. Block-type filters (see
+[Block-Type Filtering](#block-type-filtering)) and Focused mode both narrow what
+search can find: a hidden category contributes no matches, counts, badges, or
+highlights, and re-showing a category or returning to Normal mode makes that
+content searchable again without retyping the query. Folded content is still
+searched — collapsed tool output, thinking blocks, `<details>` sections, and
+rows that are not currently scrolled into view all match; only the current
+occurrence expands and scrolls into view. The match count, result list, and
+overview rail read the same filtered index, so they update immediately when a
+filter toggles during an active query.
+
 ### Token Usage
 
 The session detail header displays token usage when available, showing input and

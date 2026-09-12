@@ -61,4 +61,5 @@ export { default as TriangleAlertIcon } from "@lucide/svelte/icons/triangle-aler
 export { default as UploadIcon } from "@lucide/svelte/icons/upload";
 export { default as UserRoundIcon } from "@lucide/svelte/icons/user-round";
 export { default as UsersRoundIcon } from "@lucide/svelte/icons/users-round";
+export { default as WholeWordIcon } from "@lucide/svelte/icons/whole-word";
 export { default as XIcon } from "@lucide/svelte/icons/x";

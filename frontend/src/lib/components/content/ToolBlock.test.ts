@@ -1,132 +1,146 @@
 // @vitest-environment jsdom
-// ABOUTME: Unit tests for ToolBlock's output section behavior.
-// ABOUTME: Covers visibility, collapse/expand, and preview of result_content.
-import { describe, it, expect, vi, afterEach } from "vite-plus/test";
-import { mount, unmount, tick } from "svelte";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { mount, tick, unmount, type ComponentProps } from "svelte";
 import type { ToolCall } from "../../api/types.js";
 import { setLocale } from "../../i18n/index.js";
 import retainedFixtureSource from "../../utils/__fixtures__/retained-tool-image-1735.json?raw";
-
-const copyToClipboardMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 const SMALL_PNG_DATA_URI =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-
-vi.mock("./SubagentInline.svelte", () => ({
-  default: {},
-}));
-
-vi.mock("../../utils/clipboard.js", () => ({
-  copyToClipboard: copyToClipboardMock,
-}));
-
-// @ts-ignore
 import ToolBlock from "./ToolBlock.svelte";
 
-afterEach(() => {
-  vi.clearAllMocks();
+const copyToClipboardMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const searchState = vi.hoisted(() => ({ active: false, current: "", query: "" }));
+vi.mock("../../utils/clipboard.js", () => ({ copyToClipboard: copyToClipboardMock }));
+vi.mock("../../stores/inSessionSearch.svelte.js", () => ({
+  inSessionSearch: {
+    get isActive() {
+      return searchState.active;
+    },
+    get debouncedQuery() {
+      return searchState.query;
+    },
+    navigationRevision: 1,
+    isCurrentBlock: (key: string | undefined) => !!key && key === searchState.current,
+    countForBlock: (key: string | undefined) => (key && key === searchState.current ? 1 : 0),
+    currentOccurrence: () => 0,
+  },
+}));
+const components: ReturnType<typeof mount>[] = [];
+async function render(props: Partial<ComponentProps<typeof ToolBlock>> = {}) {
+  components.push(mount(ToolBlock, { target: document.body, props: { content: "", ...props } }));
+  await tick();
+}
+async function click(selector: string) {
+  const button = document.querySelector<HTMLButtonElement>(selector);
+  expect(button).not.toBeNull();
+  button!.click();
+  await Promise.resolve();
+  await tick();
+}
+async function formatted() {
+  const button = Array.from(
+    document.querySelectorAll<HTMLButtonElement>(".output-mode button"),
+  ).find((node) => node.textContent?.trim() === "Formatted");
+  expect(button).toBeDefined();
+  button!.click();
+  await tick();
+}
+function call(
+  tool_name: string,
+  params: Record<string, unknown> = {},
+  rest: Partial<ToolCall> = {},
+): ToolCall {
+  return { tool_name, input_json: JSON.stringify(params), ...rest };
+}
+const text = (selector: string) => document.querySelector(selector)?.textContent ?? "";
+const longCommand = Array.from({ length: 30 }, (_, i) => `echo hidden-line-${i}`).join("\n");
+beforeEach(() => {
+  setLocale("en");
+  searchState.active = false;
+  searchState.current = "";
+  searchState.query = "";
+  copyToClipboardMock.mockClear();
+});
+afterEach(async () => {
+  for (const component of components.splice(0)) await unmount(component);
+  document.body.replaceChildren();
+  setLocale("en");
 });
 
-describe("ToolBlock output section", () => {
-  let component: ReturnType<typeof mount>;
-
-  afterEach(() => {
-    if (component) unmount(component);
-    document.body.innerHTML = "";
-    setLocale("en");
-  });
-
-  it("does not render output-header when toolCall has no result_content", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "Read",
-      category: "file",
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "some input", toolCall },
-    });
-    await tick();
-
-    expect(document.querySelector(".output-header")).toBeNull();
-  });
-
-  it("does not render output-header when toolCall is absent", async () => {
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "some input" },
-    });
-    await tick();
-
-    expect(document.querySelector(".output-header")).toBeNull();
-  });
-
-  it("renders output-header after expanding the tool block when result_content is set", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "Read",
-      category: "file",
-      result_content: "line one\nline two",
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "some input", toolCall },
-    });
-    await tick();
-
-    // Output section is inside the collapsed block — not visible yet.
-    expect(document.querySelector(".output-header")).toBeNull();
-
-    // Expand the main tool block.
-    const toolHeader = document.querySelector<HTMLButtonElement>(".tool-header");
-    expect(toolHeader).not.toBeNull();
-    toolHeader!.click();
-    await tick();
-
-    expect(document.querySelector(".output-header")).not.toBeNull();
-  });
-
-  it("output starts collapsed after expanding the tool block", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "Read",
-      category: "file",
-      result_content: "line one\nline two",
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "some input", toolCall },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    // Output content pre block should not be present when output is collapsed.
+describe("ToolBlock output and controls", () => {
+  it("starts with both input and output collapsed", async () => {
+    await render({ content: "input", toolCall: call("Read", {}, { result_content: "output" }) });
+    expect(document.querySelector(".tool-content")).toBeNull();
+    await click(".tool-header");
+    expect(text(".tool-content")).toBe("input");
     expect(document.querySelector(".output-content")).toBeNull();
-    expect(document.querySelector(".output-mode")).toBeNull();
+    expect(text(".output-header")).toContain("output");
   });
-
-  it("expands output content on clicking output-header", async () => {
-    const resultText = "line one\nline two\nline three";
-    const toolCall: ToolCall = {
-      tool_name: "Read",
-      category: "file",
-      result_content: resultText,
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "some input", toolCall },
+  it("toggles the input and output independently", async () => {
+    await render({ content: "input", toolCall: call("Read", {}, { result_content: "output" }) });
+    await click(".tool-header");
+    await click(".output-header");
+    expect(text(".output-content")).toBe("output");
+    await click(".output-header");
+    expect(document.querySelector(".output-content")).toBeNull();
+    expect(text(".tool-content")).toBe("input");
+    await click(".tool-header");
+    expect(document.querySelector(".tool-content")).toBeNull();
+  });
+  it.each([undefined, ""])(
+    "omits output for an absent or empty result: %s",
+    async (result_content) => {
+      await render({ content: "input", toolCall: call("Read", {}, { result_content }) });
+      await click(".tool-header");
+      expect(document.querySelector(".output-header")).toBeNull();
+    },
+  );
+  it("omits output without a structured tool call", async () => {
+    await render({ content: "legacy input" });
+    await click(".tool-header");
+    expect(document.querySelector(".output-header")).toBeNull();
+  });
+  it("shows only the first result line in the collapsed preview", async () => {
+    await render({ toolCall: call("Read", {}, { result_content: "first\nsecond" }) });
+    await click(".tool-header");
+    expect(text(".output-header .tool-preview")).toBe("first");
+    expect(text(".output-header")).not.toContain("second");
+  });
+  it("switches raw and sanitized formatted output without changing source", async () => {
+    const result = "# Heading\n\n**bold**\n<script>alert(1)</script>";
+    await render({ toolCall: call("Read", {}, { result_content: result }) });
+    await click(".tool-header");
+    await click(".output-header");
+    expect(text(".output-content")).toBe(result);
+    await formatted();
+    expect(text(".formatted-output h1")).toBe("Heading");
+    expect(text(".formatted-output strong")).toBe("bold");
+    expect(document.querySelector(".formatted-output script")).toBeNull();
+    await click(".output-mode button:first-child");
+    expect(text(".output-content")).toBe(result);
+  });
+  it("colors fenced code in formatted output without inserting search marks", async () => {
+    await render({
+      toolCall: call("Read", {}, { result_content: "```ts\nconst target = true;\n```" }),
     });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".output-header")!.click();
-    await tick();
-
-    const outputContent = document.querySelector(".output-content");
-    expect(outputContent).not.toBeNull();
-    expect(outputContent!.textContent).toBe(resultText);
+    await click(".tool-header");
+    await click(".output-header");
+    await formatted();
+    await vi.waitFor(
+      () => expect(document.querySelector(".formatted-output code span[style]")).not.toBeNull(),
+      { timeout: 10000 },
+    );
+    expect(text(".formatted-output code")).toContain("const target = true;");
+    expect(document.querySelector("mark")).toBeNull();
   });
-
+  it("copies raw output while it remains collapsed", async () => {
+    const result = "# raw\n**output**";
+    await render({ toolCall: call("Read", {}, { result_content: result }) });
+    await click(".tool-header");
+    await click('button[aria-label="Copy output"]');
+    expect(copyToClipboardMock).toHaveBeenCalledWith(result);
+    expect(document.querySelector(".output-content")).toBeNull();
+  });
   it("shows retained image placeholders in block order in output and history", async () => {
     const result =
       '[{"type":"input_text","text":"Before"},{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1},{"type":"text","text":"After"}]';
@@ -144,7 +158,7 @@ describe("ToolBlock output section", () => {
         },
       ],
     };
-    component = mount(ToolBlock, { target: document.body, props: { content: "", toolCall } });
+    await render({ toolCall });
     await tick();
     document.querySelector<HTMLButtonElement>(".tool-header")!.click();
     await tick();
@@ -180,8 +194,7 @@ describe("ToolBlock output section", () => {
       category: "Other",
       result_content: result,
     };
-    component = mount(ToolBlock, { target: document.body, props: { content: "", toolCall } });
-    await tick();
+    await render({ toolCall });
     document.querySelector<HTMLButtonElement>(".tool-header")!.click();
     await tick();
     document.querySelector<HTMLButtonElement>(".output-header")!.click();
@@ -189,7 +202,7 @@ describe("ToolBlock output section", () => {
 
     const raw = document.querySelector(".output-content");
     expect(raw?.querySelector("img")).toBeNull();
-    expect(raw?.textContent).toBe(result.replace(/\r\n/g, "\n"));
+    expect(raw?.textContent).toBe(result);
 
     document.querySelector<HTMLButtonElement>(".output-mode button:nth-child(2)")!.click();
     await tick();
@@ -208,7 +221,7 @@ describe("ToolBlock output section", () => {
 
     document.querySelector<HTMLButtonElement>(".output-mode button:nth-child(1)")!.click();
     await tick();
-    expect(document.querySelector(".output-content")?.textContent).toBe(result.replace(/\r\n/g, "\n"));
+    expect(document.querySelector(".output-content")?.textContent).toBe(result);
 
     document.querySelector<HTMLButtonElement>('button[aria-label="Copy output"]')!.click();
     await tick();
@@ -222,8 +235,7 @@ describe("ToolBlock output section", () => {
       category: "Other",
       result_content: result,
     };
-    component = mount(ToolBlock, { target: document.body, props: { content: "", toolCall } });
-    await tick();
+    await render({ toolCall });
     document.querySelector<HTMLButtonElement>(".tool-header")!.click();
     await tick();
     document.querySelector<HTMLButtonElement>(".output-header")!.click();
@@ -252,8 +264,7 @@ describe("ToolBlock output section", () => {
       category: "Other",
       result_content: result,
     };
-    component = mount(ToolBlock, { target: document.body, props: { content: "", toolCall } });
-    await tick();
+    await render({ toolCall });
     document.querySelector<HTMLButtonElement>(".tool-header")!.click();
     await tick();
     document.querySelector<HTMLButtonElement>(".output-header")!.click();
@@ -269,1002 +280,334 @@ describe("ToolBlock output section", () => {
     base.remove();
   });
 
-  it("switches the expanded current output between raw and formatted modes", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "Read",
-      category: "Read",
-      result_content: "# Result\n\n**bold** <script>alert(1)</script>",
-    };
-    component = mount(ToolBlock, { target: document.body, props: { content: "", toolCall } });
-    await tick();
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-    document.querySelector<HTMLButtonElement>(".output-header")!.click();
-    await tick();
-    expect(document.querySelector(".output-mode")).not.toBeNull();
-    expect(document.querySelector(".formatted-output")).toBeNull();
-    const formatted = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(".output-mode button"),
-    ).find((button) => button.textContent?.trim() === "Formatted");
-    expect(formatted).not.toBeNull();
-    formatted!.click();
-    await tick();
-    expect(document.querySelector(".formatted-output h1")?.textContent).toBe("Result");
-    expect(document.querySelector(".formatted-output script")).toBeNull();
+  it("preserves long path metadata in the accessible text and title", async () => {
+    const path = "/home/person/project/" + "very-long-directory/".repeat(6) + "src/example.ts";
+    await render({ toolCall: call("Read", { file_path: path }) });
+    await click(".tool-header");
+    expect(text(".tool-meta")).toContain(path);
+    expect(document.querySelector(`.meta-value[title="${path}"]`)).not.toBeNull();
   });
-
   it("keeps canonical path metadata accessible without labelling ordinary metadata", async () => {
-    const longPath =
+    const path =
       "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte";
-    const toolCall: ToolCall = {
-      tool_name: "Read",
-      category: "Read",
-      input_json: JSON.stringify({ file_path: longPath }),
-    };
-    component = mount(ToolBlock, { target: document.body, props: { content: "", toolCall } });
-    await tick();
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
+    await render({ toolCall: call("Read", { file_path: path }, { category: "Read" }) });
+    await click(".tool-header");
     const file = document.querySelector(".meta-tag");
     expect(file?.textContent).toContain("content/ToolBlock.svelte");
-    expect(file?.querySelector(".kit-sr-only")?.textContent).toBe(longPath);
+    expect(file?.querySelector(".kit-sr-only")?.textContent).toBe(path);
     expect(file?.querySelector("[aria-label]")).toBeNull();
     expect(document.querySelector(".meta-tag:nth-child(2) [aria-label]")).toBeNull();
   });
-
-  it("highlights search matches and fenced code in formatted output", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "Read",
-      category: "Read",
-      result_content: "```ts\nconst target = true;\n```",
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", toolCall, highlightQuery: "target" },
-    });
-    await tick();
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-    document.querySelector<HTMLButtonElement>(".output-header")!.click();
-    await tick();
-    document.querySelector<HTMLButtonElement>(".output-mode button:nth-child(2)")!.click();
-    await tick();
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const formatted = document.querySelector(".formatted-output");
-    expect(formatted?.querySelector("code[class*='language-']")).not.toBeNull();
-    expect(formatted?.querySelector("mark.search-highlight")?.textContent).toBe("target");
-  });
-
-  it("shows first line as preview when output is collapsed", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "Read",
-      category: "file",
-      result_content: "first line\nsecond line",
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "some input", toolCall },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    // Output is collapsed — preview should show first line.
-    const outputHeader = document.querySelector(".output-header");
-    expect(outputHeader).not.toBeNull();
-    const preview = outputHeader!.querySelector(".tool-preview");
-    expect(preview).not.toBeNull();
-    expect(preview!.textContent).toBe("first line");
-  });
-
-  it("copies raw result_content without expanding output", async () => {
-    const resultText = "first output line\nsecond output line";
-    const toolCall: ToolCall = {
-      tool_name: "Read",
-      category: "file",
-      result_content: resultText,
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "some input", toolCall },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    const copyButton = document.querySelector<HTMLButtonElement>(
-      'button.kit-copy-btn[aria-label="Copy output"]',
-    );
-    expect(copyButton).not.toBeNull();
-    expect(document.querySelector(".output-content")).toBeNull();
-
-    copyButton!.click();
-    await Promise.resolve();
-    await tick();
-
-    expect(copyToClipboardMock).toHaveBeenCalledWith(resultText);
-    expect(document.querySelector(".output-content")).toBeNull();
-
-    document.querySelector<HTMLButtonElement>(".output-header")!.click();
-    await tick();
-
-    expect(document.querySelector(".output-content")?.textContent).toBe(resultText);
-  });
-
-  it("renders history after expanding the tool block when result_events are set", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "wait",
-      category: "Other",
-      result_content: "latest summary",
-      result_events: [
-        {
-          source: "wait_output",
-          status: "completed",
-          content: "Finished successfully",
-          content_length: 21,
-          agent_id: "agent-1",
-          event_index: 0,
-        },
-      ],
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "some input", toolCall },
-    });
-    await tick();
-
-    expect(document.querySelector(".history-header")).toBeNull();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    expect(document.querySelector(".history-header")).not.toBeNull();
-  });
-
-  it("localizes output, history, and result event metadata labels", async () => {
+  it("localizes result event metadata labels for status, source, and agent", async () => {
     setLocale("zh-CN");
-    const toolCall: ToolCall = {
-      tool_name: "wait",
-      category: "Other",
-      result_content: "latest summary",
-      result_events: [
+    await render({
+      toolCall: call(
+        "wait",
+        {},
         {
-          source: "wait_output",
-          status: "completed",
-          content: "Finished successfully",
-          content_length: 21,
-          agent_id: "agent-1",
-          event_index: 0,
+          category: "Other",
+          result_content: "latest summary",
+          result_events: [
+            {
+              source: "wait_output",
+              status: "completed",
+              content: "Finished successfully",
+              content_length: 21,
+              agent_id: "agent-1",
+              event_index: 0,
+            },
+          ],
         },
-      ],
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "some input", toolCall },
+      ),
     });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-    document.querySelector<HTMLButtonElement>(".history-header")!.click();
-    await tick();
-
-    expect(document.querySelector(".output-header .output-label")?.textContent).toBe("输出");
-    expect(document.querySelector(".history-header .output-label")?.textContent).toBe("历史");
+    await click(".tool-header");
+    await click(".history-header");
+    expect(text(".output-header .output-label")).toBe("输出");
+    expect(text(".history-header .output-label")).toBe("历史");
     expect(
-      Array.from(document.querySelectorAll(".meta-label")).map((node) => node.textContent),
+      Array.from(document.querySelectorAll(".meta-label"), (node) => node.textContent),
     ).toEqual(["状态：", "来源：", "agent："]);
   });
-
-  it("localizes long content expansion controls", async () => {
-    setLocale("zh-CN");
-    const content = Array.from({ length: 22 }, (_, i) => `line ${i + 1}`).join("\n");
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    const showMore = document.querySelector<HTMLButtonElement>(".show-more-btn");
-    expect(showMore?.textContent?.trim()).toBe("显示全部 22 行");
-
-    showMore!.click();
-    await tick();
-
-    expect(document.querySelector(".show-more-btn")?.textContent?.trim()).toBe("收起");
+  it("renders chronological result history with status, source and agent metadata", async () => {
+    const result_events = [
+      {
+        event_index: 4,
+        status: "running",
+        source: "wait",
+        agent_id: "a",
+        content: "first event",
+        content_length: 11,
+      },
+      {
+        event_index: 9,
+        status: "completed",
+        source: "wait",
+        agent_id: "b",
+        content: "last event",
+        content_length: 10,
+      },
+    ];
+    await render({ toolCall: call("Task", {}, { result_events }) });
+    await click(".tool-header");
+    expect(document.querySelector(".result-history")).toBeNull();
+    expect(text(".history-header .tool-preview")).toContain("completed: last event");
+    await click(".history-header");
+    expect(
+      Array.from(document.querySelectorAll(".history-content"), (node) => node.textContent),
+    ).toEqual(["first event", "last event"]);
+    expect(text(".result-history")).toContain("running");
+    expect(text(".result-history")).toContain("completed");
+    expect(text(".result-history")).toContain("wait");
+    expect(text(".result-history")).toContain("a");
+    await click(".history-header");
+    expect(document.querySelector(".result-history")).toBeNull();
   });
-
-  it("expands event history and shows chronological event content", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "wait",
-      category: "Other",
-      result_content: "agent-a:\nFirst finished\n\nagent-b:\nSecond finished",
-      result_events: [
+  it("localizes input, output, history and line controls without translating content", async () => {
+    setLocale("zh-CN");
+    await render({
+      content: longCommand,
+      toolCall: call(
+        "Bash",
+        {},
         {
-          source: "wait_output",
-          status: "completed",
-          content: "First finished",
-          content_length: 14,
-          agent_id: "agent-a",
-          event_index: 0,
+          result_content: "Do not translate output",
+          result_events: [
+            {
+              event_index: 0,
+              status: "completed",
+              source: "wait",
+              content: "Do not translate history",
+              content_length: 24,
+            },
+          ],
         },
-        {
-          source: "subagent_notification",
-          status: "completed",
-          content: "Second finished",
-          content_length: 15,
-          agent_id: "agent-b",
-          event_index: 1,
-        },
-      ],
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "some input", toolCall },
+      ),
     });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-    document.querySelector<HTMLButtonElement>(".history-header")!.click();
-    await tick();
-
-    const historyEntries = Array.from(document.querySelectorAll(".history-content"));
-    expect(historyEntries).toHaveLength(2);
-    expect(historyEntries[0]!.textContent).toBe("First finished");
-    expect(historyEntries[1]!.textContent).toBe("Second finished");
+    expect(document.querySelector('button[aria-label="复制输入"]')).not.toBeNull();
+    await click(".tool-header");
+    expect(text(".output-label")).toContain("输出");
+    expect(text(".show-more-btn")).toContain("30");
+    expect(text(".show-more-btn")).not.toContain("Show");
+    await click(".output-header");
+    expect(text(".output-content")).toBe("Do not translate output");
+    expect(document.querySelector('button[aria-label="复制输出"]')).not.toBeNull();
+    await click(".history-header");
+    expect(text(".history-content")).toBe("Do not translate history");
+    expect(text(".history-header")).not.toContain("History");
   });
 });
 
-describe("ToolBlock copy affordances", () => {
-  let component: ReturnType<typeof mount>;
-
-  afterEach(() => {
-    if (component) unmount(component);
-    document.body.innerHTML = "";
-    setLocale("en");
-  });
-
-  it("copies raw task prompt without expanding the tool block", async () => {
-    const prompt = "Investigate target 54\nReturn exact findings.";
-    const toolCall: ToolCall = {
-      tool_name: "Task",
-      category: "Task",
-      input_json: JSON.stringify({
-        subagent_type: "Explore",
-        prompt,
-      }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "Task", toolCall },
-    });
-    await tick();
-
-    const copyButton = document.querySelector<HTMLButtonElement>(
-      'button.kit-copy-btn[aria-label="Copy input"]',
-    );
-    expect(copyButton).not.toBeNull();
-    expect(document.querySelector(".tool-content")).toBeNull();
-
-    copyButton!.click();
-    await Promise.resolve();
-    await tick();
-
+describe("ToolBlock input source and copy", () => {
+  it("copies a complete task prompt without expanding", async () => {
+    const prompt = "Work on this task\nwith all details.";
+    await render({ toolCall: call("Task", { subagent_type: "Explore", prompt }) });
+    await click('button[aria-label="Copy input"]');
     expect(copyToClipboardMock).toHaveBeenCalledWith(prompt);
     expect(document.querySelector(".tool-content")).toBeNull();
   });
-
-  it("copies full raw Bash fallback before show-all expansion", async () => {
-    const longCommand = Array.from({ length: 230 }, (_, i) => `echo hidden-line-${i}`).join("\n");
-    const expectedCopy = `command: ${longCommand}`;
-    const toolCall: ToolCall = {
-      tool_name: "Bash",
-      category: "Bash",
-      input_json: JSON.stringify({ command: longCommand }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "Bash", toolCall },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    expect(document.querySelector(".tool-content")?.textContent).not.toContain("hidden-line-229");
-
-    const copyButton = document.querySelector<HTMLButtonElement>(
-      'button.kit-copy-btn[aria-label="Copy input"]',
-    );
-    expect(copyButton).not.toBeNull();
-
-    copyButton!.click();
-    await Promise.resolve();
-    await tick();
-
-    expect(copyToClipboardMock).toHaveBeenCalledWith(expectedCopy);
-    expect(document.querySelector(".tool-content")?.textContent).not.toContain("hidden-line-229");
+  it("copies all 230 Bash lines before show-all expansion", async () => {
+    const command = Array.from({ length: 230 }, (_, i) => `echo hidden-line-${i}`).join("\n");
+    await render({ toolCall: call("Bash", { command }, { category: "Bash" }) });
+    await click(".tool-header");
+    expect(text(".tool-content")).not.toContain("hidden-line-229");
+    await click('button[aria-label="Copy input"]');
+    expect(copyToClipboardMock).toHaveBeenCalledWith(`command: ${command}`);
+    expect(text(".tool-content")).not.toContain("hidden-line-229");
   });
-});
-
-describe("ToolBlock fallback content", () => {
-  let component: ReturnType<typeof mount>;
-
-  afterEach(() => {
-    if (component) unmount(component);
-    document.body.innerHTML = "";
+  it.each([
+    [
+      "custom Edit category",
+      call(
+        "mcp__custom__edit",
+        { old_string: "before", new_string: "after" },
+        { category: "Edit" },
+      ),
+      "-before",
+      "+after",
+    ],
+    [
+      "Write category",
+      call("write_file", { content: "first\nsecond" }, { category: "Write" }),
+      "+first",
+      "+second",
+    ],
+    ["empty Write", call("Write", { content: "" }, { category: "Write" }), "empty file", ""],
+    [
+      "apply patch fallback",
+      call("apply_patch", { patch: "*** Begin Patch\n+new\n*** End Patch" }),
+      "Begin Patch",
+      "+new",
+    ],
+    ["path without category", call("Read", { file_path: "/tmp/file.txt" }), "/tmp/file.txt", ""],
+    [
+      "path with empty category",
+      call("Read", { file_path: "/tmp/file.txt" }, { category: "" }),
+      "/tmp/file.txt",
+      "",
+    ],
+    [
+      "Cursor ApplyPatch diff",
+      call(
+        "ApplyPatch",
+        { diff: "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-before\n+after" },
+        { category: "Edit" },
+      ),
+      "-before",
+      "+after",
+    ],
+  ] as const)("renders %s from the shared source", async (_name, toolCall, first, second) => {
+    await render({ toolCall });
+    await click(".tool-header");
+    const body = text(".diff-view") || text(".tool-content");
+    expect(body).toContain(first);
+    if (second) expect(body).toContain(second);
   });
-
-  it("renders fallback content when content is empty and category matches", async () => {
-    // Edit category should show file path from input_json
-    const toolCall: ToolCall = {
-      tool_name: "custom_edit",
-      category: "Edit",
-      input_json: JSON.stringify({ file_path: "/path/to/file.txt" }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", toolCall },
-    });
-    await tick();
-
-    // Expand to see content
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    const toolContent = document.querySelector(".tool-content");
-    expect(toolContent).not.toBeNull();
-    expect(toolContent!.textContent).toContain("file_path: /path/to/file.txt");
+  it("prefers supplied content over synthesized input", async () => {
+    await render({ content: "explicit source", toolCall: call("Bash", { command: "fallback" }) });
+    await click(".tool-header");
+    expect(text(".tool-content")).toBe("explicit source");
   });
-
-  it("renders fallback content for Write tools", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "custom_write",
-      category: "Write",
-      input_json: JSON.stringify({ file_path: "/output.txt", content: "Hello World" }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", toolCall },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    const diffView = document.querySelector(".diff-view");
-    expect(diffView).not.toBeNull();
-    expect(diffView!.textContent).toContain("Hello World");
+  it("handles an absent or invalid input_json", async () => {
+    await render({ content: "legacy", toolCall: { tool_name: "Read", input_json: "{" } });
+    await click(".tool-header");
+    expect(text(".tool-content")).toBe("legacy");
   });
-
-  it("falls back to tool_name when category has no specific pattern", async () => {
-    // apply_patch doesn't match Edit pattern (which expects old_string/new_string)
-    // so it should fall back to generic key-value output
-    const toolCall: ToolCall = {
-      tool_name: "apply_patch",
-      category: "Edit",
-      input_json: JSON.stringify({ patch_file: "/path/to/patch.diff" }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", toolCall },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    const toolContent = document.querySelector(".tool-content");
-    expect(toolContent).not.toBeNull();
-    // Should show the generic key-value output with exact format
-    expect(toolContent!.textContent).toContain("patch_file: /path/to/patch.diff");
+  it("handles a tool call without input_json", async () => {
+    await render({ toolCall: { tool_name: "Read" } });
+    await click(".tool-header");
+    expect(document.querySelector(".tool-content")).toBeNull();
   });
-
-  it("renders Cursor ApplyPatch patch input as a diff", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "ApplyPatch",
-      category: "Edit",
-      input_json: JSON.stringify({
-        path: "src/app.ts",
-        patch: "@@ -1,1 +1,1 @@\n-old\n+new",
-      }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", toolCall },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    const diffView = document.querySelector(".diff-view");
-    expect(diffView).not.toBeNull();
-    expect(diffView!.textContent).toContain("-old");
-    expect(diffView!.textContent).toContain("+new");
+  it("handles legacy content without a structured call", async () => {
+    await render({ content: "legacy source" });
+    await click(".tool-header");
+    expect(text(".tool-content")).toBe("legacy source");
   });
-
-  it("renders fallback content when no category is provided", async () => {
-    // Tool without category - should use tool_name directly
-    const toolCall: ToolCall = {
-      tool_name: "apply_patch",
-      input_json: JSON.stringify({ patch_file: "/path/to/patch.diff" }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", toolCall },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    const toolContent = document.querySelector(".tool-content");
-    expect(toolContent).not.toBeNull();
-    // apply_patch doesn't have specific handling, so should show generic output
-    expect(toolContent!.textContent).toContain("patch_file: /path/to/patch.diff");
+  it("truncates long input until Show all and supports Show less", async () => {
+    await render({ toolCall: call("Bash", { command: longCommand }, { category: "Bash" }) });
+    await click(".tool-header");
+    expect(text(".tool-content")).not.toContain("hidden-line-29");
+    expect(text(".show-more-btn")).toContain("30");
+    await click(".show-more-btn");
+    expect(text(".tool-content")).toContain("hidden-line-29");
+    expect(text(".show-more-btn").toLowerCase()).toContain("show less");
+    await click(".show-more-btn");
+    expect(text(".tool-content")).not.toContain("hidden-line-29");
   });
-
-  it("falls back to tool_name when category is empty string", async () => {
-    // Empty string category should be treated same as no category
-    const toolCall: ToolCall = {
-      tool_name: "apply_patch",
-      category: "",
-      input_json: JSON.stringify({ patch_file: "/path/to/patch.diff" }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", toolCall },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    const toolContent = document.querySelector(".tool-content");
-    expect(toolContent).not.toBeNull();
-    // Should fall back to tool_name and show generic output
-    expect(toolContent!.textContent).toContain("patch_file: /path/to/patch.diff");
-  });
-
-  it("does not render fallback content when content is provided", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "custom_tool",
-      input_json: JSON.stringify({ param: "value" }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "Explicit content here", toolCall },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    const toolContent = document.querySelector(".tool-content");
-    expect(toolContent).not.toBeNull();
-    expect(toolContent!.textContent).toBe("Explicit content here");
-  });
-
-  it("does not render fallback content when input_json is empty", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "custom_tool",
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", toolCall },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    const toolContent = document.querySelector(".tool-content");
-    expect(toolContent).toBeNull();
-  });
-
-  it("does not render fallback content when no toolCall is provided", async () => {
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "" },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    const toolContent = document.querySelector(".tool-content");
-    expect(toolContent).toBeNull();
-  });
-});
-
-describe("ToolBlock show-more for long content", () => {
-  let component: ReturnType<typeof mount>;
-
-  afterEach(() => {
-    if (component) unmount(component);
-    document.body.innerHTML = "";
-  });
-
-  it("shows 'show all' button for long Bash fallback content", async () => {
-    const longCommand = Array.from({ length: 30 }, (_, i) => `echo line${i}`).join("\n");
-    const toolCall: ToolCall = {
-      tool_name: "Bash",
-      category: "Bash",
-      input_json: JSON.stringify({ command: longCommand }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", toolCall },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    const showMoreBtn = document.querySelector(".show-more-btn");
-    expect(showMoreBtn).not.toBeNull();
-    expect(showMoreBtn!.textContent).toContain("show all");
-  });
-
-  it("expands to full content when 'show all' is clicked", async () => {
-    const longCommand = Array.from({ length: 30 }, (_, i) => `echo line${i}`).join("\n");
-    const toolCall: ToolCall = {
-      tool_name: "Bash",
-      category: "Bash",
-      input_json: JSON.stringify({ command: longCommand }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", toolCall },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    const contentBefore = document.querySelector(".tool-content")!.textContent!;
-    expect(contentBefore).not.toContain("echo line29");
-
-    document.querySelector<HTMLButtonElement>(".show-more-btn")!.click();
-    await tick();
-
-    const contentAfter = document.querySelector(".tool-content")!.textContent!;
-    expect(contentAfter).toContain("echo line29");
-
-    const showMoreBtn = document.querySelector(".show-more-btn");
-    expect(showMoreBtn!.textContent).toContain("show less");
-  });
-
-  it("does not show 'show all' button for short content", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "Bash",
-      category: "Bash",
-      input_json: JSON.stringify({ command: "npm test" }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", toolCall },
-    });
-    await tick();
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
+  it("does not offer Show all for short input", async () => {
+    await render({ content: "one\ntwo" });
+    await click(".tool-header");
     expect(document.querySelector(".show-more-btn")).toBeNull();
   });
-
-  it("auto-expands hidden Bash fallback content on search match", async () => {
-    const longCommand = Array.from({ length: 30 }, (_, i) => `echo hidden-line-${i}`).join("\n");
-    const toolCall: ToolCall = {
-      tool_name: "Bash",
-      category: "Bash",
-      input_json: JSON.stringify({ command: longCommand }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: {
-        content: "",
-        toolCall,
-        highlightQuery: "hidden-line-29",
-      },
+  it("reveals hidden Bash input only for the current block", async () => {
+    searchState.active = true;
+    searchState.current = "7:tool-input:0";
+    searchState.query = "hidden-line-29";
+    await render({
+      toolCall: call("Bash", { command: longCommand }, { category: "Bash" }),
+      searchScope: { ordinal: 7, callIdx: 0 },
     });
-    await tick();
-
-    const toolContent = document.querySelector(".tool-content");
-    expect(toolContent).not.toBeNull();
-    expect(toolContent!.textContent).toContain("hidden-line-29");
-    expect(document.querySelector(".show-more-btn")!.textContent).toContain("show less");
+    expect(document.querySelector(".tool-header")?.getAttribute("aria-expanded")).toBe("true");
+    expect(text(".tool-content")).toContain("hidden-line-29");
+    expect(text(".show-more-btn").toLowerCase()).toContain("show less");
+    expect(document.querySelector("mark")).toBeNull();
   });
 });
 
-describe("ToolBlock collapsed preview", () => {
-  let component: ReturnType<typeof mount>;
-
-  afterEach(() => {
-    if (component) unmount(component);
-    document.body.innerHTML = "";
-  });
-
-  it("shows codex bash command (cmd key) when content is empty", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "exec_command",
-      category: "Bash",
-      input_json: JSON.stringify({
-        cmd: "nl -ba file.md",
-        workdir: "/x",
-      }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "Bash", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview).not.toBeNull();
-    expect(preview!.textContent).toBe("$ nl -ba file.md");
-  });
-
-  it("shows claude bash command (command key) when content is empty", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "Bash",
-      category: "Bash",
-      input_json: JSON.stringify({ command: "ls -la" }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "Bash", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview).not.toBeNull();
-    expect(preview!.textContent).toBe("$ ls -la");
-  });
-
-  it("shows only the first line of multi-line bash commands", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "exec_command",
-      category: "Bash",
-      input_json: JSON.stringify({
-        cmd: "cat <<EOF\nhello\nworld\nEOF",
-      }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "Bash", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview).not.toBeNull();
-    expect(preview!.textContent).toBe("$ cat <<EOF");
-  });
-
-  it("prefers the structured command summary over display content", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "exec_command",
-      category: "Bash",
-      input_json: JSON.stringify({ cmd: "from json" }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "$ from content", label: "Bash", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe("$ from json");
-  });
-
-  it("keeps the structured summary visible after expanding (ungated)", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "Read",
-      category: "Read",
-      input_json: JSON.stringify({ file_path: "README.md" }),
-      result_content: "line one\nline two",
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "Read", toolCall },
-    });
-    await tick();
-
-    const before = document.querySelector(".tool-header .tool-preview");
-    expect(before!.textContent).toBe("README.md (2 lines)");
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    const after = document.querySelector(".tool-header .tool-preview");
-    expect(after).not.toBeNull();
-    expect(after!.textContent).toBe("README.md (2 lines)");
-  });
-
-  it("shows the +added -removed suffix for an Edit", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "Edit",
-      category: "Edit",
-      input_json: JSON.stringify({
-        file_path: "main.go",
-        old_string: "a",
-        new_string: "a\nb\nc",
-      }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "Edit", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe("main.go (+3 -1)");
-  });
-
-  it("keeps the legacy first-line preview collapsed-only", async () => {
-    // "mystery" with no recognized fields makes summarizeToolCall return
-    // null, so the legacy content-first-line preview is the only thing
-    // rendered — and it must stay gated on the collapsed state.
-    const toolCall: ToolCall = {
-      tool_name: "mystery",
-      input_json: JSON.stringify({ foo: 1 }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "plain first line", label: "mystery", toolCall },
-    });
-    await tick();
-
-    const collapsed = document.querySelector(".tool-header .tool-preview");
-    expect(collapsed!.textContent).toBe("plain first line");
-
-    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
-    await tick();
-
-    expect(document.querySelector(".tool-header .tool-preview")).toBeNull();
-  });
-
-  it("shows in-progress todo content for TodoWrite", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "TodoWrite",
-      input_json: JSON.stringify({
+describe("ToolBlock collapsed previews", () => {
+  it.each([
+    ["Codex cmd", call("Bash", { cmd: "ls -la" }), "ls -la"],
+    ["Claude command", call("Bash", { command: "git status" }), "git status"],
+    ["multiline command", call("Bash", { command: "echo first\necho second" }), "echo first"],
+    [
+      "Edit counts",
+      call("Edit", { file_path: "/tmp/test.ts", old_string: "a\nb", new_string: "c\nd\ne" }),
+      "test.ts",
+    ],
+    [
+      "TodoWrite in progress",
+      call("TodoWrite", {
         todos: [
-          { content: "first done task", status: "completed" },
-          { content: "current work", status: "in_progress" },
-          { content: "future task", status: "pending" },
+          { content: "pending item", status: "pending" },
+          { content: "active item", status: "in_progress" },
         ],
       }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "TodoWrite", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview).not.toBeNull();
-    expect(preview!.textContent).toBe("→ current work");
-  });
-
-  it("falls back to last todo when none are in-progress", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "TodoWrite",
-      input_json: JSON.stringify({
+      "active item",
+    ],
+    [
+      "TodoWrite final item",
+      call("TodoWrite", {
         todos: [
-          { content: "task one", status: "completed" },
-          { content: "task two", status: "completed" },
+          { content: "first", status: "completed" },
+          { content: "last", status: "completed" },
         ],
       }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "TodoWrite", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe("→ task two");
+      "last",
+    ],
+    [
+      "TaskCreate subject",
+      call("TaskCreate", { subject: "Create release", description: "details" }),
+      "Create release",
+    ],
+    [
+      "TaskUpdate subject",
+      call("TaskUpdate", { taskId: "1", status: "completed", subject: "Ship release" }),
+      "Ship release",
+    ],
+    ["TaskUpdate status", call("TaskUpdate", { taskId: "1", status: "completed" }), "completed"],
+    ["Skill", call("Skill", { skill: "my-skill" }), "my-skill"],
+    ["lowercase skill", call("skill", { name: "my-skill" }), "my-skill"],
+    ["ToolSearch", call("ToolSearch", { query: "select:Read" }), "select:Read"],
+    [
+      "Task description",
+      call("Task", { description: "Explore source", prompt: "Long prompt" }),
+      "Explore source",
+    ],
+    [
+      "Task prompt fallback",
+      call("Task", { prompt: "Prompt first line\nsecond line" }),
+      "Prompt first line",
+    ],
+    [
+      "Agent",
+      call("Agent", { description: "Inspect implementation", prompt: "details" }),
+      "Inspect implementation",
+    ],
+    [
+      "Zencoder subagent",
+      call("subagent", { description: "Explore project", prompt: "details" }, { category: "Task" }),
+      "Explore project",
+    ],
+  ] as const)("preserves %s summary", async (_name, toolCall, expected) => {
+    await render({ toolCall });
+    expect(text(".tool-header .tool-preview")).toContain(expected);
   });
-
-  it("prefers TodoWrite synthesis over content first line", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "TodoWrite",
-      input_json: JSON.stringify({
-        todos: [{ content: "do thing", status: "in_progress" }],
-      }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: {
-        content: "[Todo List]\n  → do thing",
-        label: "TodoWrite",
-        toolCall,
-      },
+  it("prefers the structured summary to display content and retains it when expanded", async () => {
+    await render({
+      content: "legacy misleading preview",
+      toolCall: call("Bash", { command: "git status" }),
     });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe("→ do thing");
+    expect(text(".tool-preview")).toContain("git status");
+    expect(text(".tool-preview")).not.toContain("misleading");
+    await click(".tool-header");
+    expect(text(".tool-preview")).toContain("git status");
   });
-
-  it("shows subject for TaskCreate", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "TaskCreate",
-      input_json: JSON.stringify({
-        subject: "Rebuild Companies list table columns",
-        description: "long description here",
-      }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "TaskCreate", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe("Rebuild Companies list table columns");
+  it("limits a multiline command preview to its first line", async () => {
+    await render({ toolCall: call("Bash", { command: "echo first\necho second" }) });
+    expect(text(".tool-preview")).toContain("echo first");
+    expect(text(".tool-preview")).not.toContain("echo second");
   });
-
-  it("shows task id, status, and subject for TaskUpdate", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "TaskUpdate",
-      input_json: JSON.stringify({
-        taskId: 29,
-        status: "in_progress",
-        subject: "Rebuild Companies list table columns",
-      }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "TaskUpdate", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe("#29 · in_progress · Rebuild Companies list table columns");
+  it("shows legacy preview only while collapsed", async () => {
+    await render({ content: "legacy first\nlegacy second" });
+    expect(text(".tool-preview")).toBe("legacy first");
+    await click(".tool-header");
+    expect(document.querySelector(".tool-preview")).toBeNull();
   });
-
-  it("shows just task id and status for TaskUpdate without subject", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "TaskUpdate",
-      input_json: JSON.stringify({
-        taskId: 29,
-        status: "completed",
-      }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "TaskUpdate", toolCall },
+  it("prefers structured TodoWrite summaries to legacy content", async () => {
+    await render({
+      content: "legacy todo",
+      toolCall: call("TodoWrite", { todos: [{ content: "active task", status: "in_progress" }] }),
     });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe("#29 · completed");
-  });
-
-  it("shows skill name for Skill tool", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "Skill",
-      input_json: JSON.stringify({ skill: "roborev-review-branch" }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "Skill", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe("roborev-review-branch");
-  });
-
-  it("shows skill name from name field for lowercase skill tool", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "skill",
-      input_json: JSON.stringify({ name: "my-skill" }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "skill", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe("my-skill");
-  });
-
-  it("shows query for ToolSearch", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "ToolSearch",
-      input_json: JSON.stringify({
-        query: "select:TaskOutput,TaskGet",
-        max_results: 2,
-      }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "ToolSearch", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe("select:TaskOutput,TaskGet");
-  });
-
-  it("shows description for Task tool", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "Task",
-      input_json: JSON.stringify({
-        subagent_type: "Explore",
-        description: "Explore agentsview project",
-      }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "Task", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe("Explore agentsview project");
-  });
-
-  it("falls back to prompt when description is missing for Task", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "Task",
-      input_json: JSON.stringify({
-        subagent_type: "Explore",
-        prompt: "Find the foo function\nand return its location",
-      }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "Task", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe("Find the foo function");
-  });
-
-  it("uses Task preview for Agent tool", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "Agent",
-      input_json: JSON.stringify({
-        description: "Audit ship readiness",
-      }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "Agent", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe("Audit ship readiness");
-  });
-
-  it("uses Task preview for subagent-style tool names", async () => {
-    const toolCall: ToolCall = {
-      tool_name: "Zencoder_subagent__ZencoderSubagent",
-      input_json: JSON.stringify({
-        description: "Run subagent task",
-      }),
-    };
-    component = mount(ToolBlock, {
-      target: document.body,
-      props: { content: "", label: "subagent", toolCall },
-    });
-    await tick();
-
-    const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe("Run subagent task");
+    expect(text(".tool-preview")).toContain("active task");
+    expect(text(".tool-preview")).not.toContain("legacy todo");
   });
 });

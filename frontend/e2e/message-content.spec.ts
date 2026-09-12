@@ -412,7 +412,7 @@ test.describe("retained tool images", () => {
     await retainedBlock.locator(".output-header").click();
     const retainedRaw = retainedBlock.locator(".output-content");
     await expect(retainedRaw).toBeVisible();
-    expect(await retainedRaw.textContent()).toBe(retainedResult.replace(/\r\n/g, "\n"));
+    expect(await retainedRaw.textContent()).toBe(retainedResult);
     const retainedMode = retainedBlock.getByRole("radiogroup", { name: "Output format" });
     await retainedMode.getByRole("radio", { name: "Formatted" }).click();
     const retainedFormatted = retainedBlock.locator(".formatted-output");
@@ -458,9 +458,8 @@ test.describe("retained tool images", () => {
     }
 
     await retainedMode.getByRole("radio", { name: "Raw" }).click();
-    await expect(retainedBlock.locator(".output-content")).toHaveText(
-      retainedResult.replace(/\r\n/g, "\n"),
-    );
+    await expect(retainedRaw).toBeVisible();
+    expect(await retainedRaw.textContent()).toBe(retainedResult);
     await expect(retainedBlock.locator(".output-content img")).toHaveCount(0);
 
     const imageOnly = await openFormatted(imageOnlyBlock);

@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { searchBlock } from "../../search/session-block.svelte.js";
+  import { searchCollapsed } from "../../search/component-state.js";
+  import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
+  import SearchMatchCount from "./SearchMatchCount.svelte";
   import { m } from "../../i18n/index.js";
   import { renderMarkdown } from "../../utils/markdown.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
@@ -8,10 +12,16 @@
   interface Props {
     content: string;
     name?: string;
+    searchKey?: string;
   }
 
-  let { content, name }: Props = $props();
-  let collapsed: boolean = $state(true);
+  let { content, name, searchKey }: Props = $props();
+  let userCollapsed = $state(true);
+  let overrideSeq = $state(-1);
+  let collapsed = $derived(searchCollapsed(
+    userCollapsed, inSessionSearch.isCurrentBlock(searchKey),
+    inSessionSearch.navigationRevision, overrideSeq,
+  ));
 
   let previewLine = $derived(
     content.split("\n")[0]?.slice(0, 80) ?? "",
@@ -21,10 +31,12 @@
 <div class="skill-block">
   <button
     class="skill-header"
+    aria-expanded={!collapsed}
     onclick={() => {
       const sel = window.getSelection();
       if (sel && sel.toString().length > 0) return;
-      collapsed = !collapsed;
+      userCollapsed = !collapsed;
+      overrideSeq = inSessionSearch.navigationRevision;
     }}
   >
     <span class="skill-chevron" class:open={!collapsed}>
@@ -33,6 +45,7 @@
     <span class="skill-label">
       {m.skill_block_label({ name: name ?? m.shared_unknown() })}
     </span>
+    <SearchMatchCount {searchKey} />
     {#if collapsed && previewLine}
       <span class="skill-preview">{previewLine}</span>
     {/if}
@@ -41,6 +54,7 @@
     <div
       class="skill-content markdown"
       use:highlightCodeFences={{ content }}
+      {@attach searchBlock(searchKey)}
     >
       {@html renderMarkdown(content, {
         renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,

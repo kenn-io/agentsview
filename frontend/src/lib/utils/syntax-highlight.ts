@@ -81,6 +81,7 @@ function resolveLanguage(lang: string): string | null {
  * Highlight `code` for `lang` using Shiki (catppuccin-mocha, structure: "inline").
  * Returns null for unknown languages, over-threshold content, or any error.
  * Callers insert the result via `{@html}` — Shiki escapes the code text itself.
+ * Line endings remain text nodes so copying and search retain source offsets.
  */
 export async function highlightToHtml(code: string, lang: string): Promise<string | null> {
   const resolved = resolveLanguage(lang);
@@ -88,16 +89,24 @@ export async function highlightToHtml(code: string, lang: string): Promise<strin
 
   // Guard against large blocks that would stall the main thread.
   if (code.length > HIGHLIGHT_MAX_BYTES) return null;
-  if (code.split("\n").length > HIGHLIGHT_MAX_LINES) return null;
+  const lineEndings = code.match(/\r\n|\r|\n/g) ?? [];
+  if (lineEndings.length + 1 > HIGHLIGHT_MAX_LINES) return null;
 
   try {
     const hl = await getHighlighter();
 
-    return hl.codeToHtml(code, {
+    const html = hl.codeToHtml(code.replace(/\r\n?/g, "\n"), {
       lang: resolved,
       theme: "catppuccin-mocha",
       structure: "inline",
     });
+
+    // Shiki's inline layout emits <br>, which is absent from textContent.
+    // Restore source separators in our preformatted code containers. Literal
+    // <br> in source is already escaped by Shiki and cannot match this markup.
+    // Encode CR so assigning innerHTML does not normalize CRLF into LF.
+    let line = 0;
+    return html.replaceAll("<br>", () => (lineEndings[line++] ?? "\n").replaceAll("\r", "&#13;"));
   } catch {
     return null;
   }

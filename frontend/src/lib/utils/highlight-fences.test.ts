@@ -1,317 +1,154 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { highlightCodeFences } from "./highlight-fences.js";
-import { applyHighlight } from "./highlight.js";
-
-function makeDiv(html: string): HTMLElement {
-  const div = document.createElement("div");
-  div.innerHTML = html;
-  return div;
+import {
+  currentRangeForBlock,
+  searchBlock,
+  type SearchBlockState,
+} from "../search/search-block.svelte.js";
+const cleanups: (() => void)[] = [];
+function fixture(html: string) {
+  const root = document.createElement("div");
+  root.innerHTML = html;
+  document.body.append(root);
+  return root;
 }
-
-function marks(el: HTMLElement): string[] {
-  return Array.from(el.querySelectorAll("mark.search-highlight")).map((m) => m.textContent ?? "");
+function attach(root: HTMLElement, query: string, count = 1, occurrence = 0) {
+  let dispose: (() => void) | undefined;
+  const update = (state: SearchBlockState) => {
+    dispose?.();
+    dispose = searchBlock("7:skill:0", () => state)(root) || undefined;
+  };
+  update({ query, count, current: true, occurrence });
+  cleanups.push(() => dispose?.());
+  return { update };
 }
-
-function styledSpans(el: HTMLElement): HTMLSpanElement[] {
-  return Array.from(el.querySelectorAll("span")).filter(
-    (s) => s.style.color !== "",
-  ) as HTMLSpanElement[];
+function color(root: HTMLElement) {
+  const action = highlightCodeFences(root, { content: root.textContent ?? "" });
+  cleanups.push(action.destroy);
+  return action;
 }
-
-function makeMarkdownCodeBlock(lang: string, code: string): string {
-  const cls = lang ? ` class="language-${lang}"` : "";
-  return `<pre><code${cls}>${code}\n</code></pre>`;
-}
+afterEach(() => {
+  for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+  document.body.replaceChildren();
+});
 
 describe("highlightCodeFences", () => {
-  describe("labeled fences (known language)", () => {
-    it("swaps innerHTML of a language-ts code element with <span> tokens", async () => {
-      const html = makeMarkdownCodeBlock("ts", "const x = 1;");
-      const div = makeDiv(html);
-      const action = highlightCodeFences(div, { content: "const x = 1;" });
-      const codeEl = div.querySelector("code")!;
-      expect(codeEl).not.toBeNull();
-
-      try {
-        await vi.waitFor(
-          () => {
-            if (!codeEl.innerHTML.includes("<span")) throw new Error("not yet");
-          },
-          { timeout: 10_000 },
-        );
-        expect(styledSpans(codeEl).length).toBeGreaterThanOrEqual(1);
-        const colors = new Set(styledSpans(codeEl).map((s) => s.getAttribute("style")));
-        expect(colors.size).toBeGreaterThanOrEqual(2);
-      } finally {
-        action.destroy();
-      }
-    });
-
-    it("preserves textContent after the swap (copy still sees full code)", async () => {
-      const code = "const greeting = 'hello';";
-      const html = makeMarkdownCodeBlock("typescript", code);
-      const div = makeDiv(html);
-      const action = highlightCodeFences(div, { content: code });
-      const codeEl = div.querySelector("code")!;
-
-      try {
-        await vi.waitFor(
-          () => {
-            if (!codeEl.innerHTML.includes("<span")) throw new Error("not yet");
-          },
-          { timeout: 10_000 },
-        );
-        // Text content (what copy reads) must contain the original tokens.
-        expect(codeEl.textContent).toContain("greeting");
-        expect(codeEl.textContent).toContain("hello");
-      } finally {
-        action.destroy();
-      }
-    });
-
-    it("highlights a language-javascript fence", async () => {
-      const html = makeMarkdownCodeBlock("javascript", "var a = 1;");
-      const div = makeDiv(html);
-      const action = highlightCodeFences(div, { content: "var a = 1;" });
-      const codeEl = div.querySelector("code")!;
-
-      try {
-        await vi.waitFor(
-          () => {
-            if (!codeEl.innerHTML.includes("<span")) throw new Error("not yet");
-          },
-          { timeout: 10_000 },
-        );
-        expect(styledSpans(codeEl).length).toBeGreaterThanOrEqual(1);
-        const colors = new Set(styledSpans(codeEl).map((s) => s.getAttribute("style")));
-        expect(colors.size).toBeGreaterThanOrEqual(2);
-      } finally {
-        action.destroy();
-      }
-    });
-  });
-
-  describe("unlabeled and unknown fences", () => {
-    it("leaves an unlabeled <pre><code> element untouched", async () => {
-      const original = "no lang\n";
-      const html = `<pre><code>${original}</code></pre>`;
-      const div = makeDiv(html);
-      const action = highlightCodeFences(div, { content: original });
-
-      try {
-        // Give any async work time to settle; nothing should change.
-        await new Promise((r) => setTimeout(r, 50));
-        const codeEl = div.querySelector("code")!;
-        // innerHTML must not have been replaced with <span> tokens.
-        expect(codeEl.innerHTML).not.toContain("<span");
-        expect(codeEl.textContent).toBe(original);
-      } finally {
-        action.destroy();
-      }
-    });
-
-    it("leaves a code element with a diff language tag untouched", async () => {
-      const code = "-old line\n+new line\n";
-      const html = makeMarkdownCodeBlock("diff", code);
-      const div = makeDiv(html);
-      const action = highlightCodeFences(div, { content: code });
-
-      try {
-        // highlightToHtml returns null for diff (not in preloaded set); wait long
-        // enough to confirm the null path does not mutate the DOM.
-        await new Promise((r) => setTimeout(r, 200));
-        const codeEl = div.querySelector("code")!;
-        expect(codeEl.innerHTML).not.toContain("<span");
-      } finally {
-        action.destroy();
-      }
-    });
-  });
-
-  describe("stale-async guard", () => {
-    it("does not apply a highlight from a previous content after content changes", async () => {
-      // First render with typescript; immediately update to a different
-      // content string before the first highlight resolves.
-      const div = makeDiv(makeMarkdownCodeBlock("ts", "const x = 1;"));
-      const action = highlightCodeFences(div, { content: "const x = 1;" });
-
-      try {
-        // Update with new content (empty, so no fences to highlight).
-        div.innerHTML = "<p>plain text, no fences</p>";
-        action.update({ content: "plain text, no fences" });
-
-        // Wait well beyond the highlight resolve time to confirm no swap happens.
-        await new Promise((r) => setTimeout(r, 500));
-
-        // The first in-flight highlight should have been cancelled; the div
-        // now has no code elements so no span swaps should have occurred.
-        const codeEl = div.querySelector("code");
-        expect(codeEl).toBeNull();
-      } finally {
-        action.destroy();
-      }
-    });
-  });
-
-  describe("search-highlight interplay", () => {
-    it("re-applies search marks inside code after the Shiki swap", async () => {
-      const code = "const foo = 1;";
-      const html = makeMarkdownCodeBlock("typescript", code);
-      const div = makeDiv(html);
-
-      const fenceAction = highlightCodeFences(div, {
-        content: code,
-        q: "foo",
-        current: false,
+  it.each(["ts", "typescript", "javascript"])(
+    "colors %s with multiple token colors",
+    async (language) => {
+      const root = fixture(
+        `<pre><code class="language-${language}">const value = 42;\n</code></pre>`,
+      );
+      color(root);
+      await vi.waitFor(() => expect(root.querySelector("span[style]")).not.toBeNull(), {
+        timeout: 10000,
       });
-
-      const codeEl = div.querySelector("code")!;
-
-      try {
-        await vi.waitFor(
-          () => {
-            if (!codeEl.innerHTML.includes("<span")) throw new Error("not yet");
-          },
-          { timeout: 10_000 },
-        );
-        expect(styledSpans(codeEl).length).toBeGreaterThanOrEqual(1);
-        const codeMarks = Array.from(codeEl.querySelectorAll("mark.search-highlight")).map(
-          (m) => m.textContent ?? "",
-        );
-        expect(codeMarks).toContain("foo");
-      } finally {
-        fenceAction.destroy();
-      }
-    });
-
-    it("does not re-apply marks when no search query is active", async () => {
-      const code = "const x = 1;";
-      const html = makeMarkdownCodeBlock("ts", code);
-      const div = makeDiv(html);
-      const action = highlightCodeFences(div, { content: code });
-      const codeEl = div.querySelector("code")!;
-
-      try {
-        await vi.waitFor(
-          () => {
-            if (!codeEl.innerHTML.includes("<span")) throw new Error("not yet");
-          },
-          { timeout: 10_000 },
-        );
-        // Shiki ran, no marks expected (no query was given).
-        expect(codeEl.querySelectorAll("mark.search-highlight")).toHaveLength(0);
-      } finally {
-        action.destroy();
-      }
-    });
-
-    it("marks a query that crosses Shiki token boundaries", async () => {
-      // "const foo" is split by Shiki into separate <span> tokens;
-      // the cross-node applyMarks must still mark the full phrase.
-      const code = "const foo = 1;";
-      const html = makeMarkdownCodeBlock("typescript", code);
-      const div = makeDiv(html);
-
-      const fenceAction = highlightCodeFences(div, {
-        content: code,
-        q: "const foo",
-        current: false,
-      });
-
-      const codeEl = div.querySelector("code")!;
-
-      try {
-        await vi.waitFor(
-          () => {
-            if (!codeEl.innerHTML.includes("<span")) throw new Error("not yet");
-          },
-          { timeout: 10_000 },
-        );
-
-        const codeMarks = Array.from(codeEl.querySelectorAll("mark.search-highlight"));
-        // The mark fragments across token boundaries must concatenate to the query.
-        const combined = codeMarks.map((m) => m.textContent ?? "").join("");
-        expect(combined).toBe("const foo");
-      } finally {
-        fenceAction.destroy();
-      }
-    });
-
-    it("applyHighlight and highlightCodeFences co-applied on the same container", async () => {
-      // Mirrors the real MessageContent.svelte call pattern: applyHighlight and
-      // highlightCodeFences both mounted on the same <div>.
-      const code = "const foo = 1;";
-      const prose = "<p>search for foo here</p>";
-      const fenceHtml = makeMarkdownCodeBlock("typescript", code);
-      const content = prose + fenceHtml;
-      const div = makeDiv(content);
-      const codeEl = div.querySelector("code")!;
-
-      const hlAction = applyHighlight(div, { q: "foo", current: false, content });
-      const fenceAction = highlightCodeFences(div, {
-        content,
-        q: "foo",
-        current: false,
-      });
-
-      try {
-        // Wait for Shiki to swap code innerHTML.
-        await vi.waitFor(
-          () => {
-            if (!codeEl.innerHTML.includes("<span")) throw new Error("not yet");
-          },
-          { timeout: 10_000 },
-        );
-
-        // Prose <p> must still have marks (Shiki only touched the code element).
-        const proseEl = div.querySelector("p")!;
-        expect(marks(proseEl)).toContain("foo");
-
-        // Code element must have marks re-applied after the Shiki innerHTML swap.
-        expect(marks(codeEl)).toContain("foo");
-
-        // Call update on both actions (simulates Svelte re-rendering the content).
-        hlAction.update({ q: "foo", current: false, content });
-        fenceAction.update({ content, q: "foo", current: false });
-
-        // After update: applyHighlight re-clears and re-marks all text nodes;
-        // highlightCodeFences re-runs the async highlight and re-applies marks.
-        // Wait for the Shiki swap to settle again.
-        await vi.waitFor(
-          () => {
-            if (!codeEl.innerHTML.includes("<span")) throw new Error("not yet");
-          },
-          { timeout: 10_000 },
-        );
-
-        // Both prose and code marks must be present after the update cycle.
-        expect(marks(proseEl)).toContain("foo");
-        expect(marks(codeEl)).toContain("foo");
-      } finally {
-        hlAction.update({ q: "", current: false, content }); // teardown applyHighlight
-        fenceAction.destroy();
-      }
-    });
+      expect(
+        new Set(
+          Array.from(root.querySelectorAll("span[style]"), (node) => node.getAttribute("style")),
+        ).size,
+      ).toBeGreaterThanOrEqual(2);
+      expect(root.textContent).toBe("const value = 42;\n");
+    },
+  );
+  it("preserves text for copy after syntax coloring", async () => {
+    const root = fixture(
+      '<pre><code class="language-ts">const greeting = &quot;hello&quot;;\n</code></pre>',
+    );
+    color(root);
+    await vi.waitFor(() => expect(root.querySelector("span")).not.toBeNull(), { timeout: 10000 });
+    expect(root.textContent).toBe('const greeting = "hello";\n');
   });
-
-  describe("destroy", () => {
-    it("cancels in-flight highlights on destroy so stale swaps never occur", async () => {
-      const code = "const x = 1;";
-      const html = makeMarkdownCodeBlock("ts", code);
-      const div = makeDiv(html);
-      const originalInner = div.querySelector("code")!.innerHTML;
-
-      const action = highlightCodeFences(div, { content: code });
-      // Destroy immediately — should cancel the pending highlight.
-      action.destroy();
-
-      // Wait beyond the expected highlight resolution time.
-      await new Promise((r) => setTimeout(r, 500));
-
-      const codeEl = div.querySelector("code")!;
-      // innerHTML should still be the original plain text, not Shiki spans.
-      expect(codeEl.innerHTML).toBe(originalInner);
-    });
+  it.each(["", ' class="language-diff"'])(
+    "leaves unlabeled or unsupported fences literal: %s",
+    async (attribute) => {
+      const root = fixture(`<pre><code${attribute}>-old\n+new\n</code></pre>`);
+      const before = root.innerHTML;
+      color(root);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(root.innerHTML).toBe(before);
+    },
+  );
+  it("cancels a stale async replacement after content changes", async () => {
+    const root = fixture('<pre><code class="language-ts">const old = 1;</code></pre>');
+    const action = color(root);
+    root.innerHTML = "<p>new content</p>";
+    action.update({ content: "new content" });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(root.innerHTML).toBe("<p>new content</p>");
+  });
+  it("rebuilds ranges after syntax spans replace text nodes", async () => {
+    const root = fixture('<pre><code class="language-ts">const foo = 1;</code></pre>');
+    attach(root, "foo");
+    color(root);
+    await vi.waitFor(
+      () => {
+        expect(root.querySelector("span[style]")).not.toBeNull();
+        expect(currentRangeForBlock(root)?.toString()).toBe("foo");
+      },
+      { timeout: 10000 },
+    );
+    expect(root.querySelector("mark")).toBeNull();
+  });
+  it("preserves the selected match across adjacent text nodes", async () => {
+    const root = fixture("<p>find target here</p>");
+    (root.querySelector("p")!.firstChild as Text).splitText(7);
+    attach(root, "target");
+    color(root);
+    await vi.waitFor(() => expect(currentRangeForBlock(root)?.toString()).toBe("target"));
+    expect(root.textContent).toBe("find target here");
+  });
+  it("does not make syntax highlighting responsible for search", async () => {
+    const root = fixture('<pre><code class="language-ts">const foo = 1;</code></pre>');
+    color(root);
+    await vi.waitFor(() => expect(root.querySelector("span")).not.toBeNull(), { timeout: 10000 });
+    expect(currentRangeForBlock(root)).toBeUndefined();
+    expect(root.querySelector("mark")).toBeNull();
+  });
+  it("matches across syntax token boundaries", async () => {
+    const root = fixture('<pre><code class="language-ts">const foo = 1;</code></pre>');
+    attach(root, "const foo");
+    color(root);
+    await vi.waitFor(
+      () => {
+        expect(root.querySelector("span")).not.toBeNull();
+        expect(currentRangeForBlock(root)?.toString()).toBe("const foo");
+      },
+      { timeout: 10000 },
+    );
+  });
+  it("keeps prose and code in a single occurrence sequence across updates", async () => {
+    const root = fixture(
+      '<p>find foo here</p><pre><code class="language-ts">const foo = 1;</code></pre>',
+    );
+    const handle = attach(root, "foo", 2, 1);
+    const action = color(root);
+    await vi.waitFor(
+      () => {
+        expect(root.querySelector("span")).not.toBeNull();
+        expect(currentRangeForBlock(root)?.toString()).toBe("foo");
+        expect(
+          root.querySelector("code")!.contains(currentRangeForBlock(root)!.startContainer),
+        ).toBe(true);
+      },
+      { timeout: 10000 },
+    );
+    action.update({ content: root.textContent ?? "" });
+    handle.update({ query: "foo", count: 2, current: true, occurrence: 0 });
+    await vi.waitFor(() =>
+      expect(root.querySelector("p")!.contains(currentRangeForBlock(root)!.startContainer)).toBe(
+        true,
+      ),
+    );
+    expect(root.querySelector("mark")).toBeNull();
+  });
+  it("cancels pending syntax coloring on destruction", async () => {
+    const root = fixture('<pre><code class="language-ts">const value = 1;</code></pre>');
+    const before = root.innerHTML;
+    const action = color(root);
+    action.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(root.innerHTML).toBe(before);
   });
 });

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, tick, untrack } from "svelte";
   import { Button, EmptyState } from "@kenn-io/kit-ui";
   // kit-ui-check-ignore: MessageList uses the local TanStack wrapper for pinned-message scroll reconciliation and per-session measurement cache resets; kit-ui VirtualList does not expose those controls yet.
   import type { Virtualizer } from "@tanstack/virtual-core";
@@ -15,14 +15,7 @@
   import SystemBoundaryCard from "../system/SystemBoundaryCard.svelte";
   import ToolCallGroup from "./ToolCallGroup.svelte";
   import type { Message } from "../../api/types.js";
-  import {
-    buildDisplayItems,
-    type DisplayItem,
-  } from "../../utils/display-items.js";
-  import { filterDisplayItemsByTranscriptMode } from "../../utils/transcript-mode.js";
-  import {
-    hasVisibleSegments,
-  } from "../../utils/content-parser.js";
+  import type { DisplayItem } from "../../utils/display-items.js";
   import {
     isSystemBoundaryMessage,
     isSystemMessage,
@@ -30,17 +23,24 @@
   import { resolveMessageLayout } from "../../utils/message-layout.js";
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
-  import SessionFindBar from "./SessionFindBar.svelte";
+  import SessionFindView from "./SessionFindView.svelte";
   import {
-    getAlignedOffsetScrollAlign,
     getLatestDisplayIndex,
     type ScrollAlign,
   } from "./message-scroll.js";
   import { m } from "../../i18n/index.js";
+  import { settleVirtualScroll } from "./staged-scroll.js";
+  import { revealMatch } from "../../search/reveal.js";
+  import type { Match } from "../../search/session-index.js";
+  import {
+    keepsAnswerBeforeTrailingTools,
+    projectSessionScope,
+  } from "../../search/session-scope.js";
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
   let scrollRaf: number | null = null;
   let lastScrollRequest = 0;
+  let destroyed = false;
   let activeFollowScrollRequest: number | null = null;
   let followingScrollRaf: number | null = null;
   let followSettleTimer:
@@ -56,61 +56,24 @@
     messages.messages.filter((m) => !isSystemMessage(m)),
   );
 
-  let baseDisplayItemsAsc = $derived(
-    buildDisplayItems(baseMessages),
-  );
-
-  let filteredDisplayItemsAsc = $derived(
-    buildDisplayItems(baseMessages, {
-      skipToolGrouping: !ui.isBlockVisible("tool"),
+  // The transcript and the in-session search index share this projection, so a
+  // block filter always hides and de-indexes the same content.
+  let sessionScope = $derived(
+    projectSessionScope({
+      messages: messages.messages,
+      transcriptMode: ui.transcriptMode,
+      visibleBlocks: ui.visibleBlocks,
+      hasBlockFilters: ui.hasBlockFilters,
+      keepAnswerBeforeTrailingTools: keepsAnswerBeforeTrailingTools(
+        settings.sessionProviders,
+        sessions.activeSession?.agent,
+      ),
     }),
   );
 
-  function isItemVisible(item: DisplayItem): boolean {
-    if (item.kind === "tool-group") {
-      return true;
-    }
-    return hasVisibleSegments(item.message, (type) =>
-      ui.isBlockVisible(type),
-    );
-  }
+  let displayItemsAsc = $derived(sessionScope.items);
 
-  let normalDisplayItemsAsc = $derived.by(() => {
-    if (!ui.hasBlockFilters) return baseDisplayItemsAsc;
-    return filteredDisplayItemsAsc.filter(isItemVisible);
-  });
-
-  let displayItemsAsc = $derived.by(() => {
-    if (ui.transcriptMode === "normal") {
-      return normalDisplayItemsAsc;
-    }
-
-    const provider = settings.sessionProviders.find(
-      (candidate) => candidate.id === sessions.activeSession?.agent,
-    );
-    const keepAnswerBeforeTrailingTools =
-      provider?.post_answer_tool_work === true;
-
-    if (!ui.hasBlockFilters) {
-      return filterDisplayItemsByTranscriptMode(
-        baseDisplayItemsAsc,
-        "focused",
-        { keepAnswerBeforeTrailingTools },
-      );
-    }
-
-    return filterDisplayItemsByTranscriptMode(
-      filteredDisplayItemsAsc,
-      "focused",
-      {
-        keepAnswerBeforeTrailingTools,
-        isMessageVisible: (message) =>
-          hasVisibleSegments(message, (type) =>
-            ui.isBlockVisible(type),
-          ),
-      },
-    ).filter(isItemVisible);
-  });
+  let normalDisplayItemsAsc = $derived(sessionScope.normalItems);
 
   let displayedOrdinals = $derived.by(() =>
     displayItemsAsc.flatMap((item) => item.ordinals),
@@ -444,6 +407,7 @@
   }
 
   function handleManualScrollIntent() {
+    lastScrollRequest++;
     if (ui.followLatest) {
       cancelFollowLatestWork();
       ui.setFollowLatest(false);
@@ -494,6 +458,8 @@
   }
 
   onDestroy(() => {
+    destroyed = true;
+    lastScrollRequest++;
     if (visibleProgressRaf !== null) {
       cancelAnimationFrame(visibleProgressRaf);
       visibleProgressRaf = null;
@@ -532,90 +498,18 @@
 
   function scrollToDisplayIndex(
     index: number,
-    waitFrames: number = 0,
-    scrollRetries: number = 0,
-    reqId: number = lastScrollRequest,
+    waitFrames = 0,
+    scrollRetries = 0,
+    reqId = lastScrollRequest,
     align: ScrollAlign = "start",
-  ) {
-    if (reqId !== lastScrollRequest) return;
-
-    const v = virtualizer.instance;
-    if (!v) return;
-
-    // Phase 1: wait up to 5 frames for virtualCount to sync.
-    const desiredCount = displayItemsAsc.length;
-    const virtualCount = v.options.count;
-    if (
-      waitFrames < 5 &&
-      (virtualCount !== desiredCount || index >= virtualCount)
-    ) {
-      requestAnimationFrame(() => {
-        scrollToDisplayIndex(
-          index, waitFrames + 1, 0, reqId,
-          align,
-        );
-      });
-      return;
-    }
-
-    // Phase 2a: item already rendered — use exact measured offset.
-    const virtualItems = v.getVirtualItems();
-    const isRendered = virtualItems.some(
-      (vi) => vi.index === index,
-    );
-    if (isRendered) {
-      const offsetAndAlign =
-        v.getOffsetForIndex(index, align);
-      if (offsetAndAlign) {
-        const [offset] = offsetAndAlign;
-        v.scrollToOffset(
-          Math.round(offset),
-          { align: getAlignedOffsetScrollAlign(align) },
-        );
-        return;
-      }
-      v.scrollToIndex(index, { align });
-      if (scrollRetries < 15) {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            scrollToDisplayIndex(
-              index,
-              waitFrames,
-              scrollRetries + 1,
-              reqId,
-              align,
-            );
-          });
-        });
-      }
-      return;
-    }
-
-    // Phase 2b: item not yet in render window. scrollToIndex
-    // scrolls to an estimated position, but TanStack's reconcile
-    // loop exits after 1 stable frame — before ResizeObserver
-    // measurements (delayed by bumpVersion's setTimeout(0)) have
-    // updated the offsets.
-    //
-    // Retry in 2 frames: by then ResizeObserver + bumpVersion have
-    // fired, measurements are updated, and the next attempt either
-    // finds the item rendered (for an exact offset scroll) or
-    // repeats with a more accurate estimate. Limit to 15 scroll
-    // retries (~480 ms) to avoid looping forever.
-    v.scrollToIndex(index, { align });
-    if (scrollRetries < 15) {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          scrollToDisplayIndex(
-            index,
-            waitFrames,
-            scrollRetries + 1,
-            reqId,
-            align,
-          );
-        });
-      });
-    }
+  ): Promise<boolean> {
+    return settleVirtualScroll({
+      index, align, waitFrames, scrollRetries,
+      getVirtualizer: () => virtualizer.instance,
+      getCount: () => displayItemsAsc.length,
+      isCurrent: () => !destroyed && reqId === lastScrollRequest,
+      nextFrame: raf,
+    });
   }
 
   function raf(): Promise<void> {
@@ -775,14 +669,68 @@
     return normalDisplayItemsAsc;
   }
 
-  let highlightQuery = $derived(
-    inSessionSearch.isOpen && inSessionSearch.query.trim().length > 0
-      ? inSessionSearch.query
-      : "",
-  );
+  let searchRevealKey = $derived.by(() => {
+    const match = inSessionSearch.resolvedCurrent;
+    return match ? `${match.ordinal}:${match.blockKey}:${match.occurrence}` : "";
+  });
+
+  async function revealSearchMatch(match: Match, sessionId: string, reqId: number): Promise<boolean> {
+    return revealMatch({
+      ordinal: match.ordinal,
+      blockKey: match.blockKey,
+      getContainer: () => containerRef,
+      isCurrent: () => !destroyed && reqId === lastScrollRequest &&
+        messages.sessionId === sessionId && sessions.activeSessionId === sessionId &&
+        inSessionSearch.isActive,
+      ensureLoaded: (ordinal) => messages.ensureOrdinalLoaded(ordinal),
+      mountMessage: () => {
+        const ascIndex = displayItemsAsc.findIndex((item) => item.ordinals.includes(match.ordinal));
+        if (ascIndex < 0) return Promise.resolve(false);
+        const index = ui.sortNewestFirst ? displayItemsAsc.length - 1 - ascIndex : ascIndex;
+        return scrollToDisplayIndex(index, 0, 0, reqId);
+      },
+      scrollToOffset: (offset) => virtualizer.instance?.scrollToOffset(
+        Math.round(offset), { align: "start" },
+      ),
+      afterUpdate: tick,
+      nextFrame: raf,
+    });
+  }
+
+  $effect(() => {
+    const request = inSessionSearch.navigationRevision;
+    const key = searchRevealKey;
+    const sessionId = messages.sessionId;
+    const count = displayItemsAsc.length;
+    const newestFirst = ui.sortNewestFirst;
+    if (!inSessionSearch.isActive || !sessionId || !containerRef) return;
+    if (!key) {
+      // Active query without a renderable occurrence: drop any pending reveal
+      // so a filtered-out block cannot be mounted or scrolled into view.
+      lastScrollRequest++;
+      return;
+    }
+    void request;
+    void count;
+    void newestFirst;
+    return untrack(() => {
+      const match = inSessionSearch.resolvedCurrent;
+      if (!match) return;
+      const reqId = ++lastScrollRequest;
+      activeFollowScrollRequest = null;
+      ui.selectOrdinal(match.ordinal);
+      ui.setFollowLatest(false);
+      void revealSearchMatch(match, sessionId, reqId).catch((error: unknown) => {
+        if (reqId === lastScrollRequest) console.warn("Could not reveal search occurrence", error);
+      });
+      return () => {
+        if (reqId === lastScrollRequest) lastScrollRequest++;
+      };
+    });
+  });
 
   let effectiveLayout = $derived(
-    resolveMessageLayout(ui.messageLayout, highlightQuery !== ""),
+    resolveMessageLayout(ui.messageLayout, inSessionSearch.isActive),
   );
 
   let readProgressDivider = $derived.by(() => {
@@ -864,7 +812,12 @@
     </Button>
   </EmptyState>
 {:else}
-  <SessionFindBar />
+  <SessionFindView
+    items={displayItemsAsc}
+    totalSize={virtualizer.instance?.getTotalSize() ?? 0}
+    newestFirst={ui.sortNewestFirst}
+    rowOffset={(index) => virtualizer.instance?.getOffsetForIndex(index, "start")?.[0] ?? index * 120}
+  >
   <div
     class="message-list-scroll layout-{effectiveLayout}"
     bind:this={containerRef}
@@ -904,8 +857,7 @@
               <ToolCallGroup
                 messages={item.messages}
                 timestamp={item.timestamp}
-                highlightQuery={highlightQuery}
-                isCurrentHighlight={item.ordinals.includes(inSessionSearch.currentOrdinal ?? -1)}
+                searchable={true}
                 sortNewestFirst={ui.sortNewestFirst}
                 divider={readProgressDivider !== null && item.ordinals.includes(readProgressDivider.ordinal)
                   ? readProgressDivider
@@ -922,8 +874,7 @@
             {:else}
               <MessageContent
                 message={item.message}
-                highlightQuery={highlightQuery}
-                isCurrentHighlight={inSessionSearch.currentOrdinal === item.message.ordinal}
+                searchOrdinal={item.message.ordinal}
               />
             {/if}
           </div>
@@ -931,6 +882,7 @@
       {/each}
     </div>
   </div>
+  </SessionFindView>
 {/if}
 
 <style>

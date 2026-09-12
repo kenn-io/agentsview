@@ -16,7 +16,7 @@ interface FetchPageOptions {
   signal: AbortSignal;
 }
 
-class MessagesStore {
+export class MessagesStore {
   messages: Message[] = $state([]);
   loading: boolean = $state(false);
   sessionId: string | null = $state(null);
@@ -235,6 +235,7 @@ class MessagesStore {
   }
 
   private async loadAllMessages(id: string, signal: AbortSignal, messageCountHint?: number) {
+    this.historyComplete = false;
     let from = 0;
     let loaded: Message[] = [];
     let complete = false;
@@ -403,6 +404,76 @@ class MessagesStore {
     });
     this.loadOlderPromise = p;
     return p;
+  }
+
+  /** Complete either a missing prefix or a failed forward load for session find. */
+  async ensureHistoryLoaded(): Promise<void> {
+    const id = this.sessionId;
+    const signal = this.abortController?.signal;
+    const current = () =>
+      this.sessionId === id && this.abortController?.signal === signal && !signal?.aborted;
+    if (!id || !signal || !current() || this.loading) return;
+    if (this.hasOlder) {
+      await this.ensureOrdinalLoaded(0);
+      if (!current() || this.hasOlder) return;
+    }
+    if (this.historyComplete) return;
+    if (this.loadOlderPromise) {
+      await this.loadOlderPromise;
+      if (!current() || this.historyComplete) return;
+    }
+    const pending = this.loadRemainingMessages(id, signal).finally(() => {
+      if (this.loadOlderPromise === pending) this.loadOlderPromise = null;
+    });
+    this.loadOlderPromise = pending;
+    await pending;
+  }
+
+  /** Resume the missing tail without removing already loaded rows or their cursor. */
+  private async loadRemainingMessages(id: string, signal: AbortSignal): Promise<void> {
+    const current = () =>
+      this.sessionId === id && this.abortController?.signal === signal && !signal.aborted;
+    this.loadingOlder = true;
+    try {
+      let from = (this.messages.at(-1)?.ordinal ?? -1) + 1;
+      for (;;) {
+        const res = await SessionsService.getApiV1SessionsByIdMessages(
+          { id },
+          { from, limit: MESSAGE_PAGE_SIZE, direction: "asc" },
+          { signal },
+        );
+        if (!current()) return;
+        if (res.messages.length === 0) {
+          this.historyComplete = !this.hasOlder;
+          break;
+        }
+        const nextFrom = res.messages.at(-1)!.ordinal + 1;
+        if (nextFrom <= from) throw new Error("Session history pagination made no progress");
+        // Concurrent SSE refreshes may already have appended some of this page.
+        // Preserve their objects and never introduce duplicate ordinals.
+        const existing = new Set(this.messages.map((message) => message.ordinal));
+        const added = res.messages.filter((message) => {
+          if (existing.has(message.ordinal)) return false;
+          existing.add(message.ordinal);
+          return true;
+        });
+        clearContentCaches();
+        this.messages = [...this.messages, ...added].sort((a, b) => a.ordinal - b.ordinal);
+        this.messageCount = Math.max(this.messageCount, this.messages.at(-1)!.ordinal + 1);
+        if (res.messages.length < MESSAGE_PAGE_SIZE) {
+          this.historyComplete = !this.hasOlder;
+          break;
+        }
+        from = nextFrom;
+      }
+      this.publishPendingSessionToken(id);
+    } catch (error) {
+      if (isAbortError(error) || !current()) return;
+      this.historyComplete = false;
+      console.warn("Failed to complete session history:", error);
+    } finally {
+      if (current()) this.loadingOlder = false;
+    }
   }
 
   private async doEnsureOrdinal(id: string, targetOrdinal: number) {

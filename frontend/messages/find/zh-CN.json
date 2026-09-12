@@ -1,0 +1,38 @@
+{
+  "session_find_whole_word": "全字匹配",
+  "session_find_loading_history": "正在加载历史消息…",
+  "session_find_announce_match": "第 {current} 个匹配项，共 {total} 个",
+  "session_find_block_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "{count} 个匹配项", "countPlural=other": "{count} 个匹配项" }
+    }
+  ],
+  "session_find_results_group_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "{count} 个匹配项", "countPlural=other": "{count} 个匹配项" }
+    }
+  ],
+  "session_find_results_title": "搜索结果",
+  "session_find_results_empty": "当前会话中没有匹配项",
+  "session_find_toggle_results": "显示搜索结果",
+  "session_find_hide_results": "隐藏搜索结果",
+  "session_find_subagent_excluded": "搜索范围不包含内嵌子会话消息。",
+  "session_find_rail_label": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "当前会话共有 {count} 个匹配项",
+        "countPlural=other": "当前会话共有 {count} 个匹配项"
+      }
+    }
+  ],
+  "session_find_raw_output": "搜索期间显示原始输出",
+  "session_find_history_incomplete": "历史消息加载失败，当前搜索结果不完整。",
+  "session_find_retry_history": "重新加载历史消息",
+  "session_find_partial_results": "部分结果"
+}
