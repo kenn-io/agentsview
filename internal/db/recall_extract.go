@@ -337,11 +337,13 @@ func (db *DB) ActivateExtractGeneration(
 	// have been excluded (sessions turned ineligible) or retracted since
 	// the caller's checks, and committing then would retire the served
 	// corpus with no replacement. Serving additionally requires verified
-	// provenance, so revoked entries do not count.
+	// provenance, so revoked entries do not count. Preserved human-approved
+	// entries count even when none of the generation's entries remain automatic.
 	var servable int
 	if err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM recall_entries
-		WHERE review_state = 'unreviewed_auto' AND status = 'accepted'
+		WHERE review_state IN ('unreviewed_auto', 'human_reviewed')
+		  AND status = 'accepted'
 		  AND superseded_by_entry_id = ''
 		  AND provenance_ok != 0 AND source_run_id = ?`,
 		fingerprint,
@@ -467,6 +469,7 @@ func verifyExtractActivationCoverageTx(
 			WHERE e.source_session_id = p.session_id
 			  AND e.source_run_id = p.generation_fingerprint
 			  AND e.status = 'archived'
+			  AND e.review_state = 'unreviewed_auto'
 		  )`,
 		failedArgs...,
 	).Scan(&staleFailed); err != nil {
