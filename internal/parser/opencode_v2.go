@@ -346,7 +346,8 @@ func openCodeV2ToolCall(item openCodeV2Content, cwd string) (ParsedToolCall, err
 				// Use the shared image representation so storage's keep/drop
 				// policy owns the payload. Other files retain the producer URI,
 				// including inline PDFs; external references are never fetched.
-				if strings.HasPrefix(strings.ToLower(content.URI), "data:image/") {
+				const imagePrefix = "data:image/"
+				if len(content.URI) >= len(imagePrefix) && strings.EqualFold(content.URI[:len(imagePrefix)], imagePrefix) {
 					block["type"], block["image_url"] = "input_image", content.URI
 					delete(block, "uri")
 				}
