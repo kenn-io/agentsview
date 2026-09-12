@@ -130,6 +130,18 @@ func TestStripToolResultImagesRemovesOffloadReference(t *testing.T) {
 	assert.NotContains(t, got, "asset://")
 }
 
+func TestDowngradeOffloadedToolResultImagesKeepsInlineImages(t *testing.T) {
+	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"byte_size":3,"image_ref":"asset://abc.png","media_type":"image/png","sha256":"abc","text":"![Image: image/png, 3 bytes](asset://abc.png)","type":"agentsview_image","version":1}]`
+
+	got, stats := DowngradeOffloadedToolResultImages(content)
+
+	assert.Equal(t, int64(1), stats.Payloads)
+	assert.Contains(t, got, "data:image/png;base64,AAEC")
+	assert.Contains(t, got, `"text":"[Image: image/png, 3 bytes]"`)
+	assert.NotContains(t, got, "image_ref")
+	assert.NotContains(t, got, "asset://")
+}
+
 func TestDBPolicyZeroValue(t *testing.T) {
 	d := testDB(t)
 	assert.Equal(t, config.ToolResultImagesKeep, d.ToolResultImages())

@@ -30,14 +30,26 @@ type toolImageBlock struct {
 // StripToolResultImages replaces supported inline image blocks in one stored
 // result. Untouched JSON blocks retain their original bytes.
 func StripToolResultImages(content string) (string, ToolImageStats) {
-	projected, stats := stripToolResultImageArray(content)
+	projected, stats := stripToolResultImageArrayWithInline(content, true)
 	if stats.Payloads > 0 {
 		return projected, stats
 	}
-	return stripToolResultSummaryImages(content)
+	return stripToolResultSummaryImagesWithInline(content, true)
 }
 
-func stripToolResultImageArray(content string) (string, ToolImageStats) {
+// DowngradeOffloadedToolResultImages removes asset references while retaining
+// inline image blocks for artifact imports that cannot transport asset files.
+func DowngradeOffloadedToolResultImages(content string) (string, ToolImageStats) {
+	projected, stats := stripToolResultImageArrayWithInline(content, false)
+	if stats.Payloads > 0 {
+		return projected, stats
+	}
+	return stripToolResultSummaryImagesWithInline(content, false)
+}
+
+func stripToolResultImageArrayWithInline(
+	content string, stripInline bool,
+) (string, ToolImageStats) {
 	var blocks []json.RawMessage
 	if err := json.Unmarshal([]byte(content), &blocks); err != nil || blocks == nil {
 		return content, ToolImageStats{}
@@ -62,7 +74,7 @@ func stripToolResultImageArray(content string) (string, ToolImageStats) {
 			stats.Payloads++
 			continue
 		}
-		if block.Type != "input_image" {
+		if !stripInline || block.Type != "input_image" {
 			continue
 		}
 		var fields map[string]json.RawMessage
@@ -199,12 +211,16 @@ func scanSummarySections(
 	}
 }
 
-func stripToolResultSummaryImages(content string) (string, ToolImageStats) {
+func stripToolResultSummaryImagesWithInline(
+	content string, stripInline bool,
+) (string, ToolImageStats) {
 	var result strings.Builder
 	var stats ToolImageStats
 	copied := 0
 	scanSummarySections(content, func(arrayStart, end int, raw json.RawMessage) {
-		projected, found := stripToolResultImageArray(string(raw))
+		projected, found := stripToolResultImageArrayWithInline(
+			string(raw), stripInline,
+		)
 		if found.Payloads == 0 {
 			return
 		}

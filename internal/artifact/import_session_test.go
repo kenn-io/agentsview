@@ -118,6 +118,27 @@ func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 	assert.Zero(t, write.Signals.SecretLeakCount)
 }
 
+func TestDowngradeImportedAssetReferencesKeepsInlineImages(t *testing.T) {
+	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"byte_size":3,"image_ref":"asset://abc.png","media_type":"image/png","sha256":"abc","text":"![Image: image/png, 3 bytes](asset://abc.png)","type":"agentsview_image","version":1}]`
+	messages := []db.Message{{ToolCalls: []db.ToolCall{{
+		ResultContent:       content,
+		ResultContentLength: len(content),
+		ResultEvents: []db.ToolResultEvent{{
+			Content:       content,
+			ContentLength: len(content),
+		}},
+	}}}}
+
+	downgradeImportedAssetReferences(messages)
+
+	call := messages[0].ToolCalls[0]
+	assert.Contains(t, call.ResultContent, "data:image/png;base64,AAEC")
+	assert.NotContains(t, call.ResultContent, "image_ref")
+	assert.NotContains(t, call.ResultContent, "asset://")
+	assert.Contains(t, call.ResultEvents[0].Content, "data:image/png;base64,AAEC")
+	assert.NotContains(t, call.ResultEvents[0].Content, "image_ref")
+}
+
 func TestLoadImportedSessionCompleteClosure(t *testing.T) {
 	t.Parallel()
 

@@ -17984,6 +17984,11 @@ func stagedToolCallPositions(
 func (e *Engine) writeStagedFullParse(
 	ctx context.Context, s db.Session, msgs []db.Message, pw pendingWrite,
 ) error {
+	if pw.staged != nil {
+		if err := pw.staged.PublishToolResultImages(); err != nil {
+			return err
+		}
+	}
 	positions := stagedToolCallPositions(msgs)
 	var closure db.StagedSignalsFunc
 	if !e.disableSignalRecompute {

@@ -696,10 +696,14 @@ func TestToolResultImagesStagedRoute(t *testing.T) {
 				const raw = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
 				sink.AppendToolResultEvent("call", nil, parser.ParsedToolResultEvent{ToolUseID: "call", Source: "function_call_output", Content: raw})
 				require.NoError(t, sink.Err())
+				entries, err := os.ReadDir(database.AssetsDir())
+				require.NoError(t, err)
+				assert.Empty(t, entries)
+				require.NoError(t, sink.PublishToolResultImages())
 				var content string
 				var length int
 				require.NoError(t, sink.scratch.QueryRow("SELECT content, content_length FROM stage_events LIMIT 1").Scan(&content, &length))
-				entries, err := os.ReadDir(database.AssetsDir())
+				entries, err = os.ReadDir(database.AssetsDir())
 				require.NoError(t, err)
 				if blocked || omitted {
 					assert.Empty(t, entries)

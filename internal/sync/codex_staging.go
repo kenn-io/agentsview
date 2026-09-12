@@ -550,6 +550,10 @@ func (s *codexStagingSink) AppendToolResultEvent(
 				imagePolicy = config.ToolResultImagesDrop
 			}
 		}
+		if imagePolicy == config.ToolResultImagesOffload {
+			// Publish the asset only after the session passes its write gates.
+			imagePolicy = config.ToolResultImagesKeep
+		}
 		ev.Content = db.ProjectToolResultImageContent(ev.Content, imagePolicy, assetsDir)
 		contentLength = len(ev.Content)
 		toolCall := db.ToolCall{ResultEvents: []db.ToolResultEvent{{
@@ -615,6 +619,113 @@ func (s *codexStagingSink) AppendToolResultEvent(
 	// collecting dedup treats every staged event as distinct.
 	ev.Content = fmt.Sprintf("staged:%d", seq)
 	s.AppendUniqueToolResultEvent(callID, target, ev)
+}
+
+// PublishToolResultImages moves staged inline images after session acceptance.
+func (s *codexStagingSink) PublishToolResultImages() error {
+	if s.toolResultImages != config.ToolResultImagesOffload ||
+		s.database == nil || s.database.ArchiveContent().OmitsToolContent() {
+		return nil
+	}
+	type stagedImageRow struct {
+		seq                 int64
+		callKey             string
+		content             string
+		contentLength       int
+		blanked             bool
+		summaryParticipates bool
+	}
+	rows, err := s.scratch.Query(`
+		SELECT seq, call_key, content, content_length, blanked,
+		       summary_participates
+		FROM stage_events
+		ORDER BY seq`)
+	if err != nil {
+		s.fail(err)
+		return s.stageErr
+	}
+	var stagedRows []stagedImageRow
+	for rows.Next() {
+		var row stagedImageRow
+		var blanked, participates int
+		if err := rows.Scan(
+			&row.seq, &row.callKey, &row.content, &row.contentLength,
+			&blanked, &participates,
+		); err != nil {
+			_ = rows.Close()
+			s.fail(err)
+			return s.stageErr
+		}
+		row.blanked = blanked != 0
+		row.summaryParticipates = participates != 0
+		stagedRows = append(stagedRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		s.fail(err)
+		return s.stageErr
+	}
+	if err := rows.Close(); err != nil {
+		s.fail(err)
+		return s.stageErr
+	}
+
+	assetsDir := s.database.AssetsDir()
+	for i := range stagedRows {
+		row := &stagedRows[i]
+		projected := db.ProjectToolResultImageContent(
+			row.content, s.toolResultImages, assetsDir,
+		)
+		length := db.ResolveResultContentLength(projected, row.contentLength)
+		if projected == row.content && length == row.contentLength {
+			continue
+		}
+		if _, err := s.scratch.Exec(
+			`UPDATE stage_events SET content = ?, content_length = ? WHERE seq = ?`,
+			projected, length, row.seq,
+		); err != nil {
+			s.fail(err)
+			return s.stageErr
+		}
+		row.content = projected
+		row.contentLength = length
+	}
+
+	s.singleSummaryLengths = make(map[string]int)
+	s.contentFailures = make(map[string]bool)
+	s.findings = nil
+	s.findingPos = nil
+	s.eventByCallKey = make(map[string]int64)
+	callEventCounts := make(map[string]int)
+	for _, row := range stagedRows {
+		callEventCounts[row.callKey]++
+		eventIndex := int(s.eventByCallKey[row.callKey])
+		s.eventByCallKey[row.callKey]++
+		storedContent := row.content
+		if row.blanked {
+			storedContent = ""
+		}
+		s.addEventFindings(row.callKey, eventIndex, storedContent)
+	}
+	for _, row := range stagedRows {
+		if row.blanked || callEventCounts[row.callKey] != 1 {
+			continue
+		}
+		summary := row.content
+		if !row.summaryParticipates {
+			summary = ""
+		}
+		s.singleSummaryLengths[row.callKey] = len(summary)
+		if !s.disableSignals {
+			s.contentFailures[row.callKey] = signals.IsFailure(
+				signals.ToolCallRow{
+					Category:      s.categoryByCallKey[row.callKey],
+					ResultContent: summary,
+				},
+			)
+		}
+	}
+	return nil
 }
 
 func (s *codexStagingSink) addEventFindings(
