@@ -177,7 +177,7 @@ func TestHubFanOutAndSlowSubscriber(t *testing.T) {
 	defer unsubSlow()
 	_ = slow
 	var many []Snapshot
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		id := "burst-" + string(rune('a'+i))
 		many = append(many, hubTestSnapshot(id, 3))
 	}
@@ -214,21 +214,20 @@ func TestHubRunCoalescesScopeBursts(t *testing.T) {
 	ch, unsub := hub.Subscribe()
 	defer unsub()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	scopes := make(chan string, 16)
 	go hub.Run(ctx, scopes)
 
 	// A burst of scopes (sustained sync output) must collapse
 	// into one check during the debounce window.
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		scopes <- "messages"
 	}
 	collect(t, ch, 1)
 	assert.Len(t, store.events, 1)
 
 	// Later bursts re-check; the archive cursor keeps it silent.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		scopes <- "sessions"
 	}
 	select {

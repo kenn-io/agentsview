@@ -35,10 +35,6 @@ func withNextOrdinal(n int) func(*Session) {
 	return func(s *Session) { s.NextOrdinal = n }
 }
 
-func withRelationship(rel string) func(*Session) {
-	return func(s *Session) { s.RelationshipType = rel }
-}
-
 // setModifiedAt stamps local_modified_at directly: the column is
 // owned by the sync write path, not UpsertSession.
 func setModifiedAt(t *testing.T, d *DB, id, ts string) {
@@ -155,7 +151,7 @@ func TestNotificationEventsBoundedRing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, events)
 
-	for i := 0; i < 120; i++ {
+	for i := range 120 {
 		n := notify.Notification{
 			Kind:      notify.KindTurnEnd,
 			SessionID: "s1",
