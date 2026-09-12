@@ -57,7 +57,7 @@ describe("notifications store", () => {
     unsub();
     notifications.deliver(frame());
     expect(seen).toHaveLength(1);
-    expect(seen[0].session_id).toBe("s1");
+    expect(seen[0]!.session_id).toBe("s1");
   });
 
   it("deduplicates identical frames after a reconnect burst", () => {
@@ -73,7 +73,7 @@ describe("notifications store", () => {
   it("sends native toasts through the Tauri bridge", async () => {
     notifications.deliver(frame());
     await vi.waitFor(() => expect(sendNotification).toHaveBeenCalledTimes(1));
-    expect(sendNotification.mock.calls[0][0].title).toContain("reply finished");
+    expect(sendNotification.mock.calls[0]![0].title).toContain("reply finished");
   });
 
   it("suppresses toasts for the session being viewed", async () => {
@@ -85,7 +85,7 @@ describe("notifications store", () => {
     notifications.deliver(next);
     await vi.waitFor(() => expect(sendNotification).toHaveBeenCalledTimes(1));
     // Only the second (unviewed) frame reached the bridge.
-    expect(sendNotification.mock.calls[0][0].title).toBe(next.title);
+    expect(sendNotification.mock.calls[0]![0].title).toBe(next.title);
   });
 
   it("navigates on focus within the click window", async () => {
@@ -106,9 +106,7 @@ describe("notifications store", () => {
     const navigate = vi.fn();
     notifications.deliver(frame());
     const realNow = Date.now;
-    vi.spyOn(Date, "now").mockReturnValue(
-      realNow() + 60_000 + 1000,
-    );
+    vi.spyOn(Date, "now").mockReturnValue(realNow() + 60_000 + 1000);
     notifications.handleFocus(navigate);
     expect(navigate).not.toHaveBeenCalled();
   });
@@ -121,9 +119,7 @@ describe("showNativeNotification without a bridge", () => {
 
   it("is a no-op outside the desktop shell", async () => {
     stubWindow(false);
-    const { showNativeNotification } = await import(
-      "./notifications.svelte.js"
-    );
+    const { showNativeNotification } = await import("./notifications.svelte.js");
     // No bridge, no crash: delivery is silently skipped.
     expect(() => showNativeNotification(frame())).not.toThrow();
   });
