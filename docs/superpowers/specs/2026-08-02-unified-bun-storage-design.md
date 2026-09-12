@@ -361,16 +361,21 @@ store methods.
 ## Full-Text and Vector Capabilities
 
 Full-text and vector search are the allowed backend-specific query areas.
-Capabilities accept canonical filters and return canonical identifiers,
-ordinals, stable tool/result coordinates, unit ranges, subordinate state,
-scores, or ranks. The common store resolves lexical message hits to semantic
-units, hydrates results, and owns final ordering.
+Capabilities accept canonical filters. Global full-text session capabilities may
+return hydrated canonical session results because ranking and visibility are
+evaluated together by the engine. In-session matching returns ordinals, while
+content and vector capabilities return stable message, tool, result, and unit
+coordinates plus subordinate state, scores, or ranks. The common store hydrates
+those coordinate-based results, resolves lexical message hits to semantic units,
+and owns the public page contract.
 
 SQLite may continue to use FTS5 and sqlite-vec, PostgreSQL may use its native
 full-text facilities and pgvector, and DuckDB may use its supported regex/FTS
-and vector facilities. These implementations may differ in syntax and index
-maintenance, but their observable filters, result identity, and ordering remain
-aligned as closely as engine semantics permit.
+and vector facilities. These implementations may differ in syntax, index
+maintenance, relevance scoring, and relevance ordering where engine semantics
+genuinely differ. Observable filters and stable result identity remain aligned;
+shared code must not invent a backend-name branch to erase a capability-owned
+ranking difference.
 
 Engine switches, placeholder builders, and duplicate scan functions are not
 allowed in common store methods. A difference that cannot fit the small search

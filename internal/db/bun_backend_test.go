@@ -27,9 +27,7 @@ func (b *recordingBunBackend) Capabilities() BackendCapabilities {
 	return b.capabilities
 }
 
-func (*recordingBunBackend) SessionQueryDialect() QueryDialect {
-	return PortableBunSessionQueryDialect()
-}
+func (*recordingBunBackend) TimestampOrderExpr(column string) string { return column }
 
 func (*recordingBunBackend) SessionVersion(
 	context.Context, bun.IDB, string,
@@ -100,4 +98,85 @@ func TestBunStoreUpdateUsesOperationCapability(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 1, backend.updateCalls)
+}
+
+func TestBunStoreOwnsReadOnlyArchiveWriteDefaults(t *testing.T) {
+	backend := &recordingBunBackend{readOnly: true}
+	store := NewBunStore(backend)
+
+	assert.True(t, store.ReadOnly())
+	assert.ErrorIs(t, store.UpsertSession(Session{}), ErrReadOnly)
+	assert.ErrorIs(t, store.ReplaceSessionMessages("session", nil), ErrReadOnly)
+	result, err := store.WriteSessionBatchAtomic(nil)
+	assert.Equal(t, SessionBatchResult{}, result)
+	assert.ErrorIs(t, err, ErrReadOnly)
+	assert.Zero(t, backend.updateCalls)
+}
+
+func TestBunStoreUpsertSessionUsesWritableArchiveCapability(t *testing.T) {
+	database := testDB(t)
+	store := database.BunStore
+
+	require.NoError(t, store.UpsertSession(Session{
+		ID: "bun-store-upload", Agent: "codex", Project: "alpha",
+	}))
+	session, err := store.GetSessionFull(t.Context(), "bun-store-upload")
+	require.NoError(t, err)
+	assert.Equal(t, "alpha", session.Project)
+	assert.NotEmpty(t, session.SourceArchiveID)
+	assert.NotEmpty(t, session.SourceDatabaseGeneration)
+}
+
+func TestBunStoreReplaceSessionMessagesUsesWritableArchiveCapability(t *testing.T) {
+	database := testDB(t)
+	store := database.BunStore
+	_, err := database.upsertSession(Session{
+		ID: "bun-store-messages", Agent: "codex",
+	}, true)
+	require.NoError(t, err)
+
+	require.NoError(t, store.ReplaceSessionMessages(
+		"bun-store-messages", []Message{{
+			SessionID: "bun-store-messages", Ordinal: 0,
+			Role: "user", Content: "shared upload", ContentLength: 13,
+		}},
+	))
+	messages, err := store.GetAllMessages(
+		t.Context(), "bun-store-messages",
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "shared upload", messages[0].Content)
+}
+
+func TestBunStoreWriteSessionBatchAtomicUsesWritableArchiveCapability(t *testing.T) {
+	database := testDB(t)
+	store := database.BunStore
+
+	result, err := store.WriteSessionBatchAtomic([]SessionBatchWrite{{
+		Session: Session{ID: "bun-store-batch", Agent: "codex"},
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.WrittenSessions)
+	session, err := store.GetSessionFull(t.Context(), "bun-store-batch")
+	require.NoError(t, err)
+	assert.Equal(t, "bun-store-batch", session.ID)
+}
+
+func TestGuardedSQLFacadesExecuteThroughBun(t *testing.T) {
+	database := testDB(t)
+
+	readerHook := new(countingQueryHook)
+	database.bunReader = database.bunReader.WithQueryHook(readerHook)
+	var value int
+	require.NoError(t, database.getReader().QueryRow("SELECT 1").Scan(&value))
+	assert.Equal(t, 1, value)
+	assert.Len(t, readerHook.queries, 1)
+
+	writerHook := new(countingQueryHook)
+	database.bunWriter = database.bunWriter.WithQueryHook(writerHook)
+	value = 0
+	require.NoError(t, database.getWriter().QueryRow("SELECT 1").Scan(&value))
+	assert.Equal(t, 1, value)
+	assert.Len(t, writerHook.queries, 1)
 }

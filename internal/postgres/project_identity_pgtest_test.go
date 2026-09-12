@@ -13,7 +13,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -23,7 +26,6 @@ type identityRow struct {
 	RootPath      string
 	GitRemote     string
 	GitRemoteName string
-	Key           string
 }
 
 func readIdentityRows(
@@ -31,7 +33,7 @@ func readIdentityRows(
 ) []identityRow {
 	t.Helper()
 	rows, err := pg.QueryContext(ctx, `
-		SELECT project, machine, root_path, git_remote, git_remote_name, key
+		SELECT project, machine, root_path, git_remote, git_remote_name
 		FROM source_project_identity_observations
 		ORDER BY project, machine, root_path, git_remote`)
 	require.NoError(t, err)
@@ -41,7 +43,7 @@ func readIdentityRows(
 		var r identityRow
 		require.NoError(t, rows.Scan(
 			&r.Project, &r.Machine, &r.RootPath,
-			&r.GitRemote, &r.GitRemoteName, &r.Key,
+			&r.GitRemote, &r.GitRemoteName,
 		))
 		out = append(out, r)
 	}
@@ -64,6 +66,10 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+	bunDB := bun.NewDB(pg, pgdialect.New())
+	require.NoError(t, db.UpsertSourceArchiveRow(
+		ctx, bunDB, "archive-batch", "archive-batch-salt",
+	))
 
 	obs := func(root, remote, name string) export.ProjectIdentityObservation {
 		return export.ProjectIdentityObservation{
@@ -122,16 +128,22 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 		ambiguous,
 		obs("/preexisting-ambiguous", "git@x:p.git", "origin"),
 	)
+	for i := range preExisting {
+		preExisting[i] = export.SanitizeStoredProjectIdentityObservation(
+			preExisting[i],
+		)
+	}
+	for i := range batch {
+		batch[i] = export.SanitizeStoredProjectIdentityObservation(batch[i])
+	}
 
 	reset := func() {
 		_, err := pg.ExecContext(ctx,
 			`DELETE FROM source_project_identity_observations`)
 		require.NoError(t, err)
-		tx, err := pg.BeginTx(ctx, nil)
+		tx, err := bunDB.BeginTx(ctx, nil)
 		require.NoError(t, err)
 		defer func() { _ = tx.Rollback() }()
-		require.NoError(t, upsertSourceArchiveScope(
-			ctx, tx, "archive-batch", "archive-batch-salt"))
 		for _, o := range preExisting {
 			require.NoError(t,
 				upsertProjectIdentityObservation(ctx, tx, o, ""))
@@ -140,7 +152,7 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 	}
 
 	reset()
-	tx, err := pg.BeginTx(ctx, nil)
+	tx, err := bunDB.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	for _, o := range batch {
 		require.NoError(t, upsertProjectIdentityObservation(ctx, tx, o, ""))
@@ -149,10 +161,12 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 	sequential := readIdentityRows(t, ctx, pg)
 
 	reset()
-	tx, err = pg.BeginTx(ctx, nil)
+	bunTx, err := bunDB.BeginTx(ctx, nil)
 	require.NoError(t, err)
-	require.NoError(t, syncProjectIdentityObservationsBatch(ctx, tx, batch))
-	require.NoError(t, tx.Commit())
+	require.NoError(t, syncProjectIdentityObservationsBatch(
+		ctx, bunTx, bunTx, "archive-batch", "archive-batch-salt", batch,
+	))
+	require.NoError(t, bunTx.Commit())
 	batched := readIdentityRows(t, ctx, pg)
 
 	assert.Equal(t, sequential, batched,
@@ -161,27 +175,17 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 	// Anchor the shared outcome so a bug that changes both paths in the
 	// same way cannot slip through the differential comparison.
 	assert.Equal(t, []identityRow{
-		{"proj", "m1", "/ambiguous-with-real", "", "",
-			"/ambiguous-with-real|"},
-		{"proj", "m1", "/ambiguous-with-real", "git@x:a.git", "origin",
-			"/ambiguous-with-real|git@x:a.git"},
-		{"proj", "m1", "/fallback-only", "", "", "/fallback-only|"},
-		{"proj", "m1", "/has-remote", "git@x:h.git", "origin",
-			"/has-remote|git@x:h.git"},
-		{"proj", "m1", "/mixed-fallback-first", "git@x:m2.git", "origin",
-			"/mixed-fallback-first|git@x:m2.git"},
-		{"proj", "m1", "/mixed-real-first", "git@x:m1.git", "origin",
-			"/mixed-real-first|git@x:m1.git"},
-		{"proj", "m1", "/preexisting-ambiguous", "", "",
-			"/preexisting-ambiguous|"},
-		{"proj", "m1", "/preexisting-ambiguous", "git@x:p.git", "origin",
-			"/preexisting-ambiguous|git@x:p.git"},
-		{"proj", "m1", "/preexisting-ambiguous-only", "", "",
-			"/preexisting-ambiguous-only|"},
-		{"proj", "m1", "/replaced-fallback", "git@x:r.git", "origin",
-			"/replaced-fallback|git@x:r.git"},
-		{"proj", "m1", "/updated", "git@x:u.git", "new-name",
-			"/updated|git@x:u.git"},
+		{"proj", "m1", "/ambiguous-with-real", "", ""},
+		{"proj", "m1", "/ambiguous-with-real", "x:a.git", "origin"},
+		{"proj", "m1", "/fallback-only", "", ""},
+		{"proj", "m1", "/has-remote", "x:h.git", "origin"},
+		{"proj", "m1", "/mixed-fallback-first", "x:m2.git", "origin"},
+		{"proj", "m1", "/mixed-real-first", "x:m1.git", "origin"},
+		{"proj", "m1", "/preexisting-ambiguous", "", ""},
+		{"proj", "m1", "/preexisting-ambiguous", "x:p.git", "origin"},
+		{"proj", "m1", "/preexisting-ambiguous-only", "", ""},
+		{"proj", "m1", "/replaced-fallback", "x:r.git", "origin"},
+		{"proj", "m1", "/updated", "x:u.git", "new-name"},
 	}, batched)
 	var ambiguousResolution string
 	require.NoError(t, pg.QueryRowContext(ctx, `
@@ -199,10 +203,12 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 	assert.Nil(t, projects["proj"].Identity)
 
 	// An empty batch must be a no-op rather than an SQL error.
-	tx, err = pg.BeginTx(ctx, nil)
+	bunTx, err = bunDB.BeginTx(ctx, nil)
 	require.NoError(t, err)
-	require.NoError(t, syncProjectIdentityObservationsBatch(ctx, tx, nil))
-	require.NoError(t, tx.Commit())
+	require.NoError(t, syncProjectIdentityObservationsBatch(
+		ctx, bunTx, bunTx, "archive-batch", "archive-batch-salt", nil,
+	))
+	require.NoError(t, bunTx.Commit())
 	assert.Equal(t, batched, readIdentityRows(t, ctx, pg))
 }
 
@@ -260,12 +266,12 @@ func TestPGListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
-	// Cross the maxPGVars chunk boundary with duplicate labels that
+	// Cross the shared Bun list's 500-label chunk boundary with duplicates that
 	// straddle it, and interleave two source archives across the label
 	// range: the ORDER BY leads with source_archive_id, so concatenated
 	// per-chunk (label-range) results are not globally ordered until the
 	// Go re-sort restores the documented ordering.
-	const labelCount = maxPGVars + 50
+	const labelCount = 550
 	observedAt := time.Date(2025, 6, 2, 10, 0, 0, 0, time.UTC)
 	labels := make([]string, 0, 2*labelCount)
 	const batch = 200
@@ -347,9 +353,11 @@ func TestPGSourceArchiveScopeRejectsSaltMismatch(t *testing.T) {
 	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
+	bunDB := bun.NewDB(pg, pgdialect.New())
 
-	require.NoError(t, upsertSourceArchiveScope(
-		ctx, pg, "archive-a", "salt-a"))
-	err = upsertSourceArchiveScope(ctx, pg, "archive-a", "salt-b")
+	require.NoError(t, db.UpsertSourceArchiveRow(
+		ctx, bunDB, "archive-a", "salt-a",
+	))
+	err = db.UpsertSourceArchiveRow(ctx, bunDB, "archive-a", "salt-b")
 	require.ErrorContains(t, err, "archive salt mismatch")
 }

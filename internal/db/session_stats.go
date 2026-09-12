@@ -449,8 +449,8 @@ func (db *DB) loadSessionsInWindow(
 		to.UTC().Format(time.RFC3339Nano),
 	}
 	if f.ApplyDefaultVisibility {
-		visibilityBuilder := NewQueryBuilder(SQLiteQueryDialect(), len(args))
-		preds, _ = appendSessionVisibilityPredicates(
+		visibilityBuilder := newBunFilterArgs(sqliteTimestampOrderExpr)
+		preds, _ = appendBunSessionVisibilityPredicates(
 			preds,
 			SessionFilter{
 				ExcludeOneShot:   !f.IncludeOneShot,
@@ -459,7 +459,7 @@ func (db *DB) loadSessionsInWindow(
 			visibilityBuilder,
 			func(col string) string { return "s." + col },
 		)
-		args = append(args, visibilityBuilder.Args()...)
+		args = append(args, visibilityBuilder.values()...)
 	}
 
 	if f.Agent != "" {

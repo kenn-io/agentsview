@@ -15,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 )
 
 // pgTargetWriteContractVersion invalidates persisted push state when the
@@ -27,12 +28,104 @@ import (
 //
 // Bump this version whenever that committed projection or ownership split
 // changes. A mismatch clears the saved watermark and fingerprints, forcing a
-// complete retry. The new fingerprint is persisted only after a successful
-// push, so failures retry the same backfill; running an older binary after a
-// newer one likewise sees a mismatch and rewrites its own complete contract.
-// v2 backfills the canonical Bun session row instead of allowing old matching
-// fingerprints to leave newly source-owned columns empty indefinitely.
+// complete retry. A partially successful push may persist the new target
+// fingerprint, but the watermark and boundary fingerprints retain each failed
+// session's retry obligation; those three values jointly represent completion.
+// Running an older binary after a newer one likewise sees a mismatch and
+// rewrites its own complete contract. v2 backfills the canonical Bun session
+// row instead of allowing old matching fingerprints to leave newly source-owned
+// columns empty indefinitely.
 const pgTargetWriteContractVersion = "v2-canonical-session"
+
+type pgSessionColumnOwner string
+
+const (
+	pgSessionColumnSource pgSessionColumnOwner = "source"
+	pgSessionColumnTarget pgSessionColumnOwner = "target"
+)
+
+var pgSessionSourceOwnedColumns = map[string]struct{}{
+	"id": {}, "project": {}, "machine": {}, "agent": {},
+	"agent_label": {}, "entrypoint": {}, "session_kind": {},
+	"first_message": {}, "session_name": {}, "started_at": {},
+	"ended_at": {}, "message_count": {}, "user_message_count": {},
+	"parent_session_id": {}, "parser_parent_session_id": {},
+	"relationship_type": {}, "total_output_tokens": {},
+	"peak_context_tokens": {}, "has_total_output_tokens": {},
+	"has_peak_context_tokens": {}, "is_automated": {},
+	"tool_failure_signal_count": {}, "tool_retry_count": {},
+	"edit_churn_count": {}, "consecutive_failure_max": {},
+	"outcome": {}, "outcome_confidence": {}, "ended_with_role": {},
+	"final_failure_streak": {}, "signals_pending_since": {},
+	"compaction_count": {}, "mid_task_compaction_count": {},
+	"context_pressure_max": {}, "health_score": {}, "health_grade": {},
+	"has_tool_calls": {}, "has_context_data": {}, "secret_leak_count": {},
+	"secrets_rules_version": {}, "quality_signal_version": {},
+	"short_prompt_count": {}, "unstructured_start": {},
+	"missing_success_criteria_count": {}, "missing_verification_count": {},
+	"duplicate_prompt_count": {}, "no_code_context_count": {},
+	"runaway_tool_loop_count": {}, "data_version": {}, "cwd": {},
+	"git_branch": {}, "source_session_id": {}, "source_version": {},
+	"transcript_fidelity": {}, "parser_malformed_lines": {},
+	"is_truncated": {}, "termination_status": {}, "file_path": {},
+	"file_size": {}, "file_mtime": {}, "file_inode": {}, "file_device": {},
+	"file_hash": {}, "transcript_revision": {}, "created_at": {},
+	"source_archive_id": {}, "source_database_generation": {},
+}
+
+var pgSessionTargetOwnedColumns = map[string]struct{}{
+	"deleted_at":        {},
+	"deletion_cause":    {},
+	"display_name":      {},
+	"local_modified_at": {},
+}
+
+func pgSessionColumnOwnerships() map[string]pgSessionColumnOwner {
+	owners := make(map[string]pgSessionColumnOwner,
+		len(pgSessionSourceOwnedColumns)+len(pgSessionTargetOwnedColumns))
+	for column := range pgSessionSourceOwnedColumns {
+		owners[column] = pgSessionColumnSource
+	}
+	for column := range pgSessionTargetOwnedColumns {
+		if _, exists := owners[column]; exists {
+			panic("PostgreSQL session column has multiple owners: " + column)
+		}
+		owners[column] = pgSessionColumnTarget
+	}
+	return owners
+}
+
+func validatePGSessionColumnOwnerships() error {
+	owners := pgSessionColumnOwnerships()
+	columns := bunmodel.ModelColumns((*bunmodel.Session)(nil))
+	if len(owners) != len(columns) {
+		return fmt.Errorf(
+			"PostgreSQL session ownership classifies %d of %d canonical columns",
+			len(owners), len(columns),
+		)
+	}
+	for _, column := range columns {
+		if _, ok := owners[column]; !ok {
+			return fmt.Errorf(
+				"PostgreSQL session ownership does not classify %s", column,
+			)
+		}
+	}
+	return nil
+}
+
+func pgSessionWriteContractSignature() string {
+	owners := pgSessionColumnOwnerships()
+	var signature strings.Builder
+	signature.WriteString(pgTargetWriteContractVersion)
+	for _, column := range bunmodel.ModelColumns((*bunmodel.Session)(nil)) {
+		signature.WriteByte('\n')
+		signature.WriteString(column)
+		signature.WriteByte('=')
+		signature.WriteString(string(owners[column]))
+	}
+	return signature.String()
+}
 
 // RedactDSN returns the host portion of the DSN for diagnostics,
 // stripping credentials, query parameters, and path components
@@ -218,7 +311,7 @@ func Open(
 
 func pgTargetFingerprint(dsn, schema string) (string, error) {
 	return pgTargetFingerprintForContract(
-		dsn, schema, pgTargetWriteContractVersion,
+		dsn, schema, pgSessionWriteContractSignature(),
 	)
 }
 

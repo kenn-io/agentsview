@@ -239,22 +239,10 @@ func openSQLiteStore(b *testing.B) *db.DB {
 func openDuckDBStore(ctx context.Context, b *testing.B, local *db.DB) db.Store {
 	b.Helper()
 
-	syncer, err := duckdb.New(
-		filepath.Join(b.TempDir(), "sessions.duckdb"),
-		local,
-		benchmarkMachine,
-		duckdb.SyncOptions{},
+	path := filepath.Join(b.TempDir(), "sessions.duckdb")
+	result, err := duckdb.Push(
+		ctx, path, local, benchmarkMachine, duckdb.SyncOptions{}, true, nil,
 	)
-	if err != nil {
-		b.Fatalf("open duckdb sync: %v", err)
-	}
-	b.Cleanup(func() {
-		if err := syncer.Close(); err != nil {
-			b.Errorf("close duckdb sync: %v", err)
-		}
-	})
-
-	result, err := syncer.Push(ctx, true, nil)
 	if err != nil {
 		b.Fatalf("push duckdb fixture: %v", err)
 	}
@@ -262,7 +250,16 @@ func openDuckDBStore(ctx context.Context, b *testing.B, local *db.DB) db.Store {
 		b.Fatalf("duckdb fixture push wrote no rows: %+v", result)
 	}
 
-	return duckdb.NewStoreFromDB(syncer.DB())
+	store, err := duckdb.NewStore(path)
+	if err != nil {
+		b.Fatalf("open duckdb store: %v", err)
+	}
+	b.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			b.Errorf("close duckdb store: %v", err)
+		}
+	})
+	return store
 }
 
 func openPostgresStore(ctx context.Context, b *testing.B, local *db.DB) db.Store {

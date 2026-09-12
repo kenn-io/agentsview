@@ -32,8 +32,8 @@ func (*replayingReadBackend) Capabilities() BackendCapabilities {
 	return BackendCapabilities{}
 }
 
-func (*replayingReadBackend) SessionQueryDialect() QueryDialect {
-	return SQLiteBunSessionQueryDialect()
+func (*replayingReadBackend) TimestampOrderExpr(column string) string {
+	return sqliteTimestampOrderExpr(column)
 }
 
 func (*replayingReadBackend) SessionVersion(
@@ -71,8 +71,8 @@ func (*sessionContractBackend) Capabilities() BackendCapabilities {
 	return BackendCapabilities{}
 }
 
-func (*sessionContractBackend) SessionQueryDialect() QueryDialect {
-	return SQLiteBunSessionQueryDialect()
+func (*sessionContractBackend) TimestampOrderExpr(column string) string {
+	return "julianday(NULLIF(" + column + ", ''))"
 }
 
 func (*sessionContractBackend) SessionVersion(
@@ -102,8 +102,9 @@ func (*sessionContractBackend) Update(
 }
 
 type countingQueryHook struct {
-	selects int
-	queries []string
+	selects       int
+	queries       []string
+	insertQueries []string
 }
 
 func (h *countingQueryHook) BeforeQuery(
@@ -118,6 +119,9 @@ func (h *countingQueryHook) AfterQuery(
 	if event.Operation() == "SELECT" {
 		h.selects++
 		h.queries = append(h.queries, event.Query)
+	}
+	if event.Operation() == "INSERT" {
+		h.insertQueries = append(h.insertQueries, event.Query)
 	}
 }
 
@@ -167,6 +171,29 @@ func TestBunStoreFindSessionIDsByPartialUsesBoundedKeysetBatches(t *testing.T) {
 	for _, query := range hook.queries {
 		assert.True(t, strings.Contains(query, "LIMIT 64"), query)
 	}
+}
+
+func TestBunStoreFindSessionIDsByRawSuffixIsCaseSensitiveBeforeLimit(t *testing.T) {
+	database := testDB(t)
+	newer := "2026-08-03T12:00:00Z"
+	older := "2026-08-02T12:00:00Z"
+	for _, session := range []Session{
+		{
+			ID: "codex:ABC", Project: "alpha", Machine: "host", Agent: "codex",
+			StartedAt: &newer, CreatedAt: newer,
+		},
+		{
+			ID: "codex:abc", Project: "alpha", Machine: "host", Agent: "codex",
+			StartedAt: &older, CreatedAt: older,
+		},
+	} {
+		require.NoError(t, database.UpsertSession(session))
+	}
+
+	ids, err := database.FindSessionIDsByRawSuffix(t.Context(), "abc", 1)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"codex:abc"}, ids)
 }
 
 func TestBunStoreListSessionsKeepsQueriesAndResultsBounded(t *testing.T) {
