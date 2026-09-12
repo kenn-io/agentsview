@@ -795,6 +795,10 @@
     height: auto;
   }
 
+  .formatted-output :global(p) {
+    overflow-wrap: anywhere;
+  }
+
   .tool-preview,
   .meta-value {
     position: relative;

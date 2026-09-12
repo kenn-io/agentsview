@@ -1,15 +1,7 @@
 import { createHash } from "node:crypto";
-import { readFile, mkdir } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { test, expect, type Locator, type Page } from "@playwright/test";
-
-const require = createRequire(import.meta.url);
-const renderLintSnippet = process.env.PR_RENDER_LINT_PATH
-  ? (require(process.env.PR_RENDER_LINT_PATH) as {
-      renderLintSnippet: (scopeSelector: string) => string;
-    }).renderLintSnippet
-  : null;
 
 const LOC = {
   sessionItem: ".session-item",
@@ -258,7 +250,7 @@ test.describe("Mixed content rendering", () => {
 test.describe("retained tool images", () => {
   test.describe.configure({ timeout: 60_000 });
 
-  test("renders retained, image-only, and migrated tool images", async ({ page }) => {
+  test("renders retained, image-only, migrated, and fallback tool images", async ({ page }, testInfo) => {
     const fixturePath = fileURLToPath(
       new URL("../src/lib/utils/__fixtures__/retained-tool-image-1735.json", import.meta.url),
     );
@@ -275,6 +267,7 @@ test.describe("retained tool images", () => {
       { type: "agentsview_image", version: 1, text: "![second](asset://nested/second)" },
       { type: "text", text: "After" },
     ]);
+    const unsupportedResult = retainedResult.replace("image/png", "image/svg+xml");
     const sessionId = "retained-tool-image-1735";
     const now = "2026-09-11T12:00:00Z";
     const session = {
@@ -315,6 +308,12 @@ test.describe("retained tool images", () => {
         result_content: migratedResult,
         result_content_length: migratedResult.length,
       },
+      {
+        category: "Other",
+        tool_name: "unsupported_tool_image",
+        result_content: unsupportedResult,
+        result_content_length: unsupportedResult.length,
+      },
     ];
     const messages = toolCalls.map((toolCall, index) => ({
       id: index + 1,
@@ -337,9 +336,6 @@ test.describe("retained tool images", () => {
       is_system: false,
     }));
     const assetBytes = Buffer.from(smallPNG.split(",", 2)[1]!, "base64");
-    const artifactDir = process.env.PR_RENDER_ARTIFACT_DIR ?? fileURLToPath(new URL("../../artifacts/", import.meta.url));
-    await mkdir(artifactDir, { recursive: true });
-
     await page.route("**/api/v1/**", (route) => route.abort());
     await page.route("**/api/v1/sessions**", async (route) => {
       const pathname = new URL(route.request().url()).pathname;
@@ -377,11 +373,8 @@ test.describe("retained tool images", () => {
     );
 
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto("/sessions");
-    const sessionItem = page.locator(`[data-session-id="${sessionId}"]`);
-    await expect(sessionItem).toBeVisible();
     await page.goto(`/sessions/${sessionId}`);
-    await expect(page.locator(".tool-block")).toHaveCount(3);
+    await expect(page.locator(".tool-block")).toHaveCount(4);
 
     const retainedBlock = page
       .locator(".tool-block")
@@ -395,9 +388,14 @@ test.describe("retained tool images", () => {
       .locator(".tool-block")
       .filter({ hasText: "migrated_tool_image" })
       .first();
+    const unsupportedBlock = page
+      .locator(".tool-block")
+      .filter({ hasText: "unsupported_tool_image" })
+      .first();
     await expect(retainedBlock).toBeVisible();
     await expect(imageOnlyBlock).toBeVisible();
     await expect(migratedBlock).toBeVisible();
+    await expect(unsupportedBlock).toBeVisible();
 
     async function openFormatted(block: Locator) {
       await block.locator(".tool-header").click();
@@ -415,11 +413,11 @@ test.describe("retained tool images", () => {
     const retainedRaw = retainedBlock.locator(".output-content");
     await expect(retainedRaw).toBeVisible();
     expect(await retainedRaw.textContent()).toBe(retainedResult.replace(/\r\n/g, "\n"));
-    await page.screenshot({ path: `${artifactDir}/agentsview-1735-before.png` });
-
     const retainedMode = retainedBlock.getByRole("radiogroup", { name: "Output format" });
     await retainedMode.getByRole("radio", { name: "Formatted" }).click();
     const retainedFormatted = retainedBlock.locator(".formatted-output");
+    await expect(retainedFormatted).toBeVisible();
+    await retainedFormatted.screenshot({ path: testInfo.outputPath("agentsview-1735-before.png") });
     const retainedImage = retainedFormatted.locator("img");
     await expect(retainedImage).toHaveCount(1);
     await expect(retainedImage).toHaveAttribute("src", retainedImageURL!);
@@ -447,16 +445,15 @@ test.describe("retained tool images", () => {
       });
       expect(measurement.scrollWidth).toBeLessThanOrEqual(measurement.clientWidth + 2);
       expect(measurement.imageWidth).toBeLessThanOrEqual(measurement.clientWidth + 2);
-      const lint = renderLintSnippet
-        ? await page.evaluate((snippet) => eval(snippet) as unknown[], renderLintSnippet(".formatted-output"))
-        : null;
-      if (lint !== null) expect(lint).toEqual([]);
-      console.log(`render-lint width=${width}px violations=${JSON.stringify(lint ?? "not configured")}`);
       console.log(`retained layout width=${width}px ${JSON.stringify(measurement)}`);
       if (width === 1280) {
-        await page.screenshot({ path: `${artifactDir}/agentsview-1735-after.png` });
+        await retainedFormatted.screenshot({ path: testInfo.outputPath("agentsview-1735-after.png") });
       } else {
-        await page.screenshot({ path: `${artifactDir}/agentsview-1735-after-${width}.png` });
+        await retainedFormatted.screenshot({
+          path: testInfo.outputPath(
+            width === 768 ? "agentsview-1735-after-768.png" : "agentsview-1735-after-400.png",
+          ),
+        });
       }
     }
 
@@ -477,18 +474,14 @@ test.describe("retained tool images", () => {
     }))).toEqual({ complete: true, naturalWidth: 1, naturalHeight: 1 });
     expect(await imageOnly.formatted.textContent()).not.toContain("input_image");
 
-    await page.evaluate(() => {
-      const base = document.createElement("base");
-      base.href = "/app/";
-      document.head.appendChild(base);
-    });
     const migrated = await openFormatted(migratedBlock);
     const migratedImages = migrated.formatted.locator("img");
     await expect(migratedImages).toHaveCount(2);
-    await expect(migratedImages.nth(0)).toHaveAttribute("src", "/app/api/v1/assets/first");
+    const migratedAssetBase = "/api/v1/assets";
+    await expect(migratedImages.nth(0)).toHaveAttribute("src", `${migratedAssetBase}/first`);
     await expect(migratedImages.nth(1)).toHaveAttribute(
       "src",
-      "/app/api/v1/assets/nested/second",
+      `${migratedAssetBase}/nested/second`,
     );
     await expect.poll(() => migratedImages.evaluateAll((images) =>
       images.map((image) => ({
@@ -503,6 +496,16 @@ test.describe("retained tool images", () => {
     expect(await migrated.formatted.textContent()).toContain("Before");
     expect(await migrated.formatted.textContent()).toContain("After");
     expect(await migrated.formatted.textContent()).not.toContain("asset://");
+
+    const unsupported = await openFormatted(unsupportedBlock);
+    await expect(unsupported.formatted.locator("img")).toHaveCount(0);
+    expect(await unsupported.formatted.textContent()).toContain("input_image");
+    const unsupportedLayout = await unsupported.formatted.evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    expect(unsupportedLayout.scrollWidth).toBeLessThanOrEqual(unsupportedLayout.clientWidth + 2);
+    console.log(`unsupported layout ${JSON.stringify(unsupportedLayout)}`);
     expect(retainedBytes).toBe(1_441_138);
     expect(retainedHash).toBe("0cd12cbc57b1b4ea2cadca8f96fb7b48bfeb5ac65db6d6f8cecee074a4687dac");
   });

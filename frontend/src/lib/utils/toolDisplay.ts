@@ -14,6 +14,7 @@ export function displayToolName(call: { tool_name: string; category?: string | n
   return call.tool_name;
 }
 
+// Keep this list aligned with internal/assets/assets.go mediaTypeToExt.
 const INLINE_IMAGE_MEDIA_TYPES = new Set([
   "image/png",
   "image/jpeg",
