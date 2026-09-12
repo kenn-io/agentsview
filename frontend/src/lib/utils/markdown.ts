@@ -822,7 +822,10 @@ function getAssetReference(src: string | null): string | undefined {
 }
 
 function getAssetURL(reference: string): string {
-  return `${getBase().replace(/\/$/, "")}/assets/${encodeURIComponent(reference)}`;
+  const filename = reference.startsWith("asset://")
+    ? reference.slice("asset://".length)
+    : reference;
+  return `${getBase().replace(/\/$/, "")}/assets/${encodeURIComponent(filename)}`;
 }
 
 export function loadAssetImages(node: HTMLElement, _content = "") {
