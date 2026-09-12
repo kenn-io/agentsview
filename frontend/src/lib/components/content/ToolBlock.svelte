@@ -17,7 +17,10 @@
   import { summarizeToolCall, summarizeToolCallPath } from "../../utils/tool-summary.js";
   import { CopyButton, SegmentedControl, type SegmentedControlOption } from "@kenn-io/kit-ui";
   import { renderMarkdown } from "../../utils/markdown.js";
-  import { displayToolResult } from "../../utils/toolDisplay.js";
+  import {
+    displayFormattedToolResult,
+    displayToolResult,
+  } from "../../utils/toolDisplay.js";
   import { ui } from "../../stores/ui.svelte.js";
 
   interface Props {
@@ -197,6 +200,9 @@
   );
 
   let outputContent = $derived(displayToolResult(toolCall?.result_content ?? ""));
+  let formattedOutputContent = $derived(
+    displayFormattedToolResult(toolCall?.result_content ?? ""),
+  );
 
   let outputPreviewLine = $derived.by(() => {
     const rc = outputContent;
@@ -545,10 +551,10 @@
         {#if outputMode === "formatted"}
           <div
             class="tool-content output-content formatted-output"
-            use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: outputContent }}
-            use:highlightCodeFences={{ q: highlightQuery, current: isCurrentHighlight, content: outputContent }}
+            use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: formattedOutputContent }}
+            use:highlightCodeFences={{ q: highlightQuery, current: isCurrentHighlight, content: formattedOutputContent }}
           >
-            {@html renderMarkdown(outputContent, {
+            {@html renderMarkdown(formattedOutputContent, {
               renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,
             })}
           </div>
@@ -782,6 +788,11 @@
 
   .formatted-output :global(pre) {
     white-space: pre-wrap;
+  }
+
+  .formatted-output :global(img) {
+    max-width: 100%;
+    height: auto;
   }
 
   .tool-preview,

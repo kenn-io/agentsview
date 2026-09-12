@@ -5,8 +5,11 @@ import { describe, it, expect, vi, afterEach } from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
 import type { ToolCall } from "../../api/types.js";
 import { setLocale } from "../../i18n/index.js";
+import retainedFixtureSource from "../../utils/__fixtures__/retained-tool-image-1735.json?raw";
 
 const copyToClipboardMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const SMALL_PNG_DATA_URI =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 vi.mock("./SubagentInline.svelte", () => ({
   default: {},
@@ -163,6 +166,107 @@ describe("ToolBlock output section", () => {
     document.querySelector<HTMLButtonElement>('button[aria-label="Copy output"]')!.click();
     await tick();
     expect(copyToClipboardMock).toHaveBeenCalledWith(result);
+  });
+
+  it("renders the constructed retained PNG between text blocks", async () => {
+    const result = retainedFixtureSource;
+    const blocks = JSON.parse(result) as Array<{ image_url?: string }>;
+    const imageURL = blocks[1]?.image_url;
+    expect(imageURL).toMatch(/^data:image\/png;base64,/);
+    expect(new TextEncoder().encode(result).byteLength).toBe(1_441_138);
+
+    const toolCall: ToolCall = {
+      tool_name: "view_image",
+      category: "Other",
+      result_content: result,
+    };
+    component = mount(ToolBlock, { target: document.body, props: { content: "", toolCall } });
+    await tick();
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+    document.querySelector<HTMLButtonElement>(".output-header")!.click();
+    await tick();
+
+    const raw = document.querySelector(".output-content");
+    expect(raw?.querySelector("img")).toBeNull();
+    expect(raw?.textContent).toBe(result.replace(/\r\n/g, "\n"));
+
+    document.querySelector<HTMLButtonElement>(".output-mode button:nth-child(2)")!.click();
+    await tick();
+
+    const formatted = document.querySelector(".formatted-output");
+    expect(formatted).not.toBeNull();
+    expect(formatted!.querySelectorAll("img")).toHaveLength(1);
+    expect(formatted!.querySelector("img")?.getAttribute("src")).toBe(imageURL);
+    expect(Array.from(formatted!.querySelectorAll("p"), (p) => p.textContent)).toEqual([
+      "Before",
+      "",
+      "After",
+    ]);
+    expect(formatted!.textContent).not.toContain("input_image");
+    expect(formatted!.textContent).not.toContain(imageURL!);
+
+    document.querySelector<HTMLButtonElement>(".output-mode button:nth-child(1)")!.click();
+    await tick();
+    expect(document.querySelector(".output-content")?.textContent).toBe(result.replace(/\r\n/g, "\n"));
+
+    document.querySelector<HTMLButtonElement>('button[aria-label="Copy output"]')!.click();
+    await tick();
+    expect(copyToClipboardMock).toHaveBeenCalledWith(result);
+  });
+
+  it("renders an image-only retained result", async () => {
+    const result = JSON.stringify([{ type: "input_image", image_url: SMALL_PNG_DATA_URI }]);
+    const toolCall: ToolCall = {
+      tool_name: "view_image",
+      category: "Other",
+      result_content: result,
+    };
+    component = mount(ToolBlock, { target: document.body, props: { content: "", toolCall } });
+    await tick();
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+    document.querySelector<HTMLButtonElement>(".output-header")!.click();
+    await tick();
+    document.querySelector<HTMLButtonElement>(".output-mode button:nth-child(2)")!.click();
+    await tick();
+
+    const formatted = document.querySelector(".formatted-output");
+    expect(formatted?.querySelectorAll("img")).toHaveLength(1);
+    expect(formatted?.textContent).not.toContain("input_image");
+  });
+
+  it("renders migrated asset references in formatted output", async () => {
+    const result = JSON.stringify([
+      { type: "input_text", text: "Before" },
+      { type: "agentsview_image", version: 1, text: "![first](asset://first)" },
+      { type: "agentsview_image", version: 1, text: "![second](asset://nested/second)" },
+      { type: "text", text: "After" },
+    ]);
+    const base = document.createElement("base");
+    base.href = "http://localhost/app/";
+    document.head.appendChild(base);
+
+    const toolCall: ToolCall = {
+      tool_name: "view_image",
+      category: "Other",
+      result_content: result,
+    };
+    component = mount(ToolBlock, { target: document.body, props: { content: "", toolCall } });
+    await tick();
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+    document.querySelector<HTMLButtonElement>(".output-header")!.click();
+    await tick();
+    document.querySelector<HTMLButtonElement>(".output-mode button:nth-child(2)")!.click();
+    await tick();
+
+    expect(
+      Array.from(document.querySelectorAll<HTMLImageElement>(".formatted-output img"), (img) =>
+        img.getAttribute("src"),
+      ),
+    ).toEqual(["/app/api/v1/assets/first", "/app/api/v1/assets/nested/second"]);
+    base.remove();
   });
 
   it("switches the expanded current output between raw and formatted modes", async () => {

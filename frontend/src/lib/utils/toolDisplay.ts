@@ -14,11 +14,39 @@ export function displayToolName(call: { tool_name: string; category?: string | n
   return call.tool_name;
 }
 
+const INLINE_IMAGE_MEDIA_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
+const INLINE_IMAGE_DATA_URI = /^data:([^;,]+);base64,([A-Za-z0-9+/]+={0,2})$/;
+
+function inlineImageMarkdown(imageURL: unknown): string | null {
+  if (typeof imageURL !== "string") return null;
+  const match = INLINE_IMAGE_DATA_URI.exec(imageURL);
+  if (!match || !INLINE_IMAGE_MEDIA_TYPES.has(match[1]!)) return null;
+  if (match[2]!.length % 4 !== 0) return null;
+  return `![${match[1]}](${imageURL})`;
+}
+
 /** Display retained image placeholders alongside their surrounding text.
  * Unrecognized results stay intact so display projection cannot hide blocks. */
 export function displayToolResult(content: string): string {
-  if (!content.includes('"agentsview_image"')) return content;
-  const direct = displayToolResultArray(content);
+  return projectToolResult(content, "stored");
+}
+
+export function displayFormattedToolResult(content: string): string {
+  return projectToolResult(content, "formatted");
+}
+
+type ToolResultDisplayMode = "stored" | "formatted";
+
+function projectToolResult(content: string, mode: ToolResultDisplayMode): string {
+  const hasPlaceholderMarker = content.includes('"agentsview_image"');
+  const hasRetainedImageMarker = mode === "formatted" && content.includes('"input_image"');
+  if (!hasPlaceholderMarker && !hasRetainedImageMarker) return content;
+  const direct = displayToolResultArray(content, mode);
   if (direct !== null) return direct;
 
   // Multi-agent summaries join labelled results and trailing anonymous output
@@ -29,14 +57,14 @@ export function displayToolResult(content: string): string {
       const newline = part.indexOf("\n");
       if (newline > 0 && part.slice(0, newline).trimEnd().endsWith(":")) {
         const body = part.slice(newline + 1);
-        return part.slice(0, newline + 1) + (displayToolResultArray(body) ?? body);
+        return part.slice(0, newline + 1) + (displayToolResultArray(body, mode) ?? body);
       }
-      return displayToolResultArray(part) ?? part;
+      return displayToolResultArray(part, mode) ?? part;
     })
     .join("\n\n");
 }
 
-function displayToolResultArray(content: string): string | null {
+function displayToolResultArray(content: string, mode: ToolResultDisplayMode): string | null {
   let blocks: unknown;
   try {
     blocks = JSON.parse(content);
@@ -47,15 +75,30 @@ function displayToolResultArray(content: string): string | null {
   const text: string[] = [];
   let hasImage = false;
   for (const block of blocks) {
-    if (!block || typeof block !== "object" || typeof block.text !== "string") {
+    if (!block || typeof block !== "object") {
       return content;
     }
-    if (block.type === "agentsview_image" && block.version === 1) {
+    const candidate = block as {
+      type?: unknown;
+      version?: unknown;
+      text?: unknown;
+      image_url?: unknown;
+    };
+    if (mode === "formatted" && candidate.type === "input_image") {
+      const image = inlineImageMarkdown(candidate.image_url);
+      if (image === null) return content;
       hasImage = true;
-    } else if (block.type !== "input_text" && block.type !== "text") {
+      text.push(image);
+    } else if (typeof candidate.text !== "string") {
       return content;
+    } else if (candidate.type === "agentsview_image" && candidate.version === 1) {
+      hasImage = true;
+      text.push(candidate.text);
+    } else if (candidate.type !== "input_text" && candidate.type !== "text") {
+      return content;
+    } else {
+      text.push(candidate.text);
     }
-    text.push(block.text);
   }
   return hasImage ? text.join("\n\n") : content;
 }
