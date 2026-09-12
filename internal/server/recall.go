@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -710,13 +709,7 @@ func (s *Server) handleReviewRecallEntry(
 		return
 	}
 	var req reviewRecallEntryRequest
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+	if err := json.UnmarshalRead(r.Body, &req, json.RejectUnknownMembers(true)); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
