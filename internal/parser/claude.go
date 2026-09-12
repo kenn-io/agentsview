@@ -1004,9 +1004,12 @@ func claudeSessionIdentityUpdate(line string, stored claudeStoredIdentity) bool 
 // collectClaudeUnmatchedToolResults returns result links for appended
 // tool_result blocks whose tool_use lives outside the appended window.
 // In-append results pair at write time and agentId-linked results are
-// already carried by collectClaudeSubagentLinks. isMeta carriers are
-// skipped: the full parser drops those lines entirely, so their result
-// content never reaches the stored tool call there either. Results
+// already carried by collectClaudeSubagentLinks. Only result-bearing
+// links suppress a late result: a queue/progress mapping for the same
+// tool_use carries no content, so its result still has to be copied
+// here. isMeta carriers are skipped: the full parser drops those lines
+// entirely, so their result content never reaches the stored tool call
+// there either. Results
 // whose tool_use id is unknown to the store no-op at apply time,
 // matching the full parser's unpaired-result behavior.
 func collectClaudeUnmatchedToolResults(
@@ -1014,7 +1017,9 @@ func collectClaudeUnmatchedToolResults(
 ) []ClaudeSubagentLink {
 	linked := make(map[string]struct{}, len(agentLinks))
 	for _, l := range agentLinks {
-		linked[l.ToolUseID] = struct{}{}
+		if l.HasResult {
+			linked[l.ToolUseID] = struct{}{}
+		}
 	}
 	appendedToolUse := make(map[string]struct{})
 	var out []ClaudeSubagentLink
