@@ -2,54 +2,39 @@ package main
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/poller"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
 )
 
-const periodicPricingRefreshInterval = 24 * time.Hour
+const (
+	pricingRefreshJobName  = "pricing-refresh"
+	pricingRefreshInterval = 24 * time.Hour
+	pricingRefreshJitter   = 5 * time.Minute
+)
 
 type pricingRefreshExclusiveRunner interface {
 	RunExclusive(func() error) error
 }
 
-func startPeriodicPricingRefresh(
-	ctx context.Context,
-	database *db.DB,
-	runner pricingRefreshExclusiveRunner,
-) {
-	if err := runCurrentPricingRefresh(
-		ctx, database, runner,
-	); err != nil && ctx.Err() == nil {
-		log.Printf("pricing refresh: %v", err)
+func pricingRefreshJob(database *db.DB, runner pricingRefreshExclusiveRunner) poller.Job {
+	return poller.Job{
+		Name:       pricingRefreshJobName,
+		Interval:   pricingRefreshInterval,
+		Jitter:     pricingRefreshJitter,
+		Cooldown:   pricingrefresh.RefreshCooldown,
+		RunAtStart: true,
+		Run: func(ctx context.Context) error {
+			return runPricingExclusive(runner, func() error {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				return pricingrefresh.RefreshCurrent(ctx, database)
+			})
+		},
 	}
-	ticker := time.NewTicker(periodicPricingRefreshInterval)
-	defer ticker.Stop()
-	runPeriodicPricingRefresh(ctx, ticker.C, database, runner)
-}
-
-func runPeriodicPricingRefresh(
-	ctx context.Context,
-	ticks <-chan time.Time,
-	database *db.DB,
-	runner pricingRefreshExclusiveRunner,
-) {
-	runPricingRefreshLoop(ctx, ticks, func(ctx context.Context) error {
-		return runCurrentPricingRefresh(ctx, database, runner)
-	})
-}
-
-func runCurrentPricingRefresh(
-	ctx context.Context,
-	database *db.DB,
-	runner pricingRefreshExclusiveRunner,
-) error {
-	refresh := func() error {
-		return pricingrefresh.RefreshCurrent(ctx, database)
-	}
-	return runPricingExclusive(runner, refresh)
 }
 
 func runPricingExclusive(
@@ -60,21 +45,4 @@ func runPricingExclusive(
 		return work()
 	}
 	return runner.RunExclusive(work)
-}
-
-func runPricingRefreshLoop(
-	ctx context.Context,
-	ticks <-chan time.Time,
-	refresh func(context.Context) error,
-) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticks:
-			if err := refresh(ctx); err != nil && ctx.Err() == nil {
-				log.Printf("pricing refresh: %v", err)
-			}
-		}
-	}
 }

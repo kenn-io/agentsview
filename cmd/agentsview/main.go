@@ -24,6 +24,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/poller"
 	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/secrets"
@@ -458,7 +459,11 @@ func runServe(cfg config.Config, opts serveOptions) {
 		pricingRefreshRunner = engine
 	}
 	seedPricing(database, pricingRefreshRunner)
-	go startPeriodicPricingRefresh(ctx, database, pricingRefreshRunner)
+	scheduler := poller.Start(ctx, pricingRefreshJob(database, pricingRefreshRunner))
+	defer func() {
+		stop()
+		scheduler.Wait()
+	}()
 
 	rtOpts := serveRuntimeOptions{
 		Mode:           "serve",
