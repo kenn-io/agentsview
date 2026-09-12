@@ -37,9 +37,9 @@ The top-level **Recall** page has two tabs:
 
 - **Corpus** is a browser and review surface for distilled entries. It shows
   extraction coverage and generation state, and filters entries by text,
-  project, entry type, generation, and review state. Expand an entry to inspect
-  its body, trigger, uncertainty, provenance metadata, evidence links back to
-  the source transcript, and review controls for automatic entries.
+  project, entry type, generation, and review state. Expand an entry to
+  inspect its body, trigger, uncertainty, provenance metadata, evidence links
+  back to the source transcript, and review controls for automatic entries.
 - **Generated insights** creates and stores longer reports over an explicit
   session scope. Its form always shows the date range, project, session agent,
   automated-session scope, report template, generator, and optional focus used
@@ -123,6 +123,9 @@ archive it. **Approve** immediately marks the entry `human_reviewed`; approval
 is disabled when its source evidence has been revoked. **Archive** asks for
 confirmation, then marks the entry `human_rejected` and removes it from the
 served Recall corpus.
+
+Review actions are unavailable when `archive_content = "usage"`, which excludes
+transcript-derived Recall entries from storage.
 
 Both decisions are durable human states and are not reversed by later
 extraction-generation changes. This surface deliberately has no entry editing,
@@ -263,13 +266,13 @@ reviewed-import boundaries rather than through a separate model write path.
 
 Entries have one of five review states:
 
-| Review state      | Meaning                                                 |
-| ----------------- | ------------------------------------------------------- |
-| `human_reviewed`  | Explicitly approved by a human                          |
-| `human_rejected`  | Explicitly rejected and archived by a human             |
-| `unreviewed_auto` | Generated or omitted review decision                    |
-| `calibrated_auto` | Automated output from a calibrated future policy        |
-| `eval_raw`        | Quarantined evaluation material                         |
+| Review state      | Meaning                                          |
+| ----------------- | ------------------------------------------------ |
+| `human_reviewed`  | Explicitly approved by a human                   |
+| `human_rejected`  | Explicitly rejected and archived by a human      |
+| `unreviewed_auto` | Generated or omitted review decision             |
+| `calibrated_auto` | Automated output from a calibrated future policy |
+| `eval_raw`        | Quarantined evaluation material                  |
 
 A trusted-only read requires an accepted, `human_reviewed` entry that is both
 transferable and provenance-valid. Automated labels cannot confer

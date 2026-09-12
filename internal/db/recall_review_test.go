@@ -8,8 +8,36 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	corerecall "go.kenn.io/agentsview/internal/recall"
 )
+
+func TestReviewRecallEntryRejectsUsageOnlyStorage(t *testing.T) {
+	for _, action := range []RecallReviewAction{RecallReviewApprove, RecallReviewArchive} {
+		t.Run(string(action), func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "review-session", "project-a")
+			_, err := d.InsertRecallEntry(RecallEntry{
+				ID: "entry", Type: "fact", Scope: "project",
+				Status: "accepted", ReviewState: "unreviewed_auto",
+				Title: "Retained entry", Body: "Retained derived text",
+				ProvenanceOK: true, SourceSessionID: "review-session",
+			})
+			require.NoError(t, err)
+			before, err := d.GetRecallEntry(t.Context(), "entry")
+			require.NoError(t, err)
+			d.SetArchiveContent(config.ArchiveContentUsage)
+
+			entry, err := d.ReviewRecallEntry(t.Context(), "entry", action)
+
+			require.ErrorIs(t, err, ErrArchiveContentExcluded)
+			assert.Empty(t, entry)
+			after, err := d.GetRecallEntry(t.Context(), "entry")
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+		})
+	}
+}
 
 func TestReviewRecallEntryTransitions(t *testing.T) {
 	tests := []struct {

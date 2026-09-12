@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,10 +15,11 @@ import (
 // The caller must hold db.mu and invoke this before schema initialization so
 // schema.sql can recreate the dropped indexes and triggers canonically.
 func migrateRecallReviewStateConstraintLocked(
+	ctx context.Context,
 	w *writerHandle,
 ) (retErr error) {
 	var tableSQL string
-	err := w.QueryRow(`
+	err := w.QueryRowContext(ctx, `
 		SELECT sql FROM sqlite_master
 		WHERE type = 'table' AND name = 'recall_entries'
 	`).Scan(&tableSQL)
@@ -33,7 +35,6 @@ func migrateRecallReviewStateConstraintLocked(
 		return nil
 	}
 
-	ctx := context.Background()
 	conn, err := w.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf(
@@ -41,6 +42,12 @@ func migrateRecallReviewStateConstraintLocked(
 		)
 	}
 	defer func() {
+		if ctx.Err() != nil {
+			// Cancellation can start an asynchronous rollback before our
+			// deferred Rollback. Do not reuse connection-local PRAGMA state.
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			return
+		}
 		if err := conn.Close(); err != nil {
 			retErr = errors.Join(retErr, err)
 		}
@@ -58,11 +65,11 @@ func migrateRecallReviewStateConstraintLocked(
 		return fmt.Errorf("disabling foreign keys: %w", err)
 	}
 	defer func() {
-		if foreignKeys == 0 {
+		if foreignKeys == 0 || ctx.Err() != nil {
 			return
 		}
-		if _, err := conn.ExecContext(
-			ctx, `PRAGMA foreign_keys = ON`,
+		if _, err := execWithoutCancel(
+			ctx, conn, `PRAGMA foreign_keys = ON`,
 		); err != nil {
 			retErr = errors.Join(retErr,
 				fmt.Errorf("restoring foreign keys: %w", err))
@@ -107,6 +114,9 @@ func migrateRecallReviewStateConstraintLocked(
 	broken := rows.Next()
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("closing recall foreign-key check: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("checking migrated recall foreign keys: %w", err)
 	}
 	if broken {
 		return errors.New("migrated recall entries failed foreign-key check")

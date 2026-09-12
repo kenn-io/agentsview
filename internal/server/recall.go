@@ -734,6 +734,8 @@ func (s *Server) handleRecallReviewError(w http.ResponseWriter, err error) {
 		return
 	}
 	switch {
+	case errors.Is(err, db.ErrArchiveContentExcluded):
+		writeError(w, http.StatusNotImplemented, err.Error())
 	case errors.Is(err, db.ErrInvalidRecallReviewAction):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, db.ErrRecallEntryNotFound):

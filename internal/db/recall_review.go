@@ -44,6 +44,9 @@ func (db *DB) ReviewRecallEntry(
 	if err := db.requireWritable(); err != nil {
 		return RecallEntry{}, err
 	}
+	if err := db.requireDerivedTextStorage("recall entries"); err != nil {
+		return RecallEntry{}, err
+	}
 	id = strings.TrimSpace(id)
 	action = RecallReviewAction(strings.TrimSpace(string(action)))
 	if err := action.Validate(); err != nil {

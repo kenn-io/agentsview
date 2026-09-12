@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -102,7 +103,46 @@ func TestOpenMigratesLegacyRecallReviewConstraint(t *testing.T) {
 	require.NoError(t, tx.Commit())
 	_, err = conn.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`)
 	require.NoError(t, err)
+
+	var beforeFK int
+	require.NoError(t, conn.QueryRowContext(t.Context(), `PRAGMA foreign_keys`).Scan(&beforeFK))
+	require.Equal(t, 1, beforeFK)
+
+	// Cancel after the migration begins copying the legacy entries. A later
+	// open must still be able to migrate the intact original table.
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, _, _ string) int {
+			if op == sqlite3.SQLITE_INSERT && table == "recall_entries_review_state_v2" {
+				cancel()
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
 	require.NoError(t, conn.Close())
+	d.mu.Lock()
+	err = migrateRecallReviewStateConstraintLocked(ctx, d.getWriter())
+	d.mu.Unlock()
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
+
+	conn, err = d.getWriter().Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(nil)
+		return nil
+	}))
+	var foreignKeys int
+	require.NoError(t, conn.QueryRowContext(t.Context(), `PRAGMA foreign_keys`).Scan(&foreignKeys))
+	assert.Equal(t, 1, foreignKeys)
+	require.NoError(t, conn.Close())
+	var legacySQL string
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `
+		SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'recall_entries'
+	`).Scan(&legacySQL))
+	assert.Contains(t, legacySQL, "CHECK (review_state IN")
 	require.NoError(t, d.Close())
 
 	for pass := range 2 {

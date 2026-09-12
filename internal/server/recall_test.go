@@ -1304,6 +1304,28 @@ func TestReviewRecallEntryAllowsRevokedArchive(t *testing.T) {
 }
 
 func TestReviewRecallEntryMapsUnavailableWriters(t *testing.T) {
+	t.Run("usage only", func(t *testing.T) {
+		var notifications atomic.Int32
+		te := setupWithServerOpts(t, []server.Option{
+			server.WithRecallCorpusMutationNotifier(func() {
+				notifications.Add(1)
+			}),
+		})
+		seedReviewableRecallEntry(t, te, "review-me", true,
+			corerecall.StatusAccepted, corerecall.ReviewStateUnreviewedAuto)
+		te.db.SetArchiveContent(config.ArchiveContentUsage)
+
+		w := te.post(t, "/api/v1/recall/entries/review-me/review",
+			`{"action":"approve"}`)
+
+		assertStatus(t, w, http.StatusNotImplemented)
+		assert.Zero(t, notifications.Load())
+		entry, err := te.db.GetRecallEntry(t.Context(), "review-me")
+		require.NoError(t, err)
+		require.NotNil(t, entry)
+		assert.Equal(t, corerecall.ReviewStateUnreviewedAuto, entry.ReviewState)
+	})
+
 	t.Run("maintenance", func(t *testing.T) {
 		var notifications atomic.Int32
 		te := setupWithServerOpts(t, []server.Option{
