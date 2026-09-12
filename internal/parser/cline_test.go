@@ -728,3 +728,128 @@ func TestParseClineSession_ContentBlockToolResults(t *testing.T) {
 	assert.JSONEq(t, `[{"type": "text", "text": "package main\n\nfunc main() {}"}]`, tr.ContentRaw)
 	assert.Equal(t, "package main\n\nfunc main() {}", DecodeContent(tr.ContentRaw))
 }
+
+func TestParseClineSession_ProviderPropagation(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "1789000000001_provider"
+	taskDir := filepath.Join(dir, sessionID)
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
+
+	metaJSON := `{
+		"version": 1,
+		"session_id": "1789000000001_provider",
+		"provider": "openrouter",
+		"model": "deepseek-chat",
+		"started_at": "2026-09-10T10:00:00.000Z",
+		"ended_at": "2026-09-10T10:05:00.000Z",
+		"metadata": {
+			"totalCost": 0.05,
+			"usage": {
+				"inputTokens": 1000,
+				"outputTokens": 200,
+				"totalCost": 0.05
+			}
+		}
+	}`
+	metaPath := filepath.Join(taskDir, sessionID+".json")
+	require.NoError(t, os.WriteFile(metaPath, []byte(metaJSON), 0o644))
+
+	messagesJSON := `{
+		"messages": [
+			{
+				"id": "msg_001",
+				"role": "user",
+				"content": [{"type": "text", "text": "Hello"}],
+				"ts": 1789034400000
+			},
+			{
+				"id": "msg_002",
+				"role": "assistant",
+				"content": [{"type": "text", "text": "Hi there"}],
+				"ts": 1789034401000
+			},
+			{
+				"id": "msg_003",
+				"role": "assistant",
+				"modelInfo": {
+					"id": "claude-3-5-sonnet",
+					"provider": "anthropic"
+				},
+				"content": [{"type": "text", "text": "Switched model"}],
+				"ts": 1789034402000
+			}
+		]
+	}`
+	messagesPath := filepath.Join(taskDir, sessionID+".messages.json")
+	require.NoError(t, os.WriteFile(messagesPath, []byte(messagesJSON), 0o644))
+
+	sess, msgs, err := parseClineSession(metaPath, "test-proj", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, msgs, 3)
+
+	// User message should have empty ProviderID
+	assert.Empty(t, msgs[0].ProviderID)
+
+	// First assistant message should inherit session-level provider ("openrouter")
+	assert.Equal(t, "openrouter", msgs[1].ProviderID)
+	assert.Equal(t, "deepseek-chat", msgs[1].Model)
+
+	// Second assistant message has per-message modelInfo overriding provider to "anthropic"
+	assert.Equal(t, "anthropic", msgs[2].ProviderID)
+	assert.Equal(t, "claude-3-5-sonnet", msgs[2].Model)
+
+	// Aggregate usage event should carry session-level provider ("openrouter")
+	require.NotEmpty(t, sess.UsageEvents)
+	assert.Equal(t, "openrouter", sess.UsageEvents[0].ProviderID)
+	assert.Equal(t, "deepseek-chat", sess.UsageEvents[0].Model)
+}
+
+func TestParseClineSession_CanonicalSessionIDValidation(t *testing.T) {
+	dir := t.TempDir()
+
+	// Case 1: Matching metadata session_id succeeds
+	sess1Dir := filepath.Join(dir, "sess-canonical-1")
+	require.NoError(t, os.MkdirAll(sess1Dir, 0o755))
+	meta1 := filepath.Join(sess1Dir, "sess-canonical-1.json")
+	require.NoError(t, os.WriteFile(meta1, []byte(`{"session_id":"sess-canonical-1"}`), 0o644))
+	sess1, _, err := parseClineSession(meta1, "proj", "local")
+	require.NoError(t, err)
+	assert.Equal(t, "cline:sess-canonical-1", sess1.ID)
+
+	// Case 2: Omitted metadata session_id falls back to canonical ID
+	sess2Dir := filepath.Join(dir, "sess-canonical-2")
+	require.NoError(t, os.MkdirAll(sess2Dir, 0o755))
+	meta2 := filepath.Join(sess2Dir, "sess-canonical-2.json")
+	require.NoError(t, os.WriteFile(meta2, []byte(`{}`), 0o644))
+	sess2, _, err := parseClineSession(meta2, "proj", "local")
+	require.NoError(t, err)
+	assert.Equal(t, "cline:sess-canonical-2", sess2.ID)
+
+	// Case 3: Mismatch between metadata session_id and directory name is rejected
+	sess3Dir := filepath.Join(dir, "sess-canonical-3")
+	require.NoError(t, os.MkdirAll(sess3Dir, 0o755))
+	meta3 := filepath.Join(sess3Dir, "sess-canonical-3.json")
+	require.NoError(t, os.WriteFile(meta3, []byte(`{"session_id":"stale-or-evil-id"}`), 0o644))
+	_, _, err = parseClineSession(meta3, "proj", "local")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not match canonical id")
+
+	// Case 4: Mismatch between filename and directory name is rejected
+	sess4Dir := filepath.Join(dir, "sess-canonical-4")
+	require.NoError(t, os.MkdirAll(sess4Dir, 0o755))
+	meta4 := filepath.Join(sess4Dir, "wrong-name.json")
+	require.NoError(t, os.WriteFile(meta4, []byte(`{"session_id":"sess-canonical-4"}`), 0o644))
+	_, _, err = parseClineSession(meta4, "proj", "local")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not match directory")
+
+	// Case 5: Malformed directory name (e.g. underscore prefix) is rejected
+	sess5Dir := filepath.Join(dir, "_invalid_sess")
+	require.NoError(t, os.MkdirAll(sess5Dir, 0o755))
+	meta5 := filepath.Join(sess5Dir, "_invalid_sess.json")
+	require.NoError(t, os.WriteFile(meta5, []byte(`{"session_id":"_invalid_sess"}`), 0o644))
+	_, _, err = parseClineSession(meta5, "proj", "local")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid cline session directory name")
+}

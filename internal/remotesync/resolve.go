@@ -1053,11 +1053,7 @@ func kiloLegacySessionFileShape(rel string) bool {
 // validClineSessionID reports whether sessionID is safe to discover, sync,
 // and archive without introducing path traversal or escaping separators.
 func validClineSessionID(sessionID string) bool {
-	if sessionID == "" || strings.HasPrefix(sessionID, "_") || strings.HasPrefix(sessionID, ".") ||
-		strings.ContainsAny(sessionID, "\\:\x00") {
-		return false
-	}
-	return true
+	return parser.ValidClineSessionID(sessionID)
 }
 
 // clineSessionFileShape reports whether rel — a slash-separated path

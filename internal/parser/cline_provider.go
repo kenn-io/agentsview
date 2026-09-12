@@ -43,6 +43,17 @@ func newClineProviderFactory(def AgentDef) ProviderFactory {
 	)
 }
 
+// ValidClineSessionID reports whether sessionID is a safe, valid Cline
+// session ID that does not escape directories, traverse paths, or contain
+// injection characters.
+func ValidClineSessionID(sessionID string) bool {
+	if sessionID == "" || strings.HasPrefix(sessionID, "_") || strings.HasPrefix(sessionID, ".") ||
+		strings.ContainsAny(sessionID, "\\/:\x00") || !isSafeSinglePathComponent(sessionID) {
+		return false
+	}
+	return true
+}
+
 func clineResolveSessionsDir(root string) string {
 	clean := filepath.Clean(root)
 	if strings.HasSuffix(filepath.ToSlash(clean), "data/sessions") || filepath.Base(clean) == "sessions" {
@@ -56,7 +67,7 @@ func clineDiscoverEach(
 ) error {
 	sessionsDir := clineResolveSessionsDir(root)
 	return streamDirectoryEntries(ctx, sessionsDir, func(entry os.DirEntry) error {
-		if !entry.IsDir() || strings.HasPrefix(entry.Name(), "_") || strings.HasPrefix(entry.Name(), ".") {
+		if !entry.IsDir() || !ValidClineSessionID(entry.Name()) {
 			return nil
 		}
 		sessionID := entry.Name()
@@ -109,7 +120,7 @@ func clineClassifyPath(
 	sessionID := parts[0]
 	filename := parts[1]
 
-	if strings.HasPrefix(sessionID, "_") || strings.HasPrefix(sessionID, ".") {
+	if !ValidClineSessionID(sessionID) {
 		return singleFileMatch{}, false
 	}
 

@@ -138,13 +138,23 @@ func parseClineSession(
 		return nil, nil, fmt.Errorf("parsing cline metadata: %w", err)
 	}
 
-	if meta.SessionID == "" {
-		// Fallback to directory name if session_id is omitted.
-		meta.SessionID = filepath.Base(filepath.Dir(filepath.Clean(metaPath)))
+	cleanMetaPath := filepath.Clean(metaPath)
+	sessionDir := filepath.Dir(cleanMetaPath)
+	canonicalID := filepath.Base(sessionDir)
+	if !ValidClineSessionID(canonicalID) {
+		return nil, nil, fmt.Errorf("invalid cline session directory name: %q", canonicalID)
+	}
+	baseName := strings.TrimSuffix(filepath.Base(cleanMetaPath), ".json")
+	if baseName != canonicalID {
+		return nil, nil, fmt.Errorf("cline metadata filename %q does not match directory %q", filepath.Base(cleanMetaPath), canonicalID)
+	}
+	if meta.SessionID != "" && meta.SessionID != canonicalID {
+		return nil, nil, fmt.Errorf("cline metadata session_id %q does not match canonical id %q", meta.SessionID, canonicalID)
 	}
 
-	sessionID := string(AgentCline) + ":" + meta.SessionID
+	sessionID := string(AgentCline) + ":" + canonicalID
 	model := meta.Model
+	provider := meta.Provider
 
 	cwd := meta.Cwd
 	if cwd == "" {
@@ -163,10 +173,9 @@ func parseClineSession(
 		startedAt = t
 	}
 
-	sessionDir := filepath.Dir(metaPath)
-	messagesPath := filepath.Join(sessionDir, meta.SessionID+".messages.json")
+	messagesPath := filepath.Join(sessionDir, canonicalID+".messages.json")
 
-	parsedMessages, peakCtx, maxTS, err := parseClineMessages(messagesPath, model)
+	parsedMessages, peakCtx, maxTS, err := parseClineMessages(messagesPath, model, provider)
 	if err != nil && !os.IsNotExist(err) {
 		return nil, nil, fmt.Errorf("parsing cline messages: %w", err)
 	}
@@ -316,9 +325,10 @@ func parseClineSession(
 	// - When no per-message token metrics exist, emit whenever aggregate token usage or total cost exists.
 	if (!hasMessageUsage && usage != nil) || parsedCost != nil {
 		event := ParsedUsageEvent{
-			SessionID: sessionID,
-			Source:    "session",
-			Model:     model,
+			SessionID:  sessionID,
+			Source:     "session",
+			Model:      model,
+			ProviderID: provider,
 			OccurredAt: func() string {
 				if !endedAt.IsZero() {
 					return endedAt.Format(time.RFC3339Nano)
@@ -352,6 +362,7 @@ func parseClineSession(
 func parseClineMessages(
 	path string,
 	defaultModel string,
+	defaultProvider string,
 ) ([]ParsedMessage, int, time.Time, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -383,8 +394,14 @@ func parseClineMessages(
 		}
 
 		model := defaultModel
-		if rawMsg.ModelInfo != nil && rawMsg.ModelInfo.ID != "" {
-			model = rawMsg.ModelInfo.ID
+		provider := defaultProvider
+		if rawMsg.ModelInfo != nil {
+			if rawMsg.ModelInfo.ID != "" {
+				model = rawMsg.ModelInfo.ID
+			}
+			if rawMsg.ModelInfo.Provider != "" {
+				provider = rawMsg.ModelInfo.Provider
+			}
 		}
 
 		var textParts []string
@@ -467,6 +484,11 @@ func parseClineMessages(
 			role = RoleAssistant
 		}
 
+		msgProvider := ""
+		if role == RoleAssistant {
+			msgProvider = provider
+		}
+
 		msg := ParsedMessage{
 			Ordinal:       ordinal,
 			Role:          role,
@@ -479,6 +501,7 @@ func parseClineMessages(
 			ToolCalls:     toolCalls,
 			ToolResults:   toolResults,
 			Model:         model,
+			ProviderID:    msgProvider,
 			SourceUUID:    rawMsg.ID,
 		}
 
