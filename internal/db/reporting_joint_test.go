@@ -72,6 +72,68 @@ func TestReportingJointCellsPreserveTimeAndDimensions(t *testing.T) {
 	assert.Equal(t, oracle.Peak.Agents, hour.Activity.Peak.Agents)
 }
 
+func TestReportingJointSubagentsTakePrecedenceOverAutomation(t *testing.T) {
+	d := testDB(t)
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: "model-a", OutputPerMTok: money.MustParseDollars("1"),
+	}}))
+	for _, session := range []struct {
+		id                  string
+		subagent, automated bool
+	}{
+		{"root", false, false},
+		{"child", true, false},
+		{"automated-child", true, true},
+		{"automated", false, true},
+	} {
+		insertSession(t, d, session.id, "project-a", func(s *Session) {
+			s.Agent = "agent-a"
+			s.StartedAt, s.EndedAt = new("2026-07-28T12:00:00Z"), new("2026-07-28T12:01:00Z")
+			s.IsAutomated = session.automated
+			if session.subagent {
+				s.ParentSessionID = new("root")
+				s.RelationshipType = "subagent"
+			}
+		})
+		insertMessages(t, d,
+			Message{SessionID: session.id, Ordinal: 0, Role: "user", Timestamp: "2026-07-28T12:00:00Z"},
+			Message{SessionID: session.id, Ordinal: 1, Role: "assistant", Timestamp: "2026-07-28T12:01:00Z",
+				Model: "model-a", TokenUsage: jsontext.Value(`{"output_tokens":10}`)},
+		)
+	}
+	day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
+		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4,
+	})
+	require.NoError(t, err)
+	hour := day.Hours[12]
+	require.NotNil(t, hour.Joint)
+	require.Len(t, hour.Joint.Cells, 3)
+	for i, want := range []struct {
+		category string
+		minutes  float64
+		peak     int
+		tokens   int64
+	}{
+		{"automated", 1, 1, 10},
+		{"interactive", 1, 1, 10},
+		{"subagent", 2, 2, 20},
+	} {
+		cell := hour.Joint.Cells[i]
+		assert.Equal(t, want.category, cell.Automation)
+		assert.Equal(t, want.minutes, cell.AgentMinutes)
+		assert.Equal(t, want.peak, cell.MaxAgents)
+		assert.Equal(t, want.tokens, cell.Usage.OutputTokens)
+		assert.Equal(t, money.Money{Microdollars: want.tokens}, cell.Usage.Cost)
+		assert.Equal(t, cell.Usage.Cost, cell.Pricing.ComputedCost)
+	}
+	assert.Equal(t, 1.0, hour.Activity.Totals.InteractiveAgentMinutes)
+	assert.Equal(t, 2.0, hour.Activity.Totals.SubagentAgentMinutes)
+	assert.Equal(t, 1.0, hour.Activity.Totals.AutomatedAgentMinutes)
+	assert.Equal(t, 2, hour.Activity.Buckets[0].MaxSubagentAgents)
+	assert.Equal(t, money.Money{Microdollars: 20}, hour.Activity.Totals.SubagentCost)
+}
+
 func TestReportingJointCorrectionsReplaceCellsWithinSnapshot(t *testing.T) {
 	d := testDB(t)
 	seedJointReporting(t, d)

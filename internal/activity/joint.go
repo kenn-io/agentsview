@@ -16,7 +16,7 @@ type JointActivityCell struct {
 	ProjectKey   string
 	Agent        string
 	Model        string
-	IsAutomated  bool
+	Category     string
 	AgentMinutes float64
 	MaxAgents    int
 }
@@ -59,7 +59,7 @@ func AggregateCandidatesWithJointActivity(
 type jointActivityKey struct {
 	bucket                int
 	project, agent, model string
-	automated             bool
+	category              string
 }
 
 type jointActivityState struct {
@@ -82,18 +82,19 @@ func (a *jointActivityAccumulator) add(iv interval) {
 	if project == "" {
 		project = session.Project
 	}
+	category := session.ActivityCategory()
 	for i := max(0, windowIndex(a.windows, iv.start)); i < len(a.windows) && a.windows[i].Start.Before(iv.end); i++ {
 		window := a.windows[i]
 		start, end := maxTime(iv.start, window.Start), minTime(iv.end, window.End)
 		if !end.After(start) {
 			continue
 		}
-		key := jointActivityKey{i, project, session.Agent, iv.model, session.IsAutomated}
+		key := jointActivityKey{i, project, session.Agent, iv.model, category}
 		state := a.cells[key]
 		if state == nil {
 			state = &jointActivityState{
 				cell: JointActivityCell{BucketStart: window.Start, Project: session.Project, ProjectKey: session.ProjectKey,
-					Agent: session.Agent, Model: iv.model, IsAutomated: session.IsAutomated},
+					Agent: session.Agent, Model: iv.model, Category: category},
 				deltas: make(map[time.Time]int),
 			}
 			a.cells[key] = state
@@ -130,13 +131,7 @@ func (a *jointActivityAccumulator) finish(ctx context.Context) ([]JointActivityC
 				return order
 			}
 		}
-		if a.IsAutomated == b.IsAutomated {
-			return 0
-		}
-		if a.IsAutomated {
-			return 1
-		}
-		return -1
+		return cmp.Compare(a.Category, b.Category)
 	})
 	return cells, nil
 }

@@ -26,8 +26,8 @@ func TestJointActivityModelSwitchDoesNotDoubleCountSession(t *testing.T) {
 	assert.Equal(t, 1, report.Buckets[0].MaxAgents)
 	assert.Equal(t, 5.0, report.Totals.AgentMinutes)
 	assert.Equal(t, []JointActivityCell{
-		{BucketStart: start, Project: "project-a", Agent: "agent-a", Model: "model-a", AgentMinutes: 2, MaxAgents: 1},
-		{BucketStart: start, Project: "project-a", Agent: "agent-a", Model: "model-b", AgentMinutes: 3, MaxAgents: 1},
+		{BucketStart: start, Project: "project-a", Agent: "agent-a", Model: "model-a", Category: "interactive", AgentMinutes: 2, MaxAgents: 1},
+		{BucketStart: start, Project: "project-a", Agent: "agent-a", Model: "model-b", Category: "interactive", AgentMinutes: 3, MaxAgents: 1},
 	}, report.JointActivity)
 }
 
@@ -49,9 +49,9 @@ func TestJointActivityKeepsDimensionsAndClipsAtBuckets(t *testing.T) {
 	report, err := AggregateCandidatesWithJointActivity(t.Context(), p, sessions, candidates, nil)
 	require.NoError(t, err)
 	assert.Equal(t, []JointActivityCell{
-		{BucketStart: start, Project: "project-a", Agent: "agent-a", Model: "model-a", AgentMinutes: 1, MaxAgents: 1},
-		{BucketStart: start.Add(5 * time.Minute), Project: "project-a", Agent: "agent-a", Model: "model-a", AgentMinutes: 3, MaxAgents: 2},
-		{BucketStart: start.Add(5 * time.Minute), Project: "project-b", Agent: "agent-b", Model: "unknown", IsAutomated: true, AgentMinutes: 1, MaxAgents: 1},
+		{BucketStart: start, Project: "project-a", Agent: "agent-a", Model: "model-a", Category: "interactive", AgentMinutes: 1, MaxAgents: 1},
+		{BucketStart: start.Add(5 * time.Minute), Project: "project-a", Agent: "agent-a", Model: "model-a", Category: "interactive", AgentMinutes: 3, MaxAgents: 2},
+		{BucketStart: start.Add(5 * time.Minute), Project: "project-b", Agent: "agent-b", Model: "unknown", Category: "automated", AgentMinutes: 1, MaxAgents: 1},
 	}, report.JointActivity)
 	assert.Equal(t, 3, report.Buckets[1].MaxAgents)
 

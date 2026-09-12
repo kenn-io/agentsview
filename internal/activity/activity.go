@@ -503,6 +503,19 @@ func (s SessionMeta) kind() sessionKind {
 	return interactiveSession
 }
 
+// ActivityCategory names the session's disjoint activity category for exports.
+// Delegation takes precedence over the independent automation flag.
+func (s SessionMeta) ActivityCategory() string {
+	switch s.kind() {
+	case subagentSession:
+		return "subagent"
+	case automatedSession:
+		return "automated"
+	default:
+		return "interactive"
+	}
+}
+
 // Sessions absent from the map are treated as interactive.
 func sessionKinds(sessions []SessionMeta) map[string]sessionKind {
 	m := make(map[string]sessionKind, len(sessions))

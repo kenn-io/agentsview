@@ -171,10 +171,16 @@ whole archive). `joint.cells` is a sparse array with these fields:
 | `bucket_start`                | UTC start of a half-open bucket lasting `bucket_seconds`                                        |
 | `project`, `project_key`      | Safe display label and canonical archive-scoped key; an empty key is unattributed               |
 | `agent`, `model`              | Producer agent and model; `unknown` when absent                                                 |
-| `automation`                  | `interactive`, `automated`, or `unknown` for observations without session classification        |
+| `automation`                  | `interactive`, `subagent`, `automated`, or `unknown` without session classification             |
 | `agent_minutes`, `max_agents` | Sum of inferred activity durations and simultaneous peak within this cell                       |
 | `usage`                       | Input, output, cache-creation and cache-read tokens, plus cost in integer microdollars          |
 | `pricing`                     | `computed_cost`, `reported_cost`, `allocated_cost` in integer microdollars, and `unpriced_rows` |
+
+The `automation` field uses the same disjoint categories as activity totals.
+Subagents are labeled `subagent` even when their automation flag is set.
+Activity and usage share this classification, so subagents remain separate from
+other sessions with the same project, agent, model, and bucket. Standalone usage
+keeps `unknown`.
 
 Known cost is partitioned across the three pricing fields; their sum is the
 cell's usage cost. `allocated_cost` identifies an authoritative total

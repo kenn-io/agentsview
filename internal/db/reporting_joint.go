@@ -88,11 +88,7 @@ func jointReportingHour(
 		return state
 	}
 	for _, cell := range activityCells {
-		automation := "interactive"
-		if cell.IsAutomated {
-			automation = "automated"
-		}
-		state := cellFor(cell.BucketStart, cell.Project, cell.ProjectKey, cell.Agent, cell.Model, automation)
+		state := cellFor(cell.BucketStart, cell.Project, cell.ProjectKey, cell.Agent, cell.Model, cell.Category)
 		state.cell.AgentMinutes += cell.AgentMinutes
 		state.cell.MaxAgents = cell.MaxAgents
 	}
@@ -107,10 +103,7 @@ func jointReportingHour(
 		projectKey := ""
 		if known {
 			projectKey = export.ProjectKeyForEntry(projects[session.Project])
-			automation = "interactive"
-			if session.IsAutomated {
-				automation = "automated"
-			}
+			automation = session.ActivityCategory()
 			if agent == "" {
 				agent = session.Agent
 			}
