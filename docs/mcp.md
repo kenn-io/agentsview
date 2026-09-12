@@ -29,6 +29,9 @@ entry includes `transport`, `url`, `pid`, `backend_url` when known, and
 `token_path` when the listener requires a bearer token. Read the token from that
 private file; the status output does not print it.
 
+For wildcard binds, the URL uses loopback (`127.0.0.1` for IPv4 or `::1` for
+IPv6) so local clients can connect. Other bound addresses remain unchanged.
+
 The listener publishes its actual bound port after startup, including when
 started with port zero, and removes its record on orderly shutdown. Status omits
 records whose process has exited. Stdio sessions are not listening endpoints and

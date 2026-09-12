@@ -4,6 +4,7 @@ package mcpdiscovery
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 
@@ -25,13 +26,25 @@ type Endpoint struct {
 
 // Publish runs only after bind succeeds. The caller removes discovery state
 // after the listener closes, including shutdown caused by a serving error.
+// address is the bound listener address; wildcard hosts use loopback in the URL.
 func Publish(directory, address, token, backendURL string) (func() error, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("parse MCP listener address: %w", err)
+	}
+	if ip := net.ParseIP(host); ip.IsUnspecified() {
+		if ip.To4() != nil {
+			host = "127.0.0.1"
+		} else {
+			host = "::1"
+		}
+	}
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, err
 	}
 	store := daemon.RuntimeStore{Dir: directory, Prefix: "mcp"}
 	rec := daemon.NewRuntimeRecord(service, "", daemon.Endpoint{Network: "tcp", Address: address})
-	rec.Metadata = map[string]string{"url": "http://" + address + "/mcp", "backend_url": backendURL}
+	rec.Metadata = map[string]string{"url": "http://" + net.JoinHostPort(host, port) + "/mcp", "backend_url": backendURL}
 	tokenPath := ""
 	if token != "" {
 		file, err := os.CreateTemp(directory, "mcp-token-*")
