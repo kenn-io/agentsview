@@ -649,6 +649,11 @@ func resolveClineTarget(root string) (string, []string, error) {
 		if metaPath == "" || symlinkEscapesRoot(targetRoot, metaPath) {
 			continue
 		}
+		dir := filepath.Dir(metaPath)
+		sessionID := filepath.Base(dir)
+		if !validClineSessionID(sessionID) {
+			continue
+		}
 		regular, err := statRegularRemoteSyncFile(metaPath)
 		if err != nil {
 			return "", nil, err
@@ -657,8 +662,6 @@ func resolveClineTarget(root string) (string, []string, error) {
 			continue
 		}
 		files = append(files, metaPath)
-		dir := filepath.Dir(metaPath)
-		sessionID := filepath.Base(dir)
 		msgPath := filepath.Join(dir, sessionID+".messages.json")
 		regular, err = statRegularRemoteSyncFile(msgPath)
 		if err != nil {
@@ -1047,6 +1050,16 @@ func kiloLegacySessionFileShape(rel string) bool {
 	return false
 }
 
+// validClineSessionID reports whether sessionID is safe to discover, sync,
+// and archive without introducing path traversal or escaping separators.
+func validClineSessionID(sessionID string) bool {
+	if sessionID == "" || strings.HasPrefix(sessionID, "_") || strings.HasPrefix(sessionID, ".") ||
+		strings.ContainsAny(sessionID, "\\:\x00") {
+		return false
+	}
+	return true
+}
+
 // clineSessionFileShape reports whether rel — a slash-separated path
 // relative to a Cline root — names exactly a session file the
 // provider would discover: data/sessions/<sessionID>/<sessionID>.json,
@@ -1077,8 +1090,7 @@ func clineSessionFileShape(root, rel string) bool {
 	default:
 		return false
 	}
-	if sessionID == "" || strings.HasPrefix(sessionID, "_") || strings.HasPrefix(sessionID, ".") ||
-		strings.ContainsAny(sessionID, "\\:\x00") {
+	if !validClineSessionID(sessionID) {
 		return false
 	}
 	return filename == sessionID+".json" || filename == sessionID+".messages.json"

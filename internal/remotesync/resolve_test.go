@@ -1052,6 +1052,62 @@ func TestClineRemoteSyncExportsOnlySessionFiles(t *testing.T) {
 	assert.NotContains(t, targets.DeltaAllowedRoots(), clineRoot)
 }
 
+func TestClineRemoteSyncArchiveRejectsBackslashSessionIDs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("backslashes in directory names are not supported on Windows")
+	}
+	root := t.TempDir()
+	clineRoot := filepath.Join(root, ".cline")
+	validSess := filepath.Join(clineRoot, "data", "sessions", "sess-valid")
+	require.NoError(t, os.MkdirAll(validSess, 0o755))
+	validMeta := filepath.Join(validSess, "sess-valid.json")
+	validMsgs := filepath.Join(validSess, "sess-valid.messages.json")
+	require.NoError(t, os.WriteFile(validMeta,
+		[]byte(`{"session_id":"sess-valid","started_at":"2026-09-10T10:00:00Z"}`), 0o644))
+	require.NoError(t, os.WriteFile(validMsgs, []byte(`{"messages":[]}`), 0o644))
+
+	// Hostile session with a backslash in the session directory name
+	hostileSess := filepath.Join(clineRoot, "data", "sessions", `sess\escape`)
+	require.NoError(t, os.MkdirAll(hostileSess, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(hostileSess, `sess\escape.json`),
+		[]byte(`{"session_id":"sess\\escape","started_at":"2026-09-10T10:00:00Z"}`), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(hostileSess, `sess\escape.messages.json`),
+		[]byte(`{"messages":[]}`), 0o644))
+
+	targets := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCline: {clineRoot},
+		},
+	})
+
+	assert.Contains(t, targets.Files[parser.AgentCline], validMeta)
+	assert.Contains(t, targets.Files[parser.AgentCline], validMsgs)
+	for _, file := range targets.Files[parser.AgentCline] {
+		assert.NotContains(t, file, "escape",
+			"session with backslash in ID must not be resolved as fresh target")
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, remotesync.WriteArchive(&buf, targets))
+	tr := tar.NewReader(&buf)
+	var names []string
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		names = append(names, hdr.Name)
+	}
+	joined := strings.Join(names, "\n")
+	assert.Contains(t, joined, "data/sessions/sess-valid/sess-valid.json")
+	assert.Contains(t, joined, "data/sessions/sess-valid/sess-valid.messages.json")
+	assert.NotContains(t, joined, "escape",
+		"session with backslash in ID must not be archived")
+}
+
 func TestClineRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 	// 1. Configured-root layout (e.g. ~/.cline)
 	root := t.TempDir()
