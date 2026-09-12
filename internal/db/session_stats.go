@@ -988,7 +988,7 @@ func (db *DB) computeCacheEconomics(
 		return nil
 	}
 
-	pricing, err := db.loadPricingMap(ctx)
+	pricing, err := db.LoadPricingMap(ctx)
 	if err != nil {
 		return fmt.Errorf("loading pricing: %w", err)
 	}

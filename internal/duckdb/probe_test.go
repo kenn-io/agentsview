@@ -111,6 +111,25 @@ func TestProbeMirrorFlagsMalformedMetadataIntAsShapeIssue(t *testing.T) {
 	assert.True(t, p.NeedsRebuild("", 68))
 }
 
+func TestProbeMirrorRejectsWhitespaceGenerationAsShapeIssue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "whitespace-generation.duckdb")
+	conn, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, createSchema(t.Context(), conn))
+	_, err = conn.ExecContext(t.Context(), `
+		UPDATE sync_metadata SET value = '   ' WHERE key = ?`,
+		mirrorGenerationMetadataKey,
+	)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	probe, err := ProbeMirror(t.Context(), path)
+	require.NoError(t, err)
+	assert.True(t, probe.FileExists)
+	assert.False(t, probe.ShapeOK)
+	assert.Contains(t, probe.ShapeIssue, mirrorGenerationMetadataKey)
+}
+
 // TestProbeMirrorToleratesMissingMetadataKeysAsZeroValues verifies that a
 // freshly created mirror with no push-metadata rows yet (schema created but
 // never pushed into) probes as shape-OK with zero-value fields, per
@@ -134,6 +153,23 @@ func TestProbeMirrorToleratesMissingMetadataKeysAsZeroValues(t *testing.T) {
 	assert.True(t, p.ShapeOK)
 	assert.Equal(t, 0, p.DataVersion)
 	assert.True(t, p.NeedsRebuild("", 68), "zero data version must not match a real source version")
+}
+
+func TestProbeMirrorRejectsMissingGeneration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing-generation.duckdb")
+	conn, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, createSchema(t.Context(), conn))
+	_, err = conn.ExecContext(t.Context(),
+		`DELETE FROM sync_metadata WHERE key = ?`, mirrorGenerationMetadataKey)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	probe, err := ProbeMirror(t.Context(), path)
+	require.NoError(t, err)
+	assert.True(t, probe.FileExists)
+	assert.False(t, probe.ShapeOK)
+	assert.Contains(t, probe.ShapeIssue, mirrorGenerationMetadataKey)
 }
 
 // TestProbeMirrorRecognitionRequiresSentinel pins RecognizedMirror to the

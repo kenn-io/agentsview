@@ -5,11 +5,16 @@ package bunmodel
 
 import (
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/uptrace/bun"
 )
+
+// ErrUnsupportedTimestamp identifies a non-empty persistent timestamp that
+// cannot be represented by the canonical schema.
+var ErrUnsupportedTimestamp = errors.New("unsupported timestamp")
 
 // Timestamp is the canonical persistence timestamp. It accepts the native
 // time values returned by PostgreSQL and DuckDB as well as the text forms
@@ -39,7 +44,7 @@ func ParseTimestamp(value string) (Timestamp, error) {
 			return NewTimestamp(parsed), nil
 		}
 	}
-	return Timestamp{}, fmt.Errorf("unsupported timestamp %q", value)
+	return Timestamp{}, fmt.Errorf("%w %q", ErrUnsupportedTimestamp, value)
 }
 
 // Scan implements sql.Scanner.

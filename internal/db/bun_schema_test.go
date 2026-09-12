@@ -276,3 +276,34 @@ func TestBunSchemaStampedReopenSkipsRowInvariantScans(t *testing.T) {
 	).Scan(&invalidRows))
 	assert.Equal(t, 1, invalidRows)
 }
+
+func TestCheckCommonSchemaRejectsMissingCanonicalParent(t *testing.T) {
+	raw, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	raw.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
+	store := bun.NewDB(raw, sqlitedialect.New())
+	require.NoError(t, CreateCommonSchema(t.Context(), store))
+	_, err = store.NewInsert().Model(&bunmodel.SourceArchive{
+		SourceArchiveID: "archive", SourceArchiveSalt: "salt",
+	}).Exec(t.Context())
+	require.NoError(t, err)
+	_, err = store.NewInsert().Model(&bunmodel.Session{
+		ID: "parent-check", Project: "project", Machine: "machine", Agent: "agent",
+		CreatedAt: bunmodel.NewTimestamp(
+			time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC),
+		),
+		SourceArchiveID:          "archive",
+		SourceDatabaseGeneration: "generation",
+	}).Exec(t.Context())
+	require.NoError(t, err)
+	_, err = store.NewInsert().Model(&bunmodel.ToolCall{
+		SessionID: "parent-check", MessageOrdinal: 7,
+		ToolName: "Read", Category: "Read",
+	}).Exec(t.Context())
+	require.NoError(t, err)
+
+	err = CheckCommonSchema(t.Context(), store)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tool_calls canonical parent")
+}

@@ -12,6 +12,7 @@ import (
 	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
@@ -556,9 +557,14 @@ func TestLoadActivityReportUsageCandidatesBoundsFilteredWorkingSet(t *testing.T)
 		})
 	}
 
-	candidates, _, err := d.loadActivityReportUsageCandidatesFrom(
-		ctx, d.getReader(), []string{"candidate"},
-		"2026-06-15T10:00:00Z", "2026-06-17T10:00:00Z", false)
+	var candidates []activityReportUsageCandidate
+	err := d.consistentView(ctx, func(store bun.IDB) error {
+		var loadErr error
+		candidates, _, loadErr = d.loadActivityReportUsageCandidatesFrom(
+			ctx, store, []string{"candidate"},
+			"2026-06-15T10:00:00Z", "2026-06-17T10:00:00Z", false)
+		return loadErr
+	})
 	require.NoError(t, err)
 	require.Len(t, candidates, 2,
 		"the working set contains the candidate and its Claude peer only")

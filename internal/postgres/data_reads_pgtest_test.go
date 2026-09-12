@@ -42,7 +42,7 @@ func TestPGDataReadsThroughStoreInterface(t *testing.T) {
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push")
 
-	var store db.Store = &Store{pg: pg}
+	var store db.Store = newStore(pg)
 
 	inventory, err := store.GetProjectInventory(ctx)
 	require.NoError(t, err)

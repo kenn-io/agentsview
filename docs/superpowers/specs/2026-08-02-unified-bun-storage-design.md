@@ -154,6 +154,17 @@ The convergence uses this ownership matrix:
 | Identity and mappings                  | `source_archives` and the three `source_*` identity/mapping tables, including source archive and generation keys | SQLite change journals and publication revisions; PostgreSQL publication-scope ownership tables           |
 | Usage, pricing, curation, and insights | One common column set and logical key per registered Bun model                                                   | SQLite pricing refresh metadata, provider import cursors, and backend capability probes                   |
 
+When a pricing table is absent on a compatible read-only target or contains no
+rows, embedded rates form the canonical base catalogue. Custom rates overlay
+that base and an explicitly supplied effective catalogue overlays both; SQLite,
+PostgreSQL, and DuckDB expose identical pricing provenance for this state.
+
+Generated curation targets retain their own pin IDs on logical-key conflicts.
+Mirrors instead preserve positive source-assigned pin IDs and transactionally
+reconcile a reused ID away from any stale logical owner before the current pin
+adopts it. Preserve-mode reconciliation is never used for generated-ID targets,
+and a failed mirrored batch restores both the stale owner and prior logical pin.
+
 Canonical generated message DDL uses `(session_id, ordinal)` as its composite
 primary key and keeps `id` as an optional source row identifier. The shipped
 SQLite archive is the one physical compatibility alias: it retains
@@ -217,6 +228,15 @@ same cutover redirects subsequent writes, so the old tables are not a runtime
 fallback or dual-write path. PostgreSQL and DuckDB already use the canonical
 source-scoped identity shape.
 
+Opaque project selector keys use the aggregate identity scope derived from the
+complete canonical `source_archives` set on every backend. SQLite does not keep
+its former local-archive-only scope after cutover. Unresolved or ambiguous
+response-scoped selector keys may change whenever canonical `source_archives`
+membership changes through archive addition, retirement, or replacement.
+Resolved repository identity keys remain stable. Callers must treat selector
+keys as response-scoped opaque identifiers, not durable aliases; no dual key or
+compatibility lookup remains.
+
 `sessions.source_archive_id` and `sessions.source_database_generation` are
 required publication provenance. Normal SQLite session writers read the stable
 archive ID and database ID under the guarded handle and stamp both values in the
@@ -269,6 +289,13 @@ columns, while read-only serve and stamped drift fail closed. SQLite's writer
 transaction/busy timeout and PostgreSQL's advisory lock serialize concurrent
 openers.
 
+Fail-closed validation checks the exact compatibility-stamp value, every column
+selected by a canonical Bun model, logical-key uniqueness, registered parent
+rows and indexes, SQLite's canonical trigger definitions, and PostgreSQL's
+nullable `pinned_messages.message_id` compatibility constraint. Validation
+executes no repair DDL; an unstamped migration establishes the same invariants
+before writing the stamp.
+
 Downgrading a database after this cutover is unsupported. Older released
 binaries cannot recognize the new stamp and no trigger, shim, or dual-schema
 path attempts to police them. Before upgrading a persistent archive, operators
@@ -285,6 +312,23 @@ driver-specific connection setup, pool configuration, handle draining, and
 handle replacement. Application queries, schema operations, and transactions
 flow through Bun.
 
+PostgreSQL probes insight insertion and deletion independently because roles may
+grant only one privilege. Those results authorize distinct write operations; if
+permissions or transaction read-only state change after probing, the adapter
+maps SQLSTATE `25006` and `42501` back to `db.ErrReadOnly` while retaining the
+driver error in the chain.
+
+`BunBackend.ConsistentView` is mandatory for composite reads. SQLite uses one
+read transaction, PostgreSQL uses a repeatable-read transaction, and a local
+DuckDB serving mirror holds one immutable guarded handle. A mutable direct
+DuckDB handle uses one transaction. Quack cannot carry a remote transaction
+across separate `query()` requests, so its adapter reads an opaque mirror
+generation before and after the callback and retries the complete callback when
+a server-side mirror replacement changes that token; repeated instability
+returns an error rather than a mixed-generation result. Consistent-view
+callbacks can therefore replay and must stage results until the guarded call
+returns successfully. There is no non-snapshot fallback for adapters.
+
 Common store methods use Bun models and query builders. Complex CTEs and
 aggregates may use parameterized Bun raw fragments, but query composition,
 literal formatting, execution, transactions, and model scanning remain under
@@ -293,8 +337,11 @@ Bun.
 Those fragments use only the portable SQL subset exercised by all three
 backends. UTC parsing, calendar bucketing, percentiles, regex normalization, and
 JSON interpretation move to shared Go reducers whenever the engines do not share
-semantics. Non-search methods do not gain a backend expression switch; an
-operation that cannot be expressed portably requires a design update.
+semantics. The one non-search rendering exception is chronological filtering of
+SQLite's shipped text timestamps: the SQLite adapter supplies `julianday`
+expressions while PostgreSQL and DuckDB compare native timestamps. The shared
+method still owns the query and result contract and does not branch on backend
+identity. Any further non-search expression difference requires a design update.
 
 Parser ingestion writes canonical rows through the SQLite adapter. PostgreSQL
 push and DuckDB mirror population consume the same row models and common batch
