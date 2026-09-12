@@ -6,6 +6,8 @@ import type { DbProjectInventory, DbProjectInventoryRow } from "../../api/genera
 const api = vi.hoisted(() => ({
   getApiV1DataProjects: vi.fn(),
   getApiV1DataProjectRules: vi.fn(),
+  listSessions: vi.fn(),
+  listMessages: vi.fn(),
   candidates: vi.fn(),
   preview: vi.fn(),
   apply: vi.fn(),
@@ -23,6 +25,10 @@ vi.mock("../../api/generated/index", () => ({
     getApiV1DataProjectRules: api.getApiV1DataProjectRules,
     getApiV1DataProjectReclassificationCandidates: api.candidates,
   },
+  SessionsService: {
+    getApiV1Sessions: api.listSessions,
+    getApiV1SessionsByIdMessages: api.listMessages,
+  },
   SettingsService: {
     postApiV1SettingsWorktreeMappingsPreview: api.preview,
     postApiV1SettingsWorktreeMappingsReclassify: api.apply,
@@ -37,6 +43,9 @@ vi.mock("../../stores/router.svelte.js", () => ({
   router: { params: {}, replaceParams: vi.fn() },
 }));
 vi.mock("../../stores/sync.svelte.js", () => ({ sync: syncMock }));
+vi.mock("../../feature-flags.js", () => ({
+  PROJECT_MAPPING_WORKSPACE_ENABLED: true,
+}));
 
 import { fireEvent, screen } from "@testing-library/svelte";
 import DataPage from "./DataPage.svelte";
@@ -73,11 +82,15 @@ let component: ReturnType<typeof mount> | undefined;
 beforeEach(() => {
   api.getApiV1DataProjects.mockReset();
   api.getApiV1DataProjectRules.mockReset();
+  api.listSessions.mockReset();
+  api.listMessages.mockReset();
   api.candidates.mockReset();
   api.preview.mockReset();
   api.apply.mockReset();
   api.applyMappings.mockReset();
   api.candidates.mockResolvedValue({ candidates: [] });
+  api.listSessions.mockResolvedValue({ sessions: [], total: 0 });
+  api.listMessages.mockResolvedValue({ messages: [], count: 0 });
   syncMock.serverVersion = { version: "1.0.0", read_only: false };
   syncMock.readOnly = false;
   data.inventory = null;
@@ -92,7 +105,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (component) unmount(component);
+  if (component) void unmount(component);
   component = undefined;
   document.body.innerHTML = "";
   vi.useRealTimers();
@@ -204,6 +217,35 @@ describe("DataPage", () => {
     expect(screen.getByRole("heading", { name: "wrong-project" })).toBeTruthy();
   });
 
+  it("replaces a local range selection when browser navigation selects one project", async () => {
+    const inventory = makeInventory([
+      makeRow({ project_key: "k1", label: "first", sessions: 3 }),
+      makeRow({ project_key: "k2", label: "second", sessions: 2 }),
+      makeRow({ project_key: "k3", label: "third", sessions: 1 }),
+    ]);
+    api.getApiV1DataProjects.mockResolvedValue(inventory);
+
+    component = mount(DataPage, { target: document.body });
+    await flush();
+
+    await fireEvent.click(document.querySelector('[data-project-key="k1"]') as Element);
+    await fireEvent.click(document.querySelector('[data-project-key="k3"]') as Element, {
+      shiftKey: true,
+    });
+    await flush();
+    expect(document.querySelectorAll('.project-row[aria-selected="true"]')).toHaveLength(3);
+
+    (router as unknown as { params: Record<string, string> }).params = { project_key: "k2" };
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    await flush();
+
+    expect(document.querySelectorAll('.project-row[aria-selected="true"]')).toHaveLength(1);
+    expect(document.querySelector('[data-project-key="k2"]')?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("heading", { name: "second" })).toBeTruthy();
+  });
+
   const candidate = {
     id: "candidate-1",
     machine: "machine-a",
@@ -246,7 +288,7 @@ describe("DataPage", () => {
     await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
     await vi.advanceTimersByTimeAsync(300);
     await flush();
-    await fireEvent.click(screen.getByRole("button", { name: "Save and apply mapping" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
     await flush();
     await flush();
     return refreshSpy;
@@ -257,6 +299,9 @@ describe("DataPage", () => {
 
     expect(refreshSpy).toHaveBeenCalledTimes(1);
     expect(refreshSpy).toHaveBeenCalledWith("k1", "target-project");
+    expect(screen.getByRole("status").textContent).toContain(
+      m.data_reclassify_saved({ project: "target-project" }),
+    );
   });
 
   it("remounts the editor after a completed apply that keeps the selection", async () => {
@@ -289,7 +334,7 @@ describe("DataPage", () => {
     await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
     await vi.advanceTimersByTimeAsync(300);
     await flush();
-    await fireEvent.click(screen.getByRole("button", { name: "Save and apply mapping" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
     await flush();
 
     // Dismiss the workspace while the reclassify request is still in flight.
@@ -330,6 +375,24 @@ describe("DataPage", () => {
       ],
     };
   }
+
+  it("shows only mapping rules when the project workspace flag is disabled", async () => {
+    (router as unknown as { params: Record<string, string> }).params = {
+      project_key: "k1",
+    };
+    api.getApiV1DataProjectRules.mockResolvedValue(rulesResponse("target-project"));
+
+    component = mount(DataPage, {
+      target: document.body,
+      props: { projectWorkspaceEnabled: false },
+    });
+    await flush();
+
+    expect(data.view).toBe("rules");
+    expect(api.getApiV1DataProjects).not.toHaveBeenCalled();
+    expect(document.querySelector(".rules-view")).not.toBeNull();
+    expect(document.querySelector(".data-header")).toBeNull();
+  });
 
   it("selects the matching inventory project from a rules cross-link", async () => {
     const inventory = makeInventory([

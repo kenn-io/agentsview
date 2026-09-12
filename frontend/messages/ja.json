@@ -420,6 +420,7 @@
   "sidebar_row_rename": "名前の変更",
   "sidebar_row_open_in_new_tab": "新しいタブで開く",
   "sidebar_row_delete": "消去",
+  "sidebar_row_change_project": "プロジェクトを変更…",
   "shared_all_projects": "すべてのプロジェクト",
   "shared_project_filter_placeholder": "プロジェクトをフィルタリング...",
   "shared_select_project": "プロジェクトの選択",
@@ -813,7 +814,7 @@
   "data_projects_heading": "プロジェクト",
   "data_view_toggle_label": "データビュー",
   "data_view_inventory": "インベントリ",
-  "data_view_rules": "ルール",
+  "data_view_rules": "プロジェクトマッピングルール",
   "data_summary_projects": [
     {
       "declarations": [
@@ -842,6 +843,34 @@
       }
     }
   ],
+  "data_summary_machines": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} 台のマシン",
+        "countPlural=other": "{countNumber} 台のマシン"
+      }
+    }
+  ],
+  "data_summary_folder_suggestions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} 件のフォルダー候補",
+        "countPlural=other": "{countNumber} 件のフォルダー候補"
+      }
+    }
+  ],
   "data_summary_governed": [
     {
       "declarations": [
@@ -856,6 +885,46 @@
       }
     }
   ],
+  "data_selection_hint": "プロジェクトをクリックし、Shift キーを押しながらクリックして範囲を選択します。",
+  "data_selection_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 件のプロジェクトを選択中" }
+    }
+  ],
+  "data_selection_clear": "クリア",
+  "data_batch_workspace_label": "プロジェクトの一括修正",
+  "data_batch_heading": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 件のプロジェクトを選択中" }
+    }
+  ],
+  "data_batch_label": "一括",
+  "data_batch_folders_heading": "選択したフォルダー",
+  "data_batch_folders_intro": "選択したプロジェクトからのフォルダー候補です。",
+  "data_batch_correction_heading": "一括修正",
+  "data_batch_correction_intro": "以下の使用可能なフォルダーをすべて 1 つのプロジェクトに割り当てます。",
+  "data_batch_folder_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 個のフォルダー" }
+    }
+  ],
+  "data_batch_target_project": "選択したフォルダーの割り当て先",
+  "data_batch_saving": "一括修正を保存しています…",
+  "data_batch_save": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 件の修正を保存" }
+    }
+  ],
+  "data_batch_partial_save": "{count} 件中 {saved} 件を保存しました。",
+  "data_batch_saved": "一括修正を {project} に保存しました",
   "data_filter_projects": "プロジェクトをフィルタリングする",
   "data_col_project": "プロジェクト",
   "data_col_sessions": "セッション",
@@ -890,8 +959,15 @@
   "data_reclassify_candidates_failed": "セッションフォルダーが見つかりませんでした",
   "data_reclassify_no_candidates": "このプロジェクトのセッション フォルダーが見つかりませんでした。",
   "data_reclassify_choose_worktree": "フォルダーを選択してください",
-  "data_mapping_observed_folders": "監視フォルダー",
-  "data_mapping_definition": "マッピング",
+  "data_mapping_observed_folders": "フォルダー候補",
+  "data_reclassify_suggestions_intro": "このプロジェクトのセッションから提案されたパスです。",
+  "data_mapping_definition": "プロジェクトの修正",
+  "data_reclassify_use_for_project": "このプロジェクトに使用",
+  "data_reclassify_evidence_snapshot": "スナップショット",
+  "data_reclassify_evidence_aggregate": "集計",
+  "data_reclassify_evidence_exact_cwd": "正確な cwd",
+  "data_reclassify_evidence_unavailable": "使用可能な接頭辞なし",
+  "data_reclassify_evidence_suggestion": "候補",
   "data_reclassify_candidate_sessions": [
     {
       "declarations": [
@@ -907,7 +983,7 @@
     }
   ],
   "data_reclassify_cwd_unavailable": "このフォルダーは使用できないか、ファイルシステムのルートを表すため、安全にマップできません。",
-  "data_reclassify_path_prefix": "フォルダーパス",
+  "data_reclassify_path_prefix": "パス接頭辞",
   "data_reclassify_target_project": "プロジェクト",
   "data_reclassify_use_custom_project": "プロジェクト「{query}」を使用します",
   "data_reclassify_path_unavailable": "パスが利用できません",
@@ -972,18 +1048,64 @@
       }
     }
   ],
+  "data_reclassify_session_preview_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} 件のセッションプレビュー",
+        "countPlural=other": "{countNumber} 件のセッションプレビュー"
+      }
+    }
+  ],
+  "data_reclassify_session_preview_position": "{count} 件中 {current} 件目",
+  "data_reclassify_session_preview_previous": "前のセッション",
+  "data_reclassify_session_preview_next": "次のセッション",
+  "data_reclassify_session_preview_loading": "セッションプレビューを読み込み中…",
+  "data_reclassify_session_preview_failed": "セッションプレビューを読み込めませんでした",
+  "data_reclassify_session_preview_no_message": "表示できるセッションメッセージがありません",
+  "data_reclassify_session_preview_current_project": "現在のプロジェクト",
+  "data_reclassify_session_preview_next_project": "修正後",
+  "data_reclassify_session_preview_folder": "セッションフォルダー",
+  "data_session_assignment_heading": "セッションのプロジェクト",
+  "data_session_assignment_intro": "このセッションだけを変更します。フォルダーとフォルダールールは変更されません。",
+  "data_session_assignment_target": "このセッションの移動先",
+  "data_session_assignment_save": "セッションを割り当て",
+  "data_session_assignment_saving": "割り当て中…",
+  "data_session_assignment_failed": "セッションを割り当てられませんでした",
+  "data_session_assignment_saved": "セッションを {project} に割り当てました",
+  "data_session_assignment_refresh_failed": "セッションは割り当てられましたが、プロジェクト一覧を更新できませんでした。",
+  "data_session_assignment_manual": "手動オーバーライド",
+  "data_session_assignment_automatic": "自動",
+  "data_session_assignment_use_automatic": "自動割り当てを使用",
+  "data_session_assignment_clearing": "復元中…",
+  "data_session_assignment_cleared": "セッションを {project} に復元しました",
+  "data_session_assignment_clear_failed": "自動プロジェクト割り当ての復元に失敗しました",
   "data_reclassify_zero_matches": "このプレフィックスは、アーカイブ内のどのセッションにも一致しません。",
   "data_reclassify_conflict": "プレビュー以降、マッピングが変更されました。影響範囲を更新しました。適用前に確認してください。",
-  "data_reclassify_apply": "マッピングを保存して適用する",
-  "data_reclassify_applying": "保存して適用…",
-  "data_reclassify_apply_failed": "マッピングの保存と適用に失敗しました",
+  "data_reclassify_replaces_rule": "この修正は既存のプロジェクトマッピングルールを置き換えます。",
+  "data_reclassify_review_impact": "影響を確認",
+  "data_reclassify_back": "戻る",
+  "data_reclassify_confirm_save": "確認して保存",
+  "data_reclassify_cancel": "キャンセル",
+  "data_reclassify_apply": "修正を保存",
+  "data_reclassify_applying": "修正を保存中…",
+  "data_reclassify_apply_failed": "修正を保存できませんでした",
+  "data_reclassify_saved": "{project} のプロジェクト修正を保存しました",
+  "data_flash_success_label": "成功",
   "data_reclassify_applied_refresh_failed": "マッピングは保存されましたが、プロジェクト インベントリを更新できませんでした。更新のみを再試行します。",
   "data_reclassify_retry_refresh": "リフレッシュを再試行する",
   "data_reclassify_refreshing": "更新中…",
-  "data_reclassify_read_only": "このストアは読み取り専用です。このマシンのセッションを取り込む書き込み可能なアーカイブから分類ルールを管理します。",
-  "data_reclassify_managed_in_rules": "ここで作成したマッピングは、ルール ビューで編集できます。",
-  "data_reclassify_open_rules": "ルールを開く",
+  "data_reclassify_read_only": "ここでは変更できません。ソース Agents View を開いてプロジェクトマッピングルールを管理してください。",
+  "data_reclassify_managed_in_rules": "この修正はプロジェクトマッピングルールとして保存されます。",
+  "data_reclassify_open_rules": "プロジェクトマッピングルールを開く",
   "data_workspace_all_projects": "すべてのプロジェクト",
+  "data_workspace_map_whole_project": "プロジェクト全体をマッピング",
+  "data_workspace_correct_one_folder": "1つのフォルダーを修正",
   "data_workspace_close": "プロジェクトの詳細を閉じる",
   "data_workspace_activity": "活動",
   "data_workspace_activity_range": "{first} – {last}",

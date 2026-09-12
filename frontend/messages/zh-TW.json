@@ -407,6 +407,7 @@
   "sidebar_row_rename": "重新命名",
   "sidebar_row_open_in_new_tab": "在新分頁開啟",
   "sidebar_row_delete": "刪除",
+  "sidebar_row_change_project": "變更專案…",
   "shared_all_projects": "所有專案",
   "shared_project_filter_placeholder": "篩選專案...",
   "shared_select_project": "選擇專案",
@@ -786,7 +787,7 @@
   "data_projects_heading": "專案",
   "data_view_toggle_label": "資料檢視",
   "data_view_inventory": "清單",
-  "data_view_rules": "規則",
+  "data_view_rules": "專案對應規則",
   "data_summary_projects": [
     {
       "declarations": [
@@ -809,6 +810,28 @@
       "match": { "countPlural=other": "{countNumber} 個會話" }
     }
   ],
+  "data_summary_machines": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 台機器" }
+    }
+  ],
+  "data_summary_folder_suggestions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 個資料夾建議" }
+    }
+  ],
   "data_summary_governed": [
     {
       "declarations": [
@@ -820,6 +843,46 @@
       "match": { "countPlural=other": "{countNumber} 個會話受規則管理" }
     }
   ],
+  "data_selection_hint": "點選一個專案，然後按住 Shift 點選以選取一個範圍。",
+  "data_selection_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "已選取 {countNumber} 個專案" }
+    }
+  ],
+  "data_selection_clear": "清除",
+  "data_batch_workspace_label": "批次專案更正",
+  "data_batch_heading": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "已選取 {countNumber} 個專案" }
+    }
+  ],
+  "data_batch_label": "批次",
+  "data_batch_folders_heading": "已選取的資料夾",
+  "data_batch_folders_intro": "來自所選專案的資料夾建議。",
+  "data_batch_correction_heading": "批次更正",
+  "data_batch_correction_intro": "將下方所有可用資料夾對應到同一個專案。",
+  "data_batch_folder_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 個資料夾" }
+    }
+  ],
+  "data_batch_target_project": "將所選資料夾對應到",
+  "data_batch_saving": "正在儲存批次更正…",
+  "data_batch_save": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "儲存 {countNumber} 項更正" }
+    }
+  ],
+  "data_batch_partial_save": "已儲存 {saved}/{count} 項。",
+  "data_batch_saved": "批次更正已儲存至 {project}",
   "data_filter_projects": "篩選專案",
   "data_col_project": "專案",
   "data_col_sessions": "會話",
@@ -851,8 +914,15 @@
   "data_reclassify_candidates_failed": "無法尋找工作階段資料夾",
   "data_reclassify_no_candidates": "找不到此項目的工作階段資料夾。",
   "data_reclassify_choose_worktree": "選擇資料夾",
-  "data_mapping_observed_folders": "觀察到的資料夾",
-  "data_mapping_definition": "對應",
+  "data_mapping_observed_folders": "資料夾建議",
+  "data_reclassify_suggestions_intro": "根據此專案中的工作階段建議的路徑。",
+  "data_mapping_definition": "專案更正",
+  "data_reclassify_use_for_project": "用於此專案",
+  "data_reclassify_evidence_snapshot": "快照",
+  "data_reclassify_evidence_aggregate": "彙總",
+  "data_reclassify_evidence_exact_cwd": "精確工作目錄",
+  "data_reclassify_evidence_unavailable": "無可用前綴",
+  "data_reclassify_evidence_suggestion": "建議",
   "data_reclassify_candidate_sessions": [
     {
       "declarations": [
@@ -865,7 +935,7 @@
     }
   ],
   "data_reclassify_cwd_unavailable": "此資料夾無法安全對應，因為它無法使用或代表檔案系統根目錄。",
-  "data_reclassify_path_prefix": "資料夾路徑",
+  "data_reclassify_path_prefix": "路徑前綴",
   "data_reclassify_target_project": "項目",
   "data_reclassify_use_custom_project": "使用項目「{query}」",
   "data_reclassify_path_unavailable": "路徑無法使用",
@@ -918,18 +988,64 @@
       "match": { "countPlural=other": "{countNumber} 個工作階段" }
     }
   ],
+  "data_reclassify_session_preview_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} 個工作階段預覽",
+        "countPlural=other": "{countNumber} 個工作階段預覽"
+      }
+    }
+  ],
+  "data_reclassify_session_preview_position": "第 {current} 個，共 {count} 個",
+  "data_reclassify_session_preview_previous": "上一個工作階段",
+  "data_reclassify_session_preview_next": "下一個工作階段",
+  "data_reclassify_session_preview_loading": "正在載入工作階段預覽…",
+  "data_reclassify_session_preview_failed": "無法載入工作階段預覽",
+  "data_reclassify_session_preview_no_message": "沒有可用的工作階段訊息",
+  "data_reclassify_session_preview_current_project": "目前專案",
+  "data_reclassify_session_preview_next_project": "更正後",
+  "data_reclassify_session_preview_folder": "工作階段資料夾",
+  "data_session_assignment_heading": "工作階段專案",
+  "data_session_assignment_intro": "只變更此工作階段，其資料夾和資料夾規則維持不變。",
+  "data_session_assignment_target": "將此工作階段移至",
+  "data_session_assignment_save": "指派工作階段",
+  "data_session_assignment_saving": "正在指派…",
+  "data_session_assignment_failed": "無法指派工作階段",
+  "data_session_assignment_saved": "工作階段已指派至 {project}",
+  "data_session_assignment_refresh_failed": "工作階段已指派，但無法重新整理專案清單。",
+  "data_session_assignment_manual": "手動覆寫",
+  "data_session_assignment_automatic": "自動",
+  "data_session_assignment_use_automatic": "使用自動指派",
+  "data_session_assignment_clearing": "正在還原…",
+  "data_session_assignment_cleared": "工作階段已還原至 {project}",
+  "data_session_assignment_clear_failed": "無法還原自動專案指派",
   "data_reclassify_zero_matches": "此前綴與封存中的任何工作階段都不符合。",
   "data_reclassify_conflict": "對應自預覽後已變更。影響已重新整理；套用前請檢查。",
-  "data_reclassify_apply": "儲存並套用對應",
-  "data_reclassify_applying": "正在儲存並套用…",
-  "data_reclassify_apply_failed": "無法儲存並套用對應",
+  "data_reclassify_replaces_rule": "此更正將取代現有的專案對應規則。",
+  "data_reclassify_review_impact": "檢查影響",
+  "data_reclassify_back": "返回",
+  "data_reclassify_confirm_save": "確認並儲存",
+  "data_reclassify_cancel": "取消",
+  "data_reclassify_apply": "儲存更正",
+  "data_reclassify_applying": "正在儲存更正…",
+  "data_reclassify_apply_failed": "無法儲存更正",
+  "data_reclassify_saved": "已儲存 {project} 的專案更正",
+  "data_flash_success_label": "成功",
   "data_reclassify_applied_refresh_failed": "對應已儲存，但無法重新整理項目清單。請只重試重新整理。",
   "data_reclassify_retry_refresh": "重試重新整理",
   "data_reclassify_refreshing": "正在重新整理…",
-  "data_reclassify_read_only": "此儲存區為唯讀。請在收錄此機器工作階段的可寫入封存中管理分類規則。",
-  "data_reclassify_managed_in_rules": "可在「規則」檢視中編輯在此建立的對應。",
-  "data_reclassify_open_rules": "開啟規則",
+  "data_reclassify_read_only": "此處無法進行變更。請開啟來源 Agents View 管理專案對應規則。",
+  "data_reclassify_managed_in_rules": "此更正將儲存為專案對應規則。",
+  "data_reclassify_open_rules": "開啟專案對應規則",
   "data_workspace_all_projects": "所有專案",
+  "data_workspace_map_whole_project": "對應整個專案",
+  "data_workspace_correct_one_folder": "修正單一資料夾",
   "data_workspace_close": "關閉專案詳細資訊",
   "data_workspace_activity": "活動",
   "data_workspace_activity_range": "{first} – {last}",

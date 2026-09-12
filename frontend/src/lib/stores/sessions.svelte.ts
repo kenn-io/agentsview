@@ -1,5 +1,5 @@
 import type { DataChangedEvent } from "../api/client.js";
-import { MetadataService, SessionsService } from "../api/generated/index";
+import { MetadataService, SessionsService, SettingsService } from "../api/generated/index";
 import { callGenerated, isAbortError, isNotFoundError } from "../api/runtime.js";
 import type { Session, ProjectInfo, AgentInfo, SidebarSessionIndexRow } from "../api/types.js";
 import { sync } from "./sync.svelte.js";
@@ -32,6 +32,7 @@ export interface SessionGroupInput {
   parent_session_id?: string | null;
   relationship_type?: string | null;
   project: string;
+  project_assigned?: boolean;
   machine: string;
   agent: string;
   agent_label?: string | null;
@@ -1447,6 +1448,43 @@ class SessionsStore {
     }
   }
 
+  async assignSessionProject(id: string, project: string) {
+    const assignment = await SettingsService.putApiV1SettingsSessionProjectAssignmentsBySessionId(
+      {
+        sessionId: id,
+      },
+      { project },
+    );
+    const idx = this.sessions.findIndex((session) => session.id === id);
+    if (idx !== -1) {
+      this.sessions[idx] = {
+        ...this.sessions[idx]!,
+        project: assignment.project,
+        project_assigned: true,
+      };
+    }
+    this.invalidateProjectCache();
+    await this.load({ force: true });
+    return assignment.project;
+  }
+
+  async clearSessionProjectAssignment(id: string) {
+    const cleared = await SettingsService.deleteApiV1SettingsSessionProjectAssignmentsBySessionId({
+      sessionId: id,
+    });
+    const idx = this.sessions.findIndex((session) => session.id === id);
+    if (idx !== -1) {
+      this.sessions[idx] = {
+        ...this.sessions[idx]!,
+        project: cleared.project,
+        project_assigned: false,
+      };
+    }
+    this.invalidateProjectCache();
+    await this.load({ force: true });
+    return cleared.project;
+  }
+
   private startLiveRefresh() {
     if (this.liveRefreshStarted) return;
     this.liveRefreshStarted = true;
@@ -1555,6 +1593,7 @@ function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Sessio
   const skinny: Session = {
     id: row.id,
     project: row.project,
+    project_assigned: row.project_assigned ?? false,
     machine: row.machine,
     agent: row.agent,
     agent_label: row.agent_label ?? undefined,
@@ -1583,6 +1622,7 @@ function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Sessio
     ...skinny,
     ...existing,
     project: skinny.project,
+    project_assigned: skinny.project_assigned,
     machine: skinny.machine,
     agent: skinny.agent,
     agent_label: skinny.agent_label,

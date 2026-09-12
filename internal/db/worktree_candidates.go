@@ -96,16 +96,15 @@ func (db *DB) ListArchiveWorktreeCandidates(
 }
 
 // SelectWorktreeCandidateProjects validates that the requested display label
-// identifies the requested opaque project key, then expands the selection to
-// raw labels with the same resolved project identity. The display label
-// disambiguates a clicked inventory row; it must not exclude historical
-// aliases that display differently but resolve to the same repository.
+// identifies the requested opaque project key, then selects every raw label
+// represented by that exact inventory project. Distinct project keys can
+// resolve to the same repository while still representing different inventory
+// rows and session sets, so repository identity must not broaden the selection.
 func SelectWorktreeCandidateProjects(
 	request ArchiveWorktreeCandidateRequest,
 	labels map[string]struct{},
 	projects map[string]export.ProjectMapEntry,
 ) map[string]struct{} {
-	identityKeys := make(map[string]struct{})
 	labelMatches := false
 	for label := range labels {
 		entry := projects[label]
@@ -114,11 +113,6 @@ func SelectWorktreeCandidateProjects(
 			continue
 		}
 		labelMatches = true
-		if entry.Resolution == export.ProjectResolutionResolved &&
-			entry.Identity != nil &&
-			strings.TrimSpace(entry.Identity.Key) != "" {
-			identityKeys[entry.Identity.Key] = struct{}{}
-		}
 	}
 	if !labelMatches {
 		return map[string]struct{}{}
@@ -128,14 +122,6 @@ func SelectWorktreeCandidateProjects(
 	for label := range labels {
 		entry := projects[label]
 		if entry.ProjectKey == request.ProjectKey {
-			selected[label] = struct{}{}
-			continue
-		}
-		if entry.Resolution != export.ProjectResolutionResolved ||
-			entry.Identity == nil {
-			continue
-		}
-		if _, ok := identityKeys[entry.Identity.Key]; ok {
 			selected[label] = struct{}{}
 		}
 	}

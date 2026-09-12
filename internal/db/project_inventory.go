@@ -267,6 +267,7 @@ func (db *DB) projectInventoryCandidateRows(
 		var row MappingEvaluationRow
 		if err := rows.Scan(
 			&row.SessionID, &row.Machine, &row.Project, &row.Cwd, &row.FilePath,
+			&row.ProjectAssigned,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning project inventory candidate session: %w", err)
@@ -292,7 +293,11 @@ func projectInventoryCandidateQuery(machineList []string) (string, []any) {
 		args[i] = m
 	}
 	query := `
-		SELECT id, machine, project, cwd, COALESCE(file_path, '')
+		SELECT id, machine, project, cwd, COALESCE(file_path, ''),
+			EXISTS (
+				SELECT 1 FROM session_project_assignments spa
+				WHERE spa.session_id = sessions.id
+			)
 		FROM sessions
 		WHERE deleted_at IS NULL
 		  AND machine IN (` + strings.Join(placeholders, ",") + `)`
