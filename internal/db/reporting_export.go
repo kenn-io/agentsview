@@ -291,7 +291,8 @@ func (db *DB) reportingUsageSessionsFrom(
 			s.machine,
 			COALESCE(s.started_at, ''),
 			COALESCE(s.ended_at, ''),
-			COALESCE(s.is_automated, 0)
+			COALESCE(s.is_automated, 0),
+			s.relationship_type = 'subagent'
 		FROM sessions s
 		JOIN usage_session_ids u ON u.session_id = s.id
 		ORDER BY s.id`,
@@ -317,6 +318,7 @@ func (db *DB) reportingUsageSessionsFrom(
 			&session.StartedAt,
 			&session.EndedAt,
 			&session.IsAutomated,
+			&session.IsSubagent,
 		); err != nil {
 			return nil, nil, fmt.Errorf(
 				"scanning reporting usage session: %w", err,

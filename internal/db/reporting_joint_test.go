@@ -134,6 +134,47 @@ func TestReportingJointSubagentsTakePrecedenceOverAutomation(t *testing.T) {
 	assert.Equal(t, money.Money{Microdollars: 20}, hour.Activity.Totals.SubagentCost)
 }
 
+func TestReportingJointUsageOnlySubagentRetainsClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		automated bool
+	}{
+		{"subagent", false},
+		{"automated subagent", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "child", "project-a", func(s *Session) {
+				s.Agent = "agent-a"
+				s.StartedAt, s.EndedAt = new("2026-07-27T08:00:00Z"), new("2026-07-27T08:01:00Z")
+				s.RelationshipType = "subagent"
+				s.IsAutomated = tc.automated
+			})
+			cost := money.MustParseDollars("0.003")
+			require.NoError(t, d.ReplaceSessionUsageEvents("child", []UsageEvent{{
+				Source: "fixture", Model: "model-a", OutputTokens: 17,
+				Cost: &cost, CostStatus: "exact", CostSource: "reported",
+				OccurredAt: "2026-07-28T09:10:00Z", DedupKey: "child-usage",
+			}}))
+			day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
+				Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+				Now:  time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4,
+			})
+			require.NoError(t, err)
+			hour := day.Hours[9]
+			require.NotNil(t, hour.Joint)
+			require.Len(t, hour.Joint.Cells, 1)
+			cell := hour.Joint.Cells[0]
+			assert.Equal(t, "subagent", cell.Automation)
+			assert.Zero(t, cell.AgentMinutes)
+			assert.Zero(t, cell.MaxAgents)
+			assert.Equal(t, int64(17), cell.Usage.OutputTokens)
+			assert.Equal(t, money.Money{Microdollars: 3_000}, cell.Usage.Cost)
+			assert.Equal(t, money.Money{Microdollars: 3_000}, cell.Pricing.ReportedCost)
+		})
+	}
+}
+
 func TestReportingJointCorrectionsReplaceCellsWithinSnapshot(t *testing.T) {
 	d := testDB(t)
 	seedJointReporting(t, d)
