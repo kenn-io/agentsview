@@ -4291,6 +4291,16 @@ func openAndInit(
 		_ = db.CloseContext(ctx)
 		return nil, err
 	}
+	db.mu.Lock()
+	err = migrateRecallReviewStateConstraintLocked(ctx, db.getWriter())
+	db.mu.Unlock()
+	if err != nil {
+		_ = db.CloseContext(ctx)
+		return nil, fmt.Errorf(
+			"migrating recall review state: %w", err,
+		)
+	}
+
 	if err := db.init(ctx); err != nil {
 		_ = db.CloseContext(ctx)
 		return nil, fmt.Errorf("initializing schema: %w", err)

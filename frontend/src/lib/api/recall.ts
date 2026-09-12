@@ -7,6 +7,7 @@ import type {
   RecallExtractProgressPage,
   RecallExtractProgressResponse,
   RecallExtractionStatus,
+  RecallReviewAction,
 } from "./types/recall.js";
 import { ApiError, authHeaders, getBase, responseErrorMessage } from "./runtime.js";
 
@@ -27,6 +28,7 @@ export async function fetchRecallEntries(
   if (filters.sourceRunId) {
     query.set("source_run_id", filters.sourceRunId);
   }
+  if (filters.status) query.set("status", filters.status);
   if (filters.reviewState) {
     query.set("review_state", filters.reviewState);
   }
@@ -44,6 +46,23 @@ export async function fetchRecallEntries(
     nextCursor: data.next_cursor || undefined,
     resultCap: data.result_cap || undefined,
   };
+}
+
+export async function reviewRecallEntry(
+  id: string,
+  action: RecallReviewAction,
+): Promise<RecallEntry> {
+  const response = await fetch(
+    `${getBase()}/recall/entries/${encodeURIComponent(id)}/review`,
+    authHeaders({
+      method: "POST",
+      body: JSON.stringify({ action }),
+    }),
+  );
+  if (!response.ok) {
+    throw new ApiError(response.status, await responseErrorMessage(response));
+  }
+  return (await response.json()) as RecallEntry;
 }
 
 export async function fetchRecallExtractionStatus(
