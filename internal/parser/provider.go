@@ -1152,6 +1152,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newImportOnlyProviderFactory(def)
 	case AgentCommandCode:
 		return newCommandCodeProviderFactory(def)
+	case AgentCrush:
+		return newCrushProviderFactory(def)
 	case AgentCodex:
 		return newCodexProviderFactory(def)
 	case AgentTraeX:

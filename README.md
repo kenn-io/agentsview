@@ -362,6 +362,7 @@ local Amp thread JSON files.
 | Forge                 | `~/.forge/`                                                                                                                                                                                                                                          |
 | Gemini CLI            | `~/.gemini/`                                                                                                                                                                                                                                         |
 | Goose                 | `~/.local/share/goose/sessions/` (macOS and Linux), `%APPDATA%\\Block\\goose\\data\\sessions\\` (Windows)                                                                                                                                            |
+| Crush                 | `~/.local/share/crush/projects.json` registry pointing at per-project `~/<project>/.crush/crush.db` stores (macOS and Linux), `%LOCALAPPDATA%\\crush\\projects.json` (Windows)                                                                       |
 | gptme                 | `~/.local/share/gptme/logs/`                                                                                                                                                                                                                         |
 | Grok                  | `~/.grok/sessions/`                                                                                                                                                                                                                                  |
 | Hermes Agent          | `~/.hermes/sessions/`                                                                                                                                                                                                                                |
@@ -416,6 +417,14 @@ transcript content, thinking, tool calls and results, session relationships,
 models, token usage, and recorded costs. Set `GOOSE_PATH_ROOT` to a Goose path
 root (sessions are read from `<root>/data/sessions/`), or `agents.goose.dirs` to
 one or more data or sessions directories.
+
+Crush sessions are read from each project's SQLite `.crush/crush.db`, including
+transcript content, thinking, tool calls and results, session relationships,
+models, and recorded session costs. The project registry lives at
+`~/.local/share/crush/projects.json` (macOS and Linux) or
+`%LOCALAPPDATA%\crush\projects.json` (Windows). Set `CRUSH_DIR` or
+`agents.crush.dirs` to one or more Crush data directories, `.crush`
+directories, or `crush.db` files.
 
 Each directory can be overridden with an environment variable. See the
 [configuration docs](https://agentsview.io/configuration/) for details. Cursor

@@ -1,0 +1,960 @@
+package parser
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"hash"
+	"maps"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+)
+
+type crushProviderFactory struct {
+	def     AgentDef
+	tracker *crushChangeTracker
+}
+
+func newCrushProviderFactory(def AgentDef) ProviderFactory {
+	return &crushProviderFactory{
+		def:     cloneAgentDef(def),
+		tracker: newCrushChangeTracker(),
+	}
+}
+
+func (f *crushProviderFactory) Definition() AgentDef {
+	return cloneAgentDef(f.def)
+}
+
+func (f *crushProviderFactory) Capabilities() Capabilities {
+	return withDBBackedRawCapture(crushProviderCapabilities())
+}
+
+func (f *crushProviderFactory) NewProvider(cfg ProviderConfig) Provider {
+	cfg = cfg.Clone()
+	originalRoots := make([]string, len(cfg.Roots))
+	copy(originalRoots, cfg.Roots)
+	expandedRoots, registryMapping, projectMapping := normalizeCrushRoots(cfg.Roots)
+	cfg.Roots = expandedRoots
+	spec := crushProviderSpec(cfg.StableSourceSnapshots)
+	base := &dbBackedProvider{
+		Def:     cloneAgentDef(f.def),
+		Caps:    withDBBackedRawCapture(spec.caps),
+		Config:  cfg,
+		spec:    spec,
+		sources: newDBBackedSourceSet(spec, cfg.Roots),
+	}
+	p := &crushProvider{
+		dbBackedProvider: base,
+		tracker:          f.tracker,
+		originalRoots:    originalRoots,
+		registryMapping:  registryMapping,
+		projectMapping:   projectMapping,
+		configuredRoot:   crushConfiguredRootByExpanded(originalRoots, registryMapping),
+	}
+	// Replace the parse closure to capture the project mapping so
+	// parseCrushSession can attribute sessions to the correct project
+	// when the data directory does not follow the default layout.
+	p.spec.parse = func(
+		ctx context.Context, dbPath, sessionID, machine string,
+	) ([]ParseResult, error) {
+		sess, msgs, err := parseCrushSession(
+			ctx, dbPath, sessionID, machine,
+			cfg.StableSourceSnapshots, p.projectMapping,
+		)
+		if err != nil || sess == nil {
+			return nil, err
+		}
+		return []ParseResult{{
+			Session:     *sess,
+			Messages:    msgs,
+			UsageEvents: sess.UsageEvents,
+		}}, nil
+	}
+	return p
+}
+
+type crushProvider struct {
+	*dbBackedProvider
+	tracker         *crushChangeTracker
+	originalRoots   []string
+	registryMapping map[string][]string
+	projectMapping  map[string]string
+	// configuredRoot maps each expanded data directory back onto the
+	// configured registry, crush.db, or data-directory root that produced
+	// it, so source-machine mapping stays bound to the user's spelling.
+	configuredRoot map[string]string
+}
+
+// crushConfiguredRootByExpanded maps every expanded data directory onto the
+// configured root that produced it. Later originals do not overwrite earlier
+// ones: the first configured spelling wins when roots collapse together.
+func crushConfiguredRootByExpanded(
+	originalRoots []string, registryMapping map[string][]string,
+) map[string]string {
+	mapping := make(map[string]string, len(originalRoots))
+	add := func(expanded, original string) {
+		expanded = filepath.Clean(expanded)
+		original = filepath.Clean(original)
+		if expanded == "" || original == "" || expanded == "." || original == "." {
+			return
+		}
+		if _, ok := mapping[expanded]; !ok {
+			mapping[expanded] = original
+		}
+	}
+	for _, root := range originalRoots {
+		cleaned := filepath.Clean(root)
+		if cleaned == "" || cleaned == "." {
+			continue
+		}
+		physical := cleaned
+		if container, _, ok := ParseVirtualSourcePath(physical); ok {
+			physical = container
+		}
+		if filepath.Base(physical) == CrushDBName {
+			add(filepath.Dir(physical), cleaned)
+			continue
+		}
+		if dataDirs, ok := registryMapping[cleaned]; ok {
+			for _, dir := range dataDirs {
+				add(dir, cleaned)
+			}
+			continue
+		}
+		add(cleaned, cleaned)
+	}
+	return mapping
+}
+
+// withConfiguredRoot stamps the original configured root onto a source whose
+// expanded data directory came from a registry or crush.db spelling.
+func (p *crushProvider) withConfiguredRoot(source SourceRef) SourceRef {
+	if source.ConfiguredRoot != "" {
+		return source
+	}
+	src, ok := source.Opaque.(dbBackedSource)
+	if !ok {
+		return source
+	}
+	if configured, ok := p.configuredRoot[src.Root]; ok {
+		source.ConfiguredRoot = configured
+	}
+	return source
+}
+
+func (p *crushProvider) withConfiguredRoots(sources []SourceRef) []SourceRef {
+	for i := range sources {
+		sources[i] = p.withConfiguredRoot(sources[i])
+	}
+	return sources
+}
+
+// ResolveReconciliationScopes expands registry roots to their per-project
+// data directories before scope resolution. The configured roots contain
+// only expanded data directories, so a request root that is a registry
+// directory would otherwise match no scope. A crush.db database-file root
+// or virtual member widens through the container topology onto the owning
+// data directory so virtual session members stay in the proof scope.
+// TraversalRoots are rewritten back onto the original configured spelling
+// so a scoped NewProvider reconstruction re-applies registry expansion,
+// project mapping, and configured-root machine attribution.
+func (p *crushProvider) ResolveReconciliationScopes(
+	_ context.Context, req ReconciliationScopeRequest,
+) (ReconciliationScopePlan, error) {
+	expanded := make([]string, 0, len(req.Roots))
+	for _, root := range req.Roots {
+		if dataDirs, ok := p.registryMapping[filepath.Clean(root)]; ok {
+			expanded = append(expanded, dataDirs...)
+			continue
+		}
+		expanded = append(expanded, root)
+	}
+	if err := ValidateReconciliationScopeRoots(
+		p.Def.Type, p.Config.Roots, expanded,
+	); err != nil {
+		return ReconciliationScopePlan{}, err
+	}
+	plan := containerAwareReconciliationScopePlan(
+		p.Config.Roots, expanded, p.reconciliationContainer,
+	)
+	for i := range plan.Scopes {
+		plan.Scopes[i].TraversalRoots = p.withOriginalTraversalRoots(
+			plan.Scopes[i].TraversalRoots,
+		)
+	}
+	return plan, nil
+}
+
+// withOriginalTraversalRoots maps each expanded data directory back onto the
+// configured registry, crush.db, or data-directory root that produced it. A
+// registry traversal also includes all of its expanded data directories so
+// sibling projects discovered through the registry stay inside the declared
+// traversal boundary.
+func (p *crushProvider) withOriginalTraversalRoots(roots []string) []string {
+	out := make([]string, 0, len(roots))
+	seen := make(map[string]struct{}, len(roots))
+	appendRoot := func(root string) {
+		root = filepath.Clean(root)
+		if _, ok := seen[root]; ok {
+			return
+		}
+		seen[root] = struct{}{}
+		out = append(out, root)
+	}
+	for _, root := range roots {
+		if original, ok := p.configuredRoot[filepath.Clean(root)]; ok {
+			appendRoot(original)
+			for _, dataDir := range p.registryMapping[filepath.Clean(original)] {
+				appendRoot(dataDir)
+			}
+			continue
+		}
+		appendRoot(root)
+	}
+	return out
+}
+
+// reconciliationContainer maps a crush.db path or virtual member onto the
+// owning data directory, which is the spelling configured roots carry after
+// normalizeCrushRoots. Classification must not stat: a deleted database must
+// still resolve so its members remain reclaimable.
+func (p *crushProvider) reconciliationContainer(requested string) (string, bool) {
+	physical := requested
+	if container, _, ok := ParseVirtualSourcePath(physical); ok {
+		physical = container
+	}
+	if filepath.Base(physical) != CrushDBName {
+		return "", false
+	}
+	return filepath.Dir(physical), true
+}
+
+func (p *crushProvider) Discover(ctx context.Context) ([]SourceRef, error) {
+	watermarks, err := p.captureDiscoveryWatermarks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sources, err := p.dbBackedProvider.Discover(ctx)
+	if err != nil {
+		return nil, err
+	}
+	p.tracker.storeDiscoveryWatermarks(watermarks)
+	return p.withConfiguredRoots(sources), nil
+}
+
+func (p *crushProvider) DiscoverEach(
+	ctx context.Context, yield func(SourceRef) error,
+) error {
+	watermarks, err := p.captureDiscoveryWatermarks(ctx)
+	if err != nil {
+		return err
+	}
+	err = p.dbBackedProvider.DiscoverEach(ctx, func(source SourceRef) error {
+		return yield(p.withConfiguredRoot(source))
+	})
+	if err != nil {
+		return err
+	}
+	p.tracker.storeDiscoveryWatermarks(watermarks)
+	return nil
+}
+
+// captureDiscoveryWatermarks reads the change cursors before enumeration.
+// Publishing them only after a successful pass leaves rows committed during
+// discovery available to the next watcher event. A single unreadable database
+// is skipped so healthy roots can still be discovered.
+func (p *crushProvider) captureDiscoveryWatermarks(
+	ctx context.Context,
+) ([]crushDiscoveryWatermark, error) {
+	watermarks := make([]crushDiscoveryWatermark, 0, len(p.sources.roots))
+	for _, root := range p.sources.roots {
+		dbPath := p.spec.findDB(root)
+		if dbPath == "" {
+			continue
+		}
+		state, err := readCrushTrackedDatabase(ctx, dbPath, p.Config.StableSourceSnapshots)
+		if err != nil {
+			continue
+		}
+		watermarks = append(watermarks, crushDiscoveryWatermark{
+			dbPath: dbPath,
+			state:  state,
+		})
+	}
+	return watermarks, nil
+}
+
+// SourcesForChangedPath returns only Crush sessions with newly inserted
+// session or message rows. Metadata-only updates and row deletes are
+// intentionally handled by the provider's scheduled reconciliation pass.
+func (p *crushProvider) SourcesForChangedPath(
+	ctx context.Context, req ChangedPathRequest,
+) ([]SourceRef, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	for _, root := range p.sources.roots {
+		if req.WatchRoot != "" && !samePath(req.WatchRoot, root) {
+			continue
+		}
+		if ref, ok := p.sources.sourceRef(root, req.Path, true); ok {
+			return []SourceRef{p.withConfiguredRoot(ref)}, nil
+		}
+		dbPath, ok := p.sources.dbPathForEvent(root, req.Path)
+		if !ok {
+			continue
+		}
+		if !IsRegularFile(dbPath) {
+			// The SQLite archive is persistent. A vanished physical database
+			// cannot prove that any archived Crush member was deleted.
+			return nil, nil
+		}
+		ids, cold, snapshot, err := p.tracker.changedSessionIDs(
+			ctx, dbPath, p.Config.StableSourceSnapshots,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if cold {
+			sources, err := p.dbBackedProvider.SourcesForChangedPath(ctx, ChangedPathRequest{
+				Path:      req.Path,
+				EventKind: req.EventKind,
+				WatchRoot: req.WatchRoot,
+			})
+			if err != nil {
+				return nil, err
+			}
+			p.tracker.commit(dbPath, snapshot)
+			return p.withConfiguredRoots(sources), nil
+		}
+
+		sources := make([]SourceRef, 0, len(ids))
+		for _, id := range ids {
+			sources = append(sources, p.sources.newSourceRef(
+				root, dbPath, id, VirtualSourcePath(dbPath, id),
+			))
+		}
+		sort.Slice(sources, func(i, j int) bool {
+			return sources[i].DisplayPath < sources[j].DisplayPath
+		})
+		return p.withConfiguredRoots(sources), nil
+	}
+	return nil, nil
+}
+
+func (p *crushProvider) FindSource(
+	ctx context.Context, req FindSourceRequest,
+) (SourceRef, bool, error) {
+	source, found, err := p.dbBackedProvider.FindSource(ctx, req)
+	if err != nil || !found {
+		return source, found, err
+	}
+	return p.withConfiguredRoot(source), true, nil
+}
+
+func (p *crushProvider) Fingerprint(
+	ctx context.Context, source SourceRef,
+) (SourceFingerprint, error) {
+	fingerprint, err := p.dbBackedProvider.Fingerprint(ctx, source)
+	if err != nil {
+		return SourceFingerprint{}, err
+	}
+	src, ok := p.sources.sourceFromRef(source)
+	if !ok || !IsRegularFile(src.DBPath) {
+		return fingerprint, nil
+	}
+	hash, found, err := crushSessionFingerprint(
+		ctx, src.DBPath, src.SessionID, p.Config.StableSourceSnapshots,
+	)
+	if err != nil {
+		return SourceFingerprint{}, err
+	}
+	if found {
+		hasher := sha256.New()
+		crushWriteFingerprintField(hasher, hash)
+		crushWriteFingerprintField(
+			hasher, crushProjectDir(src.DBPath, p.projectMapping),
+		)
+		fingerprint.Hash = hex.EncodeToString(hasher.Sum(nil))
+	}
+	return fingerprint, nil
+}
+
+func crushProviderCapabilities() Capabilities {
+	source := dbBackedSourceCapabilities(CapabilityNotApplicable)
+	// Crush does not consume stored source hints; scheduling them would
+	// enumerate every session for each WAL event.
+	source.StoredSourceHints = CapabilityUnsupported
+	return Capabilities{
+		Source: source,
+		Content: ContentCapabilities{
+			FirstMessage:         CapabilitySupported,
+			SessionName:          CapabilitySupported,
+			Cwd:                  CapabilitySupported,
+			Relationships:        CapabilitySupported,
+			Thinking:             CapabilitySupported,
+			ToolCalls:            CapabilitySupported,
+			ToolResults:          CapabilitySupported,
+			AggregateUsageEvents: CapabilitySupported,
+			Model:                CapabilitySupported,
+			StopReason:           CapabilitySupported,
+		},
+		Sync: ProviderSyncSemantics{
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
+		},
+	}
+}
+
+func crushProviderSpec(stableSnapshot bool) dbBackedProviderSpec {
+	return dbBackedProviderSpec{
+		agent:  AgentCrush,
+		dbName: CrushDBName,
+		findDB: crushDBPath,
+		streamMeta: func(
+			ctx context.Context, dbPath string, yield func(dbBackedSessionMeta) error,
+		) error {
+			return forEachCrushSessionMeta(ctx, dbPath, stableSnapshot, yield)
+		},
+		metaForID: func(
+			ctx context.Context, dbPath, sessionID string,
+		) (dbBackedSessionMeta, bool, error) {
+			return crushSessionMeta(ctx, dbPath, sessionID, stableSnapshot)
+		},
+		parse: func(
+			ctx context.Context, dbPath, sessionID, machine string,
+		) ([]ParseResult, error) {
+			sess, msgs, err := parseCrushSession(ctx, dbPath, sessionID, machine, stableSnapshot, nil)
+			if err != nil || sess == nil {
+				return nil, err
+			}
+			// The engine writes usage rows only from ParseResult
+			// .UsageEvents; the ParsedSession field feeds ID validation.
+			return []ParseResult{{
+				Session:     *sess,
+				Messages:    msgs,
+				UsageEvents: sess.UsageEvents,
+			}}, nil
+		},
+		caps: crushProviderCapabilities(),
+	}
+}
+
+// normalizeCrushRoots expands configured roots into per-project data
+// directories and returns the expanded roots alongside a mapping from
+// each original registry root to its expanded data directories. A root
+// is one of:
+//   - a directory directly holding crush.db (a <project>/.crush data dir)
+//   - the path to a crush.db file itself
+//   - a Crush data directory holding projects.json, whose listed data
+//     dirs are each expanded (deduplicated); an unreadable or empty
+//     registry leaves the root in place rather than failing discovery
+func normalizeCrushRoots(roots []string) ([]string, map[string][]string, map[string]string) {
+	cleaned := cleanJSONLRoots(roots)
+	out := make([]string, 0, len(cleaned))
+	seen := make(map[string]struct{}, len(cleaned))
+	registryMapping := make(map[string][]string)
+	projectMapping := make(map[string]string)
+	add := func(root string) {
+		if _, ok := seen[root]; ok {
+			return
+		}
+		seen[root] = struct{}{}
+		out = append(out, root)
+	}
+	for _, root := range cleaned {
+		root = filepath.Clean(root)
+		if root == "" || root == "." {
+			continue
+		}
+		if filepath.Base(root) == CrushDBName {
+			add(filepath.Dir(root))
+			continue
+		}
+		if IsRegularFile(filepath.Join(root, CrushDBName)) {
+			add(root)
+			continue
+		}
+		expanded := crushProjectsDataDirs(filepath.Join(root, CrushProjectsFileName))
+		if len(expanded) == 0 {
+			add(root)
+			continue
+		}
+		registryMapping[root] = expanded
+		mapping := crushProjectDirsMapping(filepath.Join(root, CrushProjectsFileName))
+		maps.Copy(projectMapping, mapping)
+		for _, dir := range expanded {
+			add(dir)
+		}
+	}
+	return out, registryMapping, projectMapping
+}
+
+func crushDBPath(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	path := filepath.Join(dir, CrushDBName)
+	if !IsRegularFile(path) {
+		return ""
+	}
+	return path
+}
+
+// crushSessionFingerprint hashes the session row and every message row so a
+// same-second metadata or parts edit produces a fresh fingerprint even
+// though the store's second-resolution timestamps did not move.
+func crushSessionFingerprint(
+	ctx context.Context, dbPath, sessionID string, stableSnapshot bool,
+) (string, bool, error) {
+	db, err := openCrushDB(dbPath, stableSnapshot)
+	if err != nil {
+		return "", false, err
+	}
+	defer db.Close()
+	row, err := scanCrushSessionRow(db.QueryRowContext(
+		ctx, crushSessionSelect+" WHERE sessions.id = ?", sessionID,
+	))
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("fingerprinting crush session %s: %w", sessionID, err)
+	}
+	hasher := sha256.New()
+	for _, value := range []string{
+		row.id, row.title, row.parentSessionID,
+		strconv.FormatInt(row.messageCount, 10),
+		strconv.FormatInt(row.promptTokens, 10),
+		strconv.FormatInt(row.completionTokens, 10),
+		strconv.FormatFloat(row.cost, 'g', -1, 64),
+		strconv.FormatInt(row.createdAt, 10),
+		strconv.FormatInt(row.updatedAt, 10),
+		strconv.FormatInt(row.maxMessageAt.Int64, 10),
+	} {
+		crushWriteFingerprintField(hasher, value)
+	}
+	messageColumns, err := crushTableColumns(ctx, db, "messages")
+	if err != nil {
+		return "", false, fmt.Errorf("fingerprinting crush messages: %w", err)
+	}
+	columns := []struct {
+		name    string
+		exists  bool
+		express string
+	}{
+		{"id", true, "id"},
+		{"session_id", true, "session_id"},
+		{"role", true, "COALESCE(role, '')"},
+		{"parts", true, "COALESCE(parts, '')"},
+		{"model", true, "COALESCE(model, '')"},
+		{"provider", messageColumns["provider"], "COALESCE(provider, '')"},
+		{"created_at", true, "CAST(COALESCE(created_at, 0) AS TEXT)"},
+		{"updated_at", messageColumns["updated_at"], "CAST(COALESCE(updated_at, 0) AS TEXT)"},
+		{"finished_at", messageColumns["finished_at"], "COALESCE(CAST(finished_at AS TEXT), '')"},
+		{"is_summary_message", messageColumns["is_summary_message"], "CAST(COALESCE(is_summary_message, 0) AS TEXT)"},
+	}
+	selectExprs := make([]string, 0, len(columns))
+	for _, col := range columns {
+		if col.exists {
+			selectExprs = append(selectExprs, col.express)
+		}
+	}
+	selectStmt := "SELECT " + strings.Join(selectExprs, ", ") +
+		" FROM messages WHERE session_id = ? ORDER BY rowid"
+	messageRows, err := db.QueryContext(ctx, selectStmt, sessionID)
+	if err != nil {
+		return "", false, fmt.Errorf("fingerprinting crush messages: %w", err)
+	}
+	defer messageRows.Close()
+	for messageRows.Next() {
+		values := make([]string, len(selectExprs))
+		destinations := make([]any, len(values))
+		for i := range values {
+			destinations[i] = &values[i]
+		}
+		if err := messageRows.Scan(destinations...); err != nil {
+			return "", false, fmt.Errorf("scanning crush fingerprint message: %w", err)
+		}
+		for _, value := range values {
+			crushWriteFingerprintField(hasher, value)
+		}
+	}
+	if err := messageRows.Err(); err != nil {
+		return "", false, err
+	}
+	childRows, err := db.QueryContext(ctx, `
+		SELECT id FROM sessions
+		WHERE parent_session_id = ?
+		ORDER BY id
+	`, sessionID)
+	if err != nil {
+		return "", false, fmt.Errorf("fingerprinting crush child sessions: %w", err)
+	}
+	defer childRows.Close()
+	for childRows.Next() {
+		var childID string
+		if err := childRows.Scan(&childID); err != nil {
+			return "", false, fmt.Errorf("scanning crush fingerprint child session: %w", err)
+		}
+		if idx := strings.LastIndex(childID, "$$"); idx >= 0 && idx+2 < len(childID) {
+			crushWriteFingerprintField(hasher, childID)
+		}
+	}
+	if err := childRows.Err(); err != nil {
+		return "", false, err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), true, nil
+}
+
+func crushWriteFingerprintField(hasher hash.Hash, value string) {
+	_, _ = hasher.Write([]byte(strconv.Itoa(len(value))))
+	_, _ = hasher.Write([]byte{':'})
+	_, _ = hasher.Write([]byte(value))
+}
+
+type crushRowCursor struct {
+	id       int64
+	identity string
+}
+
+type crushTrackedDatabase struct {
+	schemaVersion int
+	inode         uint64
+	device        uint64
+	sessions      crushRowCursor
+	messages      crushRowCursor
+}
+
+type crushDiscoveryWatermark struct {
+	dbPath string
+	state  crushTrackedDatabase
+}
+
+type crushChangeTracker struct {
+	mu      sync.Mutex
+	entries map[string]*crushTrackedDatabaseEntry
+}
+
+type crushTrackedDatabaseEntry struct {
+	mu    sync.Mutex
+	known bool
+	state crushTrackedDatabase
+}
+
+func newCrushChangeTracker() *crushChangeTracker {
+	return &crushChangeTracker{
+		entries: make(map[string]*crushTrackedDatabaseEntry),
+	}
+}
+
+// entry returns the per-database tracker entry, creating it on first use.
+// Each database has its own lock so a slow or busy crush.db cannot stall
+// watcher classification for other Crush roots.
+func (t *crushChangeTracker) entry(dbPath string) *crushTrackedDatabaseEntry {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	key := filepath.Clean(dbPath)
+	entry, ok := t.entries[key]
+	if !ok {
+		entry = &crushTrackedDatabaseEntry{}
+		t.entries[key] = entry
+	}
+	return entry
+}
+
+func (t *crushChangeTracker) storeDiscoveryWatermarks(
+	watermarks []crushDiscoveryWatermark,
+) {
+	for _, watermark := range watermarks {
+		entry := t.entry(watermark.dbPath)
+		entry.mu.Lock()
+		entry.mergeLocked(watermark.state)
+		entry.mu.Unlock()
+	}
+}
+
+// commit publishes a snapshot that was captured before a full enumeration.
+// Callers invoke it only after that enumeration succeeds, so a failed pass
+// cannot advance the cursors past rows it never delivered.
+func (t *crushChangeTracker) commit(dbPath string, state crushTrackedDatabase) {
+	entry := t.entry(dbPath)
+	entry.mu.Lock()
+	entry.mergeLocked(state)
+	entry.mu.Unlock()
+}
+
+// mergeLocked adopts state without retreating row cursors that a concurrent
+// watcher event already advanced past this snapshot. Callers hold entry.mu.
+func (e *crushTrackedDatabaseEntry) mergeLocked(state crushTrackedDatabase) {
+	if !e.known || crushTrackedDatabaseReplaced(e.state, state) {
+		e.state = state
+		e.known = true
+		return
+	}
+	merged := state
+	merged.sessions = furthestCrushRowCursor(e.state.sessions, state.sessions)
+	merged.messages = furthestCrushRowCursor(e.state.messages, state.messages)
+	e.state = merged
+}
+
+func furthestCrushRowCursor(a, b crushRowCursor) crushRowCursor {
+	if a.id > b.id {
+		return a
+	}
+	return b
+}
+
+// changedSessionIDs lists sessions with rows inserted past the stored
+// cursors. cold reports that the caller must fall back to full enumeration;
+// the returned snapshot must then be published via commit only after that
+// enumeration succeeds. A table whose cursor retreated or was rewritten is
+// skipped — deletions are reconciliation's job — while inserts from the
+// tables whose cursors are intact are still listed.
+func (t *crushChangeTracker) changedSessionIDs(
+	ctx context.Context, dbPath string, stableSnapshot bool,
+) (ids []string, cold bool, snapshot crushTrackedDatabase, err error) {
+	entry := t.entry(dbPath)
+	entry.mu.Lock()
+	previous := entry.state
+	known := entry.known
+	entry.mu.Unlock()
+
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		return nil, false, crushTrackedDatabase{},
+			fmt.Errorf("stat crush sessions database: %w", err)
+	}
+	db, err := openCrushDB(dbPath, stableSnapshot)
+	if err != nil {
+		return nil, false, crushTrackedDatabase{}, err
+	}
+	defer db.Close()
+	current, err := readCrushTrackedDatabaseFrom(ctx, db, info)
+	if err != nil {
+		return nil, false, crushTrackedDatabase{}, err
+	}
+	if !known || crushTrackedDatabaseReplaced(previous, current) {
+		return nil, true, current, nil
+	}
+
+	seen := make(map[string]struct{})
+	for _, check := range []crushCursorCheck{
+		{table: "sessions", previous: previous.sessions, current: current.sessions},
+		{table: "messages", previous: previous.messages, current: current.messages},
+	} {
+		valid, err := crushCursorStillValid(ctx, db, check)
+		if err != nil {
+			return nil, false, crushTrackedDatabase{}, err
+		}
+		if !valid {
+			continue
+		}
+		if err := listChangedCrushSessionIDsForTable(
+			ctx, db, check.table, check.previous.id, seen,
+		); err != nil {
+			return nil, false, crushTrackedDatabase{}, err
+		}
+	}
+	entry.mu.Lock()
+	entry.mergeLocked(current)
+	entry.mu.Unlock()
+	ids = make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids, false, current, nil
+}
+
+func crushTrackedDatabaseReplaced(
+	previous, current crushTrackedDatabase,
+) bool {
+	identityChanged := (previous.inode != 0 || previous.device != 0) &&
+		(previous.inode != current.inode || previous.device != current.device)
+	return identityChanged || previous.schemaVersion != current.schemaVersion
+}
+
+func readCrushTrackedDatabase(
+	ctx context.Context, dbPath string, stableSnapshot bool,
+) (crushTrackedDatabase, error) {
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		return crushTrackedDatabase{}, fmt.Errorf("stat crush sessions database: %w", err)
+	}
+	db, err := openCrushDB(dbPath, stableSnapshot)
+	if err != nil {
+		return crushTrackedDatabase{}, err
+	}
+	defer db.Close()
+	return readCrushTrackedDatabaseFrom(ctx, db, info)
+}
+
+func readCrushTrackedDatabaseFrom(
+	ctx context.Context, db *sql.DB, info os.FileInfo,
+) (crushTrackedDatabase, error) {
+	inode, device := sourceFileIdentity(info)
+	schemaVersion, err := crushSchemaVersion(ctx, db)
+	if err != nil {
+		return crushTrackedDatabase{}, err
+	}
+	sessions, err := latestCrushRowCursor(ctx, db, "sessions")
+	if err != nil {
+		return crushTrackedDatabase{}, err
+	}
+	messages, err := latestCrushRowCursor(ctx, db, "messages")
+	if err != nil {
+		return crushTrackedDatabase{}, err
+	}
+	return crushTrackedDatabase{
+		schemaVersion: schemaVersion,
+		inode:         inode,
+		device:        device,
+		sessions:      sessions,
+		messages:      messages,
+	}, nil
+}
+
+// latestCrushRowCursor reads the newest rowid and a replacement-detecting
+// identity per table. Both Crush tables use TEXT primary keys, so the
+// rowid orders insertion.
+func latestCrushRowCursor(
+	ctx context.Context, db *sql.DB, table string,
+) (crushRowCursor, error) {
+	columns, err := crushTableColumns(ctx, db, table)
+	if err != nil {
+		return crushRowCursor{}, fmt.Errorf("inspecting crush %s columns: %w", table, err)
+	}
+	identityExpr, ok := crushRowIdentityExpression(table, columns)
+	if !ok {
+		return crushRowCursor{}, fmt.Errorf("unsupported crush cursor table %q", table)
+	}
+	query := "SELECT rowid, " + identityExpr + " FROM " + table +
+		" ORDER BY rowid DESC LIMIT 1"
+	var cursor crushRowCursor
+	err = db.QueryRowContext(ctx, query).Scan(&cursor.id, &cursor.identity)
+	if errors.Is(err, sql.ErrNoRows) {
+		return crushRowCursor{}, nil
+	}
+	if err != nil {
+		return crushRowCursor{}, fmt.Errorf("reading latest crush %s row: %w", table, err)
+	}
+	return cursor, nil
+}
+
+func crushRowIdentityExpression(table string, columns map[string]bool) (string, bool) {
+	switch table {
+	case "sessions":
+		return "CAST(id AS TEXT)", true
+	case "messages":
+		expr := "session_id || char(31) || COALESCE(role, '') || char(31) || " +
+			"CAST(COALESCE(created_at, 0) AS TEXT)"
+		if columns["finished_at"] {
+			expr += " || char(31) || COALESCE(CAST(finished_at AS TEXT), '')"
+		}
+		return expr, true
+	default:
+		return "", false
+	}
+}
+
+type crushCursorCheck struct {
+	table    string
+	previous crushRowCursor
+	current  crushRowCursor
+}
+
+func crushCursorStillValid(
+	ctx context.Context, db *sql.DB, check crushCursorCheck,
+) (bool, error) {
+	if check.current.id < check.previous.id {
+		return false, nil
+	}
+	if check.previous.id == 0 {
+		return true, nil
+	}
+	columns, err := crushTableColumns(ctx, db, check.table)
+	if err != nil {
+		return false, fmt.Errorf("inspecting crush %s columns: %w", check.table, err)
+	}
+	identityExpr, ok := crushRowIdentityExpression(check.table, columns)
+	if !ok {
+		return false, fmt.Errorf("unsupported crush cursor table %q", check.table)
+	}
+	var identity string
+	err = db.QueryRowContext(
+		ctx, "SELECT "+identityExpr+" FROM "+check.table+" WHERE rowid = ?",
+		check.previous.id,
+	).Scan(&identity)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading crush %s cursor identity: %w", check.table, err)
+	}
+	return identity == check.previous.identity, nil
+}
+
+func listChangedCrushSessionIDsForTable(
+	ctx context.Context,
+	db *sql.DB,
+	table string,
+	after int64,
+	seen map[string]struct{},
+) error {
+	var query string
+	switch table {
+	case "sessions":
+		query = "SELECT id FROM sessions WHERE rowid > ? ORDER BY rowid"
+	case "messages":
+		query = "SELECT session_id FROM messages WHERE rowid > ? ORDER BY rowid"
+	default:
+		return fmt.Errorf("unsupported crush cursor table %q", table)
+	}
+	rows, err := db.QueryContext(ctx, query, after)
+	if err != nil {
+		return fmt.Errorf("listing changed crush sessions: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("scanning changed crush session ID: %w", err)
+		}
+		id = strings.TrimSpace(id)
+		if id != "" {
+			seen[id] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return rows.Close()
+}
+
+// crushSchemaVersion reads the vendored goose migration version so a
+// re-written or downgraded database invalidates stored cursors.
+func crushSchemaVersion(ctx context.Context, db *sql.DB) (int, error) {
+	hasVersion, err := crushTableExists(ctx, db, "goose_db_version")
+	if err != nil {
+		return 0, err
+	}
+	if !hasVersion {
+		return 0, nil
+	}
+	var version int
+	if err := db.QueryRowContext(
+		ctx, "SELECT COALESCE(MAX(version_id), 0) FROM goose_db_version",
+	).Scan(&version); err != nil {
+		return 0, fmt.Errorf("reading crush schema version: %w", err)
+	}
+	return version, nil
+}
