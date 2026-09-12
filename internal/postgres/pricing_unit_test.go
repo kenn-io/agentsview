@@ -31,7 +31,6 @@ type pricingProbeRows struct {
 type pricingProbeState struct {
 	mu      sync.Mutex
 	queries int
-	execs   []string
 	rows    [][]driver.Value
 }
 
@@ -78,21 +77,7 @@ func (c *pricingProbeConn) Prepare(string) (driver.Stmt, error) {
 func (c *pricingProbeConn) Close() error { return nil }
 
 func (c *pricingProbeConn) Begin() (driver.Tx, error) {
-	return pricingProbeTx{}, nil
-}
-
-type pricingProbeTx struct{}
-
-func (pricingProbeTx) Commit() error   { return nil }
-func (pricingProbeTx) Rollback() error { return nil }
-
-func (c *pricingProbeConn) ExecContext(
-	_ context.Context, query string, _ []driver.NamedValue,
-) (driver.Result, error) {
-	c.state.mu.Lock()
-	defer c.state.mu.Unlock()
-	c.state.execs = append(c.state.execs, query)
-	return driver.RowsAffected(0), nil
+	return nil, errors.New("begin not implemented")
 }
 
 func (c *pricingProbeConn) QueryContext(
@@ -136,47 +121,6 @@ func (s *pricingProbeState) queryCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.queries
-}
-
-func (s *pricingProbeState) execStatements() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]string(nil), s.execs...)
-}
-
-func TestPGPricingUpsertStatementBatchesRows(t *testing.T) {
-	query, args := pgPricingUpsertStatement([]db.ModelPricing{
-		{
-			ModelPattern:         "model-a",
-			InputPerMTok:         money.MustParseDollars("1"),
-			OutputPerMTok:        money.MustParseDollars("2"),
-			CacheCreationPerMTok: money.MustParseDollars("3"),
-			CacheReadPerMTok:     money.MustParseDollars("4"),
-		},
-		{
-			ModelPattern:         "model-b",
-			InputPerMTok:         money.MustParseDollars("5"),
-			OutputPerMTok:        money.MustParseDollars("6"),
-			CacheCreationPerMTok: money.MustParseDollars("7"),
-			CacheReadPerMTok:     money.MustParseDollars("8"),
-			UpdatedAt:            "2026-08-05T12:01:00Z",
-		},
-	}, "2026-08-05T12:00:00Z")
-
-	assert.Contains(t, query,
-		"VALUES ($1, $2, $3, $4, $5, $6, $7), "+
-			"($8, $9, $10, $11, $12, $13, $14)")
-	assert.Contains(t, query,
-		"model_pricing.input_microdollars_per_mtok IS DISTINCT FROM")
-	assert.Contains(t, query, "EXCLUDED.input_microdollars_per_mtok")
-	assert.NotContains(t, query,
-		"model_pricing.updated_at IS DISTINCT FROM")
-	assert.Contains(t, query, "RETURNING model_pattern")
-	require.Len(t, args, 14)
-	assert.Equal(t, "model-a", args[0])
-	assert.Equal(t, "2026-08-05T12:00:00Z", args[6])
-	assert.Equal(t, "model-b", args[7])
-	assert.Equal(t, "2026-08-05T12:01:00Z", args[13])
 }
 
 func TestPGPricingFilterMatchesUpsertSemantics(t *testing.T) {
@@ -261,8 +205,4 @@ func TestSyncModelPricingSkipsWriteWhenRemoteRowsUnchanged(t *testing.T) {
 
 	require.NoError(t, sync.syncModelPricing(ctx))
 	assert.Equal(t, 1, state.queryCount(), "pg pricing reads")
-	execs := state.execStatements()
-	require.Len(t, execs, 2, "only the serialization lock, no pricing writes")
-	assert.Contains(t, execs[0], "ON CONFLICT (key) DO NOTHING")
-	assert.Contains(t, execs[1], "FOR UPDATE")
 }

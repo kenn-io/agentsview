@@ -161,9 +161,11 @@ func TestPushSecretFindingsReportsChange(t *testing.T) {
 	// pushOnce runs pushSecretFindings in its own transaction and returns
 	// whether it reported a change.
 	pushOnce := func() bool {
-		tx, err := ps.pg.BeginTx(ctx, nil)
+		findings, err := local.SessionSecretFindings(ctx, sessID)
+		require.NoError(t, err, "read source findings")
+		tx, err := ps.bunDB().BeginTx(ctx, nil)
 		require.NoError(t, err, "begin tx")
-		changed, err := ps.pushSecretFindings(ctx, tx, sessID)
+		changed, err := ps.pushSecretFindings(ctx, tx, sessID, findings)
 		if err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("pushSecretFindings: %v", err)
@@ -194,9 +196,8 @@ func TestPushSecretFindingsReportsChange(t *testing.T) {
 	), "seed finding")
 	assert.True(t, pushOnce(), "insert should report change")
 
-	// Re-pushing the same finding still rewrites rows (delete + insert),
-	// which counts as a change.
-	assert.True(t, pushOnce(), "rewrite should report change")
+	// Re-pushing identical canonical content is a no-op.
+	assert.False(t, pushOnce(), "unchanged finding should not rewrite")
 
 	// Clearing local findings deletes the PG row: that is a change.
 	require.NoError(t, local.ReplaceSessionSecretFindings(

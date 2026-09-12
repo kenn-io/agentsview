@@ -35,25 +35,23 @@ func TestDuckPushReplicatesWorktreeMappings(t *testing.T) {
 	conn, err := Open(path)
 	require.NoError(t, err)
 	defer conn.Close()
+	var id int64
 	var project string
 	var createdAt, updatedAt time.Time
 	require.NoError(t, conn.QueryRowContext(ctx, `
-		SELECT project, created_at, updated_at
+		SELECT id, project, created_at, updated_at
 		FROM source_worktree_project_mappings
 		WHERE source_archive_id = ? AND machine = ? AND path_prefix = ?`,
 		archiveID, "workstation", "/work/repos/sample",
-	).Scan(&project, &createdAt, &updatedAt), "read back mirrored mapping")
-	assert.Equal(t, "sample", project)
+	).Scan(&id, &project, &createdAt, &updatedAt), "read back mirrored mapping")
 	wantCreatedAt, err := time.Parse(time.RFC3339Nano, created.CreatedAt)
 	require.NoError(t, err)
 	wantUpdatedAt, err := time.Parse(time.RFC3339Nano, created.UpdatedAt)
 	require.NoError(t, err)
-	assert.True(t, wantCreatedAt.Equal(createdAt),
-		"created_at must retain the archive value: want %s, got %s",
-		wantCreatedAt, createdAt)
-	assert.True(t, wantUpdatedAt.Equal(updatedAt),
-		"updated_at must retain the archive value: want %s, got %s",
-		wantUpdatedAt, updatedAt)
+	assert.Equal(t, created.ID, id)
+	assert.Equal(t, "sample", project)
+	assert.Equal(t, wantCreatedAt.Truncate(time.Microsecond), createdAt.UTC())
+	assert.Equal(t, wantUpdatedAt.Truncate(time.Microsecond), updatedAt.UTC())
 }
 
 func TestDuckFilteredMappingPublicationOmitsOutOfScopeMetadata(t *testing.T) {

@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"regexp"
@@ -196,41 +195,6 @@ func semanticContentSessionFilter(f ContentSearchFilter) SessionFilter {
 	sf := contentSessionFilter(f)
 	sf.ChildExemptOneShot = true
 	return sf
-}
-
-// semanticSessionScopeSubquery is sessionScopeSubquery minus the
-// sidebar-child exclusion: semantic/hybrid unit visibility is governed by
-// Scope (which supersedes IncludeChildren), so the hybrid FTS leg must see
-// the same universe the vector leg does — every other predicate (project,
-// agent, dates, automated, one-shot for top-level sessions) still applies
-// to each session's own row.
-func semanticSessionScopeSubquery(f ContentSearchFilter) (string, []any) {
-	where, args := buildSessionBaseFilter(semanticContentSessionFilter(f))
-	where, args = AppendExcludeSessionIDs(where, args, "id", f.ExcludeSessionIDs)
-	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
-}
-
-// SearchContent runs a content search and returns a page of matches.
-func (db *DB) SearchContent(
-	ctx context.Context, f ContentSearchFilter,
-) (ContentSearchPage, error) {
-	if f.Limit <= 0 || f.Limit > MaxContentSearchLimit {
-		f.Limit = DefaultContentSearchLimit
-	}
-	if f.Pattern == "" {
-		return ContentSearchPage{}, nil
-	}
-
-	// Semantic and hybrid validate and default Sources themselves (messages
-	// only) ahead of the substring/regex/fts source-set default just below,
-	// which fills in tool_input/tool_result that neither mode supports.
-	switch f.Mode {
-	case "semantic":
-		return db.BunStore.SearchContent(ctx, f)
-	case "hybrid":
-		return db.BunStore.SearchContent(ctx, f)
-	}
-	return db.BunStore.SearchContent(ctx, f)
 }
 
 func hasSource(f ContentSearchFilter, name string) bool {
