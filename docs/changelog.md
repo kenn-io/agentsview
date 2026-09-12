@@ -94,6 +94,9 @@ description: Release history for AgentsView
 
 **Bug fixes**
 
+- Generate insights and session analyses when opening AgentsView over HTTP
+  outside localhost. Starting a report no longer requires a browser UUID API
+  that is unavailable on those origins. (#1742)
 - Show costs for OpenCode turns served through Ollama Cloud, such as
   `kimi-k2.7-code:cloud` or `gpt-oss:120b-cloud`, which previously showed as
   $0.00. Ollama bills these models per token at the upstream model's

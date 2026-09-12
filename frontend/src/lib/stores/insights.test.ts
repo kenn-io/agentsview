@@ -299,6 +299,44 @@ describe("selectedItem", () => {
 });
 
 describe("generate (multi-task)", () => {
+  it("starts independent report and session tasks without crypto.randomUUID", () => {
+    // Non-localhost HTTP origins do not expose crypto.randomUUID.
+    vi.stubGlobal("crypto", {});
+    const abortReport = vi.fn();
+    const abortSession = vi.fn();
+    vi.mocked(api.generateInsight)
+      .mockReturnValueOnce({ abort: abortReport, done: new Promise(() => {}) })
+      .mockReturnValueOnce({ abort: abortSession, done: new Promise(() => {}) });
+
+    try {
+      insights.setType("llm_canned");
+      insights.generate();
+      insights.generateForSession(makeSession());
+
+      expect(api.generateInsight).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ type: "llm_canned", llm_opt_in: true }),
+        expect.any(Function),
+        expect.any(Function),
+      );
+      expect(api.generateInsight).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ type: "agent_analysis", session_id: "run:session-1" }),
+        expect.any(Function),
+        expect.any(Function),
+      );
+      expect(insights.tasks).toHaveLength(2);
+      insights.cancelTask(insights.tasks[0]!.clientId);
+      expect(abortReport).toHaveBeenCalledOnce();
+      expect(abortSession).not.toHaveBeenCalled();
+      insights.cancelTask(insights.tasks[1]!.clientId);
+      expect(abortSession).toHaveBeenCalledOnce();
+    } finally {
+      api.generateInsight.mockReset();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("includes the browser timezone so summaries align with the dashboard", () => {
     const mockHandle = {
       abort: vi.fn(),

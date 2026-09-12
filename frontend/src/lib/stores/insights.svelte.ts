@@ -67,6 +67,7 @@ class InsightsStore {
   tasks: InsightTask[] = $state([]);
 
   #handles = new Map<string, GenerateInsightHandle>();
+  #nextTaskId = 0;
   #version = 0;
   #listRead = new LatestRead();
 
@@ -220,7 +221,7 @@ class InsightsStore {
 
   #startGeneration(
     snap: GenerationSnapshot,
-    clientId: string = crypto.randomUUID(),
+    clientId: string = String(++this.#nextTaskId),
     selectTask = false,
   ) {
     const task: InsightTask = {
