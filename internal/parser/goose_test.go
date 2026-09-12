@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -337,18 +338,23 @@ func TestGooseChangedPathWorkStaysProportionalToNewRows(t *testing.T) {
 				Roots: []string{fixture.pathRoot}, Machine: "devbox",
 			})
 			require.True(t, ok)
-			_, err := provider.Discover(context.Background())
+			scans := 0
+			ctx := WithSharedContainerScanObserver(context.Background(), func() { scans++ })
+			_, err := provider.Discover(ctx)
 			require.NoError(t, err)
+			require.Equal(t, 1, scans, "discovery must report its full container scan")
+			scans = 0
 
 			fixture.insertMessage(t, "session-000", "assistant", `[{"type":"text","text":"changed"}]`, 1_700_000_001)
 			sources, err := provider.SourcesForChangedPath(
-				context.Background(), ChangedPathRequest{
+				ctx, ChangedPathRequest{
 					Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 				},
 			)
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
 			assert.Equal(t, fixture.dbPath+"#session-000", sources[0].DisplayPath)
+			assert.Zero(t, scans, "a warm watcher event must not enumerate the container")
 		})
 	}
 }
@@ -402,18 +408,23 @@ func TestGooseTailDeletionWatcherWorkStaysBounded(t *testing.T) {
 					Roots: []string{fixture.pathRoot}, Machine: "devbox",
 				})
 				require.True(t, ok)
-				_, err := provider.Discover(context.Background())
+				scans := 0
+				ctx := WithSharedContainerScanObserver(context.Background(), func() { scans++ })
+				_, err := provider.Discover(ctx)
 				require.NoError(t, err)
+				require.Equal(t, 1, scans)
+				scans = 0
 
 				test.delete(t, fixture)
 				sources, err := provider.SourcesForChangedPath(
-					context.Background(), ChangedPathRequest{
+					ctx, ChangedPathRequest{
 						Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 					},
 				)
 				require.NoError(t, err)
 				assert.Empty(t, sources,
 					"tail deletion must wait for reconciliation instead of enumerating the archive")
+				assert.Zero(t, scans)
 			})
 		}
 	}
@@ -554,6 +565,61 @@ func TestGooseDiscoveryLeavesConcurrentRowsForWatcherProcessing(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, fixture.dbPath+"#session", sources[0].DisplayPath)
+}
+
+func TestGooseFailedDiscoveryDoesNotPublishWatermark(t *testing.T) {
+	fixture := newGooseTestFixture(t)
+	fixture.insertSession(t, "session-a", "a", "user", "")
+	fixture.insertSession(t, "session-b", "b", "user", "")
+	provider, ok := NewProvider(AgentGoose, ProviderConfig{Roots: []string{fixture.pathRoot}})
+	require.True(t, ok)
+	discoverer, ok := provider.(StreamingDiscoverer)
+	require.True(t, ok)
+	stop := errors.New("consumer stopped discovery")
+	err := discoverer.DiscoverEach(context.Background(), func(SourceRef) error { return stop })
+	require.ErrorIs(t, err, stop)
+
+	// A failed enumeration must leave the next event cold, even without new rows.
+	sources, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+		Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
+	})
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	assert.Equal(t, fixture.dbPath+"#session-a", sources[0].DisplayPath)
+	assert.Equal(t, fixture.dbPath+"#session-b", sources[1].DisplayPath)
+}
+
+func TestGooseChangedSchemaReenumeratesOnce(t *testing.T) {
+	for _, change := range []struct{ name, sql string }{
+		{"version", "UPDATE schema_version SET version = 16"},
+		{"optional usage table", "DROP TABLE usage_ledger"},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			fixture := newGooseTestFixture(t)
+			fixture.insertSession(t, "session-a", "a", "user", "")
+			fixture.insertSession(t, "session-b", "b", "user", "")
+			provider, ok := NewProvider(AgentGoose, ProviderConfig{Roots: []string{fixture.pathRoot}})
+			require.True(t, ok)
+			_, err := provider.Discover(context.Background())
+			require.NoError(t, err)
+			_, err = fixture.database.Exec(change.sql)
+			require.NoError(t, err)
+			scans := 0
+			ctx := WithSharedContainerScanObserver(context.Background(), func() { scans++ })
+			req := ChangedPathRequest{Path: fixture.dbPath, WatchRoot: fixture.sessionDir}
+			sources, err := provider.SourcesForChangedPath(ctx, req)
+			require.NoError(t, err)
+			require.Len(t, sources, 2)
+			assert.Equal(t, 1, scans)
+
+			fixture.insertMessage(t, "session-b", "user", `[{"type":"text","text":"new"}]`, 1_700_000_001)
+			sources, err = provider.SourcesForChangedPath(ctx, req)
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			assert.Equal(t, fixture.dbPath+"#session-b", sources[0].DisplayPath)
+			assert.Equal(t, 1, scans, "the new schema's cursor must keep later events bounded")
+		})
+	}
 }
 
 func TestGooseDiscoveryRejectsUnsupportedMessagesSchema(t *testing.T) {

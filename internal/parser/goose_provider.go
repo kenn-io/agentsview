@@ -3,13 +3,10 @@ package parser
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 )
 
 // GooseDBName is the SQLite filename inside Goose's sessions directory.
@@ -17,7 +14,7 @@ const GooseDBName = "sessions.db"
 
 type gooseProviderFactory struct {
 	def     AgentDef
-	tracker *gooseChangeTracker
+	tracker *sqliteChangeTracker
 }
 
 func newGooseProviderFactory(def AgentDef) ProviderFactory {
@@ -51,7 +48,7 @@ func (f *gooseProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 
 type gooseProvider struct {
 	*dbBackedProvider
-	tracker *gooseChangeTracker
+	tracker *sqliteChangeTracker
 }
 
 func (p *gooseProvider) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -86,18 +83,18 @@ func (p *gooseProvider) DiscoverEach(
 // discovery available to the next watcher event.
 func (p *gooseProvider) captureDiscoveryWatermarks(
 	ctx context.Context,
-) ([]gooseDiscoveryWatermark, error) {
-	watermarks := make([]gooseDiscoveryWatermark, 0, len(p.sources.roots))
+) ([]sqliteDiscoveryWatermark, error) {
+	watermarks := make([]sqliteDiscoveryWatermark, 0, len(p.sources.roots))
 	for _, root := range p.sources.roots {
 		dbPath := p.spec.findDB(root)
 		if dbPath == "" {
 			continue
 		}
-		state, err := readGooseTrackedDatabase(ctx, dbPath, p.Config.StableSourceSnapshots)
+		state, err := p.tracker.read(ctx, dbPath, p.Config.StableSourceSnapshots)
 		if err != nil {
 			return nil, err
 		}
-		watermarks = append(watermarks, gooseDiscoveryWatermark{
+		watermarks = append(watermarks, sqliteDiscoveryWatermark{
 			dbPath: dbPath,
 			state:  state,
 		})
@@ -332,353 +329,40 @@ func openGooseDB(dbPath string, stableSnapshot bool) (*sql.DB, error) {
 	return db, nil
 }
 
-type gooseRowCursor struct {
-	id       int64
-	identity string
-}
-
-type gooseTrackedDatabase struct {
-	schemaVersion int
-	inode         uint64
-	device        uint64
-	sessions      gooseRowCursor
-	messages      gooseRowCursor
-	usage         gooseRowCursor
-	hasUsage      bool
-}
-
-type gooseDiscoveryWatermark struct {
-	dbPath string
-	state  gooseTrackedDatabase
-}
-
-type gooseChangeTracker struct {
-	mu      sync.Mutex
-	entries map[string]*gooseTrackedDatabaseEntry
-}
-
-type gooseTrackedDatabaseEntry struct {
-	mu    sync.Mutex
-	known bool
-	state gooseTrackedDatabase
-}
-
-func newGooseChangeTracker() *gooseChangeTracker {
-	return &gooseChangeTracker{
-		entries: make(map[string]*gooseTrackedDatabaseEntry),
+func newGooseChangeTracker() *sqliteChangeTracker {
+	return &sqliteChangeTracker{
+		agent:  AgentGoose,
+		open:   openGooseDB,
+		schema: gooseCursorSchema,
 	}
 }
 
-// entry returns the per-database tracker entry, creating it on first use.
-// Each database has its own lock so a slow or busy sessions.db cannot stall
-// watcher classification for other Goose roots.
-func (t *gooseChangeTracker) entry(dbPath string) *gooseTrackedDatabaseEntry {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	key := filepath.Clean(dbPath)
-	entry, ok := t.entries[key]
-	if !ok {
-		entry = &gooseTrackedDatabaseEntry{}
-		t.entries[key] = entry
-	}
-	return entry
-}
-
-func (t *gooseChangeTracker) storeDiscoveryWatermarks(
-	watermarks []gooseDiscoveryWatermark,
-) {
-	for _, watermark := range watermarks {
-		entry := t.entry(watermark.dbPath)
-		entry.mu.Lock()
-		entry.mergeLocked(watermark.state)
-		entry.mu.Unlock()
-	}
-}
-
-// commit publishes a snapshot that was captured before a full enumeration.
-// Callers invoke it only after that enumeration succeeds, so a failed pass
-// cannot advance the cursors past rows it never delivered.
-func (t *gooseChangeTracker) commit(dbPath string, state gooseTrackedDatabase) {
-	entry := t.entry(dbPath)
-	entry.mu.Lock()
-	entry.mergeLocked(state)
-	entry.mu.Unlock()
-}
-
-// mergeLocked adopts state without retreating row cursors that a concurrent
-// watcher event already advanced past this snapshot. Callers hold entry.mu.
-func (e *gooseTrackedDatabaseEntry) mergeLocked(state gooseTrackedDatabase) {
-	if !e.known || gooseTrackedDatabaseReplaced(e.state, state) {
-		e.state = state
-		e.known = true
-		return
-	}
-	merged := state
-	merged.sessions = furthestGooseRowCursor(e.state.sessions, state.sessions)
-	merged.messages = furthestGooseRowCursor(e.state.messages, state.messages)
-	merged.usage = furthestGooseRowCursor(e.state.usage, state.usage)
-	e.state = merged
-}
-
-func furthestGooseRowCursor(a, b gooseRowCursor) gooseRowCursor {
-	if a.id > b.id {
-		return a
-	}
-	return b
-}
-
-// changedSessionIDs lists sessions with rows inserted past the stored
-// cursors. cold reports that the caller must fall back to full enumeration;
-// the returned snapshot must then be published via commit only after that
-// enumeration succeeds. A table whose cursor retreated or was rewritten is
-// skipped — deletions are reconciliation's job — while inserts from the
-// tables whose cursors are intact are still listed.
-func (t *gooseChangeTracker) changedSessionIDs(
-	ctx context.Context, dbPath string, stableSnapshot bool,
-) (ids []string, cold bool, snapshot gooseTrackedDatabase, err error) {
-	entry := t.entry(dbPath)
-	entry.mu.Lock()
-	defer entry.mu.Unlock()
-
-	info, err := os.Stat(dbPath)
+func gooseCursorSchema(
+	ctx context.Context, db *sql.DB,
+) (int, []sqliteCursorTable, error) {
+	version, err := gooseSchemaVersion(ctx, db)
 	if err != nil {
-		return nil, false, gooseTrackedDatabase{},
-			fmt.Errorf("stat goose sessions database: %w", err)
-	}
-	db, err := openGooseDB(dbPath, stableSnapshot)
-	if err != nil {
-		return nil, false, gooseTrackedDatabase{}, err
-	}
-	defer db.Close()
-	current, err := readGooseTrackedDatabaseFrom(ctx, db, info)
-	if err != nil {
-		return nil, false, gooseTrackedDatabase{}, err
-	}
-	if !entry.known || gooseTrackedDatabaseReplaced(entry.state, current) {
-		return nil, true, current, nil
-	}
-
-	seen := make(map[string]struct{})
-	for _, check := range gooseCursorChecks(entry.state, current) {
-		valid, err := gooseCursorStillValid(ctx, db, check)
-		if err != nil {
-			return nil, false, gooseTrackedDatabase{}, err
-		}
-		if !valid {
-			continue
-		}
-		if err := listChangedGooseSessionIDsForTable(
-			ctx, db, check.table, check.previous.id, seen,
-		); err != nil {
-			return nil, false, gooseTrackedDatabase{}, err
-		}
-	}
-	entry.state = current
-	entry.known = true
-	ids = make([]string, 0, len(seen))
-	for id := range seen {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids, false, current, nil
-}
-
-func gooseTrackedDatabaseReplaced(
-	previous, current gooseTrackedDatabase,
-) bool {
-	identityChanged := (previous.inode != 0 || previous.device != 0) &&
-		(previous.inode != current.inode || previous.device != current.device)
-	return identityChanged || previous.schemaVersion != current.schemaVersion ||
-		previous.hasUsage != current.hasUsage
-}
-
-func readGooseTrackedDatabase(
-	ctx context.Context, dbPath string, stableSnapshot bool,
-) (gooseTrackedDatabase, error) {
-	info, err := os.Stat(dbPath)
-	if err != nil {
-		return gooseTrackedDatabase{}, fmt.Errorf("stat goose sessions database: %w", err)
-	}
-	db, err := openGooseDB(dbPath, stableSnapshot)
-	if err != nil {
-		return gooseTrackedDatabase{}, err
-	}
-	defer db.Close()
-	return readGooseTrackedDatabaseFrom(ctx, db, info)
-}
-
-func readGooseTrackedDatabaseFrom(
-	ctx context.Context, db *sql.DB, info os.FileInfo,
-) (gooseTrackedDatabase, error) {
-	inode, device := sourceFileIdentity(info)
-	schemaVersion, err := gooseSchemaVersion(ctx, db)
-	if err != nil {
-		return gooseTrackedDatabase{}, err
+		return 0, nil, err
 	}
 	hasUsage, err := gooseTableExists(ctx, db, "usage_ledger")
 	if err != nil {
-		return gooseTrackedDatabase{}, err
+		return 0, nil, err
 	}
-	sessions, err := latestGooseRowCursor(ctx, db, "sessions")
-	if err != nil {
-		return gooseTrackedDatabase{}, err
+	tables := []sqliteCursorTable{
+		{
+			name: "sessions", rowID: "rowid", sessionID: "id",
+			identity: "CAST(id AS TEXT)",
+		},
+		{
+			name: "messages", rowID: "id", sessionID: "session_id",
+			identity: "session_id || char(31) || COALESCE(message_id, '') || char(31) || CAST(created_timestamp AS TEXT)",
+		},
 	}
-	messages, err := latestGooseRowCursor(ctx, db, "messages")
-	if err != nil {
-		return gooseTrackedDatabase{}, err
-	}
-	var usage gooseRowCursor
 	if hasUsage {
-		usage, err = latestGooseRowCursor(ctx, db, "usage_ledger")
-		if err != nil {
-			return gooseTrackedDatabase{}, err
-		}
-	}
-	return gooseTrackedDatabase{
-		schemaVersion: schemaVersion,
-		inode:         inode,
-		device:        device,
-		sessions:      sessions,
-		messages:      messages,
-		usage:         usage,
-		hasUsage:      hasUsage,
-	}, nil
-}
-
-func latestGooseRowCursor(
-	ctx context.Context, db *sql.DB, table string,
-) (gooseRowCursor, error) {
-	identityExpr, ok := gooseRowIdentityExpression(table)
-	if !ok {
-		return gooseRowCursor{}, fmt.Errorf("unsupported goose cursor table %q", table)
-	}
-	rowID := "rowid"
-	if table != "sessions" {
-		rowID = "id"
-	}
-	query := "SELECT " + rowID + ", " + identityExpr + " FROM " + table +
-		" ORDER BY " + rowID + " DESC LIMIT 1"
-	var cursor gooseRowCursor
-	err := db.QueryRowContext(ctx, query).Scan(&cursor.id, &cursor.identity)
-	if errors.Is(err, sql.ErrNoRows) {
-		return gooseRowCursor{}, nil
-	}
-	if err != nil {
-		return gooseRowCursor{}, fmt.Errorf("reading latest goose %s row: %w", table, err)
-	}
-	return cursor, nil
-}
-
-func gooseRowIdentityExpression(table string) (string, bool) {
-	switch table {
-	case "sessions":
-		return "CAST(id AS TEXT)", true
-	case "messages":
-		return "session_id || char(31) || COALESCE(message_id, '') || char(31) || CAST(created_timestamp AS TEXT)", true
-	case "usage_ledger":
-		return "session_id || char(31) || COALESCE(model, '') || char(31) || CAST(created_timestamp AS TEXT)", true
-	default:
-		return "", false
-	}
-}
-
-type gooseCursorCheck struct {
-	table    string
-	previous gooseRowCursor
-	current  gooseRowCursor
-}
-
-func gooseCursorChecks(
-	previous, current gooseTrackedDatabase,
-) []gooseCursorCheck {
-	checks := []gooseCursorCheck{
-		{table: "sessions", previous: previous.sessions, current: current.sessions},
-		{table: "messages", previous: previous.messages, current: current.messages},
-	}
-	if current.hasUsage {
-		checks = append(checks, gooseCursorCheck{
-			table: "usage_ledger", previous: previous.usage, current: current.usage,
+		tables = append(tables, sqliteCursorTable{
+			name: "usage_ledger", rowID: "id", sessionID: "session_id",
+			identity: "session_id || char(31) || COALESCE(model, '') || char(31) || CAST(created_timestamp AS TEXT)",
 		})
 	}
-	return checks
-}
-
-func gooseCursorStillValid(
-	ctx context.Context, db *sql.DB, check gooseCursorCheck,
-) (bool, error) {
-	if check.current.id < check.previous.id {
-		return false, nil
-	}
-	if check.previous.id == 0 {
-		return true, nil
-	}
-	identity, found, err := gooseRowIdentityAt(
-		ctx, db, check.table, check.previous.id,
-	)
-	if err != nil {
-		return false, err
-	}
-	return found && identity == check.previous.identity, nil
-}
-
-func gooseRowIdentityAt(
-	ctx context.Context, db *sql.DB, table string, rowID int64,
-) (string, bool, error) {
-	identityExpr, ok := gooseRowIdentityExpression(table)
-	if !ok {
-		return "", false, fmt.Errorf("unsupported goose cursor table %q", table)
-	}
-	idColumn := "rowid"
-	if table != "sessions" {
-		idColumn = "id"
-	}
-	query := "SELECT " + identityExpr + " FROM " + table + " WHERE " + idColumn + " = ?"
-	var identity string
-	err := db.QueryRowContext(ctx, query, rowID).Scan(&identity)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("reading goose %s cursor identity: %w", table, err)
-	}
-	return identity, true, nil
-}
-
-func listChangedGooseSessionIDsForTable(
-	ctx context.Context,
-	db *sql.DB,
-	table string,
-	after int64,
-	seen map[string]struct{},
-) error {
-	var query string
-	switch table {
-	case "sessions":
-		query = "SELECT id FROM sessions WHERE rowid > ? ORDER BY rowid"
-	case "messages":
-		query = "SELECT session_id FROM messages WHERE id > ? ORDER BY id"
-	case "usage_ledger":
-		query = "SELECT session_id FROM usage_ledger WHERE id > ? ORDER BY id"
-	default:
-		return fmt.Errorf("unsupported goose cursor table %q", table)
-	}
-	rows, err := db.QueryContext(ctx, query, after)
-	if err != nil {
-		return fmt.Errorf("listing changed goose sessions: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return fmt.Errorf("scanning changed goose session ID: %w", err)
-		}
-		id = strings.TrimSpace(id)
-		if id != "" {
-			seen[id] = struct{}{}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	return rows.Close()
+	return version, tables, nil
 }
