@@ -16,7 +16,7 @@
   import { ChevronRightIcon } from "../../icons.js";
   import { summarizeToolCall, summarizeToolCallPath } from "../../utils/tool-summary.js";
   import { CopyButton, SegmentedControl, type SegmentedControlOption } from "@kenn-io/kit-ui";
-  import { renderMarkdown } from "../../utils/markdown.js";
+  import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import {
     displayFormattedToolResult,
     displayToolResult,
@@ -553,6 +553,7 @@
             class="tool-content output-content formatted-output"
             use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: formattedOutputContent }}
             use:highlightCodeFences={{ q: highlightQuery, current: isCurrentHighlight, content: formattedOutputContent }}
+            use:loadAssetImages={formattedOutputContent}
           >
             {@html renderMarkdown(formattedOutputContent, {
               renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,

@@ -36,7 +36,7 @@
   import { sync } from "../../stores/sync.svelte.js";
   import { applyHighlight } from "../../utils/highlight.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
-  import { renderMarkdown } from "../../utils/markdown.js";
+  import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import { displayToolName } from "../../utils/toolDisplay.js";
   import { CirclePlayIcon, PinIcon } from "../../icons.js";
   import type { Session } from "../../api/types.js";
@@ -508,6 +508,7 @@
               content: segment.content,
               current: isCurrentHighlight,
             }}
+            use:loadAssetImages={segment.content}
           >
             {@html renderMarkdown(segment.content, {
               renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,
