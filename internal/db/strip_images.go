@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/secrets"
 )
 
@@ -451,4 +452,27 @@ func (db *DB) toolImageStats(
 func countStrippable(content string) ToolImageStats {
 	_, stats := StripToolResultImages(content)
 	return stats
+}
+
+// ProjectToolImagesForSessions rewrites copied sessions before replacement publication.
+func (db *DB) ProjectToolImagesForSessions(ctx context.Context, sessionIDs []string) error {
+	if db.ArchiveContent().OmitsToolContent() {
+		return nil
+	}
+	switch db.ToolResultImages() {
+	case config.ToolResultImagesDrop:
+		return db.StripToolImagesForSessions(ctx, sessionIDs)
+	case config.ToolResultImagesOffload:
+		if err := db.requireWritable(); err != nil {
+			return err
+		}
+		for _, id := range sessionIDs {
+			if _, err := db.rewriteStoredToolResultRows(ctx, id, func(content string) (string, error) {
+				return ProjectToolResultImageContent(content, db.ToolResultImages(), db.AssetsDir()), nil
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

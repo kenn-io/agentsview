@@ -250,7 +250,9 @@ test.describe("Mixed content rendering", () => {
 test.describe("retained tool images", () => {
   test.describe.configure({ timeout: 60_000 });
 
-  test("renders retained, image-only, migrated, and fallback tool images", async ({ page }, testInfo) => {
+  test("renders retained, image-only, migrated, and fallback tool images", async ({
+    page,
+  }, testInfo) => {
     const fixturePath = fileURLToPath(
       new URL("../src/lib/utils/__fixtures__/retained-tool-image-1735.json", import.meta.url),
     );
@@ -365,12 +367,15 @@ test.describe("retained tool images", () => {
       }
       await route.abort();
     });
-    await page.route("**/api/v1/assets/first", (route) =>
-      route.fulfill({ body: assetBytes, contentType: "image/png" }),
-    );
-    await page.route("**/api/v1/assets/nested/second", (route) =>
-      route.fulfill({ body: assetBytes, contentType: "image/png" }),
-    );
+    await page.addInitScript(() => {
+      localStorage.setItem("agentsview-auth-token", "test-asset-token");
+    });
+    for (const assetPath of ["first", "nested%2Fsecond"]) {
+      await page.route(`**/api/v1/assets/${assetPath}`, async (route) => {
+        expect(route.request().headers()["authorization"]).toBe("Bearer test-asset-token");
+        await route.fulfill({ body: assetBytes, contentType: "image/png" });
+      });
+    }
 
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(`/sessions/${sessionId}`);
@@ -421,11 +426,15 @@ test.describe("retained tool images", () => {
     const retainedImage = retainedFormatted.locator("img");
     await expect(retainedImage).toHaveCount(1);
     await expect(retainedImage).toHaveAttribute("src", retainedImageURL!);
-    await expect.poll(() => retainedImage.evaluate((img: HTMLImageElement) => ({
-      complete: img.complete,
-      naturalWidth: img.naturalWidth,
-      naturalHeight: img.naturalHeight,
-    }))).toEqual({ complete: true, naturalWidth: 600, naturalHeight: 600 });
+    await expect
+      .poll(() =>
+        retainedImage.evaluate((img: HTMLImageElement) => ({
+          complete: img.complete,
+          naturalWidth: img.naturalWidth,
+          naturalHeight: img.naturalHeight,
+        })),
+      )
+      .toEqual({ complete: true, naturalWidth: 600, naturalHeight: 600 });
     const retainedText = await retainedFormatted.textContent();
     expect(retainedText).not.toContain("input_image");
     expect(retainedText).not.toContain(retainedImageURL!);
@@ -447,7 +456,9 @@ test.describe("retained tool images", () => {
       expect(measurement.imageWidth).toBeLessThanOrEqual(measurement.clientWidth + 2);
       console.log(`retained layout width=${width}px ${JSON.stringify(measurement)}`);
       if (width === 1280) {
-        await retainedFormatted.screenshot({ path: testInfo.outputPath("agentsview-1735-after.png") });
+        await retainedFormatted.screenshot({
+          path: testInfo.outputPath("agentsview-1735-after.png"),
+        });
       } else {
         await retainedFormatted.screenshot({
           path: testInfo.outputPath(
@@ -467,32 +478,36 @@ test.describe("retained tool images", () => {
     const imageOnlyImage = imageOnly.formatted.locator("img");
     await expect(imageOnlyImage).toHaveCount(1);
     await expect(imageOnlyImage).toHaveAttribute("src", smallPNG);
-    await expect.poll(() => imageOnlyImage.evaluate((img: HTMLImageElement) => ({
-      complete: img.complete,
-      naturalWidth: img.naturalWidth,
-      naturalHeight: img.naturalHeight,
-    }))).toEqual({ complete: true, naturalWidth: 1, naturalHeight: 1 });
+    await expect
+      .poll(() =>
+        imageOnlyImage.evaluate((img: HTMLImageElement) => ({
+          complete: img.complete,
+          naturalWidth: img.naturalWidth,
+          naturalHeight: img.naturalHeight,
+        })),
+      )
+      .toEqual({ complete: true, naturalWidth: 1, naturalHeight: 1 });
     expect(await imageOnly.formatted.textContent()).not.toContain("input_image");
 
     const migrated = await openFormatted(migratedBlock);
     const migratedImages = migrated.formatted.locator("img");
     await expect(migratedImages).toHaveCount(2);
-    const migratedAssetBase = "/api/v1/assets";
-    await expect(migratedImages.nth(0)).toHaveAttribute("src", `${migratedAssetBase}/first`);
-    await expect(migratedImages.nth(1)).toHaveAttribute(
-      "src",
-      `${migratedAssetBase}/nested/second`,
-    );
-    await expect.poll(() => migratedImages.evaluateAll((images) =>
-      images.map((image) => ({
-        complete: (image as HTMLImageElement).complete,
-        naturalWidth: (image as HTMLImageElement).naturalWidth,
-        naturalHeight: (image as HTMLImageElement).naturalHeight,
-      })),
-    )).toEqual([
-      { complete: true, naturalWidth: 1, naturalHeight: 1 },
-      { complete: true, naturalWidth: 1, naturalHeight: 1 },
-    ]);
+    await expect(migratedImages.nth(0)).toHaveAttribute("src", /^blob:/);
+    await expect(migratedImages.nth(1)).toHaveAttribute("src", /^blob:/);
+    await expect
+      .poll(() =>
+        migratedImages.evaluateAll((images) =>
+          images.map((image) => ({
+            complete: (image as HTMLImageElement).complete,
+            naturalWidth: (image as HTMLImageElement).naturalWidth,
+            naturalHeight: (image as HTMLImageElement).naturalHeight,
+          })),
+        ),
+      )
+      .toEqual([
+        { complete: true, naturalWidth: 1, naturalHeight: 1 },
+        { complete: true, naturalWidth: 1, naturalHeight: 1 },
+      ]);
     expect(await migrated.formatted.textContent()).toContain("Before");
     expect(await migrated.formatted.textContent()).toContain("After");
     expect(await migrated.formatted.textContent()).not.toContain("asset://");

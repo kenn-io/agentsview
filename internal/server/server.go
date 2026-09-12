@@ -907,7 +907,7 @@ func buildCSPPolicy(
 		"default-src %[1]s; "+
 			"script-src %[1]s; "+
 			"connect-src 'self' http: https: ws: wss:; "+
-			"img-src %[1]s data:; "+
+			"img-src %[1]s data: blob:; "+
 			"style-src %[1]s 'unsafe-inline' https://fonts.googleapis.com; "+
 			"font-src %[1]s data: https://fonts.gstatic.com; "+
 			"object-src 'none'; "+

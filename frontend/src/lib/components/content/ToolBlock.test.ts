@@ -31,6 +31,7 @@ describe("ToolBlock output section", () => {
 
   afterEach(() => {
     if (component) unmount(component);
+    vi.unstubAllGlobals();
     document.body.innerHTML = "";
     setLocale("en");
   });
@@ -208,7 +209,9 @@ describe("ToolBlock output section", () => {
 
     document.querySelector<HTMLButtonElement>(".output-mode button:nth-child(1)")!.click();
     await tick();
-    expect(document.querySelector(".output-content")?.textContent).toBe(result.replace(/\r\n/g, "\n"));
+    expect(document.querySelector(".output-content")?.textContent).toBe(
+      result.replace(/\r\n/g, "\n"),
+    );
 
     document.querySelector<HTMLButtonElement>('button[aria-label="Copy output"]')!.click();
     await tick();
@@ -237,6 +240,19 @@ describe("ToolBlock output section", () => {
   });
 
   it("renders migrated asset references in formatted output", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response("image"));
+    vi.stubGlobal("fetch", fetchMock);
+    const createObjectURL = vi
+      .fn()
+      .mockReturnValueOnce("blob:first")
+      .mockReturnValueOnce("blob:second");
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = vi.fn();
+      },
+    );
     const result = JSON.stringify([
       { type: "input_text", text: "Before" },
       { type: "agentsview_image", version: 1, text: "![first](asset://first)" },
@@ -261,11 +277,17 @@ describe("ToolBlock output section", () => {
     document.querySelector<HTMLButtonElement>(".output-mode button:nth-child(2)")!.click();
     await tick();
 
-    expect(
-      Array.from(document.querySelectorAll<HTMLImageElement>(".formatted-output img"), (img) =>
-        img.getAttribute("src"),
-      ),
-    ).toEqual(["/app/api/v1/assets/first", "/app/api/v1/assets/nested/second"]);
+    await vi.waitFor(() => {
+      expect(
+        Array.from(document.querySelectorAll<HTMLImageElement>(".formatted-output img"), (img) =>
+          img.getAttribute("src"),
+        ),
+      ).toEqual(["blob:first", "blob:second"]);
+    });
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/app/api/v1/assets/first",
+      "/app/api/v1/assets/nested%2Fsecond",
+    ]);
     base.remove();
   });
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
@@ -387,6 +388,7 @@ func workerEngineConfig(cfg config.Config) sync.EngineConfig {
 		Machine:                 cfg.InstallationID,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
 		ToolResultImages:        cfg.ToolResultImages,
+		AssetsDir:               filepath.Join(cfg.DataDir, "assets"),
 		ArchiveContent:          cfg.ArchiveContent,
 	}
 }

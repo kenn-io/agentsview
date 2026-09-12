@@ -94,6 +94,7 @@ vi.mock("../../api/client.js", () => ({
 
 vi.mock("../../utils/markdown.js", () => ({
   renderMarkdown: (content: string) => content,
+  loadAssetImages: () => ({ destroy() {} }),
 }));
 
 // @ts-ignore

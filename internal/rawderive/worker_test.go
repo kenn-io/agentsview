@@ -764,12 +764,6 @@ func TestWorkerKeepsPipelineCauseWhenHeartbeatLosesLeaseToo(t *testing.T) {
 		lease.ManifestID = manifest.ManifestID
 		queue := &workerQueueFixture{leases: []JobLease{lease}, heartbeatErr: heartbeatErr}
 		parseFailure := errors.New("malformed provider source")
-		heartbeatObserved := make(chan struct{})
-		var heartbeatOnce sync.Once
-		queue.heartbeat = func(context.Context, JobLease, time.Duration) error {
-			heartbeatOnce.Do(func() { close(heartbeatObserved) })
-			return heartbeatErr
-		}
 		worker := newWorkerForTest(t, queue,
 			manifestSourceFunc(func(context.Context, JobLease) (rawsync.CanonicalManifest, error) {
 				return manifest, nil
@@ -778,10 +772,9 @@ func TestWorkerKeepsPipelineCauseWhenHeartbeatLosesLeaseToo(t *testing.T) {
 				return &Materialization{root: t.TempDir(), entries: map[string]string{}}, nil
 			}),
 			sourceParserFunc(func(ctx context.Context, _ rawsync.CanonicalManifest, _ *Materialization) (ParsedManifest, error) {
-				// Return the real pipeline failure only after a heartbeat beat
-				// has failed, so both failures deterministically coexist.
+				// Wait until the worker records the heartbeat failure and cancels
+				// this attempt before returning the independent parse failure.
 				select {
-				case <-heartbeatObserved:
 				case <-ctx.Done():
 				case <-time.After(5 * time.Second):
 				}

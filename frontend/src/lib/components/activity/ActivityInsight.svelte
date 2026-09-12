@@ -14,7 +14,7 @@
   import { insights } from "../../stores/insights.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
-  import { renderMarkdown } from "../../utils/markdown.js";
+  import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import type { AgentName } from "../../api/types.js";
   import { LightbulbIcon, PlusIcon } from "../../icons.js";
@@ -241,6 +241,7 @@
     <article
       class="markdown-body"
       use:highlightCodeFences={{ content: insight.content }}
+      use:loadAssetImages={insight.content}
     >
       {@html renderMarkdown(insight.content, {
         renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,

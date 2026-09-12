@@ -10,6 +10,7 @@
     $derived([
       { value: "keep", label: m.settings_tool_result_images_keep() },
       { value: "drop", label: m.settings_tool_result_images_drop() },
+      { value: "offload", label: m.settings_tool_result_images_offload() },
     ]);
 
   let restartRequired = $state(false);
@@ -24,7 +25,7 @@
       ariaLabel={m.settings_tool_result_images()}
       disabled={settings.saving || settings.readOnly}
       onchange={async (value) => {
-        if (value !== "keep" && value !== "drop") return;
+        if (value !== "keep" && value !== "drop" && value !== "offload") return;
         if (value === settings.toolResultImages) return;
         // A failed write leaves the stored policy alone, so the notice waits
         // for the save the way AgentDirSettings does.

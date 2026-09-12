@@ -1,6 +1,7 @@
-import { describe, it, expect } from "vite-plus/test";
+import { afterEach, describe, it, expect, vi } from "vite-plus/test";
 import issueReproductionFixture from "./__fixtures__/unknown-xml-1672.txt?raw";
-import { renderMarkdown } from "./markdown.js";
+import { loadAssetImages, renderMarkdown } from "./markdown.js";
+import { setAuthToken } from "../api/runtime.js";
 
 /**
  * Parse HTML string into a DOM container for semantic assertions.
@@ -86,6 +87,11 @@ function assertNoAnchorScheme(html: string, scheme: RegExp): void {
 }
 
 describe("renderMarkdown", () => {
+  afterEach(() => {
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
   describe("inline formatting", () => {
     it("renders bold text", () => {
       const dom = parseHTML(renderMarkdown("**bold**"));
@@ -1116,6 +1122,43 @@ describe("renderMarkdown", () => {
   });
 
   describe("edge cases", () => {
+    it("loads remote asset images with the configured origin and bearer token", async () => {
+      localStorage.setItem("agentsview-server-url", "https://remote.example.test/agentsview");
+      setAuthToken("secret");
+
+      const fetchMock = vi.fn().mockResolvedValue(new Response("image", { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const createObjectURL = vi.fn().mockReturnValue("blob:asset");
+      const originalCreateObjectURL = URL.createObjectURL;
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        value: createObjectURL,
+      });
+
+      try {
+        const root = parseHTML(renderMarkdown("![Image](asset://abc.png)"));
+        const image = root.querySelector("img")!;
+        const handle = loadAssetImages(root);
+
+        await vi.waitFor(() => expect(image.src).toBe("blob:asset"));
+
+        const [requestURL, requestInit] = fetchMock.mock.calls[0]!;
+        expect(requestURL).toBe("https://remote.example.test/agentsview/api/v1/assets/abc.png");
+        expect(new Headers(requestInit?.headers).get("Authorization")).toBe("Bearer secret");
+        handle.destroy();
+        expect(createObjectURL).toHaveBeenCalledTimes(1);
+      } finally {
+        if (originalCreateObjectURL) {
+          Object.defineProperty(URL, "createObjectURL", {
+            configurable: true,
+            value: originalCreateObjectURL,
+          });
+        } else {
+          Reflect.deleteProperty(URL, "createObjectURL");
+        }
+      }
+    });
+
     it("returns empty string for empty input", () => {
       expect(renderMarkdown("")).toBe("");
     });

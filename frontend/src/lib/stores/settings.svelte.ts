@@ -13,7 +13,7 @@ import {
 import { DEFAULT_CHART_PALETTE, isChartPalette, type ChartPalette } from "../utils/chartPalette.js";
 import { ui } from "./ui.svelte.js";
 
-export type ToolResultImagesPolicy = "keep" | "drop";
+export type ToolResultImagesPolicy = "keep" | "drop" | "offload";
 
 type TerminalConfig = TerminalResponse;
 
@@ -112,7 +112,10 @@ class SettingsStore {
       ui.applyZoomDefault(data.zoom_level);
       // A response without the field, including every fixture that predates
       // it, reads as the default keep policy instead of failing the load.
-      this.toolResultImages = data.tool_result_images === "drop" ? "drop" : "keep";
+      this.toolResultImages =
+        data.tool_result_images === "drop" || data.tool_result_images === "offload"
+          ? data.tool_result_images
+          : "keep";
       // When the server returns an auth token (localhost only), persist
       // it so the client stays authenticated after remote access is
       // toggled on (which starts requiring auth for all requests).
@@ -178,7 +181,10 @@ class SettingsStore {
       this.chartPalette = data.chart_palette;
       // A response without the field, including every fixture that predates
       // it, reads as the default keep policy instead of failing the load.
-      this.toolResultImages = data.tool_result_images === "drop" ? "drop" : "keep";
+      this.toolResultImages =
+        data.tool_result_images === "drop" || data.tool_result_images === "offload"
+          ? data.tool_result_images
+          : "keep";
       if (data.auth_token && !isRemoteConnection()) {
         setAuthToken(data.auth_token);
       }

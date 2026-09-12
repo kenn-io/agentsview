@@ -1,6 +1,6 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
-  import { renderMarkdown } from "../../utils/markdown.js";
+  import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import { ChevronRightIcon } from "../../icons.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -41,6 +41,7 @@
     <div
       class="skill-content markdown"
       use:highlightCodeFences={{ content }}
+      use:loadAssetImages={content}
     >
       {@html renderMarkdown(content, {
         renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,

@@ -4,6 +4,7 @@ import { Lexer, Marked, Tokenizer, type Links, type Token, type TokenizerExtensi
 import DOMPurify from "dompurify";
 import { LRUCache } from "./cache.js";
 import { escapeHTML } from "./highlight.js";
+import { authHeaders, getBase } from "../api/runtime.js";
 
 const KNOWN_HTML_TAGS = new Set([
   "a",
@@ -803,17 +804,71 @@ type RenderCacheEntry = [string | undefined, string | undefined];
 
 const cache = new LRUCache<string, RenderCacheEntry>(6000);
 
-function getApiBase(): string {
-  const baseEl = document.querySelector("base[href]");
-  if (baseEl) {
-    const base = new URL(document.baseURI).pathname.replace(/\/$/, "");
-    return `${base}/api/v1`;
-  }
-  return "/api/v1";
-}
+const ASSET_PLACEHOLDER_PREFIX = "/__agentsview_asset__/";
 
 function resolveAssetURLs(text: string): string {
-  return text.replace(/asset:\/\/([^\s)]+)/g, `${getApiBase()}/assets/$1`);
+  return text.replace(/asset:\/\/([^\s)]+)/g, (_match, reference: string) =>
+    `${ASSET_PLACEHOLDER_PREFIX}${encodeURIComponent(reference)}`,
+  );
+}
+
+function getAssetReference(src: string | null): string | undefined {
+  if (!src?.startsWith(ASSET_PLACEHOLDER_PREFIX)) return undefined;
+  try {
+    return decodeURIComponent(src.slice(ASSET_PLACEHOLDER_PREFIX.length));
+  } catch {
+    return undefined;
+  }
+}
+
+function getAssetURL(reference: string): string {
+  const filename = reference.startsWith("asset://")
+    ? reference.slice("asset://".length)
+    : reference;
+  return `${getBase().replace(/\/$/, "")}/assets/${encodeURIComponent(filename)}`;
+}
+
+export function loadAssetImages(node: HTMLElement, _content = "") {
+  let destroyed = false;
+  const blobURLs = new Set<string>();
+
+  async function load(): Promise<void> {
+    const images = [...node.querySelectorAll<HTMLImageElement>("img")];
+    await Promise.all(
+      images.map(async (image) => {
+        const reference = getAssetReference(image.getAttribute("src"));
+        if (!reference || image.dataset.agentsviewAsset === reference) return;
+        image.dataset.agentsviewAsset = reference;
+
+        try {
+          const response = await fetch(getAssetURL(reference), authHeaders());
+          if (!response.ok) throw new Error(`asset request failed: ${response.status}`);
+          const blobURL = URL.createObjectURL(await response.blob());
+          if (destroyed || !node.contains(image)) {
+            URL.revokeObjectURL(blobURL);
+            return;
+          }
+          image.src = blobURL;
+          blobURLs.add(blobURL);
+        } catch {
+          delete image.dataset.agentsviewAsset;
+        }
+      }),
+    );
+  }
+
+  void load();
+
+  return {
+    update() {
+      void load();
+    },
+    destroy() {
+      destroyed = true;
+      for (const blobURL of blobURLs) URL.revokeObjectURL(blobURL);
+      blobURLs.clear();
+    },
+  };
 }
 
 function isPreservedHtmlTag(name: string): boolean {

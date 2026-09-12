@@ -42,7 +42,7 @@ func (db *DB) projectSessionBatchMessages(write SessionBatchWrite) []Message {
 	if write.ToolResultImages != nil {
 		policy = *write.ToolResultImages
 	}
-	projected, _ := ProjectToolResultImages(write.Messages, policy)
+	projected, _ := db.ProjectToolResultImagesWithPolicy(write.Messages, policy)
 	return projected
 }
 

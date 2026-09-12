@@ -320,120 +320,128 @@ func TestEngineImagePolicyDeduplicatesLateProjectedResult(t *testing.T) {
 	assert.Equal(t, want, storedEvent)
 }
 
-func TestReadOnlyResyncReplacementCarriesDropPolicy(t *testing.T) {
-	root := t.TempDir()
-	archivePath := filepath.Join(t.TempDir(), "archive.db")
-	sourcePath := filepath.Join(root, "project", "keep0.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o755))
-	require.NoError(t, os.WriteFile(sourcePath, []byte(
-		testjsonl.NewSessionBuilder().
-			AddClaudeUser("2026-01-01T00:00:00Z", "hello").
-			AddClaudeAssistant("2026-01-01T00:00:01Z", "hi").
-			String(),
-	), 0o644))
+func TestReadOnlyResyncReplacementCarriesImagePolicy(t *testing.T) {
+	for _, mode := range []config.ToolResultImages{config.ToolResultImagesDrop, config.ToolResultImagesOffload} {
+		t.Run(string(mode), func(t *testing.T) {
+			root := t.TempDir()
+			archivePath := filepath.Join(t.TempDir(), "archive.db")
+			sourcePath := filepath.Join(root, "project", "keep0.jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o755))
+			require.NoError(t, os.WriteFile(sourcePath, []byte(
+				testjsonl.NewSessionBuilder().
+					AddClaudeUser("2026-01-01T00:00:00Z", "hello").
+					AddClaudeAssistant("2026-01-01T00:00:01Z", "hi").
+					String(),
+			), 0o644))
 
-	writable, err := db.Open(archivePath)
-	require.NoError(t, err)
-	engine := NewEngine(writable, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
-		Machine:   "local",
-	})
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
-	copiedContent := `[{"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"}]`
-	for _, id := range []string{"trashed", "source-missing"} {
-		filePath := filepath.Join(root, id+".jsonl")
-		require.NoError(t, writable.UpsertSession(db.Session{
-			ID: id, Project: "archived", Machine: "local",
-			Agent: string(parser.AgentClaude), MessageCount: 1,
-			FilePath: &filePath,
-		}))
-		require.NoError(t, writable.InsertMessages([]db.Message{{
-			SessionID: id, Ordinal: 0, Role: "assistant",
-			ToolCalls: []db.ToolCall{{
-				ToolUseID:     "copied-call",
-				ResultContent: copiedContent,
-				ResultEvents: []db.ToolResultEvent{{
-					ToolUseID: "copied-call", Source: "tool",
-					Status: "completed", Content: copiedContent,
-				}},
-			}},
-		}}))
-	}
-	require.NoError(t, writable.SoftDeleteSession("trashed"))
-	require.NoError(t, writable.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
-			"UPDATE sessions SET source_missing_at = ? WHERE id = ?",
-			"2026-01-01T00:00:00Z", "source-missing",
-		)
-		return err
-	}))
-	engine.Close()
-	require.NoError(t, writable.Close())
+			writable, err := db.Open(archivePath)
+			require.NoError(t, err)
+			engine := NewEngine(writable, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+				Machine:   "local",
+			})
+			require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+			copiedContent := `[{"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"}]`
+			for _, id := range []string{"trashed", "source-missing"} {
+				filePath := filepath.Join(root, id+".jsonl")
+				require.NoError(t, writable.UpsertSession(db.Session{
+					ID: id, Project: "archived", Machine: "local",
+					Agent: string(parser.AgentClaude), MessageCount: 1,
+					FilePath: &filePath,
+				}))
+				require.NoError(t, writable.InsertMessages([]db.Message{{
+					SessionID: id, Ordinal: 0, Role: "assistant",
+					ToolCalls: []db.ToolCall{{
+						ToolUseID:     "copied-call",
+						ResultContent: copiedContent,
+						ResultEvents: []db.ToolResultEvent{{
+							ToolUseID: "copied-call", Source: "tool",
+							Status: "completed", Content: copiedContent,
+						}},
+					}},
+				}}))
+			}
+			require.NoError(t, writable.SoftDeleteSession("trashed"))
+			require.NoError(t, writable.Update(func(tx *sql.Tx) error {
+				_, err := tx.Exec(
+					"UPDATE sessions SET source_missing_at = ? WHERE id = ?",
+					"2026-01-01T00:00:00Z", "source-missing",
+				)
+				return err
+			}))
+			engine.Close()
+			require.NoError(t, writable.Close())
 
-	readOnly, err := db.OpenReadOnly(archivePath)
-	require.NoError(t, err)
-	resyncEngine := NewEngine(readOnly, EngineConfig{
-		AgentDirs:        map[parser.AgentType][]string{parser.AgentClaude: {root}},
-		Machine:          "local",
-		ToolResultImages: config.ToolResultImagesDrop,
-	})
-	t.Cleanup(resyncEngine.Close)
-	t.Cleanup(func() { require.NoError(t, readOnly.Close()) })
+			readOnly, err := db.OpenReadOnly(archivePath)
+			require.NoError(t, err)
+			resyncEngine := NewEngine(readOnly, EngineConfig{
+				AgentDirs:        map[parser.AgentType][]string{parser.AgentClaude: {root}},
+				Machine:          "local",
+				ToolResultImages: mode, AssetsDir: t.TempDir(),
+			})
+			t.Cleanup(resyncEngine.Close)
+			t.Cleanup(func() { require.NoError(t, readOnly.Close()) })
 
-	content := `[ {"type":"input_image","image_url":"data:image/png;base64,AAEC"} ]`
-	tempPath := archivePath + resyncTempSuffix
-	operations := productionRebuildOperations
-	operations.rebuildFTS = func(database *db.DB) error {
-		messages, err := database.GetAllMessages(context.Background(), "keep0")
-		if err != nil {
-			return err
-		}
-		if len(messages) == 0 {
-			return fmt.Errorf("resync test session was not rebuilt")
-		}
-		messages[0].ToolCalls = []db.ToolCall{{
-			ToolUseID:     "call-image",
-			ResultContent: content,
-			ResultEvents: []db.ToolResultEvent{{
-				ToolUseID: "call-image", Source: "tool",
-				Status: "completed", Content: content,
-			}},
-		}}
-		return database.ReplaceSessionMessages("keep0", messages)
-	}
-	stats, err := resyncEngine.resyncBuildLocked(
-		context.Background(), nil, RebuildOptions{}, operations, false,
-	)
-	require.NoError(t, err)
-	assert.False(t, stats.Aborted)
+			content := `[ {"type":"input_image","image_url":"data:image/png;base64,AAEC"} ]`
+			tempPath := archivePath + resyncTempSuffix
+			operations := productionRebuildOperations
+			operations.rebuildFTS = func(database *db.DB) error {
+				messages, err := database.GetAllMessages(context.Background(), "keep0")
+				if err != nil {
+					return err
+				}
+				if len(messages) == 0 {
+					return fmt.Errorf("resync test session was not rebuilt")
+				}
+				messages[0].ToolCalls = []db.ToolCall{{
+					ToolUseID:     "call-image",
+					ResultContent: content,
+					ResultEvents: []db.ToolResultEvent{{
+						ToolUseID: "call-image", Source: "tool",
+						Status: "completed", Content: content,
+					}},
+				}}
+				return database.ReplaceSessionMessages("keep0", messages)
+			}
+			stats, err := resyncEngine.resyncBuildLocked(
+				context.Background(), nil, RebuildOptions{}, operations, false,
+			)
+			require.NoError(t, err)
+			assert.False(t, stats.Aborted)
 
-	replacement, err := db.Open(tempPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, replacement.Close()) })
-	messages, err := replacement.GetAllMessages(context.Background(), "keep0")
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.NotContains(t, messages[0].ToolCalls[0].ResultContent, "input_image")
-	assert.NotContains(t, messages[0].ToolCalls[0].ResultEvents[0].Content, "input_image")
-	for _, id := range []string{"trashed", "source-missing"} {
-		messages, err := replacement.GetAllMessages(context.Background(), id)
-		require.NoError(t, err)
-		require.Len(t, messages, 1)
-		require.Len(t, messages[0].ToolCalls, 1)
-		assert.NotContains(t, messages[0].ToolCalls[0].ResultContent, "input_image")
-		require.Len(t, messages[0].ToolCalls[0].ResultEvents, 1)
-		assert.NotContains(t,
-			messages[0].ToolCalls[0].ResultEvents[0].Content,
-			"input_image",
-		)
-		var storedEvent string
-		require.NoError(t, replacement.Reader().QueryRowContext(
-			context.Background(),
-			`SELECT content FROM tool_result_events
+			replacement, err := db.Open(tempPath)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, replacement.Close()) })
+			messages, err := replacement.GetAllMessages(context.Background(), "keep0")
+			require.NoError(t, err)
+			require.Len(t, messages, 2)
+			assert.NotContains(t, messages[0].ToolCalls[0].ResultContent, "input_image")
+			assert.NotContains(t, messages[0].ToolCalls[0].ResultEvents[0].Content, "input_image")
+			for _, id := range []string{"trashed", "source-missing"} {
+				messages, err := replacement.GetAllMessages(context.Background(), id)
+				require.NoError(t, err)
+				require.Len(t, messages, 1)
+				require.Len(t, messages[0].ToolCalls, 1)
+				assert.NotContains(t, messages[0].ToolCalls[0].ResultContent, "input_image")
+				require.Len(t, messages[0].ToolCalls[0].ResultEvents, 1)
+				assert.NotContains(t,
+					messages[0].ToolCalls[0].ResultEvents[0].Content,
+					"input_image",
+				)
+				var storedEvent string
+				require.NoError(t, replacement.Reader().QueryRowContext(
+					context.Background(),
+					`SELECT content FROM tool_result_events
 			 WHERE session_id = ? AND tool_call_message_ordinal = ?
 			   AND call_index = ?`, id, 0, 0,
-		).Scan(&storedEvent))
-		assert.NotContains(t, storedEvent, "input_image")
+				).Scan(&storedEvent))
+				assert.NotContains(t, storedEvent, "input_image")
+				if mode == config.ToolResultImagesOffload {
+					assert.Contains(t, storedEvent, `"image_ref":"asset://`)
+				}
+			}
+
+		})
 	}
 }
 
@@ -486,60 +494,73 @@ func TestDropPolicyProjectsVisualStudioCopilotArchiveMerge(t *testing.T) {
 }
 
 func TestCodexImageRetentionAcrossFullAndLateResults(t *testing.T) {
-	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b06"
-	const raw = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
-	const later = `[{"type":"input_image","image_url":"data:image/png;base64,AwQF"}]`
-	const want = `[{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1}]`
-	for _, threshold := range []int64{1, 1 << 30} {
-		t.Run(fmt.Sprint(threshold), func(t *testing.T) {
-			root := t.TempDir()
-			day := filepath.Join(root, "2024", "01", "01")
-			require.NoError(t, os.MkdirAll(day, 0o755))
-			path := filepath.Join(day, "rollout-2024-01-01T10-00-00-"+uuid+".jsonl")
-			transcript := testjsonl.JoinJSONL(
-				testjsonl.CodexSessionMetaJSON(uuid, root, "user", "2024-01-01T10:00:00Z"),
-				testjsonl.CodexMsgJSON("user", "show image", "2024-01-01T10:00:01Z"),
-				testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", `{}`, "2024-01-01T10:00:02Z"),
-				testjsonl.CodexFunctionCallOutputJSON("call", json.RawMessage(raw), "2024-01-01T10:00:03Z"),
-			)
-			require.NoError(t, os.WriteFile(path, []byte(transcript), 0o600))
-			database := openTestDB(t)
-			database.SetToolResultImages(config.ToolResultImagesKeep)
-			engine := NewEngine(database, EngineConfig{Machine: "local", Ephemeral: true,
-				AgentDirs:        map[parser.AgentType][]string{parser.AgentCodex: {root}},
-				ToolResultImages: config.ToolResultImagesDrop, StagedCodexParseMinBytes: threshold,
-				DisableFilesystemProjectDiscovery: true,
-			})
-			t.Cleanup(engine.Close)
-			stats := engine.SyncAll(t.Context(), nil)
-			require.Equal(t, 1, stats.Synced)
-			for _, late := range []bool{false, true} {
-				if late {
-					require.NoError(t, engine.writeIncremental(&incrementalUpdate{
-						sessionID: "codex:" + uuid, machine: "local", project: "project", msgCount: 2,
-						toolCallUpdates: []parser.ParsedToolCallUpdate{{ToolUseID: "call", MessageOrdinal: 1, CallIndex: 0, ResultEvents: []parser.ParsedToolResultEvent{{
-							ToolUseID: "call", Source: "function_call_output", Content: later,
-						}}}},
-					}))
-				}
-				messages, err := database.GetAllMessages(t.Context(), "codex:"+uuid)
-				require.NoError(t, err)
-				var calls []db.ToolCall
-				for _, message := range messages {
-					calls = append(calls, message.ToolCalls...)
-				}
-				require.Len(t, calls, 1)
-				assert.Equal(t, want, calls[0].ResultContent)
-				count := 1
-				if late {
-					count = 2
-				}
-				require.Len(t, calls[0].ResultEvents, count)
-				for _, event := range calls[0].ResultEvents {
-					assert.Equal(t, want, event.Content)
-					assert.Equal(t, len(want), event.ContentLength)
-				}
+	for _, mode := range []config.ToolResultImages{config.ToolResultImagesDrop, config.ToolResultImagesOffload} {
+		t.Run(string(mode), func(t *testing.T) {
+			const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b06"
+			const raw = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+			const later = `[{"type":"input_image","image_url":"data:image/png;base64,AwQF"}]`
+			const want = `[{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1}]`
+			for _, threshold := range []int64{1, 1 << 30} {
+				t.Run(fmt.Sprint(threshold), func(t *testing.T) {
+					root := t.TempDir()
+					day := filepath.Join(root, "2024", "01", "01")
+					require.NoError(t, os.MkdirAll(day, 0o755))
+					path := filepath.Join(day, "rollout-2024-01-01T10-00-00-"+uuid+".jsonl")
+					transcript := testjsonl.JoinJSONL(
+						testjsonl.CodexSessionMetaJSON(uuid, root, "user", "2024-01-01T10:00:00Z"),
+						testjsonl.CodexMsgJSON("user", "show image", "2024-01-01T10:00:01Z"),
+						testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", `{}`, "2024-01-01T10:00:02Z"),
+						testjsonl.CodexFunctionCallOutputJSON("call", json.RawMessage(raw), "2024-01-01T10:00:03Z"),
+					)
+					require.NoError(t, os.WriteFile(path, []byte(transcript), 0o600))
+					database := openTestDB(t)
+					database.SetToolResultImages(config.ToolResultImagesKeep)
+					engine := NewEngine(database, EngineConfig{Machine: "local", Ephemeral: true,
+						AgentDirs:        map[parser.AgentType][]string{parser.AgentCodex: {root}},
+						ToolResultImages: mode, AssetsDir: t.TempDir(), StagedCodexParseMinBytes: threshold,
+						DisableFilesystemProjectDiscovery: true,
+					})
+					t.Cleanup(engine.Close)
+					stats := engine.SyncAll(t.Context(), nil)
+					require.Equal(t, 1, stats.Synced)
+					for _, late := range []bool{false, true} {
+						if late {
+							require.NoError(t, engine.writeIncremental(&incrementalUpdate{
+								sessionID: "codex:" + uuid, machine: "local", project: "project", msgCount: 2,
+								toolCallUpdates: []parser.ParsedToolCallUpdate{{ToolUseID: "call", MessageOrdinal: 1, CallIndex: 0, ResultEvents: []parser.ParsedToolResultEvent{{
+									ToolUseID: "call", Source: "function_call_output", Content: later,
+								}}}},
+							}))
+						}
+						messages, err := database.GetAllMessages(t.Context(), "codex:"+uuid)
+						require.NoError(t, err)
+						var calls []db.ToolCall
+						for _, message := range messages {
+							calls = append(calls, message.ToolCalls...)
+						}
+						require.Len(t, calls, 1)
+						if mode == config.ToolResultImagesDrop {
+							assert.Equal(t, want, calls[0].ResultContent)
+						} else {
+							assert.Contains(t, calls[0].ResultContent, `"image_ref":"asset://`)
+						}
+						count := 1
+						if late {
+							count = 2
+						}
+						require.Len(t, calls[0].ResultEvents, count)
+						for _, event := range calls[0].ResultEvents {
+							if mode == config.ToolResultImagesDrop {
+								assert.Equal(t, want, event.Content)
+							} else {
+								assert.Contains(t, event.Content, `"image_ref":"asset://`)
+							}
+							assert.Equal(t, len(event.Content), event.ContentLength)
+						}
+					}
+				})
 			}
+
 		})
 	}
 }
@@ -570,4 +591,143 @@ func TestCodexDropImagesNeverEnterScratch(t *testing.T) {
 	bytes, err := os.ReadFile(sink.Path())
 	require.NoError(t, err)
 	assert.NotContains(t, string(bytes), "data:image/png;base64,AAEC")
+}
+
+func TestCodexDropImagesNeverEnterScratchWhenToolContentOmitted(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	database.SetArchiveContent(config.ArchiveContentTranscripts)
+	sink, err := newCodexStagingSink(t.TempDir(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sink.Close()) })
+	sink.database = database
+	sink.toolResultImages = config.ToolResultImagesDrop
+	sink.AppendMessage(parser.ParsedMessage{ToolCalls: []parser.ParsedToolCall{{ToolUseID: "call", Category: "Bash"}}})
+	const raw = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	const want = `[{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1}]`
+	sink.AppendToolResultEvent("call", nil, parser.ParsedToolResultEvent{
+		ToolUseID: "call", Source: "function_call_output", Content: raw,
+	})
+	require.NoError(t, sink.Err())
+	var content string
+	var contentLength int
+	require.NoError(t, sink.scratch.QueryRow(
+		"SELECT content, content_length FROM stage_events LIMIT 1",
+	).Scan(&content, &contentLength))
+	assert.Equal(t, want, content)
+	assert.Equal(t, len(want), contentLength)
+	bytes, err := os.ReadFile(sink.Path())
+	require.NoError(t, err)
+	assert.NotContains(t, string(bytes), "data:image/png;base64,AAEC")
+}
+
+func TestToolResultImagesOffloadFullIngest(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{Machine: "local", ToolResultImages: config.ToolResultImages("offload"), AssetsDir: t.TempDir()})
+	t.Cleanup(engine.Close)
+	outcome := engine.writeBatchBulkWithOutcome([]pendingWrite{{
+		sess: parser.ParsedSession{ID: "offload-full", Project: "project", Machine: "local", Agent: parser.AgentCodex, StartedAt: time.Unix(1, 0)},
+		msgs: []parser.ParsedMessage{{Ordinal: 0, Role: parser.RoleAssistant, Content: "answer", ToolCalls: []parser.ParsedToolCall{{ToolUseID: "image", ToolName: "Bash", Category: "Bash", ResultEvents: []parser.ParsedToolResultEvent{{ToolUseID: "image", Source: "tool", Status: "completed", Content: `[{"type":"input_image","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="}]`}}}}}},
+	}}, false)
+	require.NotNil(t, outcome)
+	messages, err := database.GetAllMessages(context.Background(), "offload-full")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 1)
+	require.Len(t, messages[0].ToolCalls[0].ResultEvents, 1)
+	require.Contains(t, messages[0].ToolCalls[0].ResultEvents[0].Content, `"image_ref":"asset://`)
+	objects, err := os.ReadDir(database.AssetsDir())
+	require.NoError(t, err)
+	require.Len(t, objects, 1)
+	body, err := os.ReadFile(filepath.Join(database.AssetsDir(), objects[0].Name()))
+	require.NoError(t, err)
+	require.Len(t, body, 68)
+	assert.Equal(t, []byte{137, 80, 78, 71, 13, 10, 26, 10}, body[:8])
+}
+
+func TestToolResultImagesRejectedSessionDoesNotPublishAsset(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	assetsDir := t.TempDir()
+	engine := NewEngine(database, EngineConfig{
+		Machine:            "local",
+		ToolResultImages:   config.ToolResultImagesOffload,
+		AssetsDir:          assetsDir,
+		IncludeCwdPrefixes: []string{"/allowed"},
+	})
+	t.Cleanup(engine.Close)
+
+	_, _, verdict := engine.prepareSessionWrite(pendingWrite{
+		sess: parser.ParsedSession{
+			ID: "rejected-offload", Project: "project", Machine: "local",
+			Agent: parser.AgentCodex, Cwd: "/rejected", StartedAt: time.Unix(1, 0),
+		},
+		msgs: []parser.ParsedMessage{{
+			Ordinal: 0, Role: parser.RoleAssistant, Content: "answer",
+			ToolCalls: []parser.ParsedToolCall{{
+				ToolUseID: "image", ToolName: "Bash", Category: "Bash",
+				ResultEvents: []parser.ParsedToolResultEvent{{
+					ToolUseID: "image", Source: "tool", Status: "completed",
+					Content: `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`,
+				}},
+			}},
+		}},
+	}, nil)
+
+	assert.Equal(t, sessionWriteCwdFiltered, verdict)
+	entries, err := os.ReadDir(assetsDir)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+func TestToolResultImagesStagedRoute(t *testing.T) {
+	for _, omitted := range []bool{false, true} {
+		for _, blocked := range []bool{false, true} {
+			t.Run(fmt.Sprintf("omitted=%t/blocked=%t", omitted, blocked), func(t *testing.T) {
+				database := dbtest.OpenTestDB(t)
+				database.SetAssetsDir(t.TempDir())
+				if omitted {
+					database.SetArchiveContent(config.ArchiveContentTranscripts)
+				}
+				sink, err := newCodexStagingSink(t.TempDir(), map[string]bool{"Bash": blocked})
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, sink.Close()) })
+				sink.database = database
+				sink.toolResultImages = config.ToolResultImagesOffload
+				sink.AppendMessage(parser.ParsedMessage{ToolCalls: []parser.ParsedToolCall{{ToolUseID: "call", Category: "Bash"}}})
+				const raw = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+				sink.AppendToolResultEvent("call", nil, parser.ParsedToolResultEvent{ToolUseID: "call", Source: "function_call_output", Content: raw})
+				require.NoError(t, sink.Err())
+				entries, err := os.ReadDir(database.AssetsDir())
+				require.NoError(t, err)
+				assert.Empty(t, entries)
+				require.NoError(t, sink.PublishToolResultImages())
+				var content string
+				var length int
+				require.NoError(t, sink.scratch.QueryRow("SELECT content, content_length FROM stage_events LIMIT 1").Scan(&content, &length))
+				entries, err = os.ReadDir(database.AssetsDir())
+				require.NoError(t, err)
+				if blocked || omitted {
+					assert.Empty(t, entries)
+				} else {
+					require.Len(t, entries, 1)
+					body, err := os.ReadFile(filepath.Join(database.AssetsDir(), entries[0].Name()))
+					require.NoError(t, err)
+					assert.Equal(t, []byte{0, 1, 2}, body)
+					assert.Contains(t, content, `"image_ref":"asset://`)
+					assert.Equal(t, len(content), length)
+				}
+				if omitted {
+					assert.NotContains(t, content, "data:image/png;base64,AAEC")
+					if !blocked {
+						assert.Equal(t, len(content), length)
+						assert.Contains(t, content, "agentsview_image")
+						assert.NotContains(t, content, `"image_ref":"asset://`)
+					}
+				}
+				if blocked {
+					assert.Empty(t, content)
+					assert.Equal(t, len(raw), length)
+				}
+			})
+		}
+	}
 }

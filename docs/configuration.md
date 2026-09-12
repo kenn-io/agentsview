@@ -195,7 +195,7 @@ zoom_level = 120
 | `cursor_admin_user_id`              | Optional default Cursor Admin usage filter by member user ID                                                                                                                                                                                              |
 | `github_token`                      | Optional saved GitHub token for Gist publishing                                                                                                                                                                                                           |
 | `result_content_blocked_categories` | Tool categories whose result content is not stored (default: `["Read", "Glob"]`). Changes apply to new ingestion and full rebuilds; see [storage maintenance](/docs/data/#storage-maintenance) for existing source-backed sessions.                        |
-| `tool_result_images`                | Retain supported inline tool-result image blocks with `"keep"` (default), or store readable `agentsview_image` placeholders with `"drop"`. The setting affects future ingestion and full resyncs; run `db strip --images` for existing rows; also configurable under **Settings > Archive content**, and changes require a daemon restart. |
+| `tool_result_images`                | Retain supported inline tool-result image blocks with `"keep"` (default), or store readable `agentsview_image` placeholders with `"drop"`, or move supported images to the local asset store with `"offload"`. The setting affects future ingestion and full resyncs; run `db migrate --images` for existing rows; also configurable under **Settings > Archive content**, and changes require a daemon restart. |
 | `archive_content`                   | How much of each session the archive stores: `"full"` (default), `"transcripts"`, or `"usage"`; changes require a daemon restart — see [Archive content](#archive-content)                                                                                |
 | `host`                              | Interface the server binds to (default `127.0.0.1`); non-loopback values require `require_auth = true`                                                                                                                                                    |
 | `require_auth`                      | Require bearer-token authentication for API access                                                                                                                                                                                                        |
@@ -1660,3 +1660,7 @@ Disable the CLI/web UI update check with any of:
 
 The desktop app's auto-updater is controlled separately via
 `AGENTSVIEW_DESKTOP_AUTOUPDATE=0`.
+
+### Ingest-time image offload
+
+`tool_result_images = "offload"` stores supported PNG, JPEG, WebP, and GIF tool-result images in `{dataDir}/assets/<sha256hex><ext>` before SQLite publishes their references. Restart the daemon to apply the setting. Failed writes keep inline content, and archives that omit tool content write no assets. See [image storage](/docs/data/#ingest-time-image-offload) for retries, backups, and remote-backend limits.

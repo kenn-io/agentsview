@@ -453,6 +453,7 @@ type EngineConfig struct {
 	// ToolResultImages carries the configured retention policy into workers
 	// that open the source archive read-only before building a replacement.
 	ToolResultImages config.ToolResultImages
+	AssetsDir        string
 	// IncludeCwdPrefixes, when non-empty, restricts ingestion to
 	// sessions whose working directory equals one of the prefixes
 	// or lives underneath one. Sessions without a recorded cwd are
@@ -947,8 +948,11 @@ func NewEngine(
 		progressStallAfter = defaultProgressStallAfter
 	}
 	toolResultImages := database.ToolResultImages()
-	if cfg.ToolResultImages == config.ToolResultImagesDrop {
-		toolResultImages = config.ToolResultImagesDrop
+	if cfg.AssetsDir != "" {
+		database.SetAssetsDir(cfg.AssetsDir)
+	}
+	if cfg.ToolResultImages == config.ToolResultImagesDrop || cfg.ToolResultImages == config.ToolResultImagesOffload {
+		toolResultImages = cfg.ToolResultImages
 	}
 	e := &Engine{
 		db:                      database,
@@ -3096,6 +3100,7 @@ func (e *Engine) resyncBuildLocked(
 		return stats, err
 	}
 	newDB.SetToolResultImages(e.toolResultImages)
+	newDB.SetAssetsDir(e.db.AssetsDir())
 	if err := newDB.CopyArchiveIdentityFrom(origPath); err != nil {
 		log.Printf("resync: preserve archive identity: %v", err)
 		newDB.Close()
@@ -3728,8 +3733,8 @@ func (e *Engine) resyncBuildLocked(
 		log.Printf("resync: reclassify is_automated: %v", err)
 	}
 
-	if newDB.ToolResultImages() == config.ToolResultImagesDrop {
-		if err := newDB.StripToolImagesForSessions(ctx, copiedSessionIDs); err != nil {
+	if newDB.ToolResultImages() != config.ToolResultImagesKeep {
+		if err := newDB.ProjectToolImagesForSessions(ctx, copiedSessionIDs); err != nil {
 			log.Printf("resync: project copied tool-result images: %v", err)
 			stats.Aborted = true
 			stats.Warnings = append(stats.Warnings,
@@ -11853,6 +11858,7 @@ func (e *Engine) processProviderFile(
 			}, true
 		}
 		stagedSink.toolResultImages = e.toolResultImages
+		stagedSink.database = e.db
 		stagedSink.idPrefix = e.idPrefix
 		stagedSink.disableSignals = e.disableSignalRecompute
 		stagedGCRelease = beginStagedColdSync()
@@ -17035,6 +17041,17 @@ func (e *Engine) prepareSessionWrite(
 	return s, msgs, verdict
 }
 
+func (e *Engine) projectToolResultImagesForPrepare(
+	messages []db.Message,
+) ([]db.Message, db.ToolImageStats) {
+	if !e.forceParse && e.toolResultImages != config.ToolResultImagesDrop {
+		return messages, db.ToolImageStats{}
+	}
+	return e.db.ProjectToolResultImagesForComparison(
+		messages, e.toolResultImages,
+	)
+}
+
 func (e *Engine) prepareSessionWriteContext(
 	ctx context.Context,
 	pw pendingWrite,
@@ -17044,7 +17061,7 @@ func (e *Engine) prepareSessionWriteContext(
 	if err != nil {
 		return db.Session{}, nil, sessionWritePreserved, err
 	}
-	msgs, _ = db.ProjectToolResultImages(msgs, e.toolResultImages)
+	msgs, _ = e.projectToolResultImagesForPrepare(msgs)
 	s, err := toDBSessionContext(ctx, pw)
 	if err != nil {
 		return db.Session{}, nil, sessionWritePreserved, err
@@ -17095,7 +17112,7 @@ func (e *Engine) prepareSessionWriteContext(
 	} else if mergedMsgs != nil {
 		parsedMsgs := msgs
 		msgs = mergedMsgs
-		msgs, _ = db.ProjectToolResultImages(msgs, e.toolResultImages)
+		msgs, _ = e.projectToolResultImagesForPrepare(msgs)
 		applyVisualStudioCopilotArchiveSessionFields(
 			&s, archived, parsedMsgs, msgs,
 		)
@@ -17967,6 +17984,11 @@ func stagedToolCallPositions(
 func (e *Engine) writeStagedFullParse(
 	ctx context.Context, s db.Session, msgs []db.Message, pw pendingWrite,
 ) error {
+	if pw.staged != nil {
+		if err := pw.staged.PublishToolResultImages(); err != nil {
+			return err
+		}
+	}
 	positions := stagedToolCallPositions(msgs)
 	var closure db.StagedSignalsFunc
 	if !e.disableSignalRecompute {
@@ -18778,7 +18800,7 @@ func (e *Engine) writeIncremental(
 		},
 		e.blockedResultCategories,
 	)
-	dbMsgs, _ = db.ProjectToolResultImages(dbMsgs, e.toolResultImages)
+	dbMsgs, _ = e.db.ProjectToolResultImagesWithPolicy(dbMsgs, e.toolResultImages)
 	// The incremental append path bypasses prepareSessionWrite, so run
 	// the central validation/sanitization pass on the new message rows
 	// here to keep coverage uniform across write paths. The fix counts
