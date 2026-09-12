@@ -85,6 +85,7 @@ func forEachGooseSessionMeta(
 	if err != nil {
 		return err
 	}
+	observeSharedContainerScan(ctx)
 	rows, err := db.QueryContext(ctx, gooseSessionSelect(columns, "", true))
 	if err != nil {
 		return fmt.Errorf("listing goose sessions: %w", err)
