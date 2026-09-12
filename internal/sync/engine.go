@@ -17044,12 +17044,10 @@ func (e *Engine) prepareSessionWrite(
 func (e *Engine) projectToolResultImagesForPrepare(
 	messages []db.Message,
 ) ([]db.Message, db.ToolImageStats) {
-	if e.forceParse {
-		return e.db.ProjectToolResultImagesForComparison(
-			messages, e.toolResultImages,
-		)
+	if !e.forceParse && e.toolResultImages != config.ToolResultImagesDrop {
+		return messages, db.ToolImageStats{}
 	}
-	return e.db.ProjectToolResultImagesWithPolicy(
+	return e.db.ProjectToolResultImagesForComparison(
 		messages, e.toolResultImages,
 	)
 }

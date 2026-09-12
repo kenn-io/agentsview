@@ -644,6 +644,40 @@ func TestToolResultImagesOffloadFullIngest(t *testing.T) {
 	assert.Equal(t, []byte{137, 80, 78, 71, 13, 10, 26, 10}, body[:8])
 }
 
+func TestToolResultImagesRejectedSessionDoesNotPublishAsset(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	assetsDir := t.TempDir()
+	engine := NewEngine(database, EngineConfig{
+		Machine:            "local",
+		ToolResultImages:   config.ToolResultImagesOffload,
+		AssetsDir:          assetsDir,
+		IncludeCwdPrefixes: []string{"/allowed"},
+	})
+	t.Cleanup(engine.Close)
+
+	_, _, verdict := engine.prepareSessionWrite(pendingWrite{
+		sess: parser.ParsedSession{
+			ID: "rejected-offload", Project: "project", Machine: "local",
+			Agent: parser.AgentCodex, Cwd: "/rejected", StartedAt: time.Unix(1, 0),
+		},
+		msgs: []parser.ParsedMessage{{
+			Ordinal: 0, Role: parser.RoleAssistant, Content: "answer",
+			ToolCalls: []parser.ParsedToolCall{{
+				ToolUseID: "image", ToolName: "Bash", Category: "Bash",
+				ResultEvents: []parser.ParsedToolResultEvent{{
+					ToolUseID: "image", Source: "tool", Status: "completed",
+					Content: `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`,
+				}},
+			}},
+		}},
+	}, nil)
+
+	assert.Equal(t, sessionWriteCwdFiltered, verdict)
+	entries, err := os.ReadDir(assetsDir)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
 func TestToolResultImagesStagedRoute(t *testing.T) {
 	for _, omitted := range []bool{false, true} {
 		for _, blocked := range []bool{false, true} {
