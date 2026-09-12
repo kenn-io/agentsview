@@ -58,7 +58,22 @@ type clineUsageObj struct {
 }
 
 type clineMessagesFile struct {
-	Messages []clineRawMessage `json:"messages"`
+	Version   int               `json:"version,omitempty"`
+	UpdatedAt string            `json:"updated_at,omitempty"`
+	Agent     string            `json:"agent,omitempty"`
+	SessionID string            `json:"sessionId,omitempty"`
+	TaskType  string            `json:"taskType,omitempty"`
+	Origin    *clineOriginObj   `json:"origin,omitempty"`
+	Messages  []clineRawMessage `json:"messages"`
+}
+
+type clineOriginObj struct {
+	Source         string `json:"source,omitempty"`
+	Mode           string `json:"mode,omitempty"`
+	SessionID      string `json:"sessionId,omitempty"`
+	ParentThreadID string `json:"parentThreadId,omitempty"`
+	Subagent       string `json:"subagent,omitempty"`
+	Version        string `json:"version,omitempty"`
 }
 
 type clineRawMessage struct {
@@ -128,28 +143,45 @@ func parseClineSession(
 	projectHint string,
 	machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
+	results, err := parseClineSessionWithTeammates(metaPath, projectHint, machine)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(results) == 0 {
+		return nil, nil, nil
+	}
+	return &results[0].Session, results[0].Messages, nil
+}
+
+// parseClineSessionWithTeammates parses a Cline session and any sibling teammate
+// subagent transcripts into ParseResults.
+func parseClineSessionWithTeammates(
+	metaPath string,
+	projectHint string,
+	machine string,
+) ([]ParseResult, error) {
 	metaData, err := os.ReadFile(metaPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("reading cline metadata: %w", err)
+		return nil, fmt.Errorf("reading cline metadata: %w", err)
 	}
 
 	var meta clineSessionMetadata
 	if err := json.Unmarshal(metaData, &meta); err != nil {
-		return nil, nil, fmt.Errorf("parsing cline metadata: %w", err)
+		return nil, fmt.Errorf("parsing cline metadata: %w", err)
 	}
 
 	cleanMetaPath := filepath.Clean(metaPath)
 	sessionDir := filepath.Dir(cleanMetaPath)
 	canonicalID := filepath.Base(sessionDir)
 	if !ValidClineSessionID(canonicalID) {
-		return nil, nil, fmt.Errorf("invalid cline session directory name: %q", canonicalID)
+		return nil, fmt.Errorf("invalid cline session directory name: %q", canonicalID)
 	}
 	baseName := strings.TrimSuffix(filepath.Base(cleanMetaPath), ".json")
 	if baseName != canonicalID {
-		return nil, nil, fmt.Errorf("cline metadata filename %q does not match directory %q", filepath.Base(cleanMetaPath), canonicalID)
+		return nil, fmt.Errorf("cline metadata filename %q does not match directory %q", filepath.Base(cleanMetaPath), canonicalID)
 	}
 	if meta.SessionID != "" && meta.SessionID != canonicalID {
-		return nil, nil, fmt.Errorf("cline metadata session_id %q does not match canonical id %q", meta.SessionID, canonicalID)
+		return nil, fmt.Errorf("cline metadata session_id %q does not match canonical id %q", meta.SessionID, canonicalID)
 	}
 
 	sessionID := string(AgentCline) + ":" + canonicalID
@@ -177,7 +209,7 @@ func parseClineSession(
 
 	parsedMessages, peakCtx, maxTS, err := parseClineMessages(messagesPath, model, provider)
 	if err != nil && !os.IsNotExist(err) {
-		return nil, nil, fmt.Errorf("parsing cline messages: %w", err)
+		return nil, fmt.Errorf("parsing cline messages: %w", err)
 	}
 
 	endedAt := maxTS
@@ -311,10 +343,10 @@ func parseClineSession(
 	if costVal != nil {
 		cost, err := money.ParseDollars(string(*costVal))
 		if err != nil {
-			return nil, nil, fmt.Errorf("parsing Cline total cost: %w", err)
+			return nil, fmt.Errorf("parsing Cline total cost: %w", err)
 		}
 		if cost.Microdollars < 0 {
-			return nil, nil, fmt.Errorf("parsing Cline total cost: %w", money.ErrNegative)
+			return nil, fmt.Errorf("parsing Cline total cost: %w", money.ErrNegative)
 		}
 		parsedCost = &cost
 	}
@@ -355,7 +387,22 @@ func parseClineSession(
 		sess.UsageEvents = []ParsedUsageEvent{event}
 	}
 
-	return sess, parsedMessages, nil
+	teammates, agentMap, err := parseClineTeammates(sessionDir, canonicalID, sess, model, provider)
+	if err != nil {
+		return nil, fmt.Errorf("parsing cline teammates: %w", err)
+	}
+	annotateClineSubagentCalls(parsedMessages, agentMap)
+
+	parentResult := ParseResult{
+		Session:     *sess,
+		Messages:    parsedMessages,
+		UsageEvents: sess.UsageEvents,
+	}
+
+	results := make([]ParseResult, 0, 1+len(teammates))
+	results = append(results, parentResult)
+	results = append(results, teammates...)
+	return results, nil
 }
 
 // parseClineMessages reads and parses <sessionId>.messages.json into ParsedMessages.
@@ -379,7 +426,18 @@ func parseClineMessages(
 		rawFile.Messages = slice
 	}
 
-	parsedMessages := make([]ParsedMessage, 0, len(rawFile.Messages))
+	parsedMessages, peakCtx, maxTS := parseClineRawMessages(rawFile.Messages, defaultModel, defaultProvider)
+	return parsedMessages, peakCtx, maxTS, nil
+}
+
+// parseClineRawMessages parses raw Cline messages into ParsedMessages,
+// computing peak context tokens and maximum timestamp.
+func parseClineRawMessages(
+	rawMessages []clineRawMessage,
+	defaultModel string,
+	defaultProvider string,
+) ([]ParsedMessage, int, time.Time) {
+	parsedMessages := make([]ParsedMessage, 0, len(rawMessages))
 	ordinal := 0
 	peakCtx := 0
 	var maxTS time.Time
@@ -387,7 +445,7 @@ func parseClineMessages(
 	// Map of tool_use_id -> pointer to ParsedToolCall inside parsedMessages
 	pendingToolCalls := make(map[string]*ParsedToolCall)
 
-	for _, rawMsg := range rawFile.Messages {
+	for _, rawMsg := range rawMessages {
 		ts := time.UnixMilli(rawMsg.Timestamp)
 		if ts.After(maxTS) {
 			maxTS = ts
@@ -559,7 +617,217 @@ func parseClineMessages(
 		ordinal++
 	}
 
-	return parsedMessages, peakCtx, maxTS, nil
+	return parsedMessages, peakCtx, maxTS
+}
+
+// parseClineTeammates discovers and parses teammate subagent transcripts under sessionDir.
+func parseClineTeammates(
+	sessionDir string,
+	parentSessionID string,
+	parentSess *ParsedSession,
+	parentModel string,
+	parentProvider string,
+) ([]ParseResult, map[string]string, error) {
+	entries, err := os.ReadDir(sessionDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("reading cline session directory %s: %w", sessionDir, err)
+	}
+
+	var teammates []ParseResult
+	agentMap := make(map[string]string)
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		filename := entry.Name()
+		if !IsClineTeammateMessagesFile(parentSessionID, filename) {
+			continue
+		}
+		teammatePath := filepath.Join(sessionDir, filename)
+		info, err := os.Stat(teammatePath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("stat cline teammate %s: %w", teammatePath, err)
+		}
+
+		data, err := os.ReadFile(teammatePath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("reading cline teammate %s: %w", teammatePath, err)
+		}
+
+		var rawFile clineMessagesFile
+		if err := json.Unmarshal(data, &rawFile); err != nil {
+			return nil, nil, fmt.Errorf("parsing cline teammate %s: %w", teammatePath, err)
+		}
+
+		rawSessionID := rawFile.SessionID
+		if rawSessionID == "" && rawFile.Origin != nil {
+			rawSessionID = rawFile.Origin.SessionID
+		}
+		if rawSessionID == "" {
+			taskSuffix := strings.TrimSuffix(filename, ".messages.json")
+			rawSessionID = parentSessionID + "__teamtask__" + taskSuffix
+		}
+
+		subagent := ""
+		if rawFile.Origin != nil && rawFile.Origin.Subagent != "" {
+			subagent = rawFile.Origin.Subagent
+		} else {
+			parts := strings.Split(strings.TrimSuffix(filename, ".messages.json"), "__")
+			if len(parts) > 0 {
+				subagent = parts[0]
+			}
+		}
+
+		parsedMessages, peakCtx, maxTS := parseClineRawMessages(rawFile.Messages, parentModel, parentProvider)
+
+		var startedAt time.Time
+		if len(parsedMessages) > 0 && !parsedMessages[0].Timestamp.IsZero() {
+			startedAt = parsedMessages[0].Timestamp
+		} else {
+			startedAt = info.ModTime()
+		}
+
+		endedAt := maxTS
+		if rawFile.UpdatedAt != "" {
+			if t, ok := parseClineTimestamp(rawFile.UpdatedAt); ok && (endedAt.IsZero() || t.After(endedAt)) {
+				endedAt = t
+			}
+		}
+		for _, msg := range parsedMessages {
+			if msg.Timestamp.After(endedAt) {
+				endedAt = msg.Timestamp
+			}
+		}
+		if endedAt.IsZero() {
+			endedAt = startedAt
+		}
+
+		firstMsg := ""
+		userCount := 0
+		for _, msg := range parsedMessages {
+			if msg.Role == RoleUser && !msg.IsSystem && strings.TrimSpace(msg.Content) != "" {
+				userCount++
+				if firstMsg == "" {
+					firstMsg = truncate(strings.ReplaceAll(msg.Content, "\n", " "), 300)
+				}
+			}
+		}
+
+		sessionName := ""
+		if subagent != "" {
+			sessionName = "Teammate: " + subagent
+		} else if firstMsg != "" {
+			sessionName = truncate(firstMsg, 80)
+		} else {
+			sessionName = "Teammate"
+		}
+
+		fullSessionID := string(AgentCline) + ":" + rawSessionID
+		parentFullID := string(AgentCline) + ":" + parentSessionID
+		if rawFile.Origin != nil && rawFile.Origin.ParentThreadID != "" {
+			parentFullID = string(AgentCline) + ":" + rawFile.Origin.ParentThreadID
+		}
+
+		fileInfo := FileInfo{
+			Path:  teammatePath,
+			Size:  info.Size(),
+			Mtime: info.ModTime().UnixNano(),
+		}
+
+		subSess := &ParsedSession{
+			ID:                fullSessionID,
+			Project:           parentSess.Project,
+			Machine:           parentSess.Machine,
+			Agent:             AgentCline,
+			Cwd:               parentSess.Cwd,
+			GitBranch:         parentSess.GitBranch,
+			ParentSessionID:   parentFullID,
+			RelationshipType:  RelSubagent,
+			FirstMessage:      firstMsg,
+			SessionName:       sessionName,
+			StartedAt:         startedAt,
+			EndedAt:           endedAt,
+			MessageCount:      len(parsedMessages),
+			UserMessageCount:  userCount,
+			SourceSessionID:   rawSessionID,
+			SourceVersion:     "cline-session-v1",
+			File:              fileInfo,
+			TerminationStatus: classifyClineTermination("", parsedMessages),
+		}
+
+		hasMessageUsage := false
+		for _, m := range parsedMessages {
+			if len(m.TokenUsage) > 0 {
+				hasMessageUsage = true
+				break
+			}
+		}
+		if hasMessageUsage {
+			accumulateMessageTokenUsage(subSess, parsedMessages)
+		} else if peakCtx > 0 {
+			subSess.PeakContextTokens = peakCtx
+			subSess.HasPeakContextTokens = true
+			subSess.aggregateTokenPresenceKnown = true
+		}
+
+		if subagent != "" {
+			agentMap[subagent] = fullSessionID
+		}
+
+		teammates = append(teammates, ParseResult{
+			Session:     *subSess,
+			Messages:    parsedMessages,
+			UsageEvents: subSess.UsageEvents,
+		})
+	}
+
+	return teammates, agentMap, nil
+}
+
+// extractClineAgentID extracts the agentId from a Cline tool call input JSON.
+func extractClineAgentID(inputJSON string) string {
+	if inputJSON == "" {
+		return ""
+	}
+	var input struct {
+		AgentID string `json:"agentId"`
+	}
+	if err := json.Unmarshal([]byte(inputJSON), &input); err == nil && input.AgentID != "" {
+		return input.AgentID
+	}
+	return ""
+}
+
+// annotateClineSubagentCalls annotates tool calls representing teammate
+// invocations with the child subagent's session ID. Only task execution
+// tool calls (team_run_task) are linked to the subagent session; teammate
+// spawn/definition calls (team_spawn_teammate) register the teammate record
+// but do not represent an execution run.
+func annotateClineSubagentCalls(msgs []ParsedMessage, agentMap map[string]string) {
+	if len(agentMap) == 0 {
+		return
+	}
+	for i := range msgs {
+		for j := range msgs[i].ToolCalls {
+			tc := &msgs[i].ToolCalls[j]
+			if tc.ToolName == "team_run_task" {
+				agentID := extractClineAgentID(tc.InputJSON)
+				if agentID != "" {
+					if sid, ok := agentMap[agentID]; ok {
+						tc.SubagentSessionID = sid
+						for k := range tc.ResultEvents {
+							tc.ResultEvents[k].SubagentSessionID = sid
+							tc.ResultEvents[k].AgentID = agentID
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 // parseClineToolResultContent extracts the text content and error indication from
@@ -775,8 +1043,8 @@ func clineLastMessageIsThinkingOnly(messages []ParsedMessage) bool {
 	return false
 }
 
-// clineFingerprintSource computes a composite fingerprint from <sessionId>.json
-// and <sessionId>.messages.json for freshness detection.
+// clineFingerprintSource computes a composite fingerprint from <sessionId>.json,
+// <sessionId>.messages.json, and any teammate *.messages.json files for freshness detection.
 func clineFingerprintSource(path string) (SourceFingerprint, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -810,6 +1078,34 @@ func clineFingerprintSource(path string) (SourceFingerprint, error) {
 		}
 		if err := addSiblingMetadataFingerprintPart(h, "messages", msgPath, msgInfo); err != nil {
 			return SourceFingerprint{}, err
+		}
+	}
+
+	entries, err := os.ReadDir(sessionDir)
+	if err != nil && !os.IsNotExist(err) {
+		return SourceFingerprint{}, fmt.Errorf("read cline session dir %s: %w", sessionDir, err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !IsClineTeammateMessagesFile(sessionID, name) {
+			continue
+		}
+		teammatePath := filepath.Join(sessionDir, name)
+		teammateInfo, err := siblingMetadataFileInfo(teammatePath)
+		if err != nil {
+			return SourceFingerprint{}, err
+		}
+		if teammateInfo != nil {
+			fp.Size += teammateInfo.Size()
+			if ts := teammateInfo.ModTime().UnixNano(); ts > fp.MTimeNS {
+				fp.MTimeNS = ts
+			}
+			if err := addSiblingMetadataFingerprintPart(h, "teammate:"+name, teammatePath, teammateInfo); err != nil {
+				return SourceFingerprint{}, err
+			}
 		}
 	}
 

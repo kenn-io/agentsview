@@ -1030,3 +1030,246 @@ func TestParseClineSession_CanonicalSessionIDValidation(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid cline session directory name")
 }
+
+func TestIsClineTeammateMessagesFile(t *testing.T) {
+	sessionID := "1789000000000_mocksess"
+	tests := []struct {
+		filename string
+		want     bool
+	}{
+		{"worker-scout__sub1abc.messages.json", true},
+		{"diff-checker__sub2xyz.messages.json", true},
+		{"worker__task1.messages.json", true},
+		{"my_agent__123.messages.json", true},
+		{"1789000000000_mocksess.messages.json", false},
+		{"1789000000000_mocksess.json", false},
+		{"other.json", false},
+		{"worker-scout.messages.json", false},
+		{"__sub1abc.messages.json", false},
+		{"worker-scout__.messages.json", false},
+		{".hidden__t1.messages.json", false},
+		{"_agent__t1.messages.json", false},
+		{"../evil__t1.messages.json", false},
+		{"foo/bar__t1.messages.json", false},
+		{"foo\\bar__t1.messages.json", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.filename, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsClineTeammateMessagesFile(sessionID, tt.filename))
+		})
+	}
+}
+
+func TestParseClineSession_TeammateSubagents(t *testing.T) {
+	dir := t.TempDir()
+	sessDir := filepath.Join(dir, "sess-parent")
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+
+	metaJSON := `{
+		"session_id": "sess-parent",
+		"started_at": "2026-09-10T10:00:00Z",
+		"cwd": "/workspace/teamproject",
+		"provider": "anthropic",
+		"model": "claude-3-5-sonnet",
+		"metadata": {
+			"title": "Lead Coordinator",
+			"git": { "branch": "feat/team-feature" }
+		}
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "sess-parent.json"), []byte(metaJSON), 0o644))
+
+	parentMsgsJSON := `{
+		"version": 1,
+		"agent": "lead",
+		"sessionId": "sess-parent",
+		"messages": [
+			{
+				"id": "msg_user_1",
+				"role": "user",
+				"content": [
+					{
+						"type": "text",
+						"text": "Spawn git-scout to inspect repository status"
+					}
+				],
+				"ts": 1789207950000
+			},
+			{
+				"id": "msg_asst_1",
+				"role": "assistant",
+				"content": [
+					{
+						"type": "tool_use",
+						"id": "call_spawn_scout",
+						"name": "team_spawn_teammate",
+						"input": {
+							"agentId": "git-scout",
+							"rolePrompt": "You are a git recon specialist."
+						}
+					}
+				],
+				"ts": 1789207960000
+			},
+			{
+				"id": "msg_user_2",
+				"role": "user",
+				"content": [
+					{
+						"type": "tool_result",
+						"tool_use_id": "call_spawn_scout",
+						"content": "{\"agentId\":\"git-scout\",\"status\":\"spawned\"}"
+					}
+				],
+				"ts": 1789207961000
+			},
+			{
+				"id": "msg_asst_2",
+				"role": "assistant",
+				"content": [
+					{
+						"type": "tool_use",
+						"id": "call_run_scout",
+						"name": "team_run_task",
+						"input": {
+							"agentId": "git-scout",
+							"taskId": "task_0001",
+							"runMode": "sync",
+							"task": "Collect git status. taskId: task_0001"
+						}
+					}
+				],
+				"ts": 1789207970000
+			},
+			{
+				"id": "msg_user_3",
+				"role": "user",
+				"content": [
+					{
+						"type": "tool_result",
+						"tool_use_id": "call_run_scout",
+						"content": "{\"agentId\":\"git-scout\",\"status\":\"completed\"}"
+					}
+				],
+				"ts": 1789207980000
+			}
+		]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "sess-parent.messages.json"), []byte(parentMsgsJSON), 0o644))
+
+	teammateMsgsJSON := `{
+		"version": 1,
+		"updated_at": "2026-09-10T10:05:00Z",
+		"agent": "teammate",
+		"sessionId": "sess-parent__teamtask__git-scout__t1abc",
+		"taskType": "team",
+		"origin": {
+			"source": "cli",
+			"mode": "team",
+			"sessionId": "sess-parent__teamtask__git-scout__t1abc",
+			"parentThreadId": "sess-parent",
+			"subagent": "git-scout",
+			"version": "3.0.61"
+		},
+		"messages": [
+			{
+				"id": "msg_sub_user_1",
+				"role": "user",
+				"content": [
+					{
+						"type": "text",
+						"text": "Collect git status. taskId: task_0001"
+					}
+				],
+				"ts": 1789207971000
+			},
+			{
+				"id": "msg_sub_asst_1",
+				"role": "assistant",
+				"content": [
+					{
+						"type": "thinking",
+						"thinking": "Executing git commands"
+					},
+					{
+						"type": "tool_use",
+						"id": "call_sub_cmd_1",
+						"name": "run_commands",
+						"input": {
+							"commands": ["git status --short", "git branch"]
+						}
+					}
+				],
+				"ts": 1789207975000,
+				"modelInfo": {
+					"id": "claude-3-5-haiku",
+					"provider": "anthropic"
+				},
+				"metrics": {
+					"inputTokens": 200,
+					"outputTokens": 80,
+					"cacheReadTokens": 50,
+					"cacheWriteTokens": 0
+				}
+			}
+		]
+	}`
+	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "git-scout__t1abc.messages.json"), []byte(teammateMsgsJSON), 0o644))
+
+	metaPath := filepath.Join(sessDir, "sess-parent.json")
+
+	// 1. Test parseClineSessionWithTeammates directly
+	results, err := parseClineSessionWithTeammates(metaPath, "teamproject", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+
+	// Verify Parent
+	parent := results[0]
+	assert.Equal(t, "cline:sess-parent", parent.Session.ID)
+	assert.Empty(t, parent.Session.ParentSessionID)
+	assert.Equal(t, RelNone, parent.Session.RelationshipType)
+	assert.Equal(t, "Lead Coordinator", parent.Session.SessionName)
+
+	// Verify Tool Calls in Parent are annotated with child SubagentSessionID
+	require.Len(t, parent.Messages, 5)
+	spawnCall := parent.Messages[1].ToolCalls[0]
+	assert.Empty(t, spawnCall.SubagentSessionID)
+	assert.Equal(t, "Task", spawnCall.Category)
+
+	runCall := parent.Messages[3].ToolCalls[0]
+	assert.Equal(t, "cline:sess-parent__teamtask__git-scout__t1abc", runCall.SubagentSessionID)
+	assert.Equal(t, "Task", runCall.Category)
+	require.Len(t, runCall.ResultEvents, 1)
+	assert.Equal(t, "cline:sess-parent__teamtask__git-scout__t1abc", runCall.ResultEvents[0].SubagentSessionID)
+	assert.Equal(t, "git-scout", runCall.ResultEvents[0].AgentID)
+
+	// Verify Child Subagent
+	child := results[1]
+	assert.Equal(t, "cline:sess-parent__teamtask__git-scout__t1abc", child.Session.ID)
+	assert.Equal(t, "cline:sess-parent", child.Session.ParentSessionID)
+	assert.Equal(t, RelSubagent, child.Session.RelationshipType)
+	assert.Equal(t, "Teammate: git-scout", child.Session.SessionName)
+	assert.Equal(t, "feat/team-feature", child.Session.GitBranch)
+	assert.Equal(t, "teamproject", child.Session.Project)
+	assert.Equal(t, "/workspace/teamproject", child.Session.Cwd)
+	assert.Equal(t, AgentCline, child.Session.Agent)
+	assert.Equal(t, 2, child.Session.MessageCount)
+	assert.Equal(t, 1, child.Session.UserMessageCount)
+	assert.Equal(t, "Collect git status. taskId: task_0001", child.Session.FirstMessage)
+	assert.Equal(t, 80, child.Session.TotalOutputTokens)
+	assert.Equal(t, 250, child.Session.PeakContextTokens)
+
+	// Verify child messages
+	require.Len(t, child.Messages, 2)
+	assert.True(t, child.Messages[1].HasThinking)
+	assert.Equal(t, "Executing git commands", child.Messages[1].ThinkingText)
+	require.Len(t, child.Messages[1].ToolCalls, 1)
+	assert.Equal(t, "run_commands", child.Messages[1].ToolCalls[0].ToolName)
+	assert.Equal(t, "Bash", child.Messages[1].ToolCalls[0].Category)
+
+	// 2. Verify parseClineSession (backwards compatibility) returns parent with annotated tool calls
+	sess, msgs, err := parseClineSession(metaPath, "teamproject", "local")
+	require.NoError(t, err)
+	assert.Equal(t, "cline:sess-parent", sess.ID)
+	assert.Empty(t, msgs[1].ToolCalls[0].SubagentSessionID)
+	assert.Equal(t, "cline:sess-parent__teamtask__git-scout__t1abc", msgs[3].ToolCalls[0].SubagentSessionID)
+}

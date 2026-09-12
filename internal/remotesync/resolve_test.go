@@ -1118,10 +1118,12 @@ func TestClineRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 	require.NoError(t, os.MkdirAll(sess2, 0o755))
 	sess1Meta := filepath.Join(sess1, "sess-1.json")
 	sess1Messages := filepath.Join(sess1, "sess-1.messages.json")
+	sess1Teammate := filepath.Join(sess1, "scout__t1.messages.json")
 	sess2Meta := filepath.Join(sess2, "sess-2.json")
 	require.NoError(t, os.WriteFile(sess1Meta,
 		[]byte(`{"session_id":"sess-1","started_at":"2026-09-10T10:00:00Z"}`), 0o644))
 	require.NoError(t, os.WriteFile(sess1Messages, []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(sess1Teammate, []byte(`{"messages":[]}`), 0o644))
 	require.NoError(t, os.WriteFile(sess2Meta,
 		[]byte(`{"session_id":"sess-2","started_at":"2026-09-10T11:00:00Z"}`), 0o644))
 
@@ -1132,6 +1134,7 @@ func TestClineRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 	}
 	staleClientTargets := resolveTargetsForTest(t, cfg)
 	require.Contains(t, staleClientTargets.Files[parser.AgentCline], sess1Messages)
+	require.Contains(t, staleClientTargets.Files[parser.AgentCline], sess1Teammate)
 
 	require.NoError(t, os.RemoveAll(sess1))
 	freshServerTargets := resolveTargetsForTest(t, cfg)
@@ -1158,9 +1161,9 @@ func TestClineRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 	assert.NotContains(t, joined, "sess-1")
 
 	files, ok := remotesync.SelectAllowedFiles(
-		freshServerTargets, []string{sess1Messages},
+		freshServerTargets, []string{sess1Messages, sess1Teammate},
 	)
-	require.True(t, ok, "vanished session file must validate as delta request")
+	require.True(t, ok, "vanished session and teammate files must validate as delta request")
 	var delta bytes.Buffer
 	require.NoError(t, remotesync.WriteArchiveFiles(&delta, freshServerTargets, files))
 	dr := tar.NewReader(&delta)
@@ -1186,9 +1189,11 @@ func TestClineRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 	require.NoError(t, os.MkdirAll(directSess1, 0o755))
 	require.NoError(t, os.MkdirAll(directSess2, 0o755))
 	dsess1Meta := filepath.Join(directSess1, "dsess-1.json")
+	dsess1Teammate := filepath.Join(directSess1, "scout__t1.messages.json")
 	dsess2Meta := filepath.Join(directSess2, "dsess-2.json")
 	require.NoError(t, os.WriteFile(dsess1Meta,
 		[]byte(`{"session_id":"dsess-1","started_at":"2026-09-10T10:00:00Z"}`), 0o644))
+	require.NoError(t, os.WriteFile(dsess1Teammate, []byte(`{"messages":[]}`), 0o644))
 	require.NoError(t, os.WriteFile(dsess2Meta,
 		[]byte(`{"session_id":"dsess-2","started_at":"2026-09-10T11:00:00Z"}`), 0o644))
 
@@ -1199,13 +1204,18 @@ func TestClineRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 	}
 	staleDirectTargets := resolveTargetsForTest(t, directCfg)
 	require.Contains(t, staleDirectTargets.Files[parser.AgentCline], dsess1Meta)
+	require.Contains(t, staleDirectTargets.Files[parser.AgentCline], dsess1Teammate)
 
 	require.NoError(t, os.RemoveAll(directSess1))
 	freshDirectTargets := resolveTargetsForTest(t, directCfg)
 	assert.NotContains(t, freshDirectTargets.Files[parser.AgentCline], dsess1Meta)
+	assert.NotContains(t, freshDirectTargets.Files[parser.AgentCline], dsess1Teammate)
 
 	_, ok = remotesync.SelectAllowedTargets(freshDirectTargets, staleDirectTargets)
 	require.True(t, ok, "a vanished session file under direct sessions root must not fail request")
+
+	files, ok = remotesync.SelectAllowedFiles(freshDirectTargets, []string{dsess1Teammate})
+	require.True(t, ok, "vanished teammate under direct sessions root must validate")
 
 	// Non-session paths under direct sessions root must stay rejected
 	for _, path := range []string{

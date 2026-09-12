@@ -54,6 +54,28 @@ func ValidClineSessionID(sessionID string) bool {
 	return true
 }
 
+// IsClineTeammateMessagesFile reports whether filename represents a Cline
+// teammate subagent transcript (e.g. "<agentId>__<suffix>.messages.json")
+// belonging to the session directory.
+func IsClineTeammateMessagesFile(sessionID, filename string) bool {
+	if !strings.HasSuffix(filename, ".messages.json") {
+		return false
+	}
+	if filename == sessionID+".messages.json" {
+		return false
+	}
+	base := strings.TrimSuffix(filename, ".messages.json")
+	if base == "" || strings.HasPrefix(base, ".") || strings.HasPrefix(base, "_") ||
+		strings.ContainsAny(base, "\\/:\x00") || !isSafeSinglePathComponent(base) {
+		return false
+	}
+	idx := strings.Index(base, "__")
+	if idx <= 0 || idx+2 >= len(base) {
+		return false
+	}
+	return true
+}
+
 // ClineResolveSessionsDir resolves the directory containing Cline session
 // folders. If root is already a direct sessions directory (named "sessions"
 // or ending with "data/sessions"), root is returned; otherwise, "data/sessions"
@@ -132,7 +154,7 @@ func clineClassifyPath(
 		return singleFileMatch{}, false
 	}
 
-	if filename != sessionID+".json" && filename != sessionID+".messages.json" {
+	if filename != sessionID+".json" && filename != sessionID+".messages.json" && !IsClineTeammateMessagesFile(sessionID, filename) {
 		return singleFileMatch{}, false
 	}
 
@@ -150,8 +172,15 @@ func clineFindFile(root, rawID string) (singleFileMatch, bool) {
 	if !isSafeSinglePathComponent(rawID) {
 		return singleFileMatch{}, false
 	}
+	sessionID := rawID
+	if idx := strings.Index(rawID, "__teamtask__"); idx != -1 {
+		sessionID = rawID[:idx]
+	}
+	if !ValidClineSessionID(sessionID) {
+		return singleFileMatch{}, false
+	}
 	sessionsDir := clineResolveSessionsDir(root)
-	metaPath := filepath.Join(sessionsDir, rawID, rawID+".json")
+	metaPath := filepath.Join(sessionsDir, sessionID, sessionID+".json")
 	if !isWithinRoot(sessionsDir, metaPath) {
 		return singleFileMatch{}, false
 	}
@@ -164,31 +193,29 @@ func clineFindFile(root, rawID string) (singleFileMatch, bool) {
 func clineParseFile(
 	src singleFileSource, req ParseRequest,
 ) ([]ParseResult, []string, error) {
-	sess, msgs, err := parseClineSession(
+	results, err := parseClineSessionWithTeammates(
 		src.Path, req.Source.ProjectHint, req.Machine,
 	)
 	if err != nil {
 		return nil, nil, err
 	}
-	if sess == nil {
+	if len(results) == 0 {
 		return nil, nil, nil
 	}
 
 	if req.Fingerprint.Size > 0 {
-		sess.File.Size = req.Fingerprint.Size
+		results[0].Session.File.Size = req.Fingerprint.Size
 	}
 	if req.Fingerprint.MTimeNS > 0 {
-		sess.File.Mtime = req.Fingerprint.MTimeNS
+		results[0].Session.File.Mtime = req.Fingerprint.MTimeNS
 	}
 	if req.Fingerprint.Hash != "" {
-		sess.File.Hash = req.Fingerprint.Hash
+		for i := range results {
+			results[i].Session.File.Hash = req.Fingerprint.Hash
+		}
 	}
 
-	return []ParseResult{{
-		Session:     *sess,
-		Messages:    msgs,
-		UsageEvents: sess.UsageEvents,
-	}}, nil, nil
+	return results, nil, nil
 }
 
 func clineProviderCapabilities() Capabilities {

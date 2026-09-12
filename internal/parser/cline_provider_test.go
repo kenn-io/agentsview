@@ -201,3 +201,64 @@ func TestClineDiscovery_MissingDataSessions(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, paths)
 }
+
+func TestClineFingerprint_Teammates(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "sess-fp-test"
+	sessDir := filepath.Join(dir, sessionID)
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+
+	metaPath := filepath.Join(sessDir, sessionID+".json")
+	msgPath := filepath.Join(sessDir, sessionID+".messages.json")
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{"session_id":"sess-fp-test"}`), 0o644))
+	require.NoError(t, os.WriteFile(msgPath, []byte(`{"messages":[]}`), 0o644))
+
+	fp1, err := clineFingerprintSource(metaPath)
+	require.NoError(t, err)
+
+	// Adding a teammate file must invalidate fingerprint
+	teammatePath := filepath.Join(sessDir, "git-scout__t1.messages.json")
+	require.NoError(t, os.WriteFile(teammatePath, []byte(`{"messages":[{"id":"m1"}]}`), 0o644))
+
+	fp2, err := clineFingerprintSource(metaPath)
+	require.NoError(t, err)
+	assert.NotEqual(t, fp1.Hash, fp2.Hash)
+	assert.True(t, fp2.Size > fp1.Size)
+
+	// Modifying teammate file must invalidate fingerprint again
+	require.NoError(t, os.WriteFile(teammatePath, []byte(`{"messages":[{"id":"m1"},{"id":"m2"}]}`), 0o644))
+	fp3, err := clineFingerprintSource(metaPath)
+	require.NoError(t, err)
+	assert.NotEqual(t, fp2.Hash, fp3.Hash)
+}
+
+func TestClineClassifyPath_Teammates(t *testing.T) {
+	root := t.TempDir()
+	sessionID := "sess-classify-1"
+	sessDir := filepath.Join(root, "data", "sessions", sessionID)
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+
+	metaPath := filepath.Join(sessDir, sessionID+".json")
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{}`), 0o644))
+
+	teammatePath := filepath.Join(sessDir, "scout__t1.messages.json")
+	match, ok := clineClassifyPath(root, teammatePath, false)
+	require.True(t, ok)
+	assert.Equal(t, metaPath, match.Path)
+}
+
+func TestClineFindFile_Teammates(t *testing.T) {
+	root := t.TempDir()
+	sessionID := "sess-find-1"
+	sessDir := filepath.Join(root, "data", "sessions", sessionID)
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+
+	metaPath := filepath.Join(sessDir, sessionID+".json")
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{}`), 0o644))
+
+	// Looking up raw teammate session ID resolves to the parent session metadata file
+	rawTeammateID := "sess-find-1__teamtask__scout__t1"
+	match, ok := clineFindFile(root, rawTeammateID)
+	require.True(t, ok)
+	assert.Equal(t, metaPath, match.Path)
+}

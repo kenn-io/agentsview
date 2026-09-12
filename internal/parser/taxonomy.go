@@ -43,7 +43,7 @@ func NormalizeToolCategory(rawName string) string {
 		return "Write"
 	case "edit_file", "replace":
 		return "Edit"
-	case "run_command", "execute_command", "run_shell_command":
+	case "run_command", "run_commands", "execute_command", "run_shell_command":
 		return "Bash"
 	case "search_files", "grep", "grep_search":
 		return "Grep"
@@ -85,7 +85,8 @@ func NormalizeToolCategory(rawName string) string {
 	case "browser_action", "access_mcp_resource",
 		"ask_followup_question", "attempt_completion":
 		return "Tool"
-	case "new_task":
+	case "new_task", "team_spawn_teammate", "team_run_task", "team_task",
+		"team_shutdown_teammate":
 		return "Task"
 
 	// Antigravity tools

@@ -670,6 +670,25 @@ func resolveClineTarget(root string) (string, []string, error) {
 		if regular {
 			files = append(files, msgPath)
 		}
+		entries, err := os.ReadDir(dir)
+		if err != nil && !os.IsNotExist(err) {
+			return "", nil, fmt.Errorf("read cline session dir %q: %w", dir, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if parser.IsClineTeammateMessagesFile(sessionID, entry.Name()) {
+				teammatePath := filepath.Join(dir, entry.Name())
+				regular, err := statRegularRemoteSyncFile(teammatePath)
+				if err != nil {
+					return "", nil, err
+				}
+				if regular {
+					files = append(files, teammatePath)
+				}
+			}
+		}
 	}
 	sort.Strings(files)
 	return targetRoot, files, nil
@@ -1084,7 +1103,7 @@ func clineSessionFileShape(root, rel string) bool {
 	if !validClineSessionID(sessionID) {
 		return false
 	}
-	return filename == sessionID+".json" || filename == sessionID+".messages.json"
+	return filename == sessionID+".json" || filename == sessionID+".messages.json" || parser.IsClineTeammateMessagesFile(sessionID, filename)
 }
 
 // authorizedStaleCuratedFile reports whether a curated file request
