@@ -748,6 +748,35 @@ func TestEnsureBackgroundServeExistingDaemon(t *testing.T) {
 	assert.Equal(t, port, rt.Port)
 }
 
+func TestEnsureBackgroundServeDefersOnlyCurrentArchiveSync(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stale=%t", stale), func(t *testing.T) {
+			dir := testDataDir(t)
+			path := filepath.Join(dir, "sessions.db")
+			database, err := db.Open(path)
+			require.NoError(t, err)
+			require.NoError(t, database.Close())
+			if stale {
+				markArchiveStale(t, path)
+			}
+			stop := errors.New("stop before launching")
+			oldStart := startServeBackgroundProcessForEnsure
+			startServeBackgroundProcessForEnsure = func(_ config.Config, args []string) (*exec.Cmd, string, error) {
+				if stale {
+					assert.NotContains(t, args, "--skip-initial-sync", "required archive resync must run before serving")
+				} else {
+					assert.Contains(t, args, "--skip-initial-sync", "routine sync can run after readiness")
+				}
+				return nil, "", stop
+			}
+			t.Cleanup(func() { startServeBackgroundProcessForEnsure = oldStart })
+			cfg := config.Config{DataDir: dir, DBPath: path, SkipInitialSync: true}
+			_, err = ensureBackgroundServe(t.Context(), &cfg, time.Second)
+			require.ErrorIs(t, err, stop)
+		})
+	}
+}
+
 func TestEnsureBackgroundServeGeneratesAuthTokenForRemoteSync(t *testing.T) {
 	dir := testDataDir(t)
 	host, port := testPingServer(t)

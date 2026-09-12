@@ -670,6 +670,16 @@ Report token usage and estimated cost aggregated by local-time day, scoped to
 the last 30 days by default. See [Token Usage & Costs](/docs/token-usage/) for a
 full write-up on reporting behavior and agent coverage.
 
+The report reads committed archive data. If it starts the daemon, session sync
+runs in the background; run `agentsview sync` first when new source changes must
+be included. An older archive that requires reparsing is upgraded before the
+daemon starts serving, with startup progress shown in the terminal. A cold usage
+cache prepares the sessions needed for the report without waiting for the full
+archive backfill. Slow reports print the current preparation phase and elapsed
+time to stderr, including with `--json`. Usage preparation is not subject to the
+server's normal write timeout. Press Ctrl+C to stop waiting; shared cache work
+can continue in the daemon.
+
 ```bash
 agentsview usage daily [flags]
 ```
@@ -684,7 +694,7 @@ agentsview usage daily [flags]
 | `--agent`     |               | Filter by agent name                                                     |
 | `--breakdown` | `false`       | Show per-model rows and populate detailed JSON breakdown arrays          |
 | `--offline`   | `false`       | Skip the pricing catalog fetch; use embedded fallback                    |
-| `--no-sync`   | `false`       | Skip the on-demand sync pass before querying                             |
+| `--no-sync`   | `false`       | Start the daemon without automatic sync                                 |
 | `--timezone`  | system        | IANA timezone name for date bucketing                                    |
 
 **Examples:**

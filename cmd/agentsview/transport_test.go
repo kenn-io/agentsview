@@ -938,6 +938,37 @@ func TestEnsureTransportArchiveWriteWaitsForBackgroundReplacementLock(
 	), tr.URL)
 }
 
+func TestBackgroundLaunchWaitReportsProgressAndExtendsWhileWorking(t *testing.T) {
+	setStartProbeTickForTest(t, 10*time.Millisecond)
+	dir := daemonRuntimeDir(t)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	launchLock, ok := acquireBackgroundLaunchLock(dir)
+	require.True(t, ok)
+	t.Cleanup(func() { _ = launchLock.Unlock() })
+	MarkDaemonStarting(dir)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+	state := newStartupStateWriter(dir, time.Now)
+	state.SetPhase("Opening archive")
+	released := make(chan error, 1)
+	go func() {
+		for i := range 5 {
+			time.Sleep(50 * time.Millisecond)
+			state.SetPhase(fmt.Sprintf("Preparing archive batch %d", i+1))
+		}
+		released <- launchLock.Unlock()
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	output := captureStderr(t, func() {
+		waited, err := waitForBackgroundLaunchBeforeArchiveWrite(ctx, dir, 150*time.Millisecond)
+		require.True(t, waited)
+		require.NoError(t, err, "advancing startup must extend the wait")
+	})
+	require.NoError(t, <-released)
+	assert.Contains(t, output, "Opening archive")
+	assert.Contains(t, output, "Preparing archive batch")
+}
+
 func TestEnsureTransportArchiveWriteAdoptsAuthAfterBackgroundLaunchWait(
 	t *testing.T,
 ) {

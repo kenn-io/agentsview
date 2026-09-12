@@ -19,7 +19,10 @@ import (
 func (s *Server) registerUsageRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/usage", "Usage")
 
-	s.get(group, "/summary", "Get usage summary", s.humaUsageSummary)
+	// A cold report builds the requested usage data before returning exact
+	// totals. Its lifetime is the request context, not the normal write limit.
+	s.getLong(group, "/summary", "Get usage summary", s.humaUsageSummary)
+	s.stream(group, http.MethodGet, "/summary/stream", "Get usage summary with progress", s.humaUsageSummaryStream)
 	s.get(group, "/comparison", "Get usage comparison", s.humaUsageComparison)
 	s.get(group, "/pairwise-comparison",
 		"Get usage pairwise comparison", s.humaUsagePairwiseComparison,
@@ -165,20 +168,86 @@ func (s *Server) humaUsageSummary(
 ) (*jsonOutput[UsageSummaryResponse], error) {
 	res, err := s.sessions.UsageSummary(ctx, usageRequestFromInput(*in))
 	if err != nil {
-		if ue, ok := errors.AsType[*service.UsageInputError](err); ok {
-			return nil, usageInputAPIError(ue)
-		}
-		if handled := handleHumaContextError(err); handled != nil {
-			return nil, handled
-		}
-		if handled := handleHumaReadOnly(err); handled != nil {
-			return nil, handled
-		}
-		return nil, internalError("usage summary error", err)
+		return nil, usageSummaryAPIError(err)
 	}
 	return &jsonOutput[UsageSummaryResponse]{
 		Body: usageSummaryResponseFromService(res),
 	}, nil
+}
+
+func usageSummaryAPIError(err error) error {
+	if ue, ok := errors.AsType[*service.UsageInputError](err); ok {
+		return usageInputAPIError(ue)
+	}
+	if handled := handleHumaContextError(err); handled != nil {
+		return handled
+	}
+	if handled := handleHumaReadOnly(err); handled != nil {
+		return handled
+	}
+	return internalError("usage summary error", err)
+}
+
+func (s *Server) humaUsageSummaryStream(
+	ctx context.Context, in *UsageFilterInput,
+) (*huma.StreamResponse, error) {
+	req := usageRequestFromInput(*in)
+	if _, err := service.BuildUsageFilter(req); err != nil {
+		if input, ok := errors.AsType[*service.UsageInputError](err); ok {
+			return nil, usageInputAPIError(input)
+		}
+		return nil, serverError(err)
+	}
+	return &huma.StreamResponse{Body: func(hctx huma.Context) {
+		stream, ok := newHumaSSEStream(hctx)
+		if !ok {
+			return
+		}
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		progress := make(chan string, 1)
+		req.Progress = func(phase string) {
+			select {
+			case progress <- phase:
+			case <-ctx.Done():
+			}
+		}
+		type result struct {
+			summary *service.UsageSummaryResult
+			err     error
+		}
+		done := make(chan result, 1)
+		finished := make(chan struct{})
+		defer func() { cancel(); <-finished }()
+		go func() {
+			defer close(finished)
+			summary, err := s.sessions.UsageSummary(ctx, req)
+			done <- result{summary, err}
+		}()
+		phase := "Preparing usage report from the archive"
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			if !stream.SendJSON("progress", map[string]string{"detail": phase}) {
+				return
+			}
+			select {
+			case phase = <-progress:
+			case <-ticker.C:
+			case out := <-done:
+				if out.err != nil {
+					if err := usageSummaryAPIError(out.err); err != nil {
+						stream.SendJSON("error", map[string]string{"error": err.Error()})
+					}
+				} else {
+					stream.SendJSON("done", usageSummaryResponseFromService(out.summary))
+				}
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}}, nil
 }
 
 func (s *Server) humaUsageComparison(

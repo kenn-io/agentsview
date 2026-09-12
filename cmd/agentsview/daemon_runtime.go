@@ -1004,7 +1004,10 @@ func WaitForDaemonStartupContext(
 	timeout time.Duration,
 	authToken ...string,
 ) bool {
-	deadline := time.Now().Add(timeout)
+	started := time.Now()
+	deadline := started.Add(timeout)
+	progress := daemonLaunchProgressWriter{w: os.Stderr}
+	var lastUpdate time.Time
 	for time.Now().Before(deadline) {
 		if FindDaemonRuntime(dataDir, authToken...) != nil {
 			return true
@@ -1012,6 +1015,12 @@ func WaitForDaemonStartupContext(
 		if !IsDaemonStarting(dataDir) {
 			return false
 		}
+		state := readStartupState(dataDir)
+		if state != nil && state.UpdatedAt.After(lastUpdate) {
+			lastUpdate = state.UpdatedAt
+			deadline = time.Now().Add(timeout)
+		}
+		progress.progress(state, startupSnapshotElapsed(state, started, time.Now()))
 		wait := min(time.Until(deadline), startProbeTick())
 		timer := time.NewTimer(wait)
 		select {

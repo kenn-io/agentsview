@@ -1946,6 +1946,14 @@ func CheckDataVersion(path string) error {
 	return err
 }
 
+// ArchiveNeedsResync probes an existing archive without modifying it. A
+// required schema repair or data reparse cannot be deferred to a live sync
+// worker, which is not allowed to replace the daemon's open archive.
+func ArchiveNeedsResync(path string) (bool, error) {
+	schemaStale, dataStale, err := probeDatabase(path)
+	return schemaStale || dataStale, err
+}
+
 // probeDatabase checks an existing database for schema and data staleness.
 // It returns (schemaRepairNeeded, dataStale, err). A writable Open repairs
 // missing legacy columns before initializing schema indexes, then requires a

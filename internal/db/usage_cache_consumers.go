@@ -50,15 +50,22 @@ func (db *DB) queryUsageRollups(
 	// the read. Both are resolved by recapturing, and neither is driven by
 	// the write rate.
 	var lastErr error
+	report := func(phase string) {
+		if filter.Progress != nil {
+			filter.Progress(phase)
+		}
+	}
 	for attempt := 1; attempt <= usageFillMaxAttempts; attempt++ {
 		started := time.Now()
 		var timings usageRollupRequestTimings
+		report("Reading archived sessions for this report")
 		snapshot, captureErr := db.captureUsageQuery(ctx, filter, kind)
 		if captureErr != nil {
 			return usageQuerySnapshot{}, usageFactsResult{}, nil, captureErr
 		}
 		timings.capture = time.Since(started)
 		timings.candidates = len(snapshot.Versions)
+		report("Checking the usage cache for this report")
 		if !includeCursor || !usageCursorIncluded(filter) {
 			snapshot.CursorHighWater = 0
 		}
@@ -78,6 +85,7 @@ func (db *DB) queryUsageRollups(
 		}
 		timings.sweep = time.Since(sweepStarted)
 		fillStarted := time.Now()
+		report(fmt.Sprintf("Preparing usage data for %d sessions in this report", timings.candidates))
 		fills, fillErr := cache.fill.Ensure(
 			ctx, snapshot.Versions, snapshot.CursorHighWater,
 		)
@@ -92,6 +100,7 @@ func (db *DB) queryUsageRollups(
 		timings.fill = time.Since(fillStarted)
 		snapshot.dropDeleted(fills)
 		resolver := export.NewPricingResolver(snapshot.PricingRows)
+		report(fmt.Sprintf("Calculating daily totals for %d sessions in this report", timings.candidates))
 		installs, rollupMetrics, rollupErr := cache.rollup.Ensure(
 			ctx, snapshot, fills, resolver)
 		if rollupErr != nil {
@@ -104,6 +113,7 @@ func (db *DB) queryUsageRollups(
 		}
 		timings.rollup = rollupMetrics
 		readStarted := time.Now()
+		report("Reading cached daily totals")
 		var facts usageFactsResult
 		var queryErr error
 		if kind == usageQueryKindActivity {

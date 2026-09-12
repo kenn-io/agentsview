@@ -602,13 +602,19 @@ probeDaemon:
 		}
 	}
 
+	needsResync, err := db.ArchiveNeedsResync(cfg.DBPath)
+	if err != nil {
+		return nil, err
+	}
 	args := []string{"serve"}
 	args = serveBackgroundArgsWithNoSync(args, cfg.NoSync)
-	args = serveBackgroundArgsWithSkipInitialSync(args, cfg.SkipInitialSync)
+	args = serveBackgroundArgsWithSkipInitialSync(args, cfg.SkipInitialSync && !needsResync)
 	child, logPath, err := startServeBackgroundProcessForEnsure(*cfg, args)
 	if err != nil {
 		return nil, err
 	}
+	progress := daemonLaunchProgressWriter{w: os.Stderr}
+	progress.launch(child.Process.Pid, logPath)
 	waitCh := make(chan error, 1)
 	go func() {
 		waitCh <- child.Wait()
@@ -981,9 +987,10 @@ func waitForBackgroundServeReady(
 	waitCh <-chan error,
 	timeout time.Duration,
 ) (*DaemonRuntime, error) {
+	progress := daemonLaunchProgressWriter{w: os.Stderr}
 	return waitForBackgroundServeReadyWithPolicy(
 		ctx, dataDir, authToken, waitCh, timeout,
-		backgroundServeReadyWaitPolicy{},
+		backgroundServeReadyWaitPolicy{Observe: progress.progress},
 	)
 }
 

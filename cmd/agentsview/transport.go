@@ -347,10 +347,21 @@ func waitForBackgroundLaunchBeforeArchiveWrite(
 	if waitTimeout <= 0 {
 		waitTimeout = backgroundAutoStartReadyTimeout
 	}
-	deadline := time.Now().Add(waitTimeout)
+	started := time.Now()
+	deadline := started.Add(waitTimeout)
+	progress := daemonLaunchProgressWriter{w: os.Stderr}
+	var lastUpdate time.Time
 	for isBackgroundLaunchActive(dataDir) {
 		if err := ctx.Err(); err != nil {
 			return true, err
+		}
+		if IsDaemonStarting(dataDir) {
+			state := readStartupState(dataDir)
+			if state != nil && state.UpdatedAt.After(lastUpdate) {
+				lastUpdate = state.UpdatedAt
+				deadline = time.Now().Add(waitTimeout)
+			}
+			progress.progress(state, startupSnapshotElapsed(state, started, time.Now()))
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
