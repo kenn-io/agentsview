@@ -675,7 +675,7 @@ request.
   returns from the rollup branch first, so `subagents` has no effect.
 
 ```bash
-agentsview session usage <id> [--format json] [--own-only]
+agentsview session usage <id> [--format json] [--own-only] [--no-sync]
 ```
 
 ```json
@@ -843,9 +843,18 @@ Before querying, the local backend refreshes the session's own transcript and
 the `agent-*.jsonl` files under its `subagents/` directory, so a session that
 just finished reports complete numbers. `--own-only` skips the subagent refresh.
 
+Pass `--no-sync` to read archived usage without refreshing source transcripts.
+This preserves the full subagent rollup and the exit codes above; combine it
+with `--own-only` only when you want to exclude subagents. Local and remote
+HTTP queries skip the sync request, so recent usage appears after the watcher
+or a separate sync has indexed it. PostgreSQL reads already use archived data.
+The local `--no-sync` path requires a compatible daemon and starts one with
+source synchronization disabled if needed. With `AGENTSVIEW_NO_DAEMON=1`,
+it requires an existing compatible daemon.
+
 The command uses a writable local daemon when one is running, or starts a
 detached daemon when fresh local data is needed and no compatible daemon is
-running. With `AGENTSVIEW_NO_DAEMON=1`, it falls back to direct local SQLite
+running. Without `--no-sync`, `AGENTSVIEW_NO_DAEMON=1` selects direct local SQLite
 after acquiring the write-owner lock for any required refresh. Configured
 PostgreSQL does not change this command's default local behavior; pass `--pg` to
 read usage from the shared PostgreSQL store. With `--server`, it calls

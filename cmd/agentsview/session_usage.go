@@ -48,6 +48,8 @@ func newSessionUsageCommand() *cobra.Command {
 			runSessionUsage(cmd, args[0], outputFormat(cmd))
 		},
 	}
+	cmd.Flags().Bool("no-sync", false,
+		"Use archived usage without synchronizing source transcripts")
 	cmd.Flags().Bool("own-only", false,
 		"Report only this session's own usage, excluding subagents")
 	return cmd
@@ -89,7 +91,10 @@ func sessionUsageDataForCommand(
 	}
 
 	ownOnly, _ := cmd.Flags().GetBool("own-only")
-	query := sessionUsageQuery{SessionID: sessionID, OwnOnly: ownOnly}
+	noSync, _ := cmd.Flags().GetBool("no-sync")
+	query := sessionUsageQuery{
+		SessionID: sessionID, OwnOnly: ownOnly, NoSync: noSync,
+	}
 
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
@@ -126,6 +131,7 @@ func sessionUsageDataForCommand(
 		ctx,
 		cfg,
 		archiveQueryPolicy{
+			NoSync:               noSync,
 			AutoStart:            true,
 			ReadOnlyDaemon:       archiveQueryUseReadOnlyDaemon,
 			DirectReadOnlyAction: "refresh session usage directly",
@@ -186,7 +192,7 @@ func httpSessionUsageData(
 		}
 		return nil, tokenUseExitErr, err
 	}
-	if !query.OwnOnly {
+	if !query.OwnOnly && !query.NoSync {
 		backend := service.NewHTTPBackend(baseURL, token, false)
 		if _, syncErr := backend.Sync(ctx, service.SyncInput{
 			ID: resolvedID, Subagents: true,

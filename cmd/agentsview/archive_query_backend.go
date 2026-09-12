@@ -40,10 +40,12 @@ type archiveQueryBackend interface {
 
 // sessionUsageQuery selects the session and the attribution scope for
 // `session usage`. OwnOnly restores the pre-rollup behavior of reporting
-// just the named transcript's own rows.
+// just the named transcript's own rows. NoSync skips source refreshes while
+// preserving the selected attribution scope.
 type sessionUsageQuery struct {
 	SessionID string
 	OwnOnly   bool
+	NoSync    bool
 }
 
 type dailyUsageQuery struct {
@@ -261,7 +263,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 		ctx, b.database, b.cfg.AgentDirs, query.SessionID,
 	)
 
-	if known && !b.skipFreshData {
+	if known && !b.skipFreshData && !query.NoSync {
 		engine := sync.NewEngine(b.database, sync.EngineConfig{
 			AgentDirs:               b.cfg.AgentDirs,
 			SourceMachines:          b.cfg.SourceMachines,

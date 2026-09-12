@@ -1330,6 +1330,155 @@ func TestSessionUsage_ServerFlagUsesHTTP(t *testing.T) {
 	assert.True(t, out.ServerRunning)
 }
 
+func TestSessionUsage_NoSyncPreservesAuthenticatedResolution(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	tokenFile := filepath.Join(dataDir, "remote-token")
+	require.NoError(t, os.WriteFile(tokenFile, []byte("test-token\n"), 0o600))
+	const rawID = "session-uuid"
+	const canonicalID = "codex:" + rawID
+	ts, reqs := newRemoteUsageServer(t, remoteUsageSpec{
+		canonicalID: canonicalID,
+		bearer:      "test-token",
+	})
+	cmd := sessionUsageCommand(t, "session", "usage", rawID,
+		"--server", ts.URL, "--server-token-file", tokenFile, "--no-sync")
+
+	out, code, err := sessionUsageDataForCommand(cmd, rawID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, tokenUseExitOK, code)
+	assert.Equal(t, canonicalID, out.SessionID)
+	assert.Equal(t, 42, out.TotalOutputTokens)
+	assert.Equal(t, "breakdown=true&subagents=true", reqs.UsageQuery)
+	assert.Empty(t, reqs.SyncInput.ID)
+	assert.NotContains(t, reqs.RequestPath, "/api/v1/sessions/sync")
+	assert.Contains(t, reqs.RequestPath, "/api/v1/sessions/"+rawID)
+	assert.Contains(t, reqs.RequestPath, "/api/v1/sessions/"+canonicalID)
+}
+
+func TestSessionUsage_NoSyncAutostartDisablesSourceSync(t *testing.T) {
+	testDataDir(t)
+	ts, reqs := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+	u, err := url.Parse(ts.URL)
+	require.NoError(t, err)
+	host, portText, err := net.SplitHostPort(u.Host)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portText)
+	require.NoError(t, err)
+	var started bool
+	stubStartBackgroundServeForTransport(t, func(
+		_ context.Context, cfg *config.Config, _ time.Duration,
+	) (*DaemonRuntime, error) {
+		started = true
+		assert.True(t, cfg.NoSync)
+		return &DaemonRuntime{Host: host, Port: port}, nil
+	})
+	cmd := sessionUsageCommand(t, "session", "usage", "remote-session", "--no-sync")
+	out, code, err := sessionUsageDataForCommand(cmd, "remote-session")
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.True(t, started)
+	assert.Equal(t, tokenUseExitOK, code)
+	assert.Empty(t, reqs.SyncInput.ID)
+	assert.Equal(t, "breakdown=true&subagents=true", reqs.UsageQuery)
+}
+
+func TestSessionUsage_NoSyncDiscoveredDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		body      string
+		code      int
+		wantError bool
+	}{
+		{"subagent usage", http.StatusOK,
+			`{"session_id":"codex:parent","total_output_tokens":24,"has_token_data":true,"subagent_count":2}`,
+			tokenUseExitOK, false},
+		{"no data", http.StatusOK,
+			`{"session_id":"codex:parent","has_token_data":false,"has_cost":false}`,
+			tokenUseExitNoTokenData, false},
+		{"missing", http.StatusNotFound, "", tokenUseExitNotFound, false},
+		{"unauthorized", http.StatusUnauthorized, "", tokenUseExitErr, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := newAgentDataDir(t)
+			writeTestConfig(t, dataDir, `auth_token = "test-token"`)
+			var paths []string
+			ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodGet, r.Method)
+				assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+				paths = append(paths, r.URL.Path)
+				switch r.URL.Path {
+				case "/api/v1/sessions/codex:parent":
+					writeJSONResponse(w, `{"id":"codex:parent","agent":"codex"}`)
+				case "/api/v1/sessions/codex:parent/usage":
+					assert.Equal(t, "breakdown=true&subagents=true", r.URL.RawQuery)
+					w.WriteHeader(tc.status)
+					_, _ = w.Write([]byte(tc.body))
+				default:
+					http.NotFound(w, r)
+				}
+			})
+			registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+			cmd := sessionUsageCommand(t, "session", "usage", "codex:parent", "--no-sync")
+			out, code, err := sessionUsageDataForCommand(cmd, "codex:parent")
+			if tc.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tc.code, code)
+			assert.Equal(t, []string{
+				"/api/v1/sessions/codex:parent",
+				"/api/v1/sessions/codex:parent/usage",
+			}, paths)
+			if tc.code == tokenUseExitOK {
+				require.NotNil(t, out)
+				assert.Equal(t, 24, out.TotalOutputTokens)
+				assert.Equal(t, 2, out.SubagentCount)
+			}
+		})
+	}
+}
+
+func TestSessionUsage_NoSyncLocalAttributionAndMissingData(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		id       string
+		ownOnly  bool
+		code     int
+		output   int
+		children int
+	}{
+		{"subagent usage", "claude:parent-only", false, tokenUseExitOK, 24, 1},
+		{"own only", "claude:parent-only", true, tokenUseExitNoTokenData, 0, 0},
+		{"missing", "claude:missing", false, tokenUseExitNotFound, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := newAgentDataDir(t)
+			localDB := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
+			seedSubagentOnlyUsage(t, localDB, "claude:parent-only", "agent-child", 24)
+			backend := localArchiveQueryBackend{
+				cfg:      config.Config{DBPath: sessionsDBPath(dataDir)},
+				database: localDB,
+				offline:  true,
+			}
+			out, code, err := backend.SessionUsage(context.Background(), sessionUsageQuery{
+				SessionID: tc.id, OwnOnly: tc.ownOnly, NoSync: true,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.code, code)
+			if tc.code == tokenUseExitNotFound {
+				assert.Nil(t, out)
+				return
+			}
+			require.NotNil(t, out)
+			assert.Equal(t, tc.output, out.TotalOutputTokens)
+			assert.Equal(t, tc.children, out.SubagentCount)
+		})
+	}
+}
+
 func TestSessionUsage_ServerFlagRejectsCombinedUsageFromOlderDaemon(
 	t *testing.T,
 ) {
