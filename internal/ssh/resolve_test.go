@@ -764,6 +764,12 @@ func TestResolveScriptClineTargetsOnlySessionFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(sess1, "sess-1.messages.json"), []byte(`{"messages":[]}`), 0o644))
 	require.NoError(t, os.WriteFile(
+		filepath.Join(sess1, "sess-1__team__scout.messages.json"), []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sess1, "sess-1__bad__.messages.json"), []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sess1, "_sess-1__skip.messages.json"), []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(
 		filepath.Join(sess2, "sess-2.json"), []byte(`{"session_id":"sess-2"}`), 0o644))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(settingsDir, "mcp_settings.json"),
@@ -782,6 +788,12 @@ func TestResolveScriptClineTargetsOnlySessionFiles(t *testing.T) {
 		"data/sessions/sess-1/sess-1.json"))
 	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
 		"data/sessions/sess-1/sess-1.messages.json"))
+	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		"data/sessions/sess-1/sess-1__team__scout.messages.json"))
+	assert.False(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		"data/sessions/sess-1/sess-1__bad__.messages.json"))
+	assert.False(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		"data/sessions/sess-1/_sess-1__skip.messages.json"))
 	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
 		"data/sessions/sess-2/sess-2.json"))
 	// sess-2 has no sess-2.messages.json; av_emit_agent_file skips it.

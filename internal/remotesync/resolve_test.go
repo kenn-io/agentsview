@@ -552,8 +552,10 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	require.NoError(t, os.WriteFile(windsurfWorkspaceJSON, []byte("{}\n"), 0o644))
 	clineMeta := filepath.Join(clineSessionDir, "sess-test.json")
 	clineMsg := filepath.Join(clineSessionDir, "sess-test.messages.json")
+	clineTm := filepath.Join(clineSessionDir, "sess-test__teamtask__git-scout__t1.messages.json")
 	require.NoError(t, os.WriteFile(clineMeta, []byte(`{"session_id":"sess-test"}`), 0o644))
 	require.NoError(t, os.WriteFile(clineMsg, []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(clineTm, []byte(`{"messages":[]}`), 0o644))
 	clineSecretDir := filepath.Join(clineRoot, "data", "sessions", ".secret")
 	require.NoError(t, os.MkdirAll(clineSecretDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(clineSecretDir, ".secret.json"), []byte(`{"session_id":".secret"}`), 0o644))
@@ -604,8 +606,8 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	// Cline: both resolvers must emit only session files.
 	assert.ElementsMatch(t, []string{clineRoot}, sshDirs[parser.AgentCline])
 	assert.ElementsMatch(t, sshDirs[parser.AgentCline], goTargets.Dirs[parser.AgentCline])
-	assert.ElementsMatch(t, []string{clineMeta, clineMsg}, sshFiles[parser.AgentCline])
-	assert.ElementsMatch(t, sshFiles[parser.AgentCline], goTargets.Files[parser.AgentCline])
+	assert.ElementsMatch(t, []string{clineMeta, clineMsg, clineTm}, sshFiles[parser.AgentCline])
+	assert.ElementsMatch(t, []string{clineMeta, clineMsg, clineTm}, goTargets.Files[parser.AgentCline])
 }
 
 func TestSelectAllowedFiles(t *testing.T) {
@@ -1214,7 +1216,7 @@ func TestClineRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 	_, ok = remotesync.SelectAllowedTargets(freshDirectTargets, staleDirectTargets)
 	require.True(t, ok, "a vanished session file under direct sessions root must not fail request")
 
-	files, ok = remotesync.SelectAllowedFiles(freshDirectTargets, []string{dsess1Teammate})
+	_, ok = remotesync.SelectAllowedFiles(freshDirectTargets, []string{dsess1Teammate})
 	require.True(t, ok, "vanished teammate under direct sessions root must validate")
 
 	// Non-session paths under direct sessions root must stay rejected
@@ -1463,13 +1465,18 @@ func TestClineLeafSymlinkParity(t *testing.T) {
 	clineRoot := filepath.Join(home, ".cline")
 	sessionsDir := filepath.Join(clineRoot, "data", "sessions")
 
-	// sess-valid: normal regular metadata and messages.
+	// sess-valid: normal regular metadata and messages, plus teammate messages and symlink.
 	sessValid := filepath.Join(sessionsDir, "sess-valid")
 	require.NoError(t, os.MkdirAll(sessValid, 0o755))
 	validMeta := filepath.Join(sessValid, "sess-valid.json")
 	require.NoError(t, os.WriteFile(validMeta, []byte(`{"session_id":"sess-valid"}`), 0o644))
 	validMsgs := filepath.Join(sessValid, "sess-valid.messages.json")
 	require.NoError(t, os.WriteFile(validMsgs, []byte(`{"messages":[]}`), 0o644))
+	validTm := filepath.Join(sessValid, "sess-valid__team__agent.messages.json")
+	require.NoError(t, os.WriteFile(validTm, []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.Symlink(secretFile, filepath.Join(sessValid, "sess-valid__symlink.messages.json")))
+	require.NoError(t, os.WriteFile(filepath.Join(sessValid, "sess-valid__bad__.messages.json"), []byte(`{"messages":[]}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(sessValid, "_sess-valid__skip.messages.json"), []byte(`{"messages":[]}`), 0o644))
 
 	// sess-symlink-meta: metadata file is a symlink pointing outside root.
 	sessMetaLink := filepath.Join(sessionsDir, "sess-symlink-meta")
@@ -1489,7 +1496,7 @@ func TestClineLeafSymlinkParity(t *testing.T) {
 			parser.AgentCline: {clineRoot},
 		},
 	})
-	expectedFiles := []string{validMeta, validMsgs, validMeta2}
+	expectedFiles := []string{validMeta, validMsgs, validTm, validMeta2}
 	assert.ElementsMatch(t, expectedFiles, goTargets.Files[parser.AgentCline])
 
 	cmd := exec.Command("sh")

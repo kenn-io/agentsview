@@ -15808,19 +15808,37 @@ func roocodeEffectiveStat(historyPath string, info os.FileInfo) (int64, int64) {
 }
 
 // clineEffectiveStat returns the composite size and latest mtime of
-// a Cline session's <id>.json and its <id>.messages.json sibling
-// using stat calls only. The values mirror what clineFingerprintSource
-// stamps on stored sessions (summed size, max mtime).
+// a Cline session's <id>.json, its <id>.messages.json sibling, and any
+// teammate *.messages.json files using stat calls only. The values mirror
+// what clineFingerprintSource stamps on stored sessions (summed size, max mtime).
 func clineEffectiveStat(metaPath string, info os.FileInfo) (int64, int64) {
 	size := info.Size()
 	mtime := info.ModTime().UnixNano()
 	dir := filepath.Dir(metaPath)
 	sessionID := filepath.Base(dir)
 	msgPath := filepath.Join(dir, sessionID+".messages.json")
-	if msgInfo, err := os.Stat(msgPath); err == nil && !msgInfo.IsDir() {
+	if msgInfo, err := os.Lstat(msgPath); err == nil && msgInfo.Mode().IsRegular() {
 		size += msgInfo.Size()
 		if ts := msgInfo.ModTime().UnixNano(); ts > mtime {
 			mtime = ts
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if parser.IsClineTeammateMessagesFile(sessionID, name) {
+				teammatePath := filepath.Join(dir, name)
+				if tInfo, err := os.Lstat(teammatePath); err == nil && tInfo.Mode().IsRegular() {
+					size += tInfo.Size()
+					if ts := tInfo.ModTime().UnixNano(); ts > mtime {
+						mtime = ts
+					}
+				}
+			}
 		}
 	}
 	return size, mtime
