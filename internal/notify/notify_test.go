@@ -50,7 +50,12 @@ func TestDeciderTurnEnd(t *testing.T) {
 		assert.Equal(t, KindTurnEnd, got.Notification.Kind)
 		assert.Equal(t, int64(10), got.State.TurnEndOrdinal)
 		assert.Equal(t, "/sessions/s1?msg=last", got.Notification.DeepLinkPath)
-		assert.Contains(t, got.Notification.Title, "Fix the login bug")
+		assert.Equal(t, "s1", got.Notification.SessionID)
+		assert.Equal(t, "proj", got.Notification.Project)
+		assert.Equal(t, "claude", got.Notification.Agent)
+		// The backend ships structured fields only; display copy is
+		// rendered by the frontend. turn_end carries no excerpt.
+		assert.Empty(t, got.Notification.Excerpt)
 	})
 
 	t.Run("same ordinal again is deduplicated", func(t *testing.T) {
@@ -100,6 +105,9 @@ func TestDeciderNewReplyMergeWindow(t *testing.T) {
 		require.NotNil(t, got)
 		assert.Equal(t, KindNewReply, got.Notification.Kind)
 		assert.Equal(t, int64(10), got.State.ReplyNotifyOrdinal)
+		// The new-reply body is the assistant excerpt, truncated
+		// in Go because it is session content, not UI copy.
+		assert.Equal(t, "Done — tests pass.", got.Notification.Excerpt)
 	})
 
 	t.Run("repeated check inside merge window is merged away", func(t *testing.T) {

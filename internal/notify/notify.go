@@ -29,16 +29,19 @@ const (
 )
 
 // Notification is one decided, deduplicated desktop notification.
+// It carries structured fields only: the backend decides *whether*
+// to notify, the frontend renders the localized title and body
+// (it already owns paraglide i18n and the native plugin).
 type Notification struct {
 	Kind      Kind   `json:"kind"`
 	SessionID string `json:"session_id"`
 	Project   string `json:"project"`
 	Agent     string `json:"agent"`
-	// Title and Body are pre-rendered display strings. Body is the
-	// tail of the latest assistant message, so the notification
-	// itself leaks no more than the transcript already shows.
-	Title string `json:"title"`
-	Body  string `json:"body"`
+	// Excerpt is the tail of the latest assistant message, set only
+	// for new_reply notifications. It is session content (not UI
+	// copy), so the truncation lives here; the notification itself
+	// leaks no more than the transcript already shows.
+	Excerpt string `json:"excerpt,omitempty"`
 	// DeepLinkPath is the in-app route for the notification's
 	// click target: the session scrolled to its last message.
 	DeepLinkPath string `json:"deep_link_path"`
@@ -195,10 +198,6 @@ func (d *Decider) Decide(s Snapshot, st State, readyAt time.Time) *Decision {
 }
 
 func (d *Decider) render(kind Kind, s Snapshot) Notification {
-	name := s.DisplayName
-	if name == "" {
-		name = s.Project
-	}
 	n := Notification{
 		Kind:         kind,
 		SessionID:    s.SessionID,
@@ -207,12 +206,8 @@ func (d *Decider) render(kind Kind, s Snapshot) Notification {
 		DeepLinkPath: "/sessions/" + s.SessionID + "?msg=last",
 		CreatedAt:    d.now().UTC().Format(time.RFC3339Nano),
 	}
-	if kind == KindTurnEnd {
-		n.Title = name + " — reply finished"
-		n.Body = "The agent finished this turn and is waiting for you."
-	} else {
-		n.Title = name + " — new reply"
-		n.Body = excerpt(s.LastMessage)
+	if kind == KindNewReply {
+		n.Excerpt = excerpt(s.LastMessage)
 	}
 	return n
 }

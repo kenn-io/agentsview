@@ -157,7 +157,7 @@ func TestNotificationEventsBoundedRing(t *testing.T) {
 			SessionID: "s1",
 			Project:   "proj",
 			Agent:     "claude",
-			Title:     "t",
+			Excerpt:   "t",
 			CreatedAt: time.Unix(int64(i), 0).UTC().Format(time.RFC3339Nano),
 		}
 		require.NoError(t, d.RecordNotificationEvent(ctx, n))
