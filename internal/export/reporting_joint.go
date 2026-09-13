@@ -58,6 +58,9 @@ func reportingBucketDuration(version, seconds int) (time.Duration, error) {
 type ReportingJoint struct {
 	ProjectKeys []string        `json:"project_keys"`
 	Cells       []ReportingCell `json:"cells"`
+	// Projects covers every nonempty cell key in this same hour snapshot.
+	// Resolved means every contributing session has one consistent identity.
+	Projects map[string]ProjectMapEntry `json:"projects"`
 }
 
 // ReportingCell preserves dimension relationships; it contains no session data.
@@ -109,6 +112,9 @@ func normalizeReportingJoint(hour ReportingHour) (*ReportingJoint, error) {
 		return nil, fmt.Errorf("reporting schema 4 requires joint cells")
 	}
 	joint := *hour.Joint
+	if joint.Projects == nil {
+		joint.Projects = map[string]ProjectMapEntry{}
+	}
 	joint.ProjectKeys = cloneOrEmpty(joint.ProjectKeys)
 	slices.Sort(joint.ProjectKeys)
 	joint.ProjectKeys = slices.Compact(joint.ProjectKeys)

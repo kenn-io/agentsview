@@ -181,7 +181,12 @@ func (db *DB) reportingHoursFromSnapshot(
 	if err != nil {
 		return nil, err
 	}
+	var references map[string]export.ProjectReference
 	if schemaVersion == export.ReportingJointSchemaVersion {
+		references, err = db.reportingSessionReferences(ctx, tx, allSessions)
+		if err != nil {
+			return nil, err
+		}
 		sessions, ids, events, usage = scopeJointReporting(sessions, events, usage, sessionByID, projects, projectKeys)
 		for i := range sessions {
 			sessions[i].ProjectKey = export.ProjectKeyForEntry(projects[sessions[i].Project])
@@ -254,7 +259,7 @@ func (db *DB) reportingHoursFromSnapshot(
 		}
 		if schemaVersion == export.ReportingJointSchemaVersion {
 			hour.BucketSeconds = int(bucket / time.Second)
-			hour.Joint, err = jointReportingHour(hourStart, bucket, report.JointActivity, usage, sessionByID, projects, projectKeys)
+			hour.Joint, err = jointReportingHour(hourStart, bucket, report.JointActivity, report.BySession, usage, sessionByID, projects, references, projectKeys)
 			if err != nil {
 				return nil, err
 			}

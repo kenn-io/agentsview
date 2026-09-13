@@ -126,6 +126,12 @@ otherwise follows the same transaction, revision, and publication sequence as
 
 ## Backend Parity
 
+Reporting project-label keys are not repository identities. The reporting
+catalog must resolve every contributing session from the same read transaction;
+aggregate catalogs that ignore unknown observations cannot supply that evidence.
+Keep identity-only corrections in the reporting digest. The wire contract is in
+[reporting exports](../reporting-export.md#project-identity-evidence).
+
 - Keep observable behavior and query shape aligned between SQLite and
   PostgreSQL/CockroachDB when practical. Match queries, indexes, aggregations,
   filters, and ordering unless a documented constraint requires a difference.

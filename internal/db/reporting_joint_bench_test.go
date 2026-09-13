@@ -37,6 +37,10 @@ func BenchmarkReportingJointDay(b *testing.B) {
 						Machine: "synthetic", MessageCount: 3, IsAutomated: i%2 == 0,
 						StartedAt: Ptr(at.Format(time.RFC3339)), EndedAt: Ptr(at.Add(4 * time.Minute).Format(time.RFC3339)),
 					}))
+					require.NoError(b, d.UpsertProjectIdentityObservation(b.Context(), export.ProjectIdentityObservation{
+						SessionID: id, Project: fmt.Sprintf("project-%d", i%projects), Machine: "synthetic",
+						GitRemote: fmt.Sprintf("https://example.com/team/project-%d.git", i%projects), ObservedAt: at,
+					}))
 					require.NoError(b, d.InsertMessages([]Message{
 						{SessionID: id, Ordinal: 0, Role: "user", Timestamp: at.Format(time.RFC3339)},
 						{SessionID: id, Ordinal: 1, Role: "assistant", Timestamp: at.Add(2 * time.Minute).Format(time.RFC3339),
@@ -60,6 +64,7 @@ func BenchmarkReportingJointDay(b *testing.B) {
 				b.ReportMetric(float64(len(payload)), "payload-bytes/op")
 				if variant.version == 4 {
 					require.NotEmpty(b, day.Hours[12].Joint.Cells)
+					require.Len(b, day.Hours[12].Joint.Projects, projects)
 					b.ReportMetric(float64(len(day.Hours[12].Joint.Cells)), "cells/op")
 				}
 			})

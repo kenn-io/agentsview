@@ -60,11 +60,18 @@ type reportingCellState struct {
 }
 
 func jointReportingHour(
-	start time.Time, bucket time.Duration, activityCells []activity.JointActivityCell, usage []activity.UsageRow,
+	start time.Time, bucket time.Duration, activityCells []activity.JointActivityCell, activitySessions []activity.SessionRow, usage []activity.UsageRow,
 	sessions map[string]activity.SessionMeta, projects map[string]export.ProjectMapEntry,
+	references map[string]export.ProjectReference,
 	projectKeys []string,
 ) (*export.ReportingJoint, error) {
 	states := make(map[reportingCellKey]*reportingCellState)
+	contributors := make(map[string]bool)
+	for _, session := range activitySessions {
+		if session.AgentMinutes != nil && *session.AgentMinutes > 0 {
+			contributors[session.SessionID] = true
+		}
+	}
 	cellFor := func(bucket time.Time, project, projectKey, agent, model, automation string) *reportingCellState {
 		if model == "" {
 			model = "unknown"
@@ -102,6 +109,7 @@ func jointReportingHour(
 		agent, automation := row.Agent, "unknown"
 		projectKey := ""
 		if known {
+			contributors[row.SessionID] = true
 			projectKey = export.ProjectKeyForEntry(projects[session.Project])
 			automation = session.ActivityCategory()
 			if agent == "" {
@@ -132,6 +140,7 @@ func jointReportingHour(
 	keys := slices.Clone(projectKeys)
 	slices.Sort(keys)
 	joint := &export.ReportingJoint{ProjectKeys: slices.Compact(keys), Cells: make([]export.ReportingCell, 0, len(states))}
+	joint.Projects = reportingProjectEvidence(contributors, sessions, projects, references)
 	for _, state := range states {
 		state.cell.Usage = export.ReportingUsageTotals{
 			InputTokens: state.usage.inputTokens, OutputTokens: state.usage.outputTokens,

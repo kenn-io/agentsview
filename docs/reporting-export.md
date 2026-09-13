@@ -176,6 +176,40 @@ whole archive). `joint.cells` is a sparse array with these fields:
 | `usage`                       | Input, output, cache-creation and cache-read tokens, plus cost in integer microdollars          |
 | `pricing`                     | `computed_cost`, `reported_cost`, `allocated_cost` in integer microdollars, and `unpriced_rows` |
 
+### Project identity evidence
+
+`joint.projects` maps each nonempty cell project key to a safe `display_label`,
+`resolution`, and an `identity` when resolved. It is part of the hour's digest,
+read from the same SQLite transaction as the activity and usage. It contains no
+session identifiers or raw filesystem paths. Empty hours have an empty catalog;
+standalone usage has no project identity.
+
+The cell key identifies an archive-scoped display label, **not a repository**.
+Different repositories can have the same label. A `resolved` entry means every
+session contributing activity or canonical usage under that key in the hour has
+a matching source-label snapshot and the same resolved project identity. Missing
+snapshots or mismatched labels produce `unknown`; conflicting identities or
+ambiguous snapshots produce `ambiguous`. Neither carries an identity. A known
+repository never supplies identity for another session with missing evidence.
+Resolution covers the whole project key in the hour, even when its cells use
+different models or buckets.
+
+Identities use the existing project identity fields: `key`, `kind`,
+`repository_key`, and, for `git_remote`, a credential-free `normalized_remote`.
+Machine-root identities retain opaque scoped keys; they do not prove that a
+consumer's configured filesystem path matches. Consumers own permission checks:
+match verified identity evidence to their policy, never a display label. Missing
+catalogs, unresolved entries, or identities that cannot establish the requested
+permission must not authorize detailed cells.
+
+Identity-only changes alter the hour and day digests, so ordinary correction
+screening discovers them. The exporter loads session snapshots in bounded
+batches once per day export, then builds each hour's catalog from its actual
+contributors; it does not query the archive once per hour or inspect live
+checkouts.
+
+### Cell measurements
+
 The `automation` field uses the same disjoint categories as activity totals.
 Subagents are labeled `subagent` even when their automation flag is set.
 Activity and usage share this classification, so subagents remain separate from
