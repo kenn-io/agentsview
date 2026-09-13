@@ -14,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/sourcelayout"
 	"go.kenn.io/agentsview/internal/trash"
 )
 
@@ -177,13 +178,13 @@ func (p *Pruner) Prune(ctx context.Context, cfg PruneConfig) error {
 		}
 	}
 
-	trashed, skipped, bytesReclaimed := p.trashSources(candidates)
+	trashed, skipped, unsupported, bytesReclaimed := p.trashSources(candidates)
 
 	if cfg.SourceOnly {
 		fmt.Fprintf(p.Out,
-			"\nTrashed %d source files (%d skipped; %s reclaimed);"+
-				" archive rows kept\n",
-			trashed, skipped, formatBytes(bytesReclaimed),
+			"\nTrashed %d source files (%d skipped, %d report-only;"+
+				" %s reclaimed); archive rows kept\n",
+			trashed, skipped, unsupported, formatBytes(bytesReclaimed),
 		)
 		fmt.Fprintln(p.Out,
 			"Run \"agentsview prune restore\" to undo; archived"+
@@ -193,8 +194,8 @@ func (p *Pruner) Prune(ctx context.Context, cfg PruneConfig) error {
 
 	fmt.Fprintf(p.Out,
 		"\nDeleted %d sessions, trashed %d source files"+
-			" (%d skipped; %s reclaimed)\n",
-		deleted, trashed, skipped, formatBytes(bytesReclaimed),
+			" (%d skipped, %d report-only; %s reclaimed)\n",
+		deleted, trashed, skipped, unsupported, formatBytes(bytesReclaimed),
 	)
 	fmt.Fprintln(p.Out,
 		"Source files moved to the trash;"+
@@ -202,24 +203,37 @@ func (p *Pruner) Prune(ctx context.Context, cfg PruneConfig) error {
 	return nil
 }
 
-// trashSources moves every candidate's source file to the trash.
-// Missing files are skipped silently; other failures are logged and
-// counted so one bad path cannot abort the batch.
+// trashSources moves every candidate's source files to the trash via
+// the per-agent layout policy. Sessions whose layout is app-owned are
+// counted as unsupported and left alone; missing files are skipped.
+// Failures are logged so one bad path cannot abort the batch.
 func (p *Pruner) trashSources(
 	sessions []db.Session,
-) (trashed, skipped int, reclaimed int64) {
+) (trashed, skipped, unsupported int, reclaimed int64) {
 	var paths []string
 	var metas []trash.Meta
-	for _, s := range sessions {
-		if s.FilePath == nil || *s.FilePath == "" {
-			skipped++
+	for i := range sessions {
+		s := sessions[i]
+		decision := sourcelayout.For(s.Agent).Decide(s)
+		if !decision.Deletable {
+			if decision.Reason == sourcelayout.ReportOnlyReason {
+				unsupported++
+			} else {
+				skipped++
+			}
 			continue
 		}
-		paths = append(paths, *s.FilePath)
-		metas = append(metas, trash.Meta{SessionID: s.ID, Agent: s.Agent})
+		for j, path := range decision.Paths {
+			paths = append(paths, path)
+			meta := trash.Meta{}
+			if j == 0 {
+				meta = trash.Meta{SessionID: s.ID, Agent: s.Agent}
+			}
+			metas = append(metas, meta)
+		}
 	}
 	if len(paths) == 0 {
-		return 0, skipped, 0
+		return 0, skipped, unsupported, 0
 	}
 	items, err := p.Trash.Trash(paths, metas)
 	if err != nil {
@@ -230,7 +244,7 @@ func (p *Pruner) trashSources(
 	for _, item := range items {
 		reclaimed += item.Size
 	}
-	return trashed, skipped, reclaimed
+	return trashed, skipped, unsupported, reclaimed
 }
 
 func confirm(r io.Reader, w io.Writer, msg string) bool {

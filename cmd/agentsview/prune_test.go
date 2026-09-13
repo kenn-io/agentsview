@@ -312,9 +312,10 @@ func TestTrashSourcesRemovesFiles(t *testing.T) {
 	}
 
 	pruner := &Pruner{DB: nil, Out: os.Stdout, Trash: store}
-	removed, skipped, reclaimed := pruner.trashSources(sessions)
+	removed, skipped, unsupported, reclaimed := pruner.trashSources(sessions)
 	assert.Equal(t, 1, removed)
 	assert.Equal(t, 0, skipped)
+	assert.Equal(t, 0, unsupported)
 	assert.Equal(t, int64(9), reclaimed)
 
 	// File should be gone from its original location.
@@ -329,9 +330,10 @@ func TestTrashSourcesMissingFile(t *testing.T) {
 	}
 
 	pruner := &Pruner{DB: nil, Out: os.Stdout, Trash: store}
-	removed, skipped, reclaimed := pruner.trashSources(sessions)
+	removed, skipped, unsupported, reclaimed := pruner.trashSources(sessions)
 	assert.Equal(t, 0, removed)
 	assert.Equal(t, 1, skipped)
+	assert.Equal(t, 0, unsupported)
 	assert.Equal(t, int64(0), reclaimed)
 }
 
