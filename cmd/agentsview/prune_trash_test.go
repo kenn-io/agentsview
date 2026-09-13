@@ -98,7 +98,11 @@ func TestPruneTrashesSourcesAndRestores(t *testing.T) {
 	assert.Contains(t, out.String(), "prune restore")
 
 	// Restore brings the file back and re-enables the archive row.
-	runPruneRestore(PruneRestoreConfig{Yes: true})
+	require.NoError(t, pruneRestore(PruneRestoreConfig{Yes: true},
+		pruneRestoreDeps{
+			store:  trashStore,
+			openDB: func() (*db.DB, func(), error) { return d, func() {}, nil },
+		}))
 	assert.FileExists(t, first, "restored from trash")
 	assert.False(t, d.IsSessionExcluded("pr-1"), "row re-importable")
 }

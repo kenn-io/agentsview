@@ -55,15 +55,6 @@ func parsePruneFlags(args []string) (PruneConfig, error) {
 		"source-only", false,
 		"Trash source files but keep archive rows",
 	)
-	age := fs.String(
-		"age", "",
-		"Sessions older than this age (7d, 30d, 2w, 1y);"+
-			" shorthand for --before",
-	)
-	sourceOnly := fs.Bool(
-		"source-only", false,
-		"Trash source files but keep archive rows",
-	)
 	dryRun := fs.Bool(
 		"dry-run", false,
 		"Show what would be pruned without deleting",
