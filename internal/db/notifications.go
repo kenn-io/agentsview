@@ -25,26 +25,53 @@ const (
 	// ring of decided notifications. Diagnostics only: SSE is not
 	// treated as reliable, but neither is this log — dedup
 	// correctness comes from the per-session state keys.
-	notificationEventsKey    = "notification_events"
-	notificationEventsCap    = 100
+	notificationEventsKey = "notification_events"
+	notificationEventsCap = 100
+	// notificationCandidateCap is the default batch size when the
+	// caller requests none (limit <= 0). It is deliberately not a
+	// ceiling: the Hub detects "batch full" via len == limit, so
+	// clamping a larger request to a smaller cap would make a
+	// still-full store look exhausted and strand the rest of a
+	// burst.
 	notificationCandidateCap = 64
 )
 
+// notificationTimestampLayout must stay byte-identical to the
+// strftime('%Y-%m-%dT%H:%M:%fZ') that every writer of
+// sessions.local_modified_at uses: fixed width, always three
+// fractional digits. time.RFC3339Nano must not be used here — it
+// strips trailing zeros (".060" becomes ".06"), which sorts *above*
+// ".061"..".069" under the text comparison this query relies on,
+// silently dropping those rows.
+const notificationTimestampLayout = "2006-01-02T15:04:05.000Z"
+
 // NotificationCandidates returns sessions whose transcript changed
-// after since AND after the daemon's readyAt snapshot, oldest
-// change first, bounded to notificationCandidateCap rows. Oldest
-// first is load-bearing: the Hub processes the batch and resumes
-// above the newest row it saw, so a burst larger than the cap
-// drains across successive checks instead of dropping the oldest
-// candidates forever. Metadata-only mutations never touch
-// local_modified_at, and initial sync / history rebuilds operate
-// on pre-readyAt content, so both stay silent by construction.
+// after cursor AND after the daemon's readyAt snapshot, ordered by
+// (local_modified_at, id) ascending and bounded to limit rows (or
+// notificationCandidateCap when limit <= 0).
+//
+// The cursor is a total lower bound in that same ordering: a row
+// qualifies when its timestamp is strictly greater than the
+// cursor's, or — when the cursor carries a session id — equal to it
+// with a greater id. That tiebreak is load-bearing: the Hub
+// processes the batch and resumes after the last row it saw, and
+// rows sharing one local_modified_at are normal (a single sync pass
+// stamps many sessions with the same strftime('now') value), so a
+// timestamp-only cursor would drop every unprocessed row that ties
+// with the batch's newest. An empty cursor id is a plain, strictly
+// greater time bound (the look-back overlap). Ordering and
+// comparison must stay consistent.
+//
+// Metadata-only mutations never touch local_modified_at, and
+// initial sync / history rebuilds operate on pre-readyAt content,
+// so both stay silent by construction.
 func (d *DB) NotificationCandidates(
-	ctx context.Context, since time.Time, readyAt time.Time, limit int,
+	ctx context.Context, cursor notify.Cursor, readyAt time.Time, limit int,
 ) ([]notify.Snapshot, error) {
-	if limit <= 0 || limit > notificationCandidateCap {
+	if limit <= 0 {
 		limit = notificationCandidateCap
 	}
+	since := cursor.Since.UTC().Format(notificationTimestampLayout)
 	rows, err := d.getReader().QueryContext(ctx, `
 		SELECT s.id, s.project, s.agent,
 		       COALESCE(s.display_name, ''),
@@ -61,12 +88,15 @@ func (d *DB) NotificationCandidates(
 		WHERE s.termination_status IS NOT NULL
 		  AND s.termination_status != ''
 		  AND s.next_ordinal > 0
-		  AND COALESCE(s.local_modified_at, '') > ?
+		  AND (COALESCE(s.local_modified_at, '') > ?
+		       OR (? != ''
+		           AND COALESCE(s.local_modified_at, '') = ?
+		           AND s.id > ?))
 		  AND COALESCE(s.local_modified_at, '') > ?
 		ORDER BY s.local_modified_at ASC, s.id ASC
 		LIMIT ?`,
-		since.UTC().Format(time.RFC3339Nano),
-		readyAt.UTC().Format(time.RFC3339Nano),
+		since, cursor.ID, since, cursor.ID,
+		readyAt.UTC().Format(notificationTimestampLayout),
 		limit,
 	)
 	if err != nil {

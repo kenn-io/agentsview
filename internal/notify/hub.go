@@ -7,20 +7,40 @@ import (
 	"time"
 )
 
-// candidateBatchLimit is the per-check candidate batch size. It
-// matches the store's own cap; a batch that comes back full means
-// the store may hold newer candidates still to process.
+// candidateBatchLimit is the per-check candidate batch size the Hub
+// requests. A batch that comes back exactly this size means the
+// store may hold newer candidates still to process. This relies on
+// the store honouring the caller's limit rather than clamping it to
+// a smaller internal ceiling: a silently short batch would look
+// exhausted and strand the rest of a burst.
 const candidateBatchLimit = 64
+
+// Cursor is the exclusive lower bound of the next candidate batch,
+// in the store's (local_modified_at, session id) ordering. An empty
+// ID is a plain, strictly greater time bound (the look-back
+// overlap); a set ID extends the bound to ties on Since. The store
+// serialises Since in the column's own format. The Hub never
+// formats timestamps itself: the ordering domain belongs to the
+// store.
+type Cursor struct {
+	Since time.Time
+	ID    string
+}
 
 // Store is the persistence surface the Hub needs. Implemented by
 // the archive DB layer; every method is best-effort from the
 // notification path's point of view.
 type Store interface {
 	// NotificationCandidates returns recently changed sessions
-	// worth evaluating. The store bounds the batch and applies the
-	// since window; the Hub only passes its last check time.
+	// worth evaluating, in the store's (local_modified_at, id)
+	// ascending order and bounded by limit. A row qualifies when
+	// its timestamp is strictly newer than readyAt and strictly
+	// greater than cursor in that ordering: newer than cursor.Since,
+	// or — when cursor.ID is set — equal to it with a greater id.
+	// The store owns the timestamp text format; the Hub passes
+	// times only.
 	NotificationCandidates(
-		ctx context.Context, since time.Time, readyAt time.Time, limit int,
+		ctx context.Context, cursor Cursor, readyAt time.Time, limit int,
 	) ([]Snapshot, error)
 	// NotificationState loads the persisted dedup cursor for one
 	// session. A zero State (and nil error) means never notified.
@@ -55,14 +75,18 @@ type Hub struct {
 	debounce   time.Duration
 	checkEvery time.Duration
 
-	mu        gosync.Mutex
-	subs      map[chan Notification]struct{}
-	lastCheck time.Time
+	mu   gosync.Mutex
+	subs map[chan Notification]struct{}
+	// cursor is the resume position in the store's ordering. Its
+	// ID is set only while draining a backlog (a batch that filled
+	// the cap); otherwise it is a plain time bound.
+	cursor Cursor
 	// backlog is set when the last candidate batch filled the cap,
 	// meaning the store may still hold newer candidates. The next
-	// check then resumes strictly above lastCheck instead of
-	// re-scanning the look-back overlap, so a burst larger than
-	// the cap always makes forward progress.
+	// check then resumes strictly after cursor in the store's
+	// (timestamp, id) ordering instead of re-scanning the look-back
+	// overlap, so a burst larger than the cap drains instead of
+	// stalling.
 	backlog bool
 }
 
@@ -80,7 +104,7 @@ func NewHub(
 		debounce:   debounce,
 		checkEvery: 30 * time.Second,
 		subs:       make(map[chan Notification]struct{}),
-		lastCheck:  readyAt,
+		cursor:     Cursor{Since: readyAt},
 	}
 }
 
@@ -100,8 +124,10 @@ func (h *Hub) SetConfigFn(cfgFn func() Config) {
 func (h *Hub) MarkReady(t time.Time) {
 	h.mu.Lock()
 	h.readyAt = t
-	if h.lastCheck.Before(t) {
-		h.lastCheck = t
+	if h.cursor.Since.Before(t) {
+		// Advance to a plain time bound: the id half of the
+		// cursor belongs to the superseded window.
+		h.cursor = Cursor{Since: t}
 	}
 	// A new readiness window supersedes any in-flight backlog.
 	h.backlog = false
@@ -172,33 +198,37 @@ func (h *Hub) Run(ctx context.Context, scopes <-chan string) {
 }
 
 // Check evaluates candidates once. Safe to call concurrently; the
-// lastCheck window and decider reference are taken under the mutex.
+// cursor and decider reference are taken under the mutex.
 //
-// The store returns the oldest candidates first and caps the
-// batch, so a burst larger than the cap is drained over successive
-// checks: when a batch comes back full the cursor advances to the
-// newest candidate actually processed and the next check resumes
-// strictly above it. Re-scanning is harmless because the persisted
-// per-session State suppresses sessions already notified.
+// The store returns the oldest candidates first, ordered by
+// (local_modified_at, id), and caps the batch at the requested
+// limit. A full batch means the store may still hold newer
+// candidates, so the cursor advances to the exact (timestamp, id)
+// of the last candidate processed and the next check resumes
+// strictly after that position in the same ordering. Carrying the
+// id is what keeps a batch of rows sharing one timestamp from
+// being skipped: a timestamp-only cursor would exclude every tied
+// row that the full batch did not include. Re-scanning is harmless
+// because the persisted per-session State suppresses sessions
+// already notified.
 func (h *Hub) Check(ctx context.Context) {
 	h.mu.Lock()
-	since := h.lastCheck.Add(-2 * h.debounce)
-	if h.backlog {
-		// The previous batch filled the cap: resume strictly
-		// above the last processed candidate rather than
-		// re-reading the look-back overlap, which would keep
-		// returning the same full batch and stall.
-		since = h.lastCheck
+	cursor := h.cursor
+	if !h.backlog {
+		// Look-back overlap: re-scan a trailing window so a
+		// candidate stamped just before the last check is not
+		// missed. A plain time bound, with no id tiebreak.
+		cursor = Cursor{Since: h.cursor.Since.Add(-2 * h.debounce)}
 	}
 	decider := h.decider
 	readyAt := h.readyAt
 	h.mu.Unlock()
 
 	candidates, err := h.store.NotificationCandidates(
-		ctx, since, readyAt, candidateBatchLimit,
+		ctx, cursor, readyAt, candidateBatchLimit,
 	)
 	if err != nil {
-		// Leave lastCheck untouched: the failed window is still
+		// Leave the cursor untouched: the failed window is still
 		// pending, so the next check re-reads it instead of
 		// silently skipping every candidate in it.
 		log.Printf("notify: candidate query: %v", err)
@@ -234,16 +264,16 @@ func (h *Hub) Check(ctx context.Context) {
 	h.mu.Lock()
 	if len(candidates) == candidateBatchLimit {
 		// Full batch: the store may still hold newer candidates.
-		// Advance only to the newest processed one (allowing a
-		// bounded step back into the look-back overlap when the
-		// batch was entirely older rows) and mark the backlog so
-		// the next check resumes strictly above it.
-		h.lastCheck = candidates[len(candidates)-1].LocalModifiedAt
+		// Resume strictly after the last one processed in the
+		// store's ordering, so rows sharing its timestamp are
+		// not skipped.
+		last := candidates[len(candidates)-1]
+		h.cursor = Cursor{Since: last.LocalModifiedAt, ID: last.SessionID}
 		h.backlog = true
 	} else {
 		// The window is exhausted; close it.
 		h.backlog = false
-		h.lastCheck = h.now()
+		h.cursor = Cursor{Since: h.now()}
 	}
 	h.mu.Unlock()
 }

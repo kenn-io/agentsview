@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"testing"
 	"time"
@@ -11,6 +12,44 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// storeTimestamp renders a time the way every writer of
+// sessions.local_modified_at does: fixed width, always three
+// fractional digits. The fakes must compare candidates in this
+// text domain (not time.Time) or they would hide both the
+// trailing-zero and the tie bugs the archive query is vulnerable
+// to. notify cannot import db, so this mirrors the layout const.
+func storeTimestamp(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+// afterCursor mirrors the store's predicate: strictly greater than
+// the cursor in the (timestamp, id) ordering, with an empty id
+// meaning a plain strictly-greater time bound.
+func afterCursor(s Snapshot, cursor Cursor) bool {
+	ts, since := storeTimestamp(s.LocalModifiedAt), storeTimestamp(cursor.Since)
+	if ts != since {
+		return ts > since
+	}
+	return cursor.ID != "" && s.SessionID > cursor.ID
+}
+
+func byStoreOrder(x, y Snapshot) int {
+	tx, ty := storeTimestamp(x.LocalModifiedAt), storeTimestamp(y.LocalModifiedAt)
+	if tx != ty {
+		if tx < ty {
+			return -1
+		}
+		return 1
+	}
+	if x.SessionID < y.SessionID {
+		return -1
+	}
+	if x.SessionID > y.SessionID {
+		return 1
+	}
+	return 0
+}
 
 // fakeStore is an in-memory Store double recording what the Hub
 // persisted, so tests can assert restart dedup against the same
@@ -26,18 +65,22 @@ func newFakeStore() *fakeStore {
 }
 
 func (f *fakeStore) NotificationCandidates(
-	_ context.Context, _ time.Time, readyAt time.Time, limit int,
+	_ context.Context, cursor Cursor, readyAt time.Time, limit int,
 ) ([]Snapshot, error) {
-	// The since window is a store-side optimization; the fake
-	// store returns every post-ready candidate and lets the
-	// archive-backed dedup state decide.
+	// Mirror the archive query honestly: apply the readyAt bound,
+	// the (timestamp, id) cursor, the ordering, and the cap.
 	var out []Snapshot
 	for _, s := range f.candidates {
-		if s.LocalModifiedAt.After(readyAt) {
-			out = append(out, s)
+		if !s.LocalModifiedAt.After(readyAt) {
+			continue
 		}
+		if !afterCursor(s, cursor) {
+			continue
+		}
+		out = append(out, s)
 	}
-	if len(out) > limit {
+	slices.SortFunc(out, byStoreOrder)
+	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
 	return out, nil
@@ -65,32 +108,20 @@ func (f *fakeStore) RecordNotificationEvent(
 
 // archiveLikeStore mirrors the archive's candidate query contract
 // closely enough to exercise the Hub's cursor handling: it applies
-// the since window and the batch cap, and it can inject a query
-// error. Ordering matches the SQL query under test.
+// the readyAt bound, the (timestamp, id) cursor, the ordering, and
+// the batch cap (via fakeStore), and it can inject a query error.
 type archiveLikeStore struct {
 	*fakeStore
 	queryErr error
 }
 
 func (a *archiveLikeStore) NotificationCandidates(
-	_ context.Context, since time.Time, readyAt time.Time, limit int,
+	ctx context.Context, cursor Cursor, readyAt time.Time, limit int,
 ) ([]Snapshot, error) {
 	if a.queryErr != nil {
 		return nil, a.queryErr
 	}
-	var out []Snapshot
-	for _, s := range a.candidates {
-		if s.LocalModifiedAt.After(readyAt) && s.LocalModifiedAt.After(since) {
-			out = append(out, s)
-		}
-	}
-	slices.SortFunc(out, func(x, y Snapshot) int {
-		return x.LocalModifiedAt.Compare(y.LocalModifiedAt)
-	})
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
+	return a.fakeStore.NotificationCandidates(ctx, cursor, readyAt, limit)
 }
 
 // corruptStateStore models a persisted dedup row that exists but
@@ -146,6 +177,10 @@ func TestHubTurnEndOncePerTurn(t *testing.T) {
 	store := newFakeStore()
 	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
 	hub := NewHub(store, enabledCfg, readyAt, time.Millisecond)
+	// Freeze the clock just past the candidate so the cursor is
+	// deterministic: the store's look-back must still cover it.
+	now := readyAt.Add(time.Minute)
+	hub.now = func() time.Time { return now }
 	ch, unsub := hub.Subscribe()
 	defer unsub()
 
@@ -267,6 +302,55 @@ func TestHubBurstExceedingCandidateCapNotifiesEverySession(t *testing.T) {
 	}
 }
 
+// TestHubBurstWithTiedTimestampsNotifiesEverySession covers the
+// tie case the distinct-timestamp burst above cannot see: a single
+// sync pass stamps many sessions with one local_modified_at, and a
+// timestamp-only resume cursor would skip every unprocessed row
+// that ties with the full batch's newest. The clock advances past
+// the look-back window between checks, matching production cadence.
+func TestHubBurstWithTiedTimestampsNotifiesEverySession(t *testing.T) {
+	const total = 100
+	store := &archiveLikeStore{fakeStore: newFakeStore()}
+	tie := readyAt.Add(time.Minute) // one shared timestamp
+	for i := range total {
+		id := fmt.Sprintf("tie-%03d", i)
+		store.candidates = append(store.candidates,
+			hubTestSnapshot(id, 10, func(s *Snapshot) {
+				s.LocalModifiedAt = tie
+			}))
+	}
+
+	hub := NewHub(store, enabledCfg, readyAt, 10*time.Second)
+	now := tie.Add(10 * time.Second) // trailing edge of the burst
+	hub.now = func() time.Time { return now }
+
+	hub.Check(context.Background()) // full batch -> backlog
+	now = tie.Add(30 * time.Second)
+	hub.Check(context.Background()) // resumes strictly after the tie
+	now = tie.Add(60 * time.Second)
+	hub.Check(context.Background()) // recovery check, look-back past
+
+	seen := map[string]int{}
+	for _, n := range store.events {
+		seen[n.SessionID]++
+	}
+	require.Len(t, seen, total, "every tied session must be notified")
+	for id, count := range seen {
+		assert.Equal(t, 1, count, "session %s notified %d times", id, count)
+	}
+}
+
+// TestHubNeverFormatsTimestamps guards the design rule that the
+// Hub passes time.Time only and the store owns the ordering domain.
+// A Format call here would re-introduce the trailing-zero mismatch
+// this fix removed.
+func TestHubNeverFormatsTimestamps(t *testing.T) {
+	src, err := os.ReadFile("hub.go")
+	require.NoError(t, err)
+	assert.NotContains(t, string(src), ".Format(",
+		"the Hub must not format timestamps; the store owns the ordering domain")
+}
+
 func TestHubSkipsSessionWithUnreadableDedupState(t *testing.T) {
 	store := &corruptStateStore{
 		fakeStore:  newFakeStore(),
@@ -304,6 +388,10 @@ func TestHubFanOutAndSlowSubscriber(t *testing.T) {
 	store := newFakeStore()
 	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
 	hub := NewHub(store, enabledCfg, readyAt, time.Millisecond)
+	// Freeze the clock just past the candidate so the second check's
+	// look-back still covers the replacement batch below.
+	now := readyAt.Add(time.Minute)
+	hub.now = func() time.Time { return now }
 	ch1, unsub1 := hub.Subscribe()
 	defer unsub1()
 	ch2, unsub2 := hub.Subscribe()
