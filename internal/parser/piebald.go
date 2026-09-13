@@ -285,6 +285,7 @@ func buildPiebaldSessionResults(
 		sess.ID = baseID
 		if i > 0 {
 			sess.ID = fmt.Sprintf("%s-%d", baseID, b.firstRowID)
+			sess.SourceSessionID = fmt.Sprintf("%d-%d", c.id, b.firstRowID)
 			sess.ParentSessionID = b.parentID
 			if sess.ParentSessionID == "" {
 				sess.ParentSessionID = baseID

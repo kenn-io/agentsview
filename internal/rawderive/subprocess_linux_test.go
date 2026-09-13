@@ -5,6 +5,7 @@ package rawderive
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,44 @@ import (
 	"go.kenn.io/agentsview/internal/rawsync"
 	"golang.org/x/sys/unix"
 )
+
+func TestBoundSubprocessParserPinsRunningImageAndDetectsPathReplacement(t *testing.T) {
+	copyPath := filepath.Join(t.TempDir(), "parser-image")
+	source, err := os.Open(os.Args[0])
+	require.NoError(t, err)
+	destination, err := os.OpenFile(copyPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
+	require.NoError(t, err)
+	_, err = io.Copy(destination, source)
+	require.NoError(t, err)
+	require.NoError(t, source.Close())
+	require.NoError(t, destination.Close())
+
+	image, err := openBoundParserImageAt(copyPath, copyPath)
+	require.NoError(t, err)
+	p := &SubprocessParser{WallTimeout: 10 * time.Second, image: image}
+	t.Cleanup(func() { require.NoError(t, p.Close()) })
+	digest, err := p.BuildIdentity()
+	require.NoError(t, err)
+	assert.NotEqual(t, ParityDigest{}, digest)
+	require.NoError(t, os.Rename(copyPath, copyPath+".old"))
+	require.NoError(t, os.WriteFile(copyPath, []byte("replacement"), 0o700))
+	require.Error(t, p.RevalidateExecutable())
+
+	if err = p.Preflight(t.Context()); err != nil {
+		if os.Getenv("RAW_SANDBOX_REQUIRED") == "1" {
+			t.Fatal(err)
+		}
+		t.Skip("kernel isolation unavailable")
+	}
+}
+
+func TestBoundSubprocessParserRejectsPathAlreadyDifferentFromRunningImage(t *testing.T) {
+	replacement := filepath.Join(t.TempDir(), "replacement")
+	require.NoError(t, os.WriteFile(replacement, []byte("different image"), 0o700))
+	image, err := openBoundParserImageAt("/proc/self/exe", replacement)
+	assert.Nil(t, image)
+	require.Error(t, err)
+}
 
 func TestMain(m *testing.M) {
 	if handled, code := RunParserChild(os.Args[1:]); handled {

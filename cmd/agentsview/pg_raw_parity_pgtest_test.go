@@ -5,18 +5,24 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -34,6 +40,198 @@ type hostedCaptureClient struct {
 	device, token string
 	startup       *pgServeStartup
 	last          rawsync.Manifest
+}
+
+type directCapturedGeneration struct {
+	manifest rawsync.Manifest
+	commit   rawsync.CommitResult
+}
+
+type directParityProjectionState struct {
+	sourceID string
+	active   int
+	physical int
+}
+
+type directParityCapture struct {
+	checkpoint *rawcheckpoint.Store
+	provider   parser.Provider
+	identity   rawsync.AuthIdentity
+	custody    *pgRawSyncCustody
+}
+
+func newDirectParityCapture(t *testing.T, database *sql.DB, custody *pgRawSyncCustody, agent parser.AgentType, root, device string) *directParityCapture {
+	t.Helper()
+	provider, ok := parser.NewProvider(agent, parser.ProviderConfig{Roots: []string{root}, Machine: "parity-fixture"})
+	require.True(t, ok)
+	identity, err := rawsync.NewAuthIdentity("tenant-runtime", device)
+	require.NoError(t, err)
+	registerDirectParityDevice(t, database, identity)
+	dir := t.TempDir()
+	checkpoint, err := rawcheckpoint.OpenWithOptions(t.Context(), filepath.Join(dir, "checkpoint.db"), rawcheckpoint.Options{SpoolDir: filepath.Join(dir, "spool"), MaxOutboxBytes: 8 << 20})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, checkpoint.Close()) })
+	require.NoError(t, checkpoint.SetDevice(t.Context(), identity.DeviceID))
+	return &directParityCapture{checkpoint: checkpoint, provider: provider, identity: identity, custody: custody}
+}
+
+func registerDirectParityDevice(t *testing.T, database *sql.DB, identity rawsync.AuthIdentity) {
+	t.Helper()
+	_, err := database.ExecContext(t.Context(), `INSERT INTO raw_devices(device_id,display_name,credential_sha256,created_at) VALUES($1,'parity fixture device',$2,clock_timestamp()) ON CONFLICT(device_id) DO NOTHING`, identity.DeviceID, make([]byte, 32))
+	require.NoError(t, err)
+}
+
+func (c *directParityCapture) captureSource(t *testing.T, source parser.SourceRef) directCapturedGeneration {
+	t.Helper()
+	result, err := rawcapture.New(c.checkpoint).Capture(t.Context(), c.provider, source)
+	require.NoError(t, err)
+	require.Equal(t, rawcapture.StatusCaptured, result.Status)
+	manifest, found, err := c.checkpoint.FinalizeNextManifest(t.Context(), c.identity.DeviceID)
+	require.NoError(t, err)
+	require.True(t, found)
+	for _, entry := range manifest.Entries {
+		for _, ref := range entry.Objects {
+			missing, err := c.custody.MissingObjects(t.Context(), c.identity, manifest.Provider, []rawsync.ObjectRef{ref})
+			require.NoError(t, err)
+			if len(missing) == 0 {
+				continue
+			}
+			payload, err := os.ReadFile(c.checkpoint.ObjectPath(ref))
+			require.NoError(t, err)
+			_, err = c.custody.FinalizeObject(t.Context(), c.identity, manifest.Provider, ref, bytes.NewReader(payload))
+			require.NoError(t, err)
+		}
+	}
+	commit, err := c.custody.CommitManifest(t.Context(), c.identity, manifest)
+	require.NoError(t, err)
+	require.NoError(t, c.checkpoint.BindFinalizedCommit(t.Context(), c.identity.DeviceID, manifest.CaptureID, commit))
+	_, err = c.checkpoint.AcknowledgeGeneration(t.Context(), c.identity.DeviceID, manifest.CaptureID, commit)
+	require.NoError(t, err)
+	return directCapturedGeneration{manifest: manifest, commit: commit}
+}
+
+func (c *directParityCapture) captureAll(t *testing.T) []directCapturedGeneration {
+	t.Helper()
+	discovery, err := parser.DiscoverRawCaptureSources(t.Context(), c.provider)
+	require.NoError(t, err)
+	require.True(t, discovery.Complete)
+	slices.SortFunc(discovery.Sources, func(a, b parser.SourceRef) int { return strings.Compare(a.Key, b.Key) })
+	result := make([]directCapturedGeneration, 0, len(discovery.Sources))
+	for _, source := range discovery.Sources {
+		result = append(result, c.captureSource(t, source))
+	}
+	return result
+}
+
+func replicateDirectParityGenerations(t *testing.T, source, target *directParityCapture, generations []directCapturedGeneration) []directCapturedGeneration {
+	t.Helper()
+	require.Equal(t, source.identity, target.identity)
+	result := make([]directCapturedGeneration, 0, len(generations))
+	parents := make(map[string]string)
+	for _, generation := range generations {
+		replica := generation.manifest
+		if replica.ExpectedParentReceipt != "" {
+			parent, ok := parents[replica.SourceKey]
+			require.True(t, ok, "replicated history must begin with generation one")
+			replica.ExpectedParentReceipt = parent
+		}
+		for _, entry := range replica.Entries {
+			for _, ref := range entry.Objects {
+				missing, err := target.custody.MissingObjects(t.Context(), target.identity, replica.Provider, []rawsync.ObjectRef{ref})
+				require.NoError(t, err)
+				if len(missing) == 0 {
+					continue
+				}
+				var payload bytes.Buffer
+				_, err = source.custody.CopyObject(t.Context(), source.identity.TenantID, ref, &payload)
+				require.NoError(t, err)
+				_, err = target.custody.FinalizeObject(t.Context(), target.identity, replica.Provider, ref, bytes.NewReader(payload.Bytes()))
+				require.NoError(t, err)
+			}
+		}
+		commit, err := target.custody.CommitManifest(t.Context(), target.identity, replica)
+		require.NoError(t, err)
+		require.Equal(t, generation.commit.Generation, commit.Generation)
+		parents[replica.SourceKey] = commit.Receipt
+		result = append(result, directCapturedGeneration{manifest: replica, commit: commit})
+	}
+	return result
+}
+
+func newDirectParityCustody(t *testing.T, cfg config.Config, database *sql.DB) *pgRawSyncCustody {
+	t.Helper()
+	metadata, err := postgres.NewHostedRawIngestStore(database, cfg.PG.RawTenant, rawProcessingVersion())
+	require.NoError(t, err)
+	custody := &pgRawSyncCustody{dataDir: cfg.DataDir, tenant: cfg.PG.RawTenant, metadata: metadata, limits: rawsync.DefaultManifestLimits(), version: rawProcessingVersion()}
+	t.Cleanup(func() { require.NoError(t, custody.Close()) })
+	return custody
+}
+
+func quarantineDirectParityObject(t *testing.T, custody *pgRawSyncCustody, tenant string, object rawsync.ObjectRef) {
+	t.Helper()
+	_, err := custody.openService(t.Context())
+	require.NoError(t, err)
+	originDigest := sha256.Sum256([]byte(tenant))
+	ref, err := artifact.NewRef("tenant-"+hex.EncodeToString(originDigest[:]), artifact.KindRaw, object.SHA256)
+	require.NoError(t, err)
+	require.NoError(t, custody.repository.Content().Quarantine(t.Context(), ref, "isolated missing-object parity fixture"))
+	_, err = custody.CopyObject(t.Context(), tenant, object, io.Discard)
+	require.ErrorIs(t, err, rawsync.ErrNotFound, "production custody must observe the quarantined object as missing")
+}
+
+func restrictedDirectParityBaseline(t *testing.T, cfg config.Config, admin *sql.DB) config.Config {
+	t.Helper()
+	role := cfg.PG.Schema + "_parity_reader"
+	password := cfg.PG.Schema + "_reader_password"
+	_, err := admin.ExecContext(t.Context(), `CREATE ROLE "`+role+`" LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD '`+password+`'; GRANT USAGE ON SCHEMA "`+cfg.PG.Schema+`" TO "`+role+`"; GRANT SELECT ON ALL TABLES IN SCHEMA "`+cfg.PG.Schema+`" TO "`+role+`"`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, cleanupErr := admin.ExecContext(context.Background(), `DROP OWNED BY "`+role+`"; DROP ROLE IF EXISTS "`+role+`"`)
+		assert.NoError(t, cleanupErr)
+	})
+	u, err := url.Parse(cfg.PG.URL)
+	require.NoError(t, err)
+	u.User = url.UserPassword(role, password)
+	cfg.PG.URL = u.String()
+	reader, err := postgres.OpenHosted(cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
+	require.NoError(t, err)
+	defer reader.Close()
+	var canSelect, canUpdate bool
+	require.NoError(t, reader.QueryRowContext(t.Context(), `SELECT has_table_privilege(current_user,'sessions','SELECT'),has_table_privilege(current_user,'sessions','UPDATE')`).Scan(&canSelect, &canUpdate))
+	assert.True(t, canSelect)
+	assert.False(t, canUpdate)
+	return cfg
+}
+
+func runDirectRawDerivation(t *testing.T, cfg config.Config, database *sql.DB, custody *pgRawSyncCustody, expected int) {
+	t.Helper()
+	isolated, err := rawderive.NewSubprocessParser(20 * time.Second)
+	require.NoError(t, err)
+	require.NoError(t, isolated.Preflight(t.Context()))
+	retry := rawderive.RetryPolicy{Base: time.Millisecond, Maximum: time.Second, MaxAttempts: 2}
+	sink, err := postgres.NewRawProjectionStore(database, hostedRawProjectionOptions(cfg, cfg.PG.RawTenant, retry))
+	require.NoError(t, err)
+	queue, ok := custody.metadata.(rawderive.JobQueue)
+	require.True(t, ok)
+	worker, err := rawderive.NewWorker(rawderive.WorkerConfig{
+		Queue: queue, Manifests: rawderive.ManifestLoader{Store: custody, Limits: custody.limits},
+		Materializer: rawderive.Materializer{Store: custody, BaseDir: t.TempDir(), MaxTotalBytes: 8 << 20}, Parser: isolated, Projection: sink,
+		Owner: "parity-fixture-raw", BatchSize: 8, LeaseDuration: time.Minute, HeartbeatInterval: time.Second,
+		AttemptTimeout: 20 * time.Second, RetryBase: retry.Base, RetryMax: retry.Maximum, MaxAttempts: retry.MaxAttempts,
+	})
+	require.NoError(t, err)
+	total := 0
+	for {
+		batch, err := worker.RunBatch(t.Context())
+		require.NoError(t, err)
+		total += batch.Succeeded
+		if batch.Claimed == 0 {
+			break
+		}
+		require.Zero(t, batch.Retried)
+		require.Zero(t, batch.Failed)
+	}
+	require.Equal(t, expected, total)
 }
 
 func requireHostedSandbox(t *testing.T) {
@@ -182,6 +380,295 @@ func waitCaptureJob(t *testing.T, pg *sql.DB, manifest, state string, attempts i
 		err := pg.QueryRow(`SELECT state,attempt_count FROM raw_ingest_jobs WHERE manifest_id=$1`, manifest).Scan(&got, &count)
 		return err == nil && got == state && count == attempts
 	}, 30*time.Second, 50*time.Millisecond)
+}
+
+func configureDirectParityOwner(t *testing.T, runtimeCfg, baselineCfg config.Config, runtimeDB *sql.DB, custody *pgRawSyncCustody) (*pgMigrationParityOwner, *postgres.MigrationParityStore, rawderive.ParityRequest) {
+	t.Helper()
+	baselineDB, err := postgres.OpenHosted(baselineCfg.PG.URL, baselineCfg.PG.Schema, baselineCfg.PG.RawTenant, false)
+	require.NoError(t, err)
+	defer baselineDB.Close()
+	var baselineID string
+	require.NoError(t, baselineDB.QueryRowContext(t.Context(), `SELECT target_id::text FROM migration_parity_identity WHERE singleton=1`).Scan(&baselineID))
+	runtimePG := runtimeCfg.PG
+	runtimePG.ParityEnabled = true
+	runtimePG.ParityPollSeconds = 1
+	runtimePG.ParityAttemptSeconds = 20
+	runtimePG.ParitySnapshotSeconds = 20
+	runtimePG.ParityBaselines = map[string]config.PGParityBaseline{"before": {Target: "baseline", Identity: baselineID}}
+	runtimeCfg.DefaultPG = "runtime"
+	runtimeCfg.PGTargets = map[string]config.PGConfig{"runtime": runtimePG, "baseline": baselineCfg.PG}
+	owner, err := newPGMigrationParityOwner(t.Context(), runtimeCfg, runtimePG, runtimeDB, custody)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, owner.parser.Close()) })
+	store, err := postgres.NewMigrationParityStore(t.Context(), runtimeDB, postgres.MigrationParityOptions{Schema: runtimePG.Schema, Tenant: runtimePG.RawTenant})
+	require.NoError(t, err)
+	var runtimeID, device, provider, root string
+	require.NoError(t, runtimeDB.QueryRowContext(t.Context(), `SELECT target_id::text FROM migration_parity_identity WHERE singleton=1`).Scan(&runtimeID))
+	require.NoError(t, runtimeDB.QueryRowContext(t.Context(), `SELECT min(device_id),min(provider),min(configured_root_id) FROM raw_source_heads`).Scan(&device, &provider, &root))
+	request := rawderive.ParityRequest{RunID: "00000000-0000-4000-8000-000000000137", RuntimeID: runtimeID, BaselineProfile: "before", Cohort: rawderive.ParityCohort{DeviceID: device, Provider: parser.AgentType(provider), RootID: root}}
+	return owner, store, request
+}
+
+func writeParityClaudeForkFixture(t *testing.T, root string) {
+	t.Helper()
+	project := filepath.Join(root, "project")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	original := strings.Join([]string{
+		`{"type":"system","subtype":"local_command","timestamp":"2026-01-01T09:59:59Z","sessionId":"orig-1111","content":"<command-name>/rename</command-name>\n<command-args>Original retained title</command-args>"}`,
+		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"orig-1111","cwd":"/work/project","message":{"content":"first question"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"orig-1111","message":{"id":"msg_a1","content":[{"type":"text","text":"first answer"}],"usage":{"input_tokens":11,"output_tokens":7}}}`,
+	}, "\n") + "\n"
+	fork := strings.ReplaceAll(strings.ReplaceAll(original, "orig-1111", "fork-2222"), `"sessionId":"fork-2222",`, `"sessionId":"fork-2222","sessionKind":"bg",`)
+	require.NoError(t, os.WriteFile(filepath.Join(project, "orig-1111.jsonl"), []byte(original), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(project, "fork-2222.jsonl"), []byte(fork), 0o644))
+}
+
+func writeParityClaudeCompanionFixture(t *testing.T, root string) (string, string) {
+	t.Helper()
+	project := filepath.Join(root, "project")
+	sessionID := "object-loss-session"
+	transcript := filepath.Join(project, sessionID+".jsonl")
+	sidecar := filepath.Join(project, sessionID, "tool-results", "retained.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(sidecar), 0o755))
+	require.NoError(t, os.WriteFile(sidecar, []byte("generation one retained companion\n"), 0o644))
+	persisted := "<persisted-output>\nFull output saved to: " + sidecar + "\n</persisted-output>"
+	body := strings.Join([]string{
+		`{"type":"system","subtype":"local_command","timestamp":"2026-01-02T09:59:59Z","sessionId":"` + sessionID + `","content":"<command-name>/rename</command-name>\n<command-args>Object loss title</command-args>"}`,
+		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-02T10:00:00Z","sessionId":"` + sessionID + `","cwd":"/work/project","message":{"content":"inspect retained object"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-02T10:00:01Z","sessionId":"` + sessionID + `","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"fixture"}}],"usage":{"input_tokens":13,"output_tokens":5}}}`,
+		`{"type":"user","uuid":"u2","parentUuid":"a1","timestamp":"2026-01-02T10:00:02Z","sessionId":"` + sessionID + `","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + strconv.Quote(persisted) + `,"is_error":false}]},"toolUseResult":{"persistedOutputPath":` + strconv.Quote(sidecar) + `,"persistedOutputSize":34}}`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(transcript, []byte(body), 0o644))
+	return transcript, sidecar
+}
+
+func generationObjectAtPath(t *testing.T, generation directCapturedGeneration, suffix string) rawsync.ObjectRef {
+	t.Helper()
+	for _, entry := range generation.manifest.Entries {
+		if strings.HasSuffix(entry.Path, suffix) {
+			require.Len(t, entry.Objects, 1)
+			return entry.Objects[0]
+		}
+	}
+	t.Fatalf("captured generation has no entry ending in %q", suffix)
+	return rawsync.ObjectRef{}
+}
+
+func logDirectParityEvidence(t *testing.T, database *sql.DB, runID string) {
+	t.Helper()
+	rows, err := database.QueryContext(t.Context(), `SELECT source_kind,evidence_generation,candidate_complete,COALESCE(verdict,''),code,count(*)
+		FROM migration_parity_sources WHERE run_id=$1 GROUP BY source_kind,evidence_generation,candidate_complete,verdict,code ORDER BY source_kind,evidence_generation,candidate_complete,verdict,code`, runID)
+	require.NoError(t, err)
+	for rows.Next() {
+		var kind, verdict, code string
+		var generation, count int64
+		var complete bool
+		require.NoError(t, rows.Scan(&kind, &generation, &complete, &verdict, &code, &count))
+		t.Logf("parity source evidence: kind=%s generation=%d complete=%t verdict=%s code=%s count=%d", kind, generation, complete, verdict, code, count)
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	rows, err = database.QueryContext(t.Context(), `SELECT s.source_kind,m.kind,COALESCE(m.verdict,''),m.inventory_kind,m.required,(m.candidate_fingerprint IS NOT NULL),count(*)
+		FROM migration_parity_members m JOIN migration_parity_sources s USING(tenant_id,run_id,init_epoch,source_id)
+		WHERE m.run_id=$1 GROUP BY s.source_kind,m.kind,m.verdict,m.inventory_kind,m.required,(m.candidate_fingerprint IS NOT NULL)
+		ORDER BY s.source_kind,m.kind,m.verdict,m.inventory_kind,m.required,(m.candidate_fingerprint IS NOT NULL)`, runID)
+	require.NoError(t, err)
+	for rows.Next() {
+		var sourceKind, memberKind, verdict, inventory string
+		var required, candidate bool
+		var count int64
+		require.NoError(t, rows.Scan(&sourceKind, &memberKind, &verdict, &inventory, &required, &candidate, &count))
+		t.Logf("parity member evidence: source_kind=%s kind=%s verdict=%s inventory=%s required=%t candidate=%t count=%d", sourceKind, memberKind, verdict, inventory, required, candidate, count)
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+}
+
+func directParityProjectionStates(t *testing.T, database *sql.DB) []directParityProjectionState {
+	t.Helper()
+	rows, err := database.QueryContext(t.Context(), `SELECT p.source_id,
+		count(DISTINCT b.branch_id) FILTER (WHERE b.active),count(DISTINCT ss.branch_id)
+		FROM raw_source_projections p
+		LEFT JOIN raw_session_branches b ON b.source_id=p.source_id
+		LEFT JOIN session_sources ss ON ss.source_id=p.source_id
+		GROUP BY p.source_id ORDER BY p.source_id`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var states []directParityProjectionState
+	for rows.Next() {
+		var state directParityProjectionState
+		require.NoError(t, rows.Scan(&state.sourceID, &state.active, &state.physical))
+		states = append(states, state)
+	}
+	require.NoError(t, rows.Err())
+	return states
+}
+
+func TestParityConfiguredOwnerProcessesBatchOneAcrossRestartWithRealBaselineAndExclusion(t *testing.T) {
+	runtimeCfg, _ := hostedRuntimeConfig(t)
+	baselineCfg, baselineAdmin := hostedRuntimeConfig(t)
+	runtimeDB, err := postgres.OpenHosted(runtimeCfg.PG.URL, runtimeCfg.PG.Schema, runtimeCfg.PG.RawTenant, false)
+	require.NoError(t, err)
+	defer runtimeDB.Close()
+	baselineDB, err := postgres.OpenHosted(baselineCfg.PG.URL, baselineCfg.PG.Schema, baselineCfg.PG.RawTenant, false)
+	require.NoError(t, err)
+	defer baselineDB.Close()
+	runtimeCustody := newDirectParityCustody(t, runtimeCfg, runtimeDB)
+	baselineCustody := newDirectParityCustody(t, baselineCfg, baselineDB)
+	root := t.TempDir()
+	writeParityClaudeForkFixture(t, root)
+	device := "00000000-0000-4000-8000-000000000138"
+	runtimeCapture := newDirectParityCapture(t, runtimeDB, runtimeCustody, parser.AgentClaude, root, device)
+	runtimeGenerations := runtimeCapture.captureAll(t)
+	require.Len(t, runtimeGenerations, 2)
+	registerDirectParityDevice(t, baselineDB, runtimeCapture.identity)
+	baselineCapture := &directParityCapture{identity: runtimeCapture.identity, custody: baselineCustody}
+	baselineGenerations := replicateDirectParityGenerations(t, runtimeCapture, baselineCapture, runtimeGenerations)
+	require.Len(t, baselineGenerations, 2)
+	baselineReadCfg := restrictedDirectParityBaseline(t, baselineCfg, baselineAdmin)
+	requireHostedSandbox(t)
+	runDirectRawDerivation(t, runtimeCfg, runtimeDB, runtimeCustody, 2)
+	runDirectRawDerivation(t, baselineCfg, baselineDB, baselineCustody, 2)
+	runtimeProjection := directParityProjectionStates(t, runtimeDB)
+	baselineProjection := directParityProjectionStates(t, baselineDB)
+	require.Len(t, runtimeProjection, 2)
+	require.Len(t, baselineProjection, len(runtimeProjection))
+	sameIdentities := true
+	for index := range runtimeProjection {
+		sameIdentities = sameIdentities && runtimeProjection[index].sourceID == baselineProjection[index].sourceID
+		assert.Equal(t, runtimeProjection[index].active, baselineProjection[index].active)
+		assert.Equal(t, runtimeProjection[index].physical, baselineProjection[index].physical)
+	}
+	require.True(t, sameIdentities, "runtime and baseline custody must project the same retained source identities")
+	t.Logf("real projection census: sources=%d active=%d/%d physical=%d/%d", len(baselineProjection), baselineProjection[0].active, baselineProjection[1].active, baselineProjection[0].physical, baselineProjection[1].physical)
+	_, err = baselineDB.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,message_count,user_message_count,data_version,quality_signal_version,secrets_rules_version)
+		SELECT 'baseline-independent-sentinel','sentinel','baseline','claude','legacy',1,1,data_version,quality_signal_version,secrets_rules_version FROM sessions WHERE provenance_kind='raw' LIMIT 1;
+		INSERT INTO messages(session_id,ordinal,role,content) VALUES('baseline-independent-sentinel',0,'user','baseline secret sentinel unrelated to raw')`)
+	require.NoError(t, err)
+
+	owner, store, request := configureDirectParityOwner(t, runtimeCfg, baselineReadCfg, runtimeDB, runtimeCustody)
+	_, err = store.CreateOrResumeParity(t.Context(), request, 1)
+	require.NoError(t, err)
+	require.NoError(t, owner.runOne(t.Context()))
+	first, err := store.ReadParityRequestReport(t.Context(), request.RunID, 1)
+	require.NoError(t, err)
+	assert.Equal(t, "complete", first.State)
+	assert.EqualValues(t, 1, first.PendingSources)
+	var attempted, completed int
+	require.NoError(t, runtimeDB.QueryRowContext(t.Context(), `SELECT count(*) FILTER (WHERE evidence_generation=1),count(*) FILTER (WHERE candidate_complete) FROM migration_parity_sources WHERE run_id=$1 AND source_kind='raw'`, request.RunID).Scan(&attempted, &completed))
+	assert.Equal(t, 1, attempted)
+	assert.Equal(t, 1, completed)
+	var firstBinding []byte
+	var firstObserved time.Time
+	require.NoError(t, runtimeDB.QueryRowContext(t.Context(), `SELECT binding_digest,observed_at FROM migration_parity_runs WHERE run_id=$1`, request.RunID).Scan(&firstBinding, &firstObserved))
+	require.NotEmpty(t, firstBinding)
+	require.False(t, firstObserved.IsZero())
+
+	shutdown := &pgHostedRawShutdown{parityParser: owner.parser, custody: runtimeCustody}
+	shutdown.Close()
+	runtimeCustody = newDirectParityCustody(t, runtimeCfg, runtimeDB)
+	owner, store, restartedRequest := configureDirectParityOwner(t, runtimeCfg, baselineReadCfg, runtimeDB, runtimeCustody)
+	require.Equal(t, request, restartedRequest)
+
+	_, err = store.CreateOrResumeParity(t.Context(), restartedRequest, 1)
+	require.NoError(t, err)
+	var restartedBinding []byte
+	var restartedObserved time.Time
+	require.NoError(t, runtimeDB.QueryRowContext(t.Context(), `SELECT binding_digest,observed_at FROM migration_parity_runs WHERE run_id=$1`, request.RunID).Scan(&restartedBinding, &restartedObserved))
+	assert.Equal(t, firstBinding, restartedBinding)
+	assert.Equal(t, firstObserved, restartedObserved)
+	require.NoError(t, owner.runOne(t.Context()))
+	second, err := store.ReadParityRequestReport(t.Context(), request.RunID, 2)
+	require.NoError(t, err)
+	assert.Equal(t, "complete", second.State)
+	assert.Zero(t, second.PendingSources)
+	assert.True(t, second.BaselineSealed)
+	assert.False(t, second.Passing, "provider exclusion without independent baseline proof remains partial")
+	logDirectParityEvidence(t, runtimeDB, request.RunID)
+	require.NoError(t, runtimeDB.QueryRowContext(t.Context(), `SELECT count(*) FROM migration_parity_sources WHERE run_id=$1 AND source_kind='raw' AND candidate_complete`, request.RunID).Scan(&completed))
+	assert.Equal(t, 2, completed)
+	require.NoError(t, runtimeDB.QueryRowContext(t.Context(), `SELECT count(*) FROM migration_parity_sources WHERE run_id=$1 AND source_kind='raw' AND evidence_generation=2`, request.RunID).Scan(&attempted))
+	assert.Equal(t, 1, attempted, "reconstructed owner must attempt only the source left pending by generation one")
+	var exclusions, unavailable, matchedSessions int
+	require.NoError(t, runtimeDB.QueryRowContext(t.Context(), `SELECT count(*) FROM migration_parity_members WHERE run_id=$1 AND kind='exclusion' AND verdict='partial_unsupported'`, request.RunID).Scan(&exclusions))
+	assert.Positive(t, exclusions, "the real background fork must retain a partial exclusion member when the sealed baseline has no provider proof")
+	require.NoError(t, runtimeDB.QueryRowContext(t.Context(), `SELECT count(*) FROM migration_parity_sources WHERE run_id=$1 AND source_kind='raw' AND code='exclusion_provenance_unavailable'`, request.RunID).Scan(&unavailable))
+	assert.Positive(t, unavailable)
+	require.NoError(t, runtimeDB.QueryRowContext(t.Context(), `SELECT count(*) FROM migration_parity_members WHERE run_id=$1 AND kind='session' AND verdict='matched'`, request.RunID).Scan(&matchedSessions))
+	assert.Positive(t, matchedSessions, "the non-excluded real source must complete against the sealed baseline")
+	var sentinel string
+	require.NoError(t, baselineDB.QueryRowContext(t.Context(), `SELECT content FROM messages WHERE session_id='baseline-independent-sentinel'`).Scan(&sentinel))
+	assert.Equal(t, "baseline secret sentinel unrelated to raw", sentinel)
+}
+
+func TestParityConfiguredOwnerMissingGenerationObjectDoesNotBorrowRealBaseline(t *testing.T) {
+	runtimeCfg, _ := hostedRuntimeConfig(t)
+	baselineCfg, baselineAdmin := hostedRuntimeConfig(t)
+	runtimeDB, err := postgres.OpenHosted(runtimeCfg.PG.URL, runtimeCfg.PG.Schema, runtimeCfg.PG.RawTenant, false)
+	require.NoError(t, err)
+	defer runtimeDB.Close()
+	baselineDB, err := postgres.OpenHosted(baselineCfg.PG.URL, baselineCfg.PG.Schema, baselineCfg.PG.RawTenant, false)
+	require.NoError(t, err)
+	defer baselineDB.Close()
+	runtimeCustody := newDirectParityCustody(t, runtimeCfg, runtimeDB)
+	baselineCustody := newDirectParityCustody(t, baselineCfg, baselineDB)
+	root := t.TempDir()
+	transcript, sidecar := writeParityClaudeCompanionFixture(t, root)
+	device := "00000000-0000-4000-8000-000000000139"
+	runtimeCapture := newDirectParityCapture(t, runtimeDB, runtimeCustody, parser.AgentClaude, root, device)
+	first := runtimeCapture.captureAll(t)
+	require.Len(t, first, 1)
+	missingObject := generationObjectAtPath(t, first[0], "tool-results/retained.txt")
+	require.NoError(t, os.Remove(sidecar))
+	f, err := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = f.WriteString(`{"type":"user","uuid":"u3","parentUuid":"u2","timestamp":"2026-01-02T10:00:03Z","sessionId":"object-loss-session","cwd":"/work/project","message":{"content":"generation two complete"}}` + "\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	second := runtimeCapture.captureAll(t)
+	require.Len(t, second, 1)
+	for _, entry := range second[0].manifest.Entries {
+		assert.NotContains(t, entry.Objects, missingObject, "generation-one-only companion must be absent from generation two")
+	}
+	registerDirectParityDevice(t, baselineDB, runtimeCapture.identity)
+	baselineCapture := &directParityCapture{identity: runtimeCapture.identity, custody: baselineCustody}
+	baseline := replicateDirectParityGenerations(t, runtimeCapture, baselineCapture, append(append([]directCapturedGeneration{}, first...), second...))
+	require.Len(t, baseline, 2)
+	baselineReadCfg := restrictedDirectParityBaseline(t, baselineCfg, baselineAdmin)
+	requireHostedSandbox(t)
+	runDirectRawDerivation(t, runtimeCfg, runtimeDB, runtimeCustody, 1)
+	runDirectRawDerivation(t, baselineCfg, baselineDB, baselineCustody, 1)
+	_, err = baselineDB.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,message_count,user_message_count,data_version,quality_signal_version,secrets_rules_version)
+		SELECT 'baseline-independent-sentinel','sentinel','baseline','claude','legacy',1,1,data_version,quality_signal_version,secrets_rules_version FROM sessions WHERE provenance_kind='raw' LIMIT 1;
+		INSERT INTO messages(session_id,ordinal,role,content) VALUES('baseline-independent-sentinel',0,'user','baseline secret sentinel unrelated to raw')`)
+	require.NoError(t, err)
+
+	quarantineDirectParityObject(t, runtimeCustody, runtimeCapture.identity.TenantID, missingObject)
+	owner, store, request := configureDirectParityOwner(t, runtimeCfg, baselineReadCfg, runtimeDB, runtimeCustody)
+	_, err = store.CreateOrResumeParity(t.Context(), request, 1)
+	require.NoError(t, err)
+	require.NoError(t, owner.runOne(t.Context()))
+	report, err := store.ReadParityRequestReport(t.Context(), request.RunID, 1)
+	require.NoError(t, err)
+	assert.Equal(t, "complete", report.State)
+	assert.False(t, report.Passing)
+	assert.Positive(t, report.PendingSources)
+	var code string
+	var complete bool
+	require.NoError(t, runtimeDB.QueryRowContext(t.Context(), `SELECT code,candidate_complete FROM migration_parity_sources WHERE run_id=$1 AND source_kind='raw'`, request.RunID).Scan(&code, &complete))
+	assert.Equal(t, "missing_object", code)
+	assert.False(t, complete)
+	var candidateFingerprints int
+	require.NoError(t, runtimeDB.QueryRowContext(t.Context(), `SELECT count(*) FROM migration_parity_members m JOIN migration_parity_sources s USING(tenant_id,run_id,init_epoch,source_id) WHERE m.run_id=$1 AND s.source_kind='raw' AND m.candidate_fingerprint IS NOT NULL`, request.RunID).Scan(&candidateFingerprints))
+	assert.Zero(t, candidateFingerprints, "baseline fingerprints must not become candidate evidence")
+	loader := rawderive.ManifestLoader{Store: runtimeCustody, Limits: runtimeCustody.limits}
+	_, err = loader.LoadManifest(t.Context(), runtimeCapture.identity, first[0].commit.ManifestID)
+	require.NoError(t, err, "generation-one manifest remains present")
+	_, err = loader.LoadManifest(t.Context(), runtimeCapture.identity, second[0].commit.ManifestID)
+	require.NoError(t, err, "generation-two manifest remains present")
+	var sentinel string
+	require.NoError(t, baselineDB.QueryRowContext(t.Context(), `SELECT content FROM messages WHERE session_id='baseline-independent-sentinel'`).Scan(&sentinel))
+	assert.Equal(t, "baseline secret sentinel unrelated to raw", sentinel)
 }
 
 // Losing any captured companion, parser wire field, configured policy or

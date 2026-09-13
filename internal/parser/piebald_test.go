@@ -312,12 +312,14 @@ func TestParsePiebaldSessionResultsSplitsForks(t *testing.T) {
 	require.Len(t, results, 2)
 	main := results[0]
 	assert.Equal(t, "piebald:42", main.Session.ID)
+	assert.Equal(t, "42", main.Session.SourceSessionID)
 	assert.Empty(t, main.Session.ParentSessionID)
 	assert.Equal(t, RelNone, main.Session.RelationshipType)
 	require.Len(t, main.Messages, 4)
 	assert.Equal(t, "main followup", main.Messages[2].Content)
 	fork := results[1]
 	assert.Equal(t, "piebald:42-200", fork.Session.ID)
+	assert.Equal(t, "42-200", fork.Session.SourceSessionID)
 	assert.Equal(t, "piebald:42", fork.Session.ParentSessionID)
 	assert.Equal(t, RelFork, fork.Session.RelationshipType)
 	require.Len(t, fork.Messages, 2)
@@ -383,12 +385,14 @@ func TestParsePiebaldSessionResultsHandlesNestedForks(t *testing.T) {
 
 	outer, ok := byID["piebald:42-200"]
 	require.True(t, ok, "missing outer fork session piebald:42-200")
+	assert.Equal(t, "42-200", outer.Session.SourceSessionID)
 	assert.Equal(t, RelFork, outer.Session.RelationshipType)
 	assert.Equal(t, "piebald:42", outer.Session.ParentSessionID)
 	assert.Len(t, outer.Messages, 4)
 
 	nested, ok := byID["piebald:42-300"]
 	require.True(t, ok, "missing nested fork session piebald:42-300 (lost by append/walk evaluation order bug)")
+	assert.Equal(t, "42-300", nested.Session.SourceSessionID)
 	assert.Equal(t, RelFork, nested.Session.RelationshipType)
 	assert.Equal(t, "piebald:42-200", nested.Session.ParentSessionID)
 	assert.Len(t, nested.Messages, 2)

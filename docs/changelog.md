@@ -8,6 +8,13 @@ description: Release history for AgentsView
 
 **New features**
 
+- Compare one explicitly selected hosted raw cohort against an isolated,
+  owner-provisioned PostgreSQL baseline with `agentsview pg migration parity`.
+  Each invocation queues one bounded batch, and an exact request generation can
+  be read after longer validation or an owner restart. Passing output records
+  comparison evidence at two snapshots; it does not authorize migration
+  activation. Baseline sessions prepared with incompatible parser or analysis
+  versions are reported as unsupported and prevent a passing result.
 - Upload existing Claude Code, Codex, and other supported local session roots
   with `agentsview raw-sync backfill` before starting continuous raw sync. The
   finite command saves resumable progress, reports incomplete work without
@@ -107,6 +114,10 @@ description: Release history for AgentsView
 
 **Bug fixes**
 
+- Retain Piebald chat forks as separate sessions during hosted raw imports.
+  Forks keep their existing session links and no longer collide with the parent
+  chat. Upgrading reparses local sources to refresh their identities; archived
+  sessions whose sources are gone remain available.
 - Show Bedrock costs for Codex turns reported as `openai.gpt-5.4`,
   `openai.gpt-5.6-luna`, `openai.gpt-5.6-terra`, and `openai.gpt-6-astra`,
   while keeping those names in usage breakdowns. Dated usage uses AWS rates

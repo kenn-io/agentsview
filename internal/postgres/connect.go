@@ -62,6 +62,17 @@ func CheckSSL(dsn string) error {
 // targets a non-loopback host without TLS encryption. Uses the
 // pgx driver's DSN parser for accurate host/TLS resolution.
 func WarnInsecureSSL(dsn string) {
+	warnInsecureSSL(dsn, func(host string) {
+		log.Printf(
+			"warning: pg connection to %s permits "+
+				"plaintext; consider sslmode=require or "+
+				"verify-full for non-local hosts",
+			host,
+		)
+	})
+}
+
+func warnInsecureSSL(dsn string, warn func(string)) {
 	cfg, err := pgconn.ParseConfig(dsn)
 	if err != nil {
 		return
@@ -70,12 +81,7 @@ func WarnInsecureSSL(dsn string) {
 		return
 	}
 	if hasPlaintextPath(cfg) {
-		log.Printf(
-			"warning: pg connection to %s permits "+
-				"plaintext; consider sslmode=require or "+
-				"verify-full for non-local hosts",
-			cfg.Host,
-		)
+		warn(cfg.Host)
 	}
 }
 
@@ -278,6 +284,25 @@ func OpenHosted(dsn, schema, tenant string, allowInsecure bool) (*sql.DB, error)
 // connection and tenant verification. Operations on the returned pool use the
 // contexts supplied by their callers.
 func OpenHostedContext(ctx context.Context, dsn, schema, tenant string, allowInsecure bool) (*sql.DB, error) {
+	return openHostedContext(ctx, dsn, schema, tenant, allowInsecure, WarnInsecureSSL)
+}
+
+// OpenHostedContextWithInsecureWarning opens a hosted pool while delegating
+// the allow-insecure warning to the caller. The callback receives no connection
+// details so a public command can emit a useful warning without disclosing its
+// selected target.
+func OpenHostedContextWithInsecureWarning(ctx context.Context, dsn, schema, tenant string, allowInsecure bool, warning func()) (*sql.DB, error) {
+	warn := func(dsn string) {
+		warnInsecureSSL(dsn, func(string) {
+			if warning != nil {
+				warning()
+			}
+		})
+	}
+	return openHostedContext(ctx, dsn, schema, tenant, allowInsecure, warn)
+}
+
+func openHostedContext(ctx context.Context, dsn, schema, tenant string, allowInsecure bool, warnInsecure func(string)) (*sql.DB, error) {
 	if err := validateHostedBinding(schema, tenant); err != nil {
 		return nil, err
 	}
@@ -285,7 +310,7 @@ func OpenHostedContext(ctx context.Context, dsn, schema, tenant string, allowIns
 		return nil, fmt.Errorf("postgres URL is required")
 	}
 	if allowInsecure {
-		WarnInsecureSSL(dsn)
+		warnInsecure(dsn)
 	} else if err := CheckSSL(dsn); err != nil {
 		return nil, err
 	}

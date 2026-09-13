@@ -3,6 +3,10 @@
 package rawderive
 
 import (
+	"context"
+	"crypto/sha256"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +16,81 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+type boundParserImage struct {
+	file   *os.File
+	path   string
+	digest ParityDigest
+}
+
+func (i *boundParserImage) identity() ParityDigest { return i.digest }
+
+func openBoundParserImage() (*boundParserImage, error) {
+	path, err := os.Executable()
+	if err != nil {
+		return nil, ErrSandboxUnavailable
+	}
+	return openBoundParserImageAt("/proc/self/exe", path)
+}
+
+func openBoundParserImageAt(imagePath, pathname string) (*boundParserImage, error) {
+	file, err := os.Open(imagePath)
+	if err != nil {
+		return nil, ErrSandboxUnavailable
+	}
+	digest, err := digestParserImage(file)
+	if err != nil {
+		file.Close()
+		return nil, ErrSandboxUnavailable
+	}
+	pathDigest, err := digestParserImagePath(pathname)
+	if err != nil || pathDigest != digest {
+		file.Close()
+		return nil, fmt.Errorf("%w: executable pathname does not match running image", ErrSandboxUnavailable)
+	}
+	return &boundParserImage{file: file, path: pathname, digest: digest}, nil
+}
+
+func digestParserImage(reader io.ReadSeeker) (ParityDigest, error) {
+	if _, err := reader.Seek(0, io.SeekStart); err != nil {
+		return ParityDigest{}, err
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, reader); err != nil {
+		return ParityDigest{}, err
+	}
+	if _, err := reader.Seek(0, io.SeekStart); err != nil {
+		return ParityDigest{}, err
+	}
+	var digest ParityDigest
+	copy(digest[:], h.Sum(nil))
+	return digest, nil
+}
+
+func digestParserImagePath(path string) (ParityDigest, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return ParityDigest{}, err
+	}
+	defer file.Close()
+	return digestParserImage(file)
+}
+
+func (i *boundParserImage) command(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "/proc/self/fd/3", args...)
+	cmd.ExtraFiles = []*os.File{i.file}
+	return cmd
+}
+
+func (i *boundParserImage) revalidate() error {
+	digest, err := digestParserImagePath(i.path)
+	if err != nil || digest != i.digest {
+		return fmt.Errorf("%w: executable pathname changed after parity binding", ErrSandboxUnavailable)
+	}
+	return nil
+}
+
+func (i *boundParserImage) close() error { return i.file.Close() }
 
 func configureParserNamespace(cmd *exec.Cmd) error {
 	if !parserFDBootstrapAvailable {

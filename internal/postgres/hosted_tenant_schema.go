@@ -26,7 +26,7 @@ type HostedForeignKey struct {
 	Update     string
 }
 
-var hostedTables = append([]HostedTable{
+var hostedTables = append(append([]HostedTable{
 	{Name: "vector_generations", Key: []string{"id"}},
 	{Name: "vector_generation_machines", Key: []string{"generation_id", "machine"}},
 	{Name: "vector_documents", Key: []string{"doc_key"}},
@@ -73,7 +73,7 @@ var hostedTables = append([]HostedTable{
 		{Columns: []string{"device_id"}, Table: "raw_devices", References: []string{"device_id"}, Delete: "RESTRICT"},
 	}},
 	{Name: "raw_ingest_jobs", Key: []string{"id"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"manifest_id"}, Table: "raw_manifests", References: []string{"manifest_id"}, Delete: "RESTRICT"}}},
-}, rawProjectionTables...)
+}, rawProjectionTables...), migrationParityTables...)
 
 func sessionHostedFK() []HostedForeignKey {
 	return []HostedForeignKey{{Columns: []string{"session_id"}, Table: "sessions", References: []string{"id"}, Delete: "CASCADE"}}

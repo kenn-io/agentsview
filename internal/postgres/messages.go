@@ -530,6 +530,12 @@ func (s *Store) Search(
 func (s *Store) attachToolCalls(
 	ctx context.Context, msgs []db.Message,
 ) error {
+	return attachPGToolCalls(ctx, s.pg, msgs)
+}
+
+func attachPGToolCalls(
+	ctx context.Context, q hostedQuerier, msgs []db.Message,
+) error {
 	if len(msgs) == 0 {
 		return nil
 	}
@@ -544,15 +550,15 @@ func (s *Store) attachToolCalls(
 
 	for i := 0; i < len(ordinals); i += attachToolCallBatchSize {
 		end := min(i+attachToolCallBatchSize, len(ordinals))
-		if err := s.attachToolCallsBatch(
-			ctx, msgs, ordToIdx, sessionID,
+		if err := attachPGToolCallsBatch(
+			ctx, q, msgs, ordToIdx, sessionID,
 			ordinals[i:end],
 		); err != nil {
 			return err
 		}
 	}
-	if err := s.attachToolResultEvents(
-		ctx, msgs, ordToIdx, sessionID, ordinals,
+	if err := attachPGToolResultEvents(
+		ctx, q, msgs, ordToIdx, sessionID, ordinals,
 	); err != nil {
 		return err
 	}
@@ -562,8 +568,8 @@ func (s *Store) attachToolCalls(
 	return nil
 }
 
-func (s *Store) attachToolCallsBatch(
-	ctx context.Context,
+func attachPGToolCallsBatch(
+	ctx context.Context, q hostedQuerier,
 	msgs []db.Message,
 	ordToIdx map[int]int,
 	sessionID string,
@@ -597,7 +603,7 @@ func (s *Store) attachToolCallsBatch(
 		ORDER BY message_ordinal, call_index`,
 		strings.Join(phs, ","))
 
-	rows, err := s.pg.QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf(
 			"querying tool_calls: %w", err,
@@ -629,8 +635,8 @@ func (s *Store) attachToolCallsBatch(
 	return rows.Err()
 }
 
-func (s *Store) attachToolResultEvents(
-	ctx context.Context,
+func attachPGToolResultEvents(
+	ctx context.Context, q hostedQuerier,
 	msgs []db.Message,
 	ordToIdx map[int]int,
 	sessionID string,
@@ -638,8 +644,8 @@ func (s *Store) attachToolResultEvents(
 ) error {
 	for i := 0; i < len(ordinals); i += attachToolCallBatchSize {
 		end := min(i+attachToolCallBatchSize, len(ordinals))
-		if err := s.attachToolResultEventsBatch(
-			ctx, msgs, ordToIdx, sessionID, ordinals[i:end],
+		if err := attachPGToolResultEventsBatch(
+			ctx, q, msgs, ordToIdx, sessionID, ordinals[i:end],
 		); err != nil {
 			return err
 		}
@@ -647,8 +653,8 @@ func (s *Store) attachToolResultEvents(
 	return nil
 }
 
-func (s *Store) attachToolResultEventsBatch(
-	ctx context.Context,
+func attachPGToolResultEventsBatch(
+	ctx context.Context, q hostedQuerier,
 	msgs []db.Message,
 	ordToIdx map[int]int,
 	sessionID string,
@@ -678,7 +684,7 @@ func (s *Store) attachToolResultEventsBatch(
 		ORDER BY tool_call_message_ordinal, call_index, event_index`,
 		strings.Join(phs, ","))
 
-	rows, err := s.pg.QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying tool_result_events: %w", err)
 	}
@@ -708,11 +714,18 @@ func (s *Store) attachToolResultEventsBatch(
 		if !ok {
 			continue
 		}
-		if callIndex < 0 || callIndex >= len(msgs[idx].ToolCalls) {
+		callPosition := -1
+		for i := range msgs[idx].ToolCalls {
+			if msgs[idx].ToolCalls[i].CallIndex == callIndex {
+				callPosition = i
+				break
+			}
+		}
+		if callPosition < 0 {
 			continue
 		}
-		msgs[idx].ToolCalls[callIndex].ResultEvents = append(
-			msgs[idx].ToolCalls[callIndex].ResultEvents,
+		msgs[idx].ToolCalls[callPosition].ResultEvents = append(
+			msgs[idx].ToolCalls[callPosition].ResultEvents,
 			ev,
 		)
 	}

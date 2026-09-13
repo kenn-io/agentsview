@@ -61,6 +61,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		if err = installRawProjectionUpgrade(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
+		if err = installMigrationParityUpgrade(ctx, tx, schema, tenant); err != nil {
+			return err
+		}
 		if _, err = tx.ExecContext(ctx, hostedLegacyRevisionDDL); err != nil {
 			return err
 		}
@@ -79,6 +82,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		if _, err = tx.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("creating hosted application schema: %w", err)
 		}
+	}
+	if _, err = tx.ExecContext(ctx, migrationParityDDL); err != nil {
+		return fmt.Errorf("creating migration parity evidence schema: %w", err)
 	}
 	if err = ensureRawProjectionJobColumns(ctx, tx); err != nil {
 		return err
@@ -116,6 +122,12 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 	}
 	if err = InstallHostedTables(ctx, tx, schema, tenant, hostedTables); err != nil {
 		return fmt.Errorf("installing hosted tenant constraints: %w", err)
+	}
+	if err = ensureMigrationParityIdentity(ctx, tx); err != nil {
+		return err
+	}
+	if err = ensureMigrationParityIdentityTrigger(ctx, tx); err != nil {
+		return err
 	}
 	if _, err = tx.ExecContext(ctx, rawProjectionIndexesDDL); err != nil {
 		return err

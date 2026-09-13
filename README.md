@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-11
+last_edited: 2026-09-12
 ---
 
 # agentsview
@@ -586,12 +586,85 @@ exclude_projects = ["scratch"]
 Named target names are normalized case-insensitively. `all`, `local`, and the
 legacy `[pg]` field names `url`, `schema`, `machine_name`, `allow_insecure`,
 `projects`, `exclude_projects`, `raw_tenant`, `raw_derivation`,
-`raw_poll_seconds`, `raw_attempt_seconds`, and `raw_max_attempts` cannot be used
-for `[pg.NAME]`.
+`raw_poll_seconds`, `raw_attempt_seconds`, `raw_max_attempts`,
+`parity_enabled`, `parity_baselines`, `parity_poll_seconds`,
+`parity_attempt_seconds`, and `parity_snapshot_seconds` cannot be used for
+`[pg.NAME]`.
 
 `AGENTSVIEW_PG_URL`, `AGENTSVIEW_PG_SCHEMA`, and `AGENTSVIEW_PG_MACHINE` still
 work, but in named-target mode they apply only to the effective default target.
 They do not rewrite every named `[pg.NAME]` entry.
+
+### Hosted migration parity
+
+Hosted operators can compare one explicit raw cohort with an isolated
+PostgreSQL baseline before planning a migration. The runtime and baseline must
+be existing named targets for the same tenant. An owner must provision both
+targets first and record the baseline's immutable target identity in the
+runtime profile:
+
+```toml
+default_pg = "runtime"
+
+[pg.runtime]
+url = "postgres://runtime-role@runtime-db/agentsview"
+schema = "agentsview_runtime"
+raw_tenant = "tenant-a"
+parity_enabled = true
+
+[pg.runtime.parity_baselines.before]
+target = "baseline"
+identity = "00000000-0000-4000-8000-000000000001"
+
+[pg.baseline]
+url = "postgres://baseline-reader@baseline-db/agentsview"
+schema = "agentsview_baseline"
+raw_tenant = "tenant-a"
+```
+
+The runtime role needs the provisioned parity evidence grants. The baseline
+role must be read-only across the complete physical session inventory, with no
+schema creation, DDL, or corpus write privileges. The hosted owner verifies
+those boundaries and opens a separate baseline pool even when both targets use
+the same database.
+
+Submit one finite batch with every selector explicit:
+
+```bash
+agentsview pg migration parity \
+  --runtime-target runtime --baseline-target before \
+  --run-id 00000000-0000-4000-8000-000000000002 \
+  --device device-a --provider claude --root root-a \
+  --batch-size 32 --wait 60s --json
+```
+
+One request authorizes one batch of at most 128 sources. Reuse the same command
+and run ID to advance a larger cohort. The run ID permanently binds the
+runtime, baseline profile, cohort, and parser/projection versions; use a new run
+ID when the source baseline or another bound input changes. A missing owner
+leaves the request pending. Partial, unsupported, ambiguous, missing, stale, or
+legacy-only evidence cannot pass. The legacy census is deliberately
+conservative because rows without authenticated raw provenance cannot be
+assigned to a source safely.
+
+`--wait` only waits for the requested generation and is capped at 60 seconds.
+Work can continue after the command returns. If validation takes longer, read
+that exact result later, including after an owner restart:
+
+```bash
+agentsview pg migration parity \
+  --runtime-target runtime \
+  --run-id 00000000-0000-4000-8000-000000000002 \
+  --status --request-generation 3 --json
+```
+
+Ordinary `--status` output is non-passing historical evidence. Explicit
+generation output can report `historical_checked`; it describes the recorded
+baseline and runtime snapshot timestamps and does not claim current migration
+readiness or grant activation permission. Pending and non-passing reports still
+exit successfully, so scripts must inspect `state` and `passing`. PostgreSQL
+also omits SQLite-only raw late-result identity bookkeeping, so a parity verdict
+does not prove that local incremental replay state is portable.
 
 ### Automatic push (background service)
 

@@ -11,6 +11,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
+	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
@@ -23,14 +24,10 @@ func rawDigest(parts ...string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 func rawSourceID(m rawsync.CanonicalManifest) string {
-	return rawDigest("source-v1", m.Identity.TenantID, m.Identity.DeviceID, string(m.Manifest.Provider), m.Manifest.ConfiguredRootID, m.Manifest.SourceKey)
+	return rawderive.SourceID(m)
 }
 func rawGroupID(m rawsync.CanonicalManifest, s db.Session) (string, string) {
-	key := s.SourceSessionID
-	if key == "" {
-		key = rawDigest("source-local-v1", rawSourceID(m), s.ID)
-	}
-	return rawDigest("group-v1", m.Identity.TenantID, s.Agent, key), key
+	return rawderive.GroupID(m, s)
 }
 func encodeRawPayload(p ingest.PreparedSession) ([]byte, error) {
 	var b bytes.Buffer

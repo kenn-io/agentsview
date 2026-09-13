@@ -654,6 +654,7 @@ func newPGCommand() *cobra.Command {
 	cmd.AddCommand(newPGServiceCommand())
 	cmd.AddCommand(newPGHostedProvisionCommand())
 	cmd.AddCommand(newPGRawReparseCommand())
+	cmd.AddCommand(newPGMigrationCommand())
 	return cmd
 }
 

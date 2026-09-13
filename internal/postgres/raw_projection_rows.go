@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"reflect"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -133,17 +132,5 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	return bulkInsertSecretFindings(ctx, tx, id, p.Findings)
 }
 func copyRawSignalFields(session *db.Session, signals db.SessionSignalUpdate) {
-	target := reflect.ValueOf(session).Elem()
-	for _, source := range []reflect.Value{reflect.ValueOf(signals), reflect.ValueOf(signals.QualitySignals)} {
-		for i := 0; i < source.NumField(); i++ {
-			name := source.Type().Field(i).Name
-			if name == "Version" {
-				name = "QualitySignalVersion"
-			}
-			field := target.FieldByName(name)
-			if field.IsValid() && field.CanSet() && field.Type() == source.Field(i).Type() {
-				field.Set(source.Field(i))
-			}
-		}
-	}
+	ingest.ApplySignalFields(session, signals)
 }

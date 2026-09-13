@@ -3,14 +3,15 @@
 package postgres
 
 import (
+	"database/sql"
 	"fmt"
-	"go.kenn.io/agentsview/internal/db"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawderive"
 )
@@ -133,6 +134,28 @@ func TestHostedCrossSourceHistoricalExactAuthority(t *testing.T) {
 			assert.Empty(t, got.ParentSessionIDs)
 		})
 	}
+}
+
+func TestHostedAndParityReadersUseTheSameCohortAuthority(t *testing.T) {
+	f := newProjectionFixture(t)
+	child, _ := f.acceptScoped(t, "device-a", "child", "", parser.AgentCodex, "root-a", "child.jsonl")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, child), child, linkChildOutcome()))
+	parent, _ := f.acceptScoped(t, "device-a", "parent", "", parser.AgentCodex, "root-a", "parent.jsonl")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, parent), parent, projectionOutcome("parent")))
+	h, err := newHostedAdapter(f.runtime, f.tenant)
+	require.NoError(t, err)
+	got, err := h.GetSessionFull(t.Context(), "codex:child")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.ParentSessionID)
+	assert.Equal(t, "codex:portable", *got.ParentSessionID)
+	tx, err := f.runtime.BeginTx(t.Context(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	require.NoError(t, err)
+	resolved, _, err := readHostedLinkTarget(t.Context(), tx, rawSourceID(child), "codex:portable")
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	assert.Equal(t, rawSourceID(parent), resolved.SourceID)
+	assert.Equal(t, "portable", resolved.LogicalKey)
 }
 
 func TestHostedCrossSourceAliasAnchorLimitsHistoricalAuthority(t *testing.T) {

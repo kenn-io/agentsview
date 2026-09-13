@@ -103,6 +103,102 @@ func TestManifestLoaderRejectsUnverifiedOrMismatchedObjects(t *testing.T) {
 	}
 }
 
+func TestManifestLoaderLoadManifestUsesIdenticalTerminalVerification(t *testing.T) {
+	t.Parallel()
+	identity, canonical := canonicalTestManifest(t)
+	verificationFailure := errors.New("digest mismatch")
+
+	tests := []struct {
+		name    string
+		info    rawsync.ObjectInfo
+		payload []byte
+		verify  error
+		wantErr bool
+	}{
+		{
+			name: "verified",
+			info: rawsync.ObjectInfo{Ref: rawsync.ObjectRef{
+				SHA256: canonical.ManifestID, Length: int64(len(canonical.CanonicalJSON)),
+			}},
+			payload: canonical.CanonicalJSON,
+		},
+		{
+			name: "identity mismatch",
+			info: rawsync.ObjectInfo{Ref: rawsync.ObjectRef{
+				SHA256: "0000000000000000000000000000000000000000000000000000000000000000",
+				Length: int64(len(canonical.CanonicalJSON)),
+			}},
+			payload: canonical.CanonicalJSON,
+			wantErr: true,
+		},
+		{
+			name: "length mismatch",
+			info: rawsync.ObjectInfo{Ref: rawsync.ObjectRef{
+				SHA256: canonical.ManifestID, Length: int64(len(canonical.CanonicalJSON) + 1),
+			}},
+			payload: canonical.CanonicalJSON,
+			wantErr: true,
+		},
+		{
+			name: "hash mismatch",
+			info: rawsync.ObjectInfo{Ref: rawsync.ObjectRef{
+				SHA256: canonical.ManifestID, Length: int64(len(canonical.CanonicalJSON)),
+			}},
+			payload: canonical.CanonicalJSON,
+			verify:  verificationFailure,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			for _, method := range []string{"Load", "LoadManifest"} {
+				t.Run(method, func(t *testing.T) {
+					reader := &testVerifiedReader{
+						Reader: bytes.NewReader(tc.payload), verifyErr: tc.verify,
+					}
+					loader := ManifestLoader{
+						Store: manifestStoreFunc(func(
+							_ context.Context,
+							gotIdentity rawsync.AuthIdentity,
+							gotManifestID string,
+						) (rawsync.ObjectInfo, rawsync.VerifiedObjectReader, error) {
+							assert.Equal(t, identity, gotIdentity)
+							assert.Equal(t, canonical.ManifestID, gotManifestID)
+							return tc.info, reader, nil
+						}),
+						Limits: rawsync.DefaultManifestLimits(),
+					}
+					var got rawsync.CanonicalManifest
+					var err error
+					if method == "Load" {
+						got, err = loader.Load(t.Context(), JobLease{
+							Identity: identity, ManifestID: canonical.ManifestID,
+						})
+					} else {
+						got, err = loader.LoadManifest(
+							t.Context(), identity, canonical.ManifestID,
+						)
+					}
+					if tc.wantErr {
+						require.Error(t, err)
+					} else {
+						require.NoError(t, err)
+						assert.Equal(t, canonical, got)
+					}
+					assert.True(t, reader.closed)
+					assert.Equal(t,
+						tc.info.Ref.SHA256 == canonical.ManifestID &&
+							tc.info.Ref.Length == int64(len(canonical.CanonicalJSON)),
+						reader.verified,
+					)
+				})
+			}
+		})
+	}
+}
+
 type manifestStoreFunc func(
 	context.Context,
 	rawsync.AuthIdentity,

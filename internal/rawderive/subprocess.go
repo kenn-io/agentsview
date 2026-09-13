@@ -28,13 +28,72 @@ var errParserFailed = errors.New("isolated parser failed")
 
 // SubprocessParser never invokes a provider in the hosting process. Limits are
 // fixed hard ceilings; WallTimeout is validated before activation.
-type SubprocessParser struct{ WallTimeout time.Duration }
+type SubprocessParser struct {
+	WallTimeout time.Duration
+	imageMu     sync.RWMutex
+	image       *boundParserImage
+	closed      bool
+}
 
 func NewSubprocessParser(wall time.Duration) (*SubprocessParser, error) {
-	if wall <= 0 || wall > 5*time.Minute {
+	if wall <= 0 || wall > 30*time.Minute {
 		return nil, rawsync.ErrInvalid
 	}
 	return &SubprocessParser{WallTimeout: wall}, nil
+}
+
+// NewBoundSubprocessParser pins the actual running executable image used for
+// every child parse and exposes its content digest for parity binding.
+func NewBoundSubprocessParser(wall time.Duration) (*SubprocessParser, error) {
+	p, err := NewSubprocessParser(wall)
+	if err != nil {
+		return nil, err
+	}
+	p.image, err = openBoundParserImage()
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (p *SubprocessParser) BuildIdentity() (ParityDigest, error) {
+	if p == nil {
+		return ParityDigest{}, ErrSandboxUnavailable
+	}
+	p.imageMu.RLock()
+	defer p.imageMu.RUnlock()
+	if p.closed || p.image == nil {
+		return ParityDigest{}, ErrSandboxUnavailable
+	}
+	return p.image.identity(), nil
+}
+
+func (p *SubprocessParser) RevalidateExecutable() error {
+	if p == nil {
+		return ErrSandboxUnavailable
+	}
+	p.imageMu.RLock()
+	defer p.imageMu.RUnlock()
+	if p.closed || p.image == nil {
+		return ErrSandboxUnavailable
+	}
+	return p.image.revalidate()
+}
+
+func (p *SubprocessParser) Close() error {
+	if p == nil {
+		return nil
+	}
+	p.imageMu.Lock()
+	defer p.imageMu.Unlock()
+	if p.closed {
+		return nil
+	}
+	p.closed = true
+	if p.image == nil {
+		return nil
+	}
+	return p.image.close()
 }
 
 type parserRequest struct {
@@ -180,6 +239,11 @@ func (p *SubprocessParser) Parse(ctx context.Context, m rawsync.CanonicalManifes
 	return decodeParserOutcome(data)
 }
 func (p *SubprocessParser) execute(parent context.Context, source string, req parserRequest) ([]byte, error) {
+	p.imageMu.RLock()
+	defer p.imageMu.RUnlock()
+	if p.closed {
+		return nil, ErrSandboxUnavailable
+	}
 	input, err := json.Marshal(req)
 	if err != nil || len(input) > 2*rawsync.DefaultManifestLimits().MaxCanonicalBytes+4096 {
 		return nil, errParserProtocol
@@ -192,13 +256,18 @@ func (p *SubprocessParser) execute(parent context.Context, source string, req pa
 	if os.Mkdir(filepath.Join(jail, "source"), 0700) != nil {
 		return nil, ErrSandboxUnavailable
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		return nil, ErrSandboxUnavailable
-	}
 	ctx, cancel := context.WithTimeout(parent, p.WallTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, ParserChildFlag, source, jail)
+	var cmd *exec.Cmd
+	if p.image != nil {
+		cmd = p.image.command(ctx, ParserChildFlag, source, jail)
+	} else {
+		exe, executableErr := os.Executable()
+		if executableErr != nil {
+			return nil, ErrSandboxUnavailable
+		}
+		cmd = exec.CommandContext(ctx, exe, ParserChildFlag, source, jail)
+	}
 	cmd.Env = []string{"GOMAXPROCS=2", "GOMEMLIMIT=384MiB", "TZ=UTC", "LANG=C"}
 	if err = configureParserNamespace(cmd); err != nil {
 		return nil, err

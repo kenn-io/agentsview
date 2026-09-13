@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-11
+last_edited: 2026-09-12
 ---
 
 # Session Format Source Inventory
@@ -104,6 +104,14 @@ repository or document disappears, retain its original URL and commit hash and
 add an archived or maintained mirror without replacing the original identity.
 
 ## Claude Code (`claude`)
+
+- **Migration parity fixture check (2026-09-12):** Existing synthetic captures
+  retain persisted tool-output companions and child transcripts; independent
+  archive assertions cover tool failures, explicit zero usage, and parent links.
+  Synthetic fixtures in `internal/rawtest/parity_*.go` are checked against
+  SQLite ingestion and retained raw PostgreSQL publication. They extend the
+  local evidence for the pinned format below; they are not a new upstream format
+  claim.
 
 Rechecked 2026-09-11 against the existing provider parser and its metadata
 fixtures: the first nonempty JSONL `sessionId` supplies `SourceSessionID`. A
@@ -375,6 +383,14 @@ fixtures retain this field; missing identities remain source-local.
   `internal/parser/cowork_paths.go`, and `internal/parser/cowork_provider.go`.
 
 ## Codex (`codex`)
+
+- **Migration parity fixture check (2026-09-12):** Existing synthetic captures
+  retain fork-parent companions and structured tool-result events. Fork replay
+  metadata remains distinct from public subagent parent links. Synthetic
+  fixtures in `internal/rawtest/parity_*.go` are checked against SQLite
+  ingestion and retained raw PostgreSQL publication. They extend the local
+  evidence for the pinned format below; they are not a new upstream format
+  claim.
 
 - **Tool-result image check (2026-09-08):** Reverified the pinned
   [output payload types and array tests](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/models.rs).
@@ -2088,6 +2104,14 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 
 ## Forge (`forge`)
 
+- **Migration parity fixture check (2026-09-12):** New synthetic WAL database
+  fixtures cover two conversations, tool pairing, per-message token fallback,
+  and explicit zero totals. Messages carry producer timestamps so both stores
+  select the same historical pricing context. Synthetic fixtures in
+  `internal/rawtest/parity_*.go` are checked against SQLite ingestion and
+  retained raw PostgreSQL publication. They extend the local evidence for the
+  pinned format below; they are not a new upstream format claim.
+
 - **Format:** A `.forge.db` SQLite database containing conversations, context
   messages, and usage records.
 - **Evidence:** `source`.
@@ -2162,6 +2186,17 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 
 ## Piebald (`piebald`)
 
+- **Migration parity fixture check (2026-09-12):** New synthetic WAL database
+  fixtures cover two chats and plural fork output. Fork source identities now
+  use the chat ID plus the existing first-message ID suffix (for example,
+  42-200); root identity remains 42. Existing public session and parent IDs do
+  not change. This prevents retained raw publication and usage accounting from
+  conflating a fork with its parent. Data version 108 reparses existing local
+  sources without deleting archived sessions. Synthetic fixtures in
+  `internal/rawtest/parity_*.go` are checked against SQLite ingestion and
+  retained raw PostgreSQL publication. They extend the local evidence for the
+  pinned format below; they are not a new upstream format claim.
+
 - **Format:** An `app.db` SQLite database containing chats, projects, and
   messages.
 - **Evidence:** `source`.
@@ -2182,6 +2217,14 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   Producer schema and usage semantics are unchanged.
 
 ## Warp (`warp`)
+
+- **Migration parity fixture check (2026-09-12):** New synthetic WAL database
+  fixtures cover query text, synthesized command usage, token totals, and a
+  second conversation with null usage metadata. Warp does not retain billable
+  sessions without a query message in this parser. Synthetic fixtures in
+  `internal/rawtest/parity_*.go` are checked against SQLite ingestion and
+  retained raw PostgreSQL publication. They extend the local evidence for the
+  pinned format below; they are not a new upstream format claim.
 
 - **Format:** A `warp.sqlite` database whose conversation records include
   transcript metadata and aggregate usage counters.
@@ -2292,6 +2335,12 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 
 ## Z Code (`zcode`)
 
+- **Migration parity fixture check (2026-09-12):** Reused the existing live WAL
+  fixture with two sessions, including billable usage without a transcript.
+  Literal independent expectations cover provider titles, roles, and token
+  totals before retained raw PostgreSQL comparison. The pinned producer evidence
+  below is unchanged.
+
 - **Format:** A `db.sqlite` database, including a `model_usage` table.
 - **Evidence:** `no-public-source`.
 - **Upstream:** Z Code's first-party product pages, documentation, and public
@@ -2324,6 +2373,14 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   inferred.
 
 ## Goose (`goose`)
+
+- **Migration parity fixture check (2026-09-12):** New synthetic
+  schema-version-15 WAL database fixtures cover tool results, subagent links,
+  request usage with null versus explicit zero cost, and billable usage without
+  transcript. Synthetic fixtures in `internal/rawtest/parity_*.go` are checked
+  against SQLite ingestion and retained raw PostgreSQL publication. They extend
+  the local evidence for the pinned format below; they are not a new upstream
+  format claim.
 
 - **Format:** A shared SQLite `sessions.db`. Schema version 15 stores session
   metadata in `sessions`, ordered role messages with tagged JSON content in
@@ -2818,6 +2875,14 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   parsing.
 
 ## Evener (`evener`)
+
+- **Migration parity fixture check (2026-09-12):** New framed-v2 transcript and
+  metadata fixtures cover provider title, structured failed tool output,
+  explicit zero versus absent usage, and retained malformed-input failure.
+  Synthetic fixtures in `internal/rawtest/parity_*.go` are checked against
+  SQLite ingestion and retained raw PostgreSQL publication. They extend the
+  local evidence for the pinned format below; they are not a new upstream format
+  claim.
 
 - **Format:** newline-framed semantic transcript v2; header followed by entries
   containing a sequence number and semantic turn. Optional metadata is a

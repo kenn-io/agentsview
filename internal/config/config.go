@@ -77,6 +77,12 @@ type PGConfig struct {
 	HostedEmbeddingsMaxAttempts    int  `toml:"hosted_embeddings_max_attempts" json:"hosted_embeddings_max_attempts,omitempty"`
 	HostedEmbeddingsConcurrency    int  `toml:"hosted_embeddings_concurrency" json:"hosted_embeddings_concurrency,omitempty"`
 
+	ParityEnabled         bool                        `toml:"parity_enabled" json:"parity_enabled,omitempty"`
+	ParityBaselines       map[string]PGParityBaseline `toml:"parity_baselines" json:"parity_baselines,omitempty"`
+	ParityPollSeconds     int                         `toml:"parity_poll_seconds" json:"parity_poll_seconds,omitempty"`
+	ParityAttemptSeconds  int                         `toml:"parity_attempt_seconds" json:"parity_attempt_seconds,omitempty"`
+	ParitySnapshotSeconds int                         `toml:"parity_snapshot_seconds" json:"parity_snapshot_seconds,omitempty"`
+
 	URL             string   `toml:"url" json:"url"`
 	Schema          string   `toml:"schema" json:"schema"`
 	MachineName     string   `toml:"machine_name" json:"machine_name"`
@@ -111,6 +117,7 @@ type ResolvedPGTarget struct {
 var pgConfigKeys = map[string]struct{}{
 	"raw_tenant": {}, "raw_derivation": {}, "raw_poll_seconds": {}, "raw_attempt_seconds": {}, "raw_max_attempts": {},
 	"hosted_embeddings_enabled": {}, "hosted_embeddings_poll_seconds": {}, "hosted_embeddings_attempt_seconds": {}, "hosted_embeddings_max_attempts": {}, "hosted_embeddings_concurrency": {},
+	"parity_enabled": {}, "parity_baselines": {}, "parity_poll_seconds": {}, "parity_attempt_seconds": {}, "parity_snapshot_seconds": {},
 
 	"url":              {},
 	"schema":           {},
@@ -1659,6 +1666,11 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.PG.HostedEmbeddingsAttemptSeconds = legacyPG.HostedEmbeddingsAttemptSeconds
 		c.PG.HostedEmbeddingsMaxAttempts = legacyPG.HostedEmbeddingsMaxAttempts
 		c.PG.HostedEmbeddingsConcurrency = legacyPG.HostedEmbeddingsConcurrency
+		c.PG.ParityEnabled = legacyPG.ParityEnabled
+		c.PG.ParityBaselines = legacyPG.ParityBaselines
+		c.PG.ParityPollSeconds = legacyPG.ParityPollSeconds
+		c.PG.ParityAttemptSeconds = legacyPG.ParityAttemptSeconds
+		c.PG.ParitySnapshotSeconds = legacyPG.ParitySnapshotSeconds
 	}
 	profiles, err := normalizeHostedEmbeddingProfiles(file.HostedEmbeddings.Profiles, meta)
 	if err != nil {

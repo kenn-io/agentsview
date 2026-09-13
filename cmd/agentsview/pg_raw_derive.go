@@ -36,6 +36,50 @@ type pgRawRuntime struct {
 	interval         time.Duration
 }
 
+type pgRuntimeStopper interface{ Stop() }
+type pgRuntimeCloser interface{ Close() error }
+
+// pgHostedRawShutdown owns the production shutdown order. Parser work must
+// join before the bound parser image and shared custody repository are closed.
+type pgHostedRawShutdown struct {
+	parityRuntime, rawRuntime, embeddingRuntime pgRuntimeStopper
+	parityParser                                pgRuntimeCloser
+	closeUploads                                func() error
+	custody, store                              pgRuntimeCloser
+}
+
+func (s *pgHostedRawShutdown) Close() {
+	if s.parityRuntime != nil {
+		s.parityRuntime.Stop()
+	}
+	if s.rawRuntime != nil {
+		s.rawRuntime.Stop()
+	}
+	if s.embeddingRuntime != nil {
+		s.embeddingRuntime.Stop()
+	}
+	if s.parityParser != nil {
+		if err := s.parityParser.Close(); err != nil {
+			log.Print("migration parity parser cleanup failed")
+		}
+	}
+	if s.closeUploads != nil {
+		if err := s.closeUploads(); err != nil {
+			log.Print("hosted raw upload cleanup failed")
+		}
+	}
+	if s.custody != nil {
+		if err := s.custody.Close(); err != nil {
+			log.Print("hosted raw custody cleanup failed")
+		}
+	}
+	if s.store != nil {
+		if err := s.store.Close(); err != nil {
+			log.Print("hosted raw database cleanup failed")
+		}
+	}
+}
+
 func newPGRawRuntime(parent context.Context, interval time.Duration, batch func(context.Context)) *pgRawRuntime {
 	ctx, cancel := context.WithCancel(parent)
 	return &pgRawRuntime{ctx: ctx, cancel: cancel, done: make(chan struct{}), batch: batch, interval: interval}
@@ -82,6 +126,9 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 	if err := pg.ValidateHostedEmbeddings(app.RequireAuth); err != nil {
 		return pgServeStartup{}, err
 	}
+	if err := pg.ValidateParity(app.RequireAuth); err != nil {
+		return pgServeStartup{}, err
+	}
 	applyClassifierConfig(app)
 	store, err := postgres.NewHostedStore(pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
 	if err != nil {
@@ -89,30 +136,17 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	var runtime *pgRawRuntime
+	var parityRuntime *pgRawRuntime
+	var parityOwner *pgMigrationParityOwner
 	var embeddingRuntime *hostedEmbeddingRuntime
 	var closeUploads func() error
 	custody := &pgRawSyncCustody{dataDir: app.DataDir, tenant: pg.RawTenant, limits: rawsync.DefaultManifestLimits(), version: rawProcessingVersion()}
+	shutdown := &pgHostedRawShutdown{custody: custody, store: store}
 	var once sync.Once
 	cleanup := func() {
 		once.Do(func() {
 			stop()
-			if runtime != nil {
-				runtime.Stop()
-			}
-			if embeddingRuntime != nil {
-				embeddingRuntime.Stop()
-			}
-			if closeUploads != nil {
-				if err := closeUploads(); err != nil {
-					log.Print("hosted raw upload cleanup failed")
-				}
-			}
-			if err := custody.Close(); err != nil {
-				log.Print("hosted raw custody cleanup failed")
-			}
-			if err := store.Close(); err != nil {
-				log.Print("hosted raw database cleanup failed")
-			}
+			shutdown.Close()
 		})
 	}
 	fail := func(err error) (pgServeStartup, error) { cleanup(); return pgServeStartup{}, err }
@@ -152,6 +186,7 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 				PollInterval: time.Duration(poll) * time.Second, AttemptTimeout: time.Duration(attempt) * time.Second,
 				SourceConcurrency: concurrency, LeaseDuration: time.Minute, HeartbeatInterval: 10 * time.Second,
 			})
+			shutdown.embeddingRuntime = embeddingRuntime
 		}
 	}
 	metadata, err := postgres.NewHostedRawIngestStore(store.DB(), pg.RawTenant, custody.version)
@@ -166,6 +201,20 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 	auth, err := rawsync.NewDeviceAuthService(authStore, pgRawSyncTokenTTL)
 	if err != nil {
 		return fail(err)
+	}
+	if pg.ParityEnabled {
+		parityOwner, err = newPGMigrationParityOwner(ctx, app, pg, store.DB(), custody)
+		if err != nil {
+			return fail(err)
+		}
+		shutdown.parityParser = parityOwner.parser
+		poll, _, _ := pg.ParityWorkerBounds()
+		parityRuntime = newPGRawRuntime(ctx, time.Duration(poll)*time.Second, func(ctx context.Context) {
+			if err := parityOwner.runOne(ctx); err != nil && ctx.Err() == nil {
+				log.Print("migration parity worker batch failed")
+			}
+		})
+		shutdown.parityRuntime = parityRuntime
 	}
 	if pg.RawDerivation {
 		poll, attempt, maxAttempts := pg.RawWorkerBounds()
@@ -204,6 +253,7 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 				log.Print("hosted raw pending-signal maintenance failed")
 			}
 		})
+		shutdown.rawRuntime = runtime
 	}
 	rtOpts := serveRuntimeOptions{Mode: "pg-serve", RequestedPort: app.Port}
 	app, err = prepareServeRuntimeConfig(app, rtOpts)
@@ -215,13 +265,17 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 		return fail(err)
 	}
 	closeUploads = closeUploadStore
+	shutdown.closeUploads = closeUploads
 	opts := []server.Option{server.WithVersion(server.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate, ReadOnly: true}), server.WithDataDir(app.DataDir), server.WithBaseContext(ctx), server.WithRawSyncServices(auth, custody), server.WithRawSyncTenant(pg.RawTenant), uploadOption}
 	if basePath != "" {
 		opts = append(opts, server.WithBasePath(basePath))
 	}
 	startup := pgServeStartup{cfg: app, ctx: ctx, rtOpts: rtOpts, srv: server.New(app, store, nil, opts...), cleanup: cleanup}
-	if runtime != nil || embeddingRuntime != nil {
+	if runtime != nil || parityRuntime != nil || embeddingRuntime != nil {
 		startup.startWorker = func() {
+			if parityRuntime != nil {
+				parityRuntime.Start()
+			}
 			if runtime != nil {
 				runtime.Start()
 			}

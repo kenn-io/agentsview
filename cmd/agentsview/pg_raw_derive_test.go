@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -73,6 +75,75 @@ func TestPGRawRuntimeClosedBeforeReadinessNeverStarts(t *testing.T) {
 	r.Stop()
 	assert.Zero(t, calls.Load())
 }
+
+func TestParityRuntimeStopJoinsActiveParserCleanupBeforeOwnedClosers(t *testing.T) {
+	binding := parityWorkerRuntimeBinding()
+	manifest := parityRuntimeManifest(t)
+	source := rawderive.ParitySource{ID: rawderive.SourceID(manifest), Identity: manifest.Identity, HeadManifestID: manifest.ManifestID, HeadGeneration: 1, DependencyDigest: rawderive.ParityDigest{1}, Required: true}
+	lease := parityRuntimeLease(binding)
+	lease.BatchSize = 1
+	store := &parityRuntimeStoreFixture{lease: &lease, report: rawderive.ParityReport{BaselineSealed: true}, sources: []rawderive.ParitySource{source}, history: map[string][]rawderive.ParityHistoryEntry{source.ID: {{ManifestID: manifest.ManifestID, Generation: 1}}}}
+	entered := make(chan string, 1)
+	releaseCleanup := make(chan struct{})
+	var events []string
+	var mu sync.Mutex
+	appendEvent := func(event string) { mu.Lock(); defer mu.Unlock(); events = append(events, event) }
+	parser := &parityRuntimeParserFixture{identity: binding.Versions.ParserBuild}
+	parser.parseTree = func(ctx context.Context, tree *rawderive.Materialization) (rawderive.ParsedManifest, error) {
+		entered <- tree.Root()
+		<-ctx.Done()
+		<-releaseCleanup
+		return rawderive.ParsedManifest{}, ctx.Err()
+	}
+	parser.close = func() error {
+		appendEvent("parser-close")
+		return nil
+	}
+	owner := &pgMigrationParityOwner{store: store, parser: parser,
+		manifests:    parityRuntimeManifestFixture{manifest: manifest},
+		materializer: rawderive.Materializer{Store: parityRuntimeObjectFixture{body: []byte("fixture")}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20},
+		owner:        "parity-owner", tenant: binding.Tenant, leaseDuration: time.Minute, heartbeatInterval: time.Hour,
+		attemptTimeout: time.Minute, snapshotTimeout: time.Second, versions: binding.Versions,
+		openBaseline: func(context.Context, string) (*sql.DB, string, rawderive.ParityDigest, error) {
+			return nil, binding.BaselineID, binding.BaselineConfig, nil
+		},
+	}
+	r := newPGRawRuntime(t.Context(), time.Hour, func(ctx context.Context) { _ = owner.runOne(ctx) })
+	shutdown := pgHostedRawShutdown{parityRuntime: r, parityParser: parser, custody: closeFunc(func() error {
+		appendEvent("custody-close")
+		return nil
+	})}
+	r.Start()
+	var materialized string
+	select {
+	case materialized = <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("parity worker did not enter parser")
+	}
+	closed := make(chan struct{})
+	go func() {
+		shutdown.Close()
+		close(closed)
+	}()
+	require.Never(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(events) != 0
+	}, 50*time.Millisecond, 5*time.Millisecond, "owned closers must wait for parser cleanup")
+	close(releaseCleanup)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not join parser cleanup")
+	}
+	_, err := os.Stat(materialized)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	assert.Equal(t, []string{"parser-close", "custody-close"}, events)
+}
+
+type closeFunc func() error
+
+func (f closeFunc) Close() error { return f() }
 
 func TestMain(m *testing.M) {
 	if handled, code := rawderive.RunParserChild(os.Args[1:]); handled {

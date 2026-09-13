@@ -29,16 +29,26 @@ func (l ManifestLoader) Load(
 	ctx context.Context,
 	lease JobLease,
 ) (_ rawsync.CanonicalManifest, resultErr error) {
+	return l.LoadManifest(ctx, lease.Identity, lease.ManifestID)
+}
+
+// LoadManifest returns the exact canonical manifest named by its authenticated
+// identity and immutable object ID.
+func (l ManifestLoader) LoadManifest(
+	ctx context.Context,
+	identity rawsync.AuthIdentity,
+	manifestID string,
+) (_ rawsync.CanonicalManifest, resultErr error) {
 	if l.Store == nil {
 		return rawsync.CanonicalManifest{}, fmt.Errorf("%w: manifest store is required", rawsync.ErrInvalid)
 	}
 	if l.Limits.MaxCanonicalBytes <= 0 {
 		return rawsync.CanonicalManifest{}, fmt.Errorf("%w: manifest limits are invalid", rawsync.ErrInvalid)
 	}
-	if _, err := rawsync.NewObjectRef(lease.ManifestID, 0); err != nil {
+	if _, err := rawsync.NewObjectRef(manifestID, 0); err != nil {
 		return rawsync.CanonicalManifest{}, fmt.Errorf("loading raw manifest: %w", err)
 	}
-	info, reader, err := l.Store.OpenManifest(ctx, lease.Identity, lease.ManifestID)
+	info, reader, err := l.Store.OpenManifest(ctx, identity, manifestID)
 	if err != nil {
 		return rawsync.CanonicalManifest{}, fmt.Errorf("opening raw manifest: %w", err)
 	}
@@ -50,7 +60,7 @@ func (l ManifestLoader) Load(
 			resultErr = fmt.Errorf("closing raw manifest: %w", err)
 		}
 	}()
-	if info.Ref.SHA256 != lease.ManifestID || info.Ref.Length <= 0 ||
+	if info.Ref.SHA256 != manifestID || info.Ref.Length <= 0 ||
 		info.Ref.Length > int64(l.Limits.MaxCanonicalBytes) {
 		return rawsync.CanonicalManifest{}, fmt.Errorf(
 			"%w: stored manifest identity is inconsistent", rawsync.ErrInvalid,
@@ -72,7 +82,7 @@ func (l ManifestLoader) Load(
 		return rawsync.CanonicalManifest{}, fmt.Errorf("verifying raw manifest: %w", err)
 	}
 	manifest, err := rawsync.ParseCanonicalManifest(
-		lease.Identity, lease.ManifestID, canonicalJSON, l.Limits,
+		identity, manifestID, canonicalJSON, l.Limits,
 	)
 	if err != nil {
 		return rawsync.CanonicalManifest{}, fmt.Errorf("parsing raw manifest: %w", err)
