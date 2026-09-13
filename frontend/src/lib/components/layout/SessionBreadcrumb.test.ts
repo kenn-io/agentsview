@@ -1230,26 +1230,86 @@ describe("SessionBreadcrumb", () => {
     });
   });
 
-  it("hides local-only actions for remote sessions", async () => {
+  it.each([false, true])("copies remote commands with fallback=%s and excludes local actions", async (fallback) => {
+    const resume = vi.mocked(SessionsService.postApiV1SessionsByIdResume);
+    const command = "cd '/home/user/project' && claude --resume abc-123";
+    if (fallback) resume.mockRejectedValueOnce(new Error("offline"));
+    else resume.mockResolvedValueOnce({ launched: false, command, cwd: "/home/user/project" });
+    openersService.getApiV1Openers.mockResolvedValue({ openers: [
+      { id: "kitty", name: "Kitty", kind: "terminal", bin: "kitty" },
+      { id: "code", name: "VS Code", kind: "editor", bin: "code" },
+      { id: "finder", name: "Finder", kind: "files", bin: "open" },
+      { id: "claude-desktop", name: "Claude Desktop", kind: "action", bin: "open" },
+    ] });
     const component = mount(SessionBreadcrumb, {
       target: document.body,
       props: {
         session: makeSession("claude", {
-          id: "devbox1~abc-123",
+          id: "devbox1~claude:abc-123",
           machine: "devbox1",
+          file_path: "/remote/session.jsonl",
         }),
         onBack: () => {},
       },
     });
 
-    await tick();
+    try {
+      await flushPromises();
+      const trigger = document.querySelector<HTMLButtonElement>(".resume-btn");
+      expect(trigger).not.toBeNull();
+      trigger!.click();
+      await tick();
+      expect(Array.from(document.querySelectorAll(".open-menu-name"), (el) => el.textContent)).toEqual(["Copy command"]);
+      expect(document.querySelector(".open-menu-divider")).toBeNull();
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "1" }));
+      await tick();
+      expect(resume).not.toHaveBeenCalled();
+      document.querySelector<HTMLButtonElement>(".open-menu-item")!.click();
+      await vi.waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith(fallback ? "claude --resume abc-123" : command));
+      expect(resume).toHaveBeenCalledExactlyOnceWith({ id: "devbox1~claude:abc-123" }, { command_only: true });
+      expect(SessionsService.postApiV1SessionsByIdOpen).not.toHaveBeenCalled();
+      expect(trigger!.textContent).toContain("Command copied!");
+    } finally {
+      await unmount(component);
+    }
+  });
 
-    // The dropdown trigger (.resume-btn) should not appear
-    // for remote sessions (no resume, no copy-dir, no open-in).
-    const resumeBtn = document.querySelector(".resume-btn");
-    expect(resumeBtn).toBeNull();
+  it("hides the remote menu for unsupported agents", async () => {
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("unknown", { id: "devbox1~unsupported" }), onBack: () => {} },
+    });
+    await flushPromises();
+    expect(document.querySelector(".resume-btn")).toBeNull();
+    await unmount(component);
+  });
 
-    unmount(component);
+  it("keeps local launch and file actions with remote-looking machine metadata", async () => {
+    openersService.getApiV1Openers.mockResolvedValue({ openers: [
+      { id: "kitty", name: "Kitty", kind: "terminal", bin: "kitty" },
+      { id: "code", name: "VS Code", kind: "editor", bin: "code" },
+      { id: "finder", name: "Finder", kind: "files", bin: "open" },
+      { id: "claude-desktop", name: "Claude Desktop", kind: "action", bin: "open" },
+    ] });
+    vi.mocked(SessionsService.postApiV1SessionsByIdResume).mockResolvedValueOnce({ launched: true, command: "claude --resume abc-123" });
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("claude", { id: "claude:abc-123", machine: "devbox1~remote" }), onBack: () => {} },
+    });
+    try {
+      await flushPromises();
+      document.querySelector<HTMLButtonElement>(".resume-btn")!.click();
+      await tick();
+      expect(Array.from(document.querySelectorAll(".open-menu-name"), (el) => el.textContent)).toEqual([
+        "Kitty", "Default terminal", "Open in Claude Code", "Copy command", "Copy directory path", "VS Code", "Finder", "Claude Desktop",
+      ]);
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "1" }));
+      await vi.waitFor(() => expect(SessionsService.postApiV1SessionsByIdResume).toHaveBeenCalledExactlyOnceWith({
+        id: "claude:abc-123",
+      }, { opener_id: "kitty" }));
+    } finally {
+      await unmount(component);
+    }
   });
 
   describe("cost badge", () => {

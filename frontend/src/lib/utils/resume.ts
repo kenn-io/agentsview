@@ -60,6 +60,10 @@ export function stripIdPrefix(id: string, agent?: string): string {
   return id;
 }
 
+function stripHostPrefix(id: string): string {
+  return id.slice(id.indexOf("~") + 1);
+}
+
 /**
  * Returns true if the given agent supports CLI session resumption.
  */
@@ -84,7 +88,7 @@ export function buildResumeCommand(
   const builder = RESUME_AGENTS[agent];
   if (!builder) return null;
 
-  const rawId = stripIdPrefix(sessionId, agent);
+  const rawId = stripIdPrefix(stripHostPrefix(sessionId), agent);
   let cmd = builder(rawId);
 
   if (flags?.model) {

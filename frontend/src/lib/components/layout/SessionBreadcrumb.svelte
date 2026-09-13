@@ -647,7 +647,7 @@
     !session?.id.includes("~"),
   );
 
-  const canResume = $derived(
+  const canLaunch = $derived(
     session
       ? supportsResume(session.agent) && isLocal
       : false,
@@ -662,6 +662,7 @@
       ? claudeCodeLink(sessionDir)
       : null,
   );
+  const canCopyCommand = $derived(session ? supportsResume(session.agent) : false);
 
   const terminalOpeners = $derived(
     openers.filter((o) => o.kind === "terminal"),
@@ -682,7 +683,7 @@
   );
 
   const showDropdown = $derived(
-    canResume ||
+    canCopyCommand ||
     codexLink !== null ||
     (isLocal && (
       editorOpeners.length > 0 ||
@@ -843,10 +844,10 @@
             class:has-feedback-success={openFeedback !== "" && openFeedbackKind === "success"}
             class:has-feedback-error={openFeedback !== "" && openFeedbackKind === "error"}
             onclick={(e) => { e.stopPropagation(); showOpenMenu = !showOpenMenu; }}
-            title={canResume
+            title={canLaunch
               ? m.session_breadcrumb_resume_session_in_terminal()
               : m.session_breadcrumb_session_actions()}
-            aria-label={canResume
+            aria-label={canLaunch
               ? m.session_breadcrumb_resume_session()
               : m.session_breadcrumb_session_actions()}
           >
@@ -858,7 +859,7 @@
               {/if}
               {openFeedback}
             {:else}
-              {canResume
+              {canLaunch
                 ? m.session_breadcrumb_resume()
                 : m.session_breadcrumb_open()}
               <ChevronDownIcon size="8" strokeWidth="2.6" aria-hidden="true" />
@@ -866,7 +867,7 @@
           </button>
           {#if showOpenMenu}
             <div class="open-menu">
-              {#if canResume}
+              {#if canLaunch}
                 {#each terminalOpeners as opener, i (opener.id)}
                   <button
                     class="open-menu-item"
@@ -910,7 +911,9 @@
                     <span class="open-menu-name">{m.session_breadcrumb_open_in_claude_code()}</span>
                   </a>
                 {/if}
-                <div class="open-menu-divider"></div>
+              {/if}
+              {#if canCopyCommand}
+                {#if canLaunch}<div class="open-menu-divider"></div>{/if}
                 <button class="open-menu-item" onclick={handleCopyResumeCommand}>
                   <span class="open-menu-num">
                     <CopyIcon size="10" strokeWidth="2" aria-hidden="true" />
@@ -952,7 +955,7 @@
                 {/each}
               {/if}
               {/if}
-              {#if canResume && claudeDesktopOpener}
+              {#if canLaunch && claudeDesktopOpener}
                 <div class="open-menu-divider"></div>
                 <button
                   class="open-menu-item"

@@ -26,6 +26,33 @@ describe("supportsResume", () => {
 });
 
 describe("buildResumeCommand", () => {
+  it.each([
+    ["claude", "devbox1~claude:abc-123", "claude --resume abc-123"],
+    ["claude", "devbox1~abc-123", "claude --resume abc-123"],
+    ["codex", "devbox1~codex:abc-123", "codex resume abc-123"],
+    ["codex", "devbox1~codex:$(whoami)", "codex resume '$(whoami)'"],
+    ["claude", "devbox1~claude:it's a test", "claude --resume 'it'\"'\"'s a test'"],
+    ["claude", "devbox1~claude:a~b", "claude --resume 'a~b'"],
+    ["cursor", "devbox1~cursor:abc-123", null],
+    ["unknown", "devbox1~unknown:abc-123", null],
+  ])("remote fallback %s %s is ID-only", (agent, id, command) => {
+    expect(buildResumeCommand(agent, id)).toBe(command);
+  });
+
+  it.each([
+    ["abc-123", "claude --resume abc-123"],
+    ["claude:abc-123", "claude --resume abc-123"],
+    ["devbox1:abc-123", "claude --resume 'devbox1:abc-123'"],
+    ["$(whoami)", "claude --resume '$(whoami)'"],
+  ])("local fallback false positive %s", (id, command) => {
+    expect(buildResumeCommand("claude", id)).toBe(command);
+  });
+
+  it("preserves remote Claude flags", () => {
+    expect(buildResumeCommand("claude", "devbox1~claude:abc-123", {
+      skipPermissions: true, forkSession: true, print: true,
+    })).toBe("claude --resume abc-123 --dangerously-skip-permissions --fork-session --print");
+  });
   it("generates claude resume command", () => {
     expect(buildResumeCommand("claude", "abc-123-def")).toBe("claude --resume abc-123-def");
   });
@@ -170,6 +197,14 @@ describe("buildResumeCommand", () => {
 });
 
 describe("formatResumeResponseCommand", () => {
+  it.each([
+    ["claude", "cd '/remote/project' && claude --resume abc-123", "cd '/remote/project' && claude --resume abc-123"],
+    ["kiro", "cd '/remote/project' && kiro-cli chat --resume-id abc-123", "cd '/remote/project' && kiro-cli chat --resume-id abc-123"],
+    ["cursor", "cursor agent --resume abc-123", "cd '/remote/project' && cursor agent --resume abc-123"],
+    ["codex", "codex resume abc-123", "codex resume abc-123"],
+  ])("remote cwd formatting for %s", (agent, command, expected) => {
+    expect(formatResumeResponseCommand(agent, { command, cwd: "/remote/project" })).toBe(expected);
+  });
   it("keeps non-cursor backend commands unchanged", () => {
     expect(
       formatResumeResponseCommand("claude", {

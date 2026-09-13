@@ -50,6 +50,41 @@ describe("registerShortcuts", () => {
     cleanup();
     detachSessionList?.();
     document.body.innerHTML = "";
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+  });
+
+  describe("remote c copy", () => {
+    it.each([
+      ["claude", false, "cd '/remote/project' && claude --resume abc-123"],
+      ["claude", true, "claude --resume abc-123"],
+      ["cursor", false, "cd '/remote/project' && cursor agent --resume abc-123"],
+      ["cursor", true, null],
+      ["unknown", false, null],
+    ] as const)("%s fallback=%s", async (agent, fallback, expected) => {
+      const id = `devbox1~${agent}:abc-123`;
+      sessions.sessions = [{
+        id, agent, project: "remote-project", machine: "devbox1", first_message: null,
+        started_at: null, ended_at: null, message_count: 1, user_message_count: 1,
+        total_output_tokens: 0, peak_context_tokens: 0, is_automated: false,
+        created_at: "2026-01-01T00:00:00Z",
+      }];
+      sessions.activeSessionId = id;
+      const resume = vi.spyOn(SessionsService, "postApiV1SessionsByIdResume");
+      if (fallback) resume.mockRejectedValue(new Error("offline"));
+      else resume.mockResolvedValue({
+        launched: false,
+        command: agent === "cursor" ? "cursor agent --resume abc-123" : "cd '/remote/project' && claude --resume abc-123",
+        cwd: "/remote/project",
+      });
+      fireKey("c");
+      await Promise.resolve();
+      await Promise.resolve();
+      if (agent === "unknown") expect(resume).not.toHaveBeenCalled();
+      else expect(resume).toHaveBeenCalledExactlyOnceWith({ id }, { command_only: true });
+      if (expected) expect(copyToClipboard).toHaveBeenCalledExactlyOnceWith(expected);
+      else expect(copyToClipboard).not.toHaveBeenCalled();
+    });
   });
 
   describe("Cmd+K modal toggle", () => {

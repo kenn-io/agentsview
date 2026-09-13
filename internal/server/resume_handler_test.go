@@ -167,8 +167,67 @@ func powerShellSingleQuoteForTest(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
+func TestResumeRemoteCommandOnly(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "devbox1~claude:abc-123", "remote-project", 1, func(s *db.Session) {
+		s.Agent = "claude"
+		s.Cwd = "/home/user/project"
+	})
+	w := te.post(t, "/api/v1/sessions/devbox1~claude:abc-123/resume", `{"command_only":true}`)
+	t.Logf("status=%d body=%s", w.Code, w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Launched bool   `json:"launched"`
+		Command  string `json:"command"`
+		Cwd      string `json:"cwd"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.False(t, resp.Launched)
+	assert.Equal(t, "cd '/home/user/project' && claude --resume abc-123", resp.Command)
+	assert.Equal(t, "/home/user/project", resp.Cwd)
+	assert.NotContains(t, resp.Command, "~")
+}
+
 func TestResumeSession(t *testing.T) {
 	te := setup(t)
+
+	t.Run("remote launch guard", func(t *testing.T) {
+		te.seedSession(t, "devbox1~claude:guard", "remote", 1, func(s *db.Session) { s.Agent = "claude" })
+		for _, body := range []string{`{}`, `{"command_only":false}`, `{"opener_id":"claude-desktop"}`, `{"opener_id":"missing-terminal"}`, `{"command_only":true,"fork_session":true,"from_ordinal":0}`} {
+			w := te.post(t, "/api/v1/sessions/devbox1~claude:guard/resume", body)
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.JSONEq(t, `{"error":"cannot resume remote session"}`, w.Body.String())
+		}
+	})
+
+	t.Run("remote unsupported agent", func(t *testing.T) {
+		te.seedSession(t, "devbox1~unsupported", "remote", 1, func(s *db.Session) { s.Agent = "vscode-copilot" })
+		w := te.post(t, "/api/v1/sessions/devbox1~unsupported/resume", `{"command_only":true}`)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.JSONEq(t, `{"error":"agent \"vscode-copilot\" does not support resume"}`, w.Body.String())
+	})
+
+	t.Run("remote deleted row precedes guard", func(t *testing.T) {
+		te.seedSession(t, "devbox1~deleted", "remote", 1)
+		require.NoError(t, te.db.SoftDeleteSession("devbox1~deleted"))
+		for _, body := range []string{`{}`, `{"command_only":true}`} {
+			w := te.post(t, "/api/v1/sessions/devbox1~deleted/resume", body)
+			assert.Equal(t, http.StatusNotFound, w.Code)
+		}
+	})
+
+	t.Run("local namespace false positive", func(t *testing.T) {
+		te.seedSession(t, "codex:local-id", "remote-project", 1, func(s *db.Session) {
+			s.Agent = "codex"
+			s.Machine = "devbox1~remote"
+		})
+		assertStatus(t, te.post(t, "/api/v1/config/terminal", `{"mode":"clipboard"}`), http.StatusOK)
+		for _, body := range []string{`{}`, `{"command_only":true}`} {
+			w := te.post(t, "/api/v1/sessions/codex:local-id/resume", body)
+			assert.Equal(t, http.StatusOK, w.Code)
+			assert.JSONEq(t, `{"launched":false,"command":"codex resume local-id"}`, w.Body.String())
+		}
+	})
 
 	// Seed a claude session with an absolute project path.
 	projectDir := t.TempDir()
@@ -945,6 +1004,53 @@ func TestPrimaryResumeModel(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, "codex resume model-selection-real -m real-model", resp.Command)
 	})
+}
+
+func TestResumeRemoteCwd(t *testing.T) {
+	for _, tc := range []struct{ agent, command string }{
+		{"claude", "claude --resume abc-123"},
+		{"kiro", "kiro-cli chat --resume-id abc-123"},
+		{"cursor", "cursor agent --resume abc-123"},
+		{"codex", "codex resume abc-123"},
+		{"copilot", "copilot --resume=abc-123"},
+		{"gemini", "gemini --resume abc-123"},
+		{"opencode", "opencode --session abc-123"},
+		{"amp", "amp --resume abc-123"},
+	} {
+		for _, cwd := range []string{"", "/home/user/project", "/remote/project dir", `C:\remote\project`} {
+			t.Run(tc.agent+"/"+cwd, func(t *testing.T) {
+				te := setup(t)
+				localDir := t.TempDir()
+				file := filepath.Join(t.TempDir(), "session.jsonl")
+				pathJSON, err := json.Marshal(localDir)
+				require.NoError(t, err)
+				// Conflicting local transcript paths must never influence remote output.
+				content := `{"cwd":` + string(pathJSON) + `,"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"working_directory":` + string(pathJSON) + `}}]}}`
+				require.NoError(t, os.WriteFile(file, []byte(content), 0o600))
+				id := "devbox1~" + tc.agent + ":abc-123"
+				te.seedSession(t, id, localDir, 1, func(s *db.Session) {
+					s.Agent = tc.agent
+					s.Cwd = cwd
+					s.FilePath = &file
+				})
+				w := te.post(t, "/api/v1/sessions/"+id+"/resume", `{"command_only":true,"opener_id":"missing-terminal"}`)
+				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+				var resp struct {
+					Launched bool   `json:"launched"`
+					Command  string `json:"command"`
+					Cwd      string `json:"cwd"`
+				}
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+				want := tc.command
+				if cwd != "" && (tc.agent == "claude" || tc.agent == "kiro") {
+					want = "cd '" + cwd + "' && " + want
+				}
+				assert.Equal(t, want, resp.Command)
+				assert.Equal(t, cwd, resp.Cwd)
+				assert.False(t, resp.Launched)
+			})
+		}
+	}
 }
 
 func TestGetSessionDirectory(t *testing.T) {

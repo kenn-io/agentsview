@@ -1174,7 +1174,9 @@ func (s *Server) humaResumeSession(
 	if session == nil || session.DeletedAt != nil {
 		return nil, apiError(http.StatusNotFound, "session not found")
 	}
-	if host, _ := parser.StripHostPrefix(in.ID); host != "" {
+	req := in.Body
+	host, rawID := parser.StripHostPrefix(in.ID)
+	if host != "" && (!req.CommandOnly || req.FromOrdinal != nil) {
 		return nil, apiError(http.StatusBadRequest, "cannot resume remote session")
 	}
 	tmpl, ok := resumeAgents[string(session.Agent)]
@@ -1182,7 +1184,6 @@ func (s *Server) humaResumeSession(
 		return nil, apiError(http.StatusBadRequest,
 			fmt.Sprintf("agent %q does not support resume", session.Agent))
 	}
-	req := in.Body
 	if req.FromOrdinal != nil {
 		if string(session.Agent) != "claude" {
 			return nil, apiError(http.StatusBadRequest,
@@ -1301,7 +1302,7 @@ func (s *Server) humaResumeSession(
 		}, nil
 	}
 	prefix := string(session.Agent) + ":"
-	rawID := strings.TrimPrefix(in.ID, prefix)
+	rawID = strings.TrimPrefix(rawID, prefix)
 	if s.db.ReadOnly() && !req.CommandOnly {
 		return nil, apiError(http.StatusNotImplemented,
 			"session launch not available in remote mode")
@@ -1323,14 +1324,23 @@ func (s *Server) humaResumeSession(
 			cmd += " --fork-session"
 		}
 	}
-	launchDir, workspaceDir := resolveResumePaths(session)
+	var launchDir, workspaceDir string
+	if host != "" {
+		launchDir = session.Cwd
+	} else {
+		launchDir, workspaceDir = resolveResumePaths(session)
+	}
 	if string(session.Agent) == "cursor" && workspaceDir != "" {
 		cmd += " --workspace " + shellQuote(workspaceDir)
 	}
 	responseCmd := cmd
 	switch string(session.Agent) {
 	case "claude", "kiro":
-		responseCmd = commandWithCwd(cmd, launchDir)
+		if host != "" {
+			responseCmd = commandWithDir(cmd, launchDir)
+		} else {
+			responseCmd = commandWithCwd(cmd, launchDir)
+		}
 	}
 	if req.CommandOnly {
 		return &jsonOutput[resumeResponse]{

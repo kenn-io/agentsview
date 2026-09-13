@@ -155,7 +155,14 @@ func commandWithCwd(cmd, cwd string) string {
 	if !isDir(cwd) {
 		return cmd
 	}
-	return fmt.Sprintf("cd %s && %s", shellQuote(cwd), cmd)
+	return commandWithDir(cmd, cwd)
+}
+
+func commandWithDir(cmd, dir string) string {
+	if dir == "" {
+		return cmd
+	}
+	return fmt.Sprintf("cd %s && %s", shellQuote(dir), cmd)
 }
 
 func commandWithCleanup(cmd, cleanupPath string) string {
