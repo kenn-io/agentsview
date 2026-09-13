@@ -408,9 +408,7 @@ func TestClaudeProviderParseAdoptsAITitle(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
 			assert.Equal(t, tt.want, outcome.Results[0].Result.Session.SessionName)
-			if tt.name == "ai title only" {
-				t.Logf("SessionName=%q", outcome.Results[0].Result.Session.SessionName)
-			}
+			t.Logf("SessionName=%q", outcome.Results[0].Result.Session.SessionName)
 			assert.Equal(t, "First question", outcome.Results[0].Result.Session.FirstMessage)
 			require.Len(t, outcome.Results[0].Result.Messages, 2)
 			assert.Equal(t, "Answer", outcome.Results[0].Result.Messages[1].Content)
