@@ -447,10 +447,12 @@ func TestCodexProviderPlansForkWithReplayParent(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	const childID = "22222222-2222-4222-8222-222222222222"
 	const parentID = "11111111-1111-4111-8111-111111111111"
-	parentPath := writeCodexProviderSession(t, root, parentID, "parent task")
-	childPath := writeCodexProviderSessionContent(t, root, childID,
-		`{"type":"session_meta","payload":{"id":"`+childID+`","forked_from_id":"`+parentID+`"}}`+"\n",
-	)
+	parentPath := canonicalRawCaptureTestPath(t,
+		writeCodexProviderSession(t, root, parentID, "parent task"))
+	childPath := canonicalRawCaptureTestPath(t,
+		writeCodexProviderSessionContent(t, root, childID,
+			`{"type":"session_meta","payload":{"id":"`+childID+`","forked_from_id":"`+parentID+`"}}`+"\n",
+		))
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	child := requireCodexProviderSource(t, provider, childID)
@@ -477,9 +479,10 @@ func TestCodexProviderPlansForkCaptureWithoutReplayParent(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	const childID = "22222222-2222-4222-8222-222222222222"
 	const parentID = "11111111-1111-4111-8111-111111111111"
-	writeCodexProviderSessionContent(t, root, childID,
-		`{"type":"session_meta","payload":{"id":"`+childID+`","forked_from_id":"`+parentID+`"}}`+"\n",
-	)
+	childPath := canonicalRawCaptureTestPath(t,
+		writeCodexProviderSessionContent(t, root, childID,
+			`{"type":"session_meta","payload":{"id":"`+childID+`","forked_from_id":"`+parentID+`"}}`+"\n",
+		))
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	child := requireCodexProviderSource(t, provider, childID)
@@ -489,7 +492,7 @@ func TestCodexProviderPlansForkCaptureWithoutReplayParent(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, supported)
 	require.Len(t, plan.Entries, 1)
-	assert.Equal(t, child.DisplayPath, plan.Entries[0].LocalPath)
+	assert.Equal(t, childPath, plan.Entries[0].LocalPath)
 	assert.True(t, plan.Entries[0].Appendable)
 }
 
