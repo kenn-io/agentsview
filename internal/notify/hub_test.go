@@ -93,6 +93,24 @@ func (a *archiveLikeStore) NotificationCandidates(
 	return out, nil
 }
 
+// corruptStateStore models a persisted dedup row that exists but
+// cannot be read. The archive reports it as an error (distinct
+// from a missing row, which is a legitimate zero State), so the
+// Hub must skip the session rather than treat it as fresh.
+type corruptStateStore struct {
+	*fakeStore
+	badSession string
+}
+
+func (s *corruptStateStore) NotificationState(
+	ctx context.Context, sessionID string,
+) (State, error) {
+	if sessionID == s.badSession {
+		return State{}, errors.New("notification state corrupt")
+	}
+	return s.fakeStore.NotificationState(ctx, sessionID)
+}
+
 func hubTestSnapshot(id string, ordinal int64, mods ...func(*Snapshot)) Snapshot {
 	s := Snapshot{
 		SessionID:         id,
@@ -247,6 +265,27 @@ func TestHubBurstExceedingCandidateCapNotifiesEverySession(t *testing.T) {
 	for id, count := range seen {
 		assert.Equal(t, 1, count, "session %s notified %d times", id, count)
 	}
+}
+
+func TestHubSkipsSessionWithUnreadableDedupState(t *testing.T) {
+	store := &corruptStateStore{
+		fakeStore:  newFakeStore(),
+		badSession: "corrupt",
+	}
+	store.candidates = []Snapshot{
+		hubTestSnapshot("corrupt", 10),
+		hubTestSnapshot("healthy", 10),
+	}
+	hub := NewHub(store, enabledCfg, readyAt, time.Millisecond)
+	hub.Check(context.Background())
+
+	// A corrupt dedup row must not read as "never notified": the
+	// session is skipped, not re-notified, and its stored state is
+	// left alone. Other sessions in the same batch still fire.
+	assert.NotContains(t, store.states, "corrupt",
+		"corrupt state must not be overwritten as if fresh")
+	require.Len(t, store.events, 1)
+	assert.Equal(t, "healthy", store.events[0].SessionID)
 }
 
 func TestHubWorksWithoutSubscribers(t *testing.T) {

@@ -122,7 +122,11 @@ func tailExcerpt(s string) string {
 }
 
 // NotificationState loads the persisted dedup cursor for a
-// session. A missing key yields the zero State.
+// session. A missing key yields the zero State and a nil error —
+// legitimately never notified. A key that exists but cannot be
+// parsed yields an error instead: reporting a zero State there
+// would be indistinguishable from "never notified" and would
+// re-fire an already-delivered notification.
 func (d *DB) NotificationState(
 	ctx context.Context, sessionID string,
 ) (notify.State, error) {
@@ -139,7 +143,8 @@ func (d *DB) NotificationState(
 	}
 	var st notify.State
 	if err := json.Unmarshal([]byte(raw), &st); err != nil {
-		return notify.State{}, nil
+		return notify.State{}, fmt.Errorf(
+			"notification state corrupt for %s: %w", sessionID, err)
 	}
 	return st, nil
 }

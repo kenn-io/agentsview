@@ -171,6 +171,23 @@ func TestNotificationStateRoundtripAndRestart(t *testing.T) {
 	assert.Equal(t, int64(14), got.TurnEndOrdinal)
 }
 
+func TestNotificationStateCorruptRowReturnsError(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// The row exists but is not valid JSON. Reporting a zero State
+	// here would be indistinguishable from "never notified" and
+	// would re-fire a notification for a session already reported.
+	_, err := d.getWriter().Exec(
+		`INSERT INTO archive_metadata (key, value) VALUES (?, ?)`,
+		notificationStateKeyPrefix+"corrupt", "{not json")
+	require.NoError(t, err)
+
+	_, err = d.NotificationState(ctx, "corrupt")
+	require.Error(t, err,
+		"corrupt dedup state must error, not read as a zero State")
+}
+
 func TestNotificationEventsBoundedRing(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
