@@ -126,16 +126,18 @@ export function showNativeNotification(n: DesktopNotification): void {
 /** Render the localized title/body for a decided notification. The
  * backend ships structured fields only; the display copy is built
  * here from paraglide messages so OS toasts follow the active UI
- * locale. `new_reply` shows the backend-truncated excerpt. */
+ * locale. The title prefers the session's own name and falls back to
+ * the project. `new_reply` shows the backend-truncated excerpt. */
 export function notificationText(n: DesktopNotification): { title: string; body: string } {
+  const name = n.display_name || n.project;
   if (n.kind === "new_reply") {
     return {
-      title: `${n.project} — ${m.notification_new_reply_title_suffix()}`,
+      title: `${name} — ${m.notification_new_reply_title_suffix()}`,
       body: n.excerpt ?? "",
     };
   }
   return {
-    title: `${n.project} — ${m.notification_turn_end_title_suffix()}`,
+    title: `${name} — ${m.notification_turn_end_title_suffix()}`,
     body: m.notification_turn_end_body(),
   };
 }

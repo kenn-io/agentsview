@@ -144,6 +144,7 @@ export interface DesktopNotification {
   session_id: string;
   project: string;
   agent: string;
+  display_name?: string;
   excerpt?: string;
   deep_link_path: string;
   created_at: string;

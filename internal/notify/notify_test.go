@@ -53,6 +53,9 @@ func TestDeciderTurnEnd(t *testing.T) {
 		assert.Equal(t, "s1", got.Notification.SessionID)
 		assert.Equal(t, "proj", got.Notification.Project)
 		assert.Equal(t, "claude", got.Notification.Agent)
+		// DisplayName travels so the toast can prefer the session's
+		// own title; the frontend falls back to Project when empty.
+		assert.Equal(t, "Fix the login bug", got.Notification.DisplayName)
 		// The backend ships structured fields only; display copy is
 		// rendered by the frontend. turn_end carries no excerpt.
 		assert.Empty(t, got.Notification.Excerpt)

@@ -37,6 +37,11 @@ type Notification struct {
 	SessionID string `json:"session_id"`
 	Project   string `json:"project"`
 	Agent     string `json:"agent"`
+	// DisplayName is the session's own title, which reads better in a
+	// toast than the project when the user has several sessions open.
+	// Empty when the session has none; the frontend falls back to
+	// Project, so the ordering rule lives in exactly one place.
+	DisplayName string `json:"display_name,omitempty"`
 	// Excerpt is the tail of the latest assistant message, set only
 	// for new_reply notifications. It is session content (not UI
 	// copy), so the truncation lives here; the notification itself
@@ -203,6 +208,7 @@ func (d *Decider) render(kind Kind, s Snapshot) Notification {
 		SessionID:    s.SessionID,
 		Project:      s.Project,
 		Agent:        s.Agent,
+		DisplayName:  s.DisplayName,
 		DeepLinkPath: "/sessions/" + s.SessionID + "?msg=last",
 		CreatedAt:    d.now().UTC().Format(time.RFC3339Nano),
 	}

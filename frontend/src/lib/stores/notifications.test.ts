@@ -94,6 +94,23 @@ describe("notifications store", () => {
     expect(body).toBe("Partial output");
   });
 
+  it("prefers the session's own name over the project in the title", async () => {
+    notifications.deliver(
+      frame({ kind: "turn_end", project: "proj", display_name: "Fix the login bug" }),
+    );
+    await vi.waitFor(() => expect(sendNotification).toHaveBeenCalledTimes(1));
+    const { title } = sendNotification.mock.calls[0]![0];
+    expect(title).toBe(`Fix the login bug — ${m.notification_turn_end_title_suffix()}`);
+    expect(title).toBe("Fix the login bug — reply finished");
+  });
+
+  it("falls back to the project when the session carries no name", async () => {
+    notifications.deliver(frame({ kind: "turn_end", project: "proj", display_name: "" }));
+    await vi.waitFor(() => expect(sendNotification).toHaveBeenCalledTimes(1));
+    const { title } = sendNotification.mock.calls[0]![0];
+    expect(title).toBe(`proj — ${m.notification_turn_end_title_suffix()}`);
+  });
+
   it("localizes the toast text to the active UI locale", async () => {
     runtime.setLocale("zh-CN", { reload: false });
     notifications.deliver(frame({ kind: "turn_end", project: "proj" }));
