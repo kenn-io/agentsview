@@ -125,7 +125,7 @@ func (s *Store) Trash(paths []string, meta []Meta) ([]Item, error) {
 			continue
 		}
 		name := uniqueName(s.impl, filepath.Base(abs))
-		trashedPath, err := s.moveToTrash(abs, name)
+		trashedPath, movedVia, err := s.moveToTrash(abs, name)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -137,7 +137,7 @@ func (s *Store) Trash(paths []string, meta []Meta) ([]Item, error) {
 			TrashedPath:  trashedPath,
 			Size:         info.Size(),
 			DeletedAt:    deleted,
-			Backend:      s.impl.name(),
+			Backend:      movedVia,
 		}
 		if i < len(meta) {
 			item.SessionID = meta[i].SessionID
@@ -241,24 +241,25 @@ func (s *Store) restore(batch []Item) ([]Item, error) {
 
 // moveToTrash dispatches to the active backend, falling back to the
 // agentsview-owned directory when the system trash refuses the move
-// (typically a cross-device rename).
-func (s *Store) moveToTrash(abs, name string) (string, error) {
+// (typically a cross-device rename). It returns the trashed path and
+// the backend that actually performed the move.
+func (s *Store) moveToTrash(abs, name string) (string, string, error) {
 	trashed, err := s.impl.move(abs, name)
 	if err == nil {
-		return trashed, nil
+		return trashed, s.impl.name(), nil
 	}
 	if !isCrossDevice(err) || s.impl.name() == BackendFallback {
-		return "", fmt.Errorf("trash: moving %s: %w", abs, err)
+		return "", "", fmt.Errorf("trash: moving %s: %w", abs, err)
 	}
 	fb := fallbackBackend{s.dataDir}
 	if err := fb.prepare(); err != nil {
-		return "", fmt.Errorf("trash: preparing fallback backend: %w", err)
+		return "", "", fmt.Errorf("trash: preparing fallback backend: %w", err)
 	}
 	trashed, err = fb.move(abs, name)
 	if err != nil {
-		return "", fmt.Errorf("trash: moving %s via fallback: %w", abs, err)
+		return "", "", fmt.Errorf("trash: moving %s via fallback: %w", abs, err)
 	}
-	return trashed, nil
+	return trashed, BackendFallback, nil
 }
 
 func (s *Store) manifestDir() string  { return filepath.Join(s.dataDir, "trash") }
