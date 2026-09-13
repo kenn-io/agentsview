@@ -2,6 +2,8 @@ package notify
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -58,6 +60,36 @@ func (f *fakeStore) RecordNotificationEvent(
 ) error {
 	f.events = append(f.events, n)
 	return nil
+}
+
+// archiveLikeStore mirrors the archive's candidate query contract
+// closely enough to exercise the Hub's cursor handling: it applies
+// the since window and the batch cap, and it can inject a query
+// error. Ordering matches the SQL query under test.
+type archiveLikeStore struct {
+	*fakeStore
+	queryErr error
+}
+
+func (a *archiveLikeStore) NotificationCandidates(
+	_ context.Context, since time.Time, readyAt time.Time, limit int,
+) ([]Snapshot, error) {
+	if a.queryErr != nil {
+		return nil, a.queryErr
+	}
+	var out []Snapshot
+	for _, s := range a.candidates {
+		if s.LocalModifiedAt.After(readyAt) && s.LocalModifiedAt.After(since) {
+			out = append(out, s)
+		}
+	}
+	slices.SortFunc(out, func(x, y Snapshot) int {
+		return y.LocalModifiedAt.Compare(x.LocalModifiedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 func hubTestSnapshot(id string, ordinal int64, mods ...func(*Snapshot)) Snapshot {
@@ -142,6 +174,34 @@ func TestHubRestartDedup(t *testing.T) {
 		t.Fatalf("restarted hub re-notified: %+v", n)
 	case <-time.After(50 * time.Millisecond):
 	}
+}
+
+func TestHubFailedCandidateQueryDoesNotAdvanceCursor(t *testing.T) {
+	store := &archiveLikeStore{fakeStore: newFakeStore()}
+	store.candidates = []Snapshot{hubTestSnapshot("s1", 10)}
+	store.queryErr = errors.New("archive unavailable")
+
+	hub := NewHub(store, enabledCfg, readyAt, time.Millisecond)
+	// A clock far past the candidate: if the failed check advanced
+	// the cursor, the candidate falls outside the next window.
+	hub.now = func() time.Time { return readyAt.Add(time.Hour) }
+	ch, unsub := hub.Subscribe()
+	defer unsub()
+
+	hub.Check(context.Background())
+	select {
+	case n := <-ch:
+		t.Fatalf("notified on a failed query: %+v", n)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	// The archive recovers. The candidate must still be inside the
+	// window, proving the failed check did not consume it.
+	store.queryErr = nil
+	hub.Check(context.Background())
+	got := collect(t, ch, 1)
+	require.Len(t, got, 1)
+	assert.Equal(t, "s1", got[0].SessionID)
 }
 
 func TestHubWorksWithoutSubscribers(t *testing.T) {

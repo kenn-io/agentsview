@@ -163,7 +163,6 @@ func (h *Hub) Run(ctx context.Context, scopes <-chan string) {
 func (h *Hub) Check(ctx context.Context) {
 	h.mu.Lock()
 	since := h.lastCheck.Add(-2 * h.debounce)
-	h.lastCheck = h.now()
 	decider := h.decider
 	readyAt := h.readyAt
 	h.mu.Unlock()
@@ -172,6 +171,9 @@ func (h *Hub) Check(ctx context.Context) {
 		ctx, since, readyAt, 64,
 	)
 	if err != nil {
+		// Leave lastCheck untouched: the failed window is still
+		// pending, so the next check re-reads it instead of
+		// silently skipping every candidate in it.
 		log.Printf("notify: candidate query: %v", err)
 		return
 	}
@@ -198,4 +200,10 @@ func (h *Hub) Check(ctx context.Context) {
 		}
 		h.fanOut(d.Notification)
 	}
+
+	// The query succeeded, so this window has been fully
+	// evaluated; advance the cursor to close it.
+	h.mu.Lock()
+	h.lastCheck = h.now()
+	h.mu.Unlock()
 }
