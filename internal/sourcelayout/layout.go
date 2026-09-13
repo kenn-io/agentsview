@@ -79,13 +79,17 @@ func (openCodeTree) Decide(sess db.Session) Decision {
 		return Decision{Reason: ReportOnlyReason}
 	}
 	// storage/session/<project>/<session>.json under the opencode
-	// root; the session id is the file stem.
+	// root; the session id is the file stem and the storage dir sits
+	// exactly three levels up.
 	base := filepath.Base(sessionPath)
 	sessionID := strings.TrimSuffix(base, filepath.Ext(base))
-	root := filepath.Dir(filepath.Dir(filepath.Dir(sessionPath)))
+	storageDir := filepath.Dir(filepath.Dir(filepath.Dir(sessionPath)))
+	if filepath.Base(storageDir) != "storage" {
+		return Decision{Reason: "unexpected opencode storage layout"}
+	}
 	paths := []string{sessionPath}
 
-	messageDir := filepath.Join(root, "storage", "message", sessionID)
+	messageDir := filepath.Join(storageDir, "message", sessionID)
 	entries, err := os.ReadDir(messageDir)
 	if err == nil {
 		paths = append(paths, messageDir)
@@ -94,7 +98,7 @@ func (openCodeTree) Decide(sess db.Session) Decision {
 				continue
 			}
 			messageID := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
-			partDir := filepath.Join(root, "storage", "part", messageID)
+			partDir := filepath.Join(storageDir, "part", messageID)
 			if info, statErr := os.Stat(partDir); statErr == nil && info.IsDir() {
 				paths = append(paths, partDir)
 			}

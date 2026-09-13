@@ -163,10 +163,11 @@ func TestTrashSourcesSkipsMissingAndNilPaths(t *testing.T) {
 	withoutPath := db.Session{ID: "np-1", Project: "p"}
 	withMissing := db.Session{ID: "np-2", Project: "p", FilePath: new(missing)}
 
-	trashed, skipped, reclaimed := pruner.trashSources(
+	trashed, skipped, unsupported, reclaimed := pruner.trashSources(
 		[]db.Session{withoutPath, withMissing})
 	assert.Equal(t, 0, trashed)
 	assert.Equal(t, 2, skipped)
+	assert.Equal(t, 0, unsupported)
 	assert.Equal(t, int64(0), reclaimed)
 }
 
