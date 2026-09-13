@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/trash"
 )
 
 func TestParsePruneFlags(t *testing.T) {
@@ -297,7 +298,7 @@ func TestPruner_PruneScenarios(t *testing.T) {
 	}
 }
 
-func TestDeleteFilesRemovesFiles(t *testing.T) {
+func TestTrashSourcesRemovesFiles(t *testing.T) {
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "session1")
 	require.NoError(t, os.MkdirAll(subdir, 0o755))
@@ -305,40 +306,45 @@ func TestDeleteFilesRemovesFiles(t *testing.T) {
 	f := filepath.Join(subdir, "data.jsonl")
 	require.NoError(t, os.WriteFile(f, []byte("test data"), 0o644))
 
+	store := trash.New(t.TempDir())
 	sessions := []db.Session{
 		{ID: "s1", FilePath: new(f)},
 	}
 
-	removed, reclaimed := deleteFiles(sessions)
+	pruner := &Pruner{DB: nil, Out: os.Stdout, Trash: store}
+	removed, skipped, reclaimed := pruner.trashSources(sessions)
 	assert.Equal(t, 1, removed)
+	assert.Equal(t, 0, skipped)
 	assert.Equal(t, int64(9), reclaimed)
 
-	// File should be gone.
+	// File should be gone from its original location.
 	_, err := os.Stat(f)
 	assert.True(t, os.IsNotExist(err), "file still exists")
-
-	// Empty parent dir should be removed.
-	_, err = os.Stat(subdir)
-	assert.True(t, os.IsNotExist(err), "empty parent dir still exists")
 }
 
-func TestDeleteFilesMissingFile(t *testing.T) {
+func TestTrashSourcesMissingFile(t *testing.T) {
+	store := trash.New(t.TempDir())
 	sessions := []db.Session{
 		{ID: "s1", FilePath: new("/nonexistent/path/file.jsonl")},
 	}
 
-	removed, reclaimed := deleteFiles(sessions)
+	pruner := &Pruner{DB: nil, Out: os.Stdout, Trash: store}
+	removed, skipped, reclaimed := pruner.trashSources(sessions)
 	assert.Equal(t, 0, removed)
+	assert.Equal(t, 1, skipped)
 	assert.Equal(t, int64(0), reclaimed)
 }
 
-func TestDeleteFilesNilPath(t *testing.T) {
+func TestTrashSourcesNilPath(t *testing.T) {
+	store := trash.New(t.TempDir())
 	sessions := []db.Session{
 		{ID: "s1", FilePath: nil},
 	}
 
-	removed, reclaimed := deleteFiles(sessions)
+	pruner := &Pruner{DB: nil, Out: os.Stdout, Trash: store}
+	removed, skipped, reclaimed := pruner.trashSources(sessions)
 	assert.Equal(t, 0, removed)
+	assert.Equal(t, 1, skipped)
 	assert.Equal(t, int64(0), reclaimed)
 }
 
@@ -346,9 +352,10 @@ func newTestPruner(t *testing.T, d *db.DB, input string) (*Pruner, *bytes.Buffer
 	t.Helper()
 	var buf bytes.Buffer
 	p := &Pruner{
-		DB:  d,
-		Out: &buf,
-		In:  strings.NewReader(input),
+		DB:    d,
+		Out:   &buf,
+		In:    strings.NewReader(input),
+		Trash: trash.New(t.TempDir()),
 	}
 	return p, &buf
 }

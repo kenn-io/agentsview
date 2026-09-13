@@ -3,18 +3,18 @@ package main
 import (
 	"bufio"
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/trash"
 )
 
 // PruneConfig holds parsed CLI options for the prune command.
@@ -22,6 +22,10 @@ type PruneConfig struct {
 	Filter db.PruneFilter
 	DryRun bool
 	Yes    bool
+	// Age accepts "30d"-style durations and resolves to Filter.Before
+	// when Before is empty. Empty means no age filter.
+	Age        string
+	SourceOnly bool
 }
 
 func parsePruneFlags(args []string) (PruneConfig, error) {
@@ -42,6 +46,24 @@ func parsePruneFlags(args []string) (PruneConfig, error) {
 		"first-message", "",
 		"Sessions whose first message starts with this text",
 	)
+	age := fs.String(
+		"age", "",
+		"Sessions older than this age (7d, 30d, 2w, 1y);"+
+			" shorthand for --before",
+	)
+	sourceOnly := fs.Bool(
+		"source-only", false,
+		"Trash source files but keep archive rows",
+	)
+	age := fs.String(
+		"age", "",
+		"Sessions older than this age (7d, 30d, 2w, 1y);"+
+			" shorthand for --before",
+	)
+	sourceOnly := fs.Bool(
+		"source-only", false,
+		"Trash source files but keep archive rows",
+	)
 	dryRun := fs.Bool(
 		"dry-run", false,
 		"Show what would be pruned without deleting",
@@ -56,7 +78,7 @@ func parsePruneFlags(args []string) (PruneConfig, error) {
 	}
 
 	if *maxMessages < 0 && *maxMessages != -1 {
-		return PruneConfig{}, errors.New("max-messages must be >= 0")
+		return PruneConfig{}, fmt.Errorf("max-messages must be >= 0")
 	}
 
 	var mm *int
@@ -71,14 +93,30 @@ func parsePruneFlags(args []string) (PruneConfig, error) {
 			Before:       *before,
 			FirstMessage: *firstMessage,
 		},
-		DryRun: *dryRun,
-		Yes:    *yes,
+		DryRun:     *dryRun,
+		Yes:        *yes,
+		Age:        *age,
+		SourceOnly: *sourceOnly,
+	}
+
+	if cfg.Age != "" && cfg.Filter.Before != "" {
+		return PruneConfig{}, fmt.Errorf("--age and --before are mutually exclusive")
+	}
+	if cfg.Age != "" {
+		days, err := parseAgeDuration(cfg.Age)
+		if err != nil {
+			return PruneConfig{}, err
+		}
+		cfg.Filter.Before = time.Now().
+			AddDate(0, 0, -days).
+			Format("2006-01-02")
 	}
 
 	if !cfg.Filter.HasFilters() {
-		return PruneConfig{}, errors.New("at least one filter is required\n" +
-			"use --project, --max-messages, --before," +
-			" or --first-message",
+		return PruneConfig{}, fmt.Errorf(
+			"at least one filter is required\n" +
+				"use --project, --max-messages, --before," +
+				" or --first-message",
 		)
 	}
 
@@ -87,16 +125,18 @@ func parsePruneFlags(args []string) (PruneConfig, error) {
 
 // Pruner executes the prune workflow against a database.
 type Pruner struct {
-	DB  *db.DB
-	Out io.Writer
-	In  io.Reader
+	DB    *db.DB
+	Out   io.Writer
+	In    io.Reader
+	Trash *trash.Store
 }
 
 // Prune finds matching sessions and deletes them.
-func (p *Pruner) Prune(ctx context.Context, cfg PruneConfig) error {
+func (p *Pruner) Prune(cfg PruneConfig) error {
 	if !cfg.Filter.HasFilters() {
-		return errors.New("at least one filter is required " +
-			"(refusing to prune all sessions)",
+		return fmt.Errorf(
+			"at least one filter is required " +
+				"(refusing to prune all sessions)",
 		)
 	}
 
@@ -133,19 +173,73 @@ func (p *Pruner) Prune(ctx context.Context, cfg PruneConfig) error {
 		ids[i] = s.ID
 	}
 
-	deleted, err := p.DB.DeleteSessions(ctx, ids)
-	if err != nil {
-		return fmt.Errorf("deleting sessions: %w", err)
+	if p.Trash == nil {
+		return fmt.Errorf("prune: trash store not configured")
 	}
 
-	filesRemoved, bytesReclaimed := deleteFiles(candidates)
+	deleted := 0
+	if !cfg.SourceOnly {
+		var err error
+		deleted, err = p.DB.DeleteSessions(ctx, ids)
+		if err != nil {
+			return fmt.Errorf("deleting sessions: %w", err)
+		}
+	}
+
+	trashed, skipped, bytesReclaimed := p.trashSources(candidates)
+
+	if cfg.SourceOnly {
+		fmt.Fprintf(p.Out,
+			"\nTrashed %d source files (%d skipped; %s reclaimed);"+
+				" archive rows kept\n",
+			trashed, skipped, formatBytes(bytesReclaimed),
+		)
+		fmt.Fprintln(p.Out,
+			"Run \"agentsview prune restore\" to undo; archived"+
+				" rows will re-import on the next sync.")
+		return nil
+	}
 
 	fmt.Fprintf(p.Out,
-		"\nDeleted %d sessions, removed %d files"+
-			" (%s reclaimed)\n",
-		deleted, filesRemoved, formatBytes(bytesReclaimed),
+		"\nDeleted %d sessions, trashed %d source files"+
+			" (%d skipped; %s reclaimed)\n",
+		deleted, trashed, skipped, formatBytes(bytesReclaimed),
 	)
+	fmt.Fprintln(p.Out,
+		"Source files moved to the trash;"+
+			" run \"agentsview prune restore\" to undo.")
 	return nil
+}
+
+// trashSources moves every candidate's source file to the trash.
+// Missing files are skipped silently; other failures are logged and
+// counted so one bad path cannot abort the batch.
+func (p *Pruner) trashSources(
+	sessions []db.Session,
+) (trashed, skipped int, reclaimed int64) {
+	var paths []string
+	var metas []trash.Meta
+	for _, s := range sessions {
+		if s.FilePath == nil || *s.FilePath == "" {
+			skipped++
+			continue
+		}
+		paths = append(paths, *s.FilePath)
+		metas = append(metas, trash.Meta{SessionID: s.ID, Agent: s.Agent})
+	}
+	if len(paths) == 0 {
+		return 0, skipped, 0
+	}
+	items, err := p.Trash.Trash(paths, metas)
+	if err != nil {
+		log.Printf("warning: some source files were not trashed: %v", err)
+	}
+	trashed = len(items)
+	skipped += len(paths) - trashed
+	for _, item := range items {
+		reclaimed += item.Size
+	}
+	return trashed, skipped, reclaimed
 }
 
 func confirm(r io.Reader, w io.Writer, msg string) bool {
@@ -183,43 +277,6 @@ func writeSummary(w io.Writer, sessions []db.Session) {
 	}
 }
 
-func deleteFiles(sessions []db.Session) (int, int64) {
-	removed := 0
-	var reclaimed int64
-
-	for _, s := range sessions {
-		if s.FilePath == nil {
-			continue
-		}
-		path := *s.FilePath
-
-		info, err := os.Stat(path)
-		size := int64(0)
-		if err == nil {
-			size = info.Size()
-		}
-
-		if err := os.Remove(path); err != nil {
-			if !os.IsNotExist(err) {
-				log.Printf(
-					"warning: removing %s: %v", path, err,
-				)
-			}
-			continue
-		}
-		removed++
-		reclaimed += size
-
-		// Remove parent directory if empty (session subdirs).
-		dir := filepath.Dir(path)
-		entries, err := os.ReadDir(dir)
-		if err == nil && len(entries) == 0 {
-			_ = os.Remove(dir)
-		}
-	}
-	return removed, reclaimed
-}
-
 func formatBytes(b int64) string {
 	switch {
 	case b >= 1<<30:
@@ -233,7 +290,7 @@ func formatBytes(b int64) string {
 	}
 }
 
-func runPrune(ctx context.Context, cfg PruneConfig) {
+func runPrune(cfg PruneConfig) {
 	if cfg.Filter.MaxMessages != nil && *cfg.Filter.MaxMessages < 0 {
 		fatal("max-messages must be >= 0")
 	}
@@ -246,19 +303,19 @@ func runPrune(ctx context.Context, cfg PruneConfig) {
 		log.Fatalf("loading config: %v", err)
 	}
 
-	database, writeLock, err := openWriteDB(ctx, appCfg)
+	database, writeLock, err := openWriteDB(context.Background(), appCfg)
 	if err != nil {
 		log.Fatalf("opening database: %v", err)
 	}
+	defer closeWriteDB(database, writeLock)
 
 	pruner := &Pruner{
-		DB:  database,
-		Out: os.Stdout,
-		In:  os.Stdin,
+		DB:    database,
+		Out:   os.Stdout,
+		In:    os.Stdin,
+		Trash: trash.New(appCfg.DataDir),
 	}
-	err = pruner.Prune(ctx, cfg)
-	closeWriteDB(database, writeLock)
-	if err != nil {
+	if err := pruner.Prune(cfg); err != nil {
 		log.Fatalf("prune: %v", err)
 	}
 }
