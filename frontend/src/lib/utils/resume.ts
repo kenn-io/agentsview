@@ -9,6 +9,7 @@ RESUME_AGENTS["cursor"] = (id) => `cursor agent --resume ${shellQuote(id)}`;
 RESUME_AGENTS["gemini"] = (id) => `gemini --resume ${shellQuote(id)}`;
 RESUME_AGENTS["opencode"] = (id) => `opencode --session ${shellQuote(id)}`;
 RESUME_AGENTS["amp"] = (id) => `amp --resume ${shellQuote(id)}`;
+RESUME_AGENTS["kiro"] = (id) => `kiro-cli chat --resume-id ${shellQuote(id)}`;
 
 /**
  * Agents whose resume commands require server-resolved parameters

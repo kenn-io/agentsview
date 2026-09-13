@@ -1284,6 +1284,39 @@ describe("SessionBreadcrumb", () => {
     await unmount(component);
   });
 
+  it("copies remote Kiro commands", async () => {
+    const resume = vi.mocked(SessionsService.postApiV1SessionsByIdResume);
+    resume.mockResolvedValueOnce({
+      launched: false,
+      command: "cd '/home/user/project' && kiro-cli chat --resume-id session-1",
+      cwd: "/home/user/project",
+    });
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("kiro", {
+          id: "devbox1~kiro:session-1",
+          machine: "devbox1",
+        }),
+        onBack: () => {},
+      },
+    });
+    try {
+      await flushPromises();
+      document.querySelector<HTMLButtonElement>(".resume-btn")!.click();
+      await tick();
+      document.querySelector<HTMLButtonElement>(".open-menu-item")!.click();
+      await vi.waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith(
+        "cd '/home/user/project' && kiro-cli chat --resume-id session-1",
+      ));
+      expect(resume).toHaveBeenCalledExactlyOnceWith({
+        id: "devbox1~kiro:session-1",
+      }, { command_only: true });
+    } finally {
+      await unmount(component);
+    }
+  });
+
   it("keeps local launch and file actions with remote-looking machine metadata", async () => {
     openersService.getApiV1Openers.mockResolvedValue({ openers: [
       { id: "kitty", name: "Kitty", kind: "terminal", bin: "kitty" },

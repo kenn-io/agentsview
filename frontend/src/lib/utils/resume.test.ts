@@ -11,6 +11,7 @@ describe("supportsResume", () => {
     expect(supportsResume("gemini")).toBe(true);
     expect(supportsResume("opencode")).toBe(true);
     expect(supportsResume("amp")).toBe(true);
+    expect(supportsResume("kiro")).toBe(true);
   });
 
   it("returns false for unsupported agents", () => {
@@ -104,6 +105,12 @@ describe("buildResumeCommand", () => {
 
   it("generates amp resume command", () => {
     expect(buildResumeCommand("amp", "amp:t-1")).toBe("amp --resume t-1");
+  });
+
+  it("generates kiro resume command", () => {
+    expect(
+      buildResumeCommand("kiro", "kiro:session-1"),
+    ).toBe("kiro-cli chat --resume-id session-1");
   });
 
   it("strips agent prefix from compound IDs", () => {
