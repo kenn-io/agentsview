@@ -166,6 +166,7 @@ func runUsageDaily(cfg UsageDailyConfig) {
 		Offline:              cfg.Offline,
 		NoSync:               cfg.NoSync,
 		AutoStart:            true,
+		SkipInitialSync:      true,
 		ReadOnlyDaemon:       archiveQuerySkipReadOnlyDaemon,
 		DirectReadOnlyAction: "refresh usage directly",
 	})

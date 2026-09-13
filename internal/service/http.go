@@ -644,7 +644,7 @@ func (b *httpBackend) UsageSummary(
 	q.Set("include_automated", strconv.FormatBool(req.IncludeAutomated))
 
 	var out UsageSummaryResult
-	err := b.getJSON(ctx, "/api/v1/usage/summary?"+q.Encode(), &out)
+	err := b.getJSONLong(ctx, "/api/v1/usage/summary?"+q.Encode(), &out)
 	if errors.Is(err, errHTTPNotImplemented) {
 		// A read-only daemon (pg serve) returns 501 for usage; surface
 		// the shared sentinel so callers can errors.Is it.

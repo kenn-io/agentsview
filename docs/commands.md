@@ -680,6 +680,10 @@ time to stderr, including with `--json`. Usage preparation is not subject to the
 server's normal write timeout. Press Ctrl+C to stop waiting; shared cache work
 can continue in the daemon.
 
+Restart older daemons after upgrading so they provide the usage progress
+endpoint. `session usage`, `token-use`, and `usage statusline` still wait for
+initial sync when they start a daemon.
+
 ```bash
 agentsview usage daily [flags]
 ```

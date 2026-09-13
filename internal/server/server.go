@@ -52,7 +52,7 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 8
+	APIVersion = 9
 	// ScopedWatchPushAPIVersion is the first daemon API that accepts bounded
 	// watcher batches and their authoritative recovery scope on push requests.
 	ScopedWatchPushAPIVersion = 7

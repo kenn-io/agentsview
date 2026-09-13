@@ -12,7 +12,60 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 )
+
+func TestUsageCommandsDeferStartupSyncOnlyForDaily(t *testing.T) {
+	for _, command := range []string{"daily", "statusline", "session usage", "token-use"} {
+		t.Run(command, func(t *testing.T) {
+			newAgentDataDir(t)
+			var ts *httptest.Server
+			if command == "daily" || command == "statusline" {
+				ts = sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
+					if command == "daily" {
+						writeUsageStreamResponse(t, w, r, sampleDailyUsageJSON)
+					} else {
+						writeJSONResponse(w, sampleDailyUsageJSON)
+					}
+				})
+			} else {
+				ts, _ = newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "codex:session-a"})
+			}
+			started := false
+			stubStartBackgroundServeForTransport(t, func(_ context.Context, cfg *config.Config, _ time.Duration) (*DaemonRuntime, error) {
+				started = true
+				assert.Equal(t, command == "daily", cfg.SkipInitialSync)
+				assert.False(t, cfg.NoSync)
+				return daemonRuntimeFromTestURL(t, ts.URL), nil
+			})
+			captureStdout(t, func() {
+				switch command {
+				case "daily":
+					runUsageDaily(UsageDailyConfig{JSON: true, Timezone: "UTC"})
+				case "statusline":
+					runUsageStatusline(UsageStatuslineConfig{JSON: true})
+				case "session usage":
+					cmd := sessionUsageCommand(t, "session", "usage", "codex:session-a")
+					_, _, err := sessionUsageDataForCommand(cmd, "codex:session-a")
+					require.NoError(t, err)
+				case "token-use":
+					_, _, err := sessionUsageData("codex:session-a")
+					require.NoError(t, err)
+				}
+			})
+			assert.True(t, started, "exercise daemon startup rather than an existing daemon")
+		})
+	}
+}
+
+func TestUsageProgressRejectsDaemonWithoutStreamEndpoint(t *testing.T) {
+	err := daemonRuntimeCompatibilityError(&DaemonRuntime{
+		API: 8, Data: db.CurrentDataVersion(),
+	})
+	require.ErrorContains(t, err, "restart the daemon")
+}
 
 func writeUsageStreamResponse(t *testing.T, w http.ResponseWriter, r *http.Request, body string) {
 	t.Helper()

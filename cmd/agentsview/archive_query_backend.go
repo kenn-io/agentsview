@@ -28,6 +28,7 @@ type archiveQueryPolicy struct {
 	Offline              bool
 	NoSync               bool
 	AutoStart            bool
+	SkipInitialSync      bool
 	ReadOnlyDaemon       archiveQueryReadOnlyDaemonPolicy
 	DirectReadOnlyAction string
 }
@@ -118,9 +119,9 @@ func resolveArchiveQueryTransport(
 	policy archiveQueryPolicy,
 ) (transport, error) {
 	if policy.AutoStart && !policy.NoSync {
-		// Archive queries need the committed archive, not a startup sync of
-		// every provider. The daemon schedules that sync after readiness.
-		cfg.SkipInitialSync = true
+		// Daily reports can read committed data while sync runs after
+		// readiness. Session-specific commands still need startup ingestion.
+		cfg.SkipInitialSync = policy.SkipInitialSync
 		return ensureTransportContext(ctx, cfg, transportIntentArchiveWrite, 0)
 	}
 	if policy.NoSync {

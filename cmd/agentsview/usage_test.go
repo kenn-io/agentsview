@@ -1152,21 +1152,6 @@ func TestArchiveQueryBackendNoSyncStartsNoSyncDaemonForDailyUsage(t *testing.T) 
 	assert.IsType(t, daemonArchiveQueryBackend{}, backend)
 }
 
-func TestArchiveQueryBackendDefersStartupSyncForDailyUsage(t *testing.T) {
-	newAgentDataDir(t)
-	stubStartBackgroundServeForTransport(t, func(
-		_ context.Context, cfg *config.Config, _ time.Duration,
-	) (*DaemonRuntime, error) {
-		assert.True(t, cfg.SkipInitialSync, "usage reads the archive while sync runs in the background")
-		assert.False(t, cfg.NoSync, "background sync must remain enabled")
-		return &DaemonRuntime{Host: "127.0.0.1", Port: 12345}, nil
-	})
-	backend := resolveTestArchiveQueryBackend(t, defaultArchiveQueryPolicy(
-		func(p *archiveQueryPolicy) { p.AutoStart = true },
-	))
-	assert.IsType(t, daemonArchiveQueryBackend{}, backend)
-}
-
 func TestArchiveQueryBackendRefusesReadOnlyDaemonForDailyUsage(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 

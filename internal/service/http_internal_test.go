@@ -77,6 +77,23 @@ func TestSearchContentUsesLongRunningClient(t *testing.T) {
 	assert.Empty(t, result.Matches)
 }
 
+func TestUsageSummaryUsesLongRunningClient(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/usage/summary", r.URL.Path)
+		time.Sleep(50 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"daily":[{"date":"2026-09-01"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	backend := NewHTTPBackend(srv.URL, "", false).(*httpBackend)
+	backend.client.Timeout = 10 * time.Millisecond
+	result, err := backend.UsageSummary(t.Context(), UsageRequest{})
+	require.NoError(t, err)
+	require.Len(t, result.Daily, 1)
+	assert.Equal(t, "2026-09-01", result.Daily[0].Date)
+}
+
 func TestQueryRecallSemanticModesUseLongRunningClient(t *testing.T) {
 	tests := []struct {
 		name      string
