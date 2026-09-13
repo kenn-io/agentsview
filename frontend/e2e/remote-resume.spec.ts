@@ -1,11 +1,18 @@
 import { test, expect } from "@playwright/test";
 import { createMockSessions, handleSessionsRoute, sessionsRoutePattern } from "./helpers/mock-sessions";
 
-test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+test.skip(
+  ({ browserName }) => browserName !== "chromium",
+  "The clipboard proof uses Chromium permissions.",
+);
 
 for (const width of [1280, 768, 400]) {
   test(`remote copy menu and clipboard at ${width}`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
+    await page.context().grantPermissions(
+      ["clipboard-read", "clipboard-write"],
+      { origin: "http://127.0.0.1:8090" },
+    );
     const session = {
       ...createMockSessions(1, "remote", () => "project")[0]!,
       id: "devbox1~claude:abc-123",
