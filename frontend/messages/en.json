@@ -2143,5 +2143,8 @@
   "settings_notifications_projects_hint": "Comma-separated allow list; empty means all projects",
   "settings_notifications_saved": "Notification settings saved.",
   "settings_notifications_saving": "Saving…",
-  "settings_notifications_save": "Save"
+  "settings_notifications_save": "Save",
+  "notification_new_reply_title_suffix": "new reply",
+  "notification_turn_end_body": "The agent finished this turn and is waiting for you.",
+  "notification_turn_end_title_suffix": "reply finished"
 }

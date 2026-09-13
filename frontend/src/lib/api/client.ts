@@ -133,14 +133,18 @@ export interface DataChangedEvent {
 /** Payload for /api/v1/events notification frames: one decided
  * desktop notification from the backend's notify hub. Delivery is
  * best-effort SSE — dedup state lives in the archive, so a missed
- * frame is at most a delayed/absent reminder, never a duplicate. */
+ * frame is at most a delayed/absent reminder, never a duplicate.
+ *
+ * The frame carries structured fields only: the frontend renders
+ * the localized title/body (it owns paraglide i18n and the native
+ * plugin). `excerpt` is the truncated tail of the latest assistant
+ * message, present only for `new_reply`. */
 export interface DesktopNotification {
   kind: "turn_end" | "new_reply";
   session_id: string;
   project: string;
   agent: string;
-  title: string;
-  body: string;
+  excerpt?: string;
   deep_link_path: string;
   created_at: string;
 }

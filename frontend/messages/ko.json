@@ -2096,5 +2096,8 @@
   "settings_notifications_projects_hint": "쉼표로 구분된 허용 목록, 비우면 모든 프로젝트",
   "settings_notifications_saved": "알림 설정이 저장되었습니다.",
   "settings_notifications_saving": "저장 중…",
-  "settings_notifications_save": "저장"
+  "settings_notifications_save": "저장",
+  "notification_new_reply_title_suffix": "새 응답",
+  "notification_turn_end_body": "에이전트가 이번 턴을 마치고 사용자 입력을 기다리고 있습니다.",
+  "notification_turn_end_title_suffix": "응답 완료"
 }

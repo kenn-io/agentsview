@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { notifications } from "./notifications.svelte.js";
 import type { DesktopNotification } from "../api/client.js";
+import { m } from "../paraglide/messages.js";
+import * as runtime from "../paraglide/runtime.js";
 
 // The native boundary is window.__TAURI__.notification; the store's
 // showNativeNotification talks to whatever bridge the stub provides.
@@ -31,8 +33,7 @@ function frame(overrides: Partial<DesktopNotification> = {}): DesktopNotificatio
     session_id: `s${seq}`,
     project: "proj",
     agent: "claude",
-    title: "Fix login — reply finished",
-    body: "Done.",
+    excerpt: "Done.",
     deep_link_path: "/sessions/s1?msg=last",
     created_at: `2026-09-06T12:01:0${seq % 10}Z`,
     ...overrides,
@@ -43,6 +44,9 @@ describe("notifications store", () => {
   beforeEach(() => {
     sendNotification.mockClear();
     stubWindow();
+    // Rendering happens against the active paraglide locale; pin it
+    // so the English assertions below are deterministic.
+    runtime.setLocale("en", { reload: false });
   });
 
   afterEach(() => {
@@ -70,10 +74,35 @@ describe("notifications store", () => {
     expect(seen).toHaveLength(1);
   });
 
-  it("sends native toasts through the Tauri bridge", async () => {
-    notifications.deliver(frame());
+  it("renders the localized turn-end title and body", async () => {
+    notifications.deliver(frame({ kind: "turn_end", project: "proj" }));
     await vi.waitFor(() => expect(sendNotification).toHaveBeenCalledTimes(1));
-    expect(sendNotification.mock.calls[0]![0].title).toContain("reply finished");
+    const { title, body } = sendNotification.mock.calls[0]![0];
+    expect(title).toBe(`proj — ${m.notification_turn_end_title_suffix()}`);
+    expect(body).toBe(m.notification_turn_end_body());
+    // English catalogue, pinned in beforeEach.
+    expect(title).toBe("proj — reply finished");
+    expect(body).toBe("The agent finished this turn and is waiting for you.");
+  });
+
+  it("renders the localized new-reply title and the excerpt body", async () => {
+    notifications.deliver(frame({ kind: "new_reply", project: "proj", excerpt: "Partial output" }));
+    await vi.waitFor(() => expect(sendNotification).toHaveBeenCalledTimes(1));
+    const { title, body } = sendNotification.mock.calls[0]![0];
+    expect(title).toBe(`proj — ${m.notification_new_reply_title_suffix()}`);
+    expect(title).toBe("proj — new reply");
+    expect(body).toBe("Partial output");
+  });
+
+  it("localizes the toast text to the active UI locale", async () => {
+    runtime.setLocale("zh-CN", { reload: false });
+    notifications.deliver(frame({ kind: "turn_end", project: "proj" }));
+    await vi.waitFor(() => expect(sendNotification).toHaveBeenCalledTimes(1));
+    const { title, body } = sendNotification.mock.calls[0]![0];
+    expect(title).toBe(`proj — ${m.notification_turn_end_title_suffix()}`);
+    expect(title).not.toContain("reply finished");
+    expect(body).toBe(m.notification_turn_end_body());
+    expect(body).not.toBe("The agent finished this turn and is waiting for you.");
   });
 
   it("suppresses toasts for the session being viewed", async () => {
@@ -85,7 +114,9 @@ describe("notifications store", () => {
     notifications.deliver(next);
     await vi.waitFor(() => expect(sendNotification).toHaveBeenCalledTimes(1));
     // Only the second (unviewed) frame reached the bridge.
-    expect(sendNotification.mock.calls[0]![0].title).toBe(next.title);
+    expect(sendNotification.mock.calls[0]![0].title).toBe(
+      `proj — ${m.notification_turn_end_title_suffix()}`,
+    );
   });
 
   it("navigates on focus within the click window", async () => {

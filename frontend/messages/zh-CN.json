@@ -2096,5 +2096,8 @@
   "settings_notifications_projects_hint": "逗号分隔的白名单，留空表示全部项目",
   "settings_notifications_saved": "通知设置已保存。",
   "settings_notifications_saving": "保存中…",
-  "settings_notifications_save": "保存"
+  "settings_notifications_save": "保存",
+  "notification_new_reply_title_suffix": "新回复",
+  "notification_turn_end_body": "Agent 已完成本轮回复，正在等待你的输入。",
+  "notification_turn_end_title_suffix": "回复已完成"
 }

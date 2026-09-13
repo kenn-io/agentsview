@@ -2143,5 +2143,8 @@
   "settings_notifications_projects_hint": "カンマ区切りの許可リスト。空欄ですべてのプロジェクト",
   "settings_notifications_saved": "通知設定を保存しました。",
   "settings_notifications_saving": "保存中…",
-  "settings_notifications_save": "保存"
+  "settings_notifications_save": "保存",
+  "notification_new_reply_title_suffix": "新しい返信",
+  "notification_turn_end_body": "エージェントはこのターンを終え、あなたの入力を待っています。",
+  "notification_turn_end_title_suffix": "返信が完了しました"
 }

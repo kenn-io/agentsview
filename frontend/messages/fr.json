@@ -2142,5 +2142,8 @@
   "settings_notifications_projects_hint": "Liste d'autorisation séparée par des virgules ; vide signifie tous les projets",
   "settings_notifications_saved": "Paramètres de notification enregistrés.",
   "settings_notifications_saving": "Enregistrement…",
-  "settings_notifications_save": "Enregistrer"
+  "settings_notifications_save": "Enregistrer",
+  "notification_new_reply_title_suffix": "nouvelle réponse",
+  "notification_turn_end_body": "L'agent a terminé ce tour et vous attend.",
+  "notification_turn_end_title_suffix": "réponse terminée"
 }

@@ -1,4 +1,5 @@
 import type { DesktopNotification } from "../api/client.js";
+import { m } from "../i18n/index.js";
 
 // If the user is already reading the session a notification is
 // about, the on-screen transcript wins and no OS toast fires.
@@ -93,9 +94,11 @@ type TauriNotificationBridge = {
 
 function tauriNotificationPlugin(): TauriNotificationBridge | null {
   if (typeof window === "undefined") return null;
-  const t = (window as Window & {
-    __TAURI__?: { notification?: TauriNotificationBridge };
-  }).__TAURI__;
+  const t = (
+    window as Window & {
+      __TAURI__?: { notification?: TauriNotificationBridge };
+    }
+  ).__TAURI__;
   return t?.notification ?? null;
 }
 
@@ -112,10 +115,27 @@ export function showNativeNotification(n: DesktopNotification): void {
         granted = (await plugin.requestPermission()) === "granted";
       }
       if (granted) {
-        plugin.sendNotification?.({ title: n.title, body: n.body });
+        plugin.sendNotification?.(notificationText(n));
       }
     } catch (err) {
       console.warn("native notification failed", err);
     }
   })();
+}
+
+/** Render the localized title/body for a decided notification. The
+ * backend ships structured fields only; the display copy is built
+ * here from paraglide messages so OS toasts follow the active UI
+ * locale. `new_reply` shows the backend-truncated excerpt. */
+export function notificationText(n: DesktopNotification): { title: string; body: string } {
+  if (n.kind === "new_reply") {
+    return {
+      title: `${n.project} — ${m.notification_new_reply_title_suffix()}`,
+      body: n.excerpt ?? "",
+    };
+  }
+  return {
+    title: `${n.project} — ${m.notification_turn_end_title_suffix()}`,
+    body: m.notification_turn_end_body(),
+  };
 }
