@@ -116,6 +116,10 @@ add an archived or maintained mirror without replacing the original identity.
   occurred in 7 files, and `sessionName` did not occur. Native Claude parsing
   adopts non-empty `aiTitle` when no `/rename` is present; this target leaves
   `custom-title` and `sessionName` to compatible producer parsing.
+  A title appended after the session is stored is persisted by one escalating
+  full parse while the stored name is still empty, and repeated records stay
+  incremental after that parse. A transcript that is no longer being written
+  is not re-read, so it re-titles on its next full parse.
 
 - **Evidence:** `no-public-source`.
 

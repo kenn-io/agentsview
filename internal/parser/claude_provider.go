@@ -323,6 +323,7 @@ func (p *claudeProvider) ParseIncremental(
 			},
 			storedLinearParse:         req.StoredClaudeLinearParse,
 			storedTailClaudeMessageID: req.StoredLastClaudeMessageID,
+			storedSessionName:         req.StoredSessionName,
 		},
 	)
 	if err != nil {

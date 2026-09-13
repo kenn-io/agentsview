@@ -14891,9 +14891,20 @@ func (e *Engine) tryProviderIncrementalAppend(
 		// same-message.id continuation; without it, every routine queued
 		// command followed by a fresh response would force a full parse.
 		var storedLastClaudeMessageID *string
+		var storedSessionName *string
 		if provider.Definition().Type == parser.AgentClaude {
 			id := e.db.LastClaudeMessageID(inc.ID)
 			storedLastClaudeMessageID = &id
+			if !e.db.ArchiveContent().UsageOnly() {
+				name, found, nerr := e.db.GetSessionName(ctx, inc.ID)
+				if nerr != nil {
+					return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
+						fmt.Errorf("read stored Claude session name: %w", nerr)
+				}
+				if found {
+					storedSessionName = &name
+				}
+			}
 		}
 		outcome, status, perr := provider.ParseIncremental(
 			ctx,
@@ -14911,6 +14922,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				StoredSessionKind:         inc.SessionKind,
 				StoredClaudeLinearParse:   inc.ClaudeLinearParse,
 				StoredLastClaudeMessageID: storedLastClaudeMessageID,
+				StoredSessionName:         storedSessionName,
 				StoredPendingUsageOrdinal: inc.PendingUsageOrdinal,
 			},
 		)

@@ -1077,6 +1077,14 @@ type IncrementalRequest struct {
 	// the appended assistant head continues exactly this message id.
 	// nil keeps the conservative fallback.
 	StoredLastClaudeMessageID *string
+	// StoredSessionName is the session_name already persisted for this
+	// session ("" when the row carries none), or nil when the call site
+	// cannot supply it. Claude adopts a generated ai-title only when no
+	// /rename is present, and the producer repeats the same record many
+	// times per transcript, so the incremental parser escalates on an
+	// appended title only when it could fill a still-empty stored name.
+	// nil keeps the append incremental.
+	StoredSessionName *string
 	// StoredPendingUsageOrdinal is the last assistant message without token
 	// usage in the current turn, as resolved from the committed transcript.
 	// Codex uses it to attach a token_count that follows a late tool result

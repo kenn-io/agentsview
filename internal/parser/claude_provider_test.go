@@ -408,6 +408,9 @@ func TestClaudeProviderParseAdoptsAITitle(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
 			assert.Equal(t, tt.want, outcome.Results[0].Result.Session.SessionName)
+			if tt.name == "ai title only" {
+				t.Logf("SessionName=%q", outcome.Results[0].Result.Session.SessionName)
+			}
 			assert.Equal(t, "First question", outcome.Results[0].Result.Session.FirstMessage)
 			require.Len(t, outcome.Results[0].Result.Messages, 2)
 			assert.Equal(t, "Answer", outcome.Results[0].Result.Messages[1].Content)
@@ -467,35 +470,134 @@ func TestClaudeProviderUploadAndTitleBoundaries(t *testing.T) {
 	assert.Equal(t, "Uploaded question", results[0].Session.FirstMessage)
 }
 
-func TestClaudeProviderIncrementalAITitleRemainsIncremental(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "project", "incremental.jsonl")
-	initial := claudeProviderFixture("First question")
-	writeSourceFile(t, path, initial)
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-	appended := `{"type":"ai-title","aiTitle":"Appended title"}` + "\n"
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
-	_, err = f.WriteString(appended)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-	current, err := os.Stat(path)
-	require.NoError(t, err)
-	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: "incremental"})
-	require.NoError(t, err)
-	require.True(t, ok)
-	outcome, status, err := provider.ParseIncremental(context.Background(), IncrementalRequest{
-		Source: source, Fingerprint: SourceFingerprint{Key: path, Size: current.Size()},
-		SessionID: "incremental", Offset: info.Size(), StartOrdinal: 2,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, IncrementalApplied, status)
-	assert.False(t, outcome.ForceReplace)
-	assert.Equal(t, int64(len(appended)), outcome.ConsumedBytes)
-	assert.Empty(t, outcome.Messages)
+func TestClaudeProviderIncrementalAITitleEscalation(t *testing.T) {
+	emptyName := ""
+	existingName := "Existing title"
+	tests := []struct {
+		name         string
+		storedName   *string
+		appended     string
+		wantStatus   IncrementalStatus
+		wantForce    bool
+		wantConsumed int64
+		wantMessages int
+		wantContent  string
+	}{
+		{
+			name:         "empty stored name",
+			storedName:   &emptyName,
+			appended:     `{"type":"ai-title","aiTitle":"Appended title"}`,
+			wantStatus:   IncrementalNeedsFullParse,
+			wantForce:    true,
+			wantMessages: 0,
+		},
+		{
+			name:         "existing stored name",
+			storedName:   &existingName,
+			appended:     `{"type":"ai-title","aiTitle":"Appended title"}`,
+			wantStatus:   IncrementalApplied,
+			wantConsumed: int64(len(`{"type":"ai-title","aiTitle":"Appended title"}`) + 1),
+			wantMessages: 0,
+		},
+		{
+			name:         "stored name unavailable",
+			appended:     `{"type":"ai-title","aiTitle":"Appended title"}`,
+			wantStatus:   IncrementalApplied,
+			wantConsumed: int64(len(`{"type":"ai-title","aiTitle":"Appended title"}`) + 1),
+			wantMessages: 0,
+		},
+		{
+			name:         "empty title",
+			storedName:   &emptyName,
+			appended:     `{"type":"ai-title","aiTitle":""}`,
+			wantStatus:   IncrementalApplied,
+			wantConsumed: int64(len(`{"type":"ai-title","aiTitle":""}`) + 1),
+			wantMessages: 0,
+		},
+		{
+			name:         "non-string title",
+			storedName:   &emptyName,
+			appended:     `{"type":"ai-title","aiTitle":42}`,
+			wantStatus:   IncrementalApplied,
+			wantConsumed: int64(len(`{"type":"ai-title","aiTitle":42}`) + 1),
+			wantMessages: 0,
+		},
+		{
+			name:         "missing title field",
+			storedName:   &emptyName,
+			appended:     `{"type":"ai-title"}`,
+			wantStatus:   IncrementalApplied,
+			wantConsumed: int64(len(`{"type":"ai-title"}`) + 1),
+			wantMessages: 0,
+		},
+		{
+			name:         "malformed line",
+			storedName:   &emptyName,
+			appended:     `{malformed`,
+			wantStatus:   IncrementalNoNewData,
+			wantMessages: 0,
+		},
+		{
+			name:         "ordinary user message",
+			storedName:   &emptyName,
+			appended:     testjsonl.ClaudeUserJSON("Appended question", tsEarlyS5),
+			wantStatus:   IncrementalApplied,
+			wantConsumed: int64(len(testjsonl.ClaudeUserJSON("Appended question", tsEarlyS5)) + 1),
+			wantMessages: 1,
+			wantContent:  "Appended question",
+		},
+	}
+
+	statusName := func(status IncrementalStatus) string {
+		switch status {
+		case IncrementalNoNewData:
+			return "IncrementalNoNewData"
+		case IncrementalApplied:
+			return "IncrementalApplied"
+		case IncrementalNeedsFullParse:
+			return "IncrementalNeedsFullParse"
+		default:
+			return "IncrementalUnsupported"
+		}
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "project", "incremental.jsonl")
+			initial := claudeProviderFixture("First question")
+			writeSourceFile(t, path, initial)
+			info, err := os.Stat(path)
+			require.NoError(t, err)
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+			require.NoError(t, err)
+			_, err = f.WriteString(tt.appended + "\n")
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+			current, err := os.Stat(path)
+			require.NoError(t, err)
+			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: "incremental"})
+			require.NoError(t, err)
+			require.True(t, ok)
+			outcome, status, err := provider.ParseIncremental(context.Background(), IncrementalRequest{
+				Source: source, Fingerprint: SourceFingerprint{Key: path, Size: current.Size()},
+				SessionID: "incremental", Offset: info.Size(), StartOrdinal: 2,
+				StoredSessionName: tt.storedName,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantStatus, status)
+			assert.Equal(t, tt.wantForce, outcome.ForceReplace)
+			assert.Equal(t, tt.wantConsumed, outcome.ConsumedBytes)
+			assert.Len(t, outcome.Messages, tt.wantMessages)
+			if tt.wantContent != "" {
+				require.Len(t, outcome.Messages, 1)
+				assert.Equal(t, tt.wantContent, outcome.Messages[0].Content)
+			}
+			t.Logf("appended=%s status=%s force_replace=%t consumed=%d messages=%d", tt.appended, statusName(status), outcome.ForceReplace, outcome.ConsumedBytes, len(outcome.Messages))
+		})
+	}
 }
 
 func TestClaudeProviderParseResolvesPersistedToolResultsThroughStoredPathResolver(t *testing.T) {
