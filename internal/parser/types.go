@@ -1236,6 +1236,7 @@ type FileInfo struct {
 
 // ParsedSession holds session metadata extracted from a JSONL file.
 type ParsedSession struct {
+	RateLimits []RateLimitSnapshot
 	ID         string
 	Project    string
 	Machine    string

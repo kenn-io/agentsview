@@ -10761,6 +10761,7 @@ func drainResults(results <-chan syncJob, remaining int) {
 // incremental JSONL parse, used to partially update the
 // session row without overwriting unrelated columns.
 type incrementalUpdate struct {
+	rateLimits          []parser.RateLimitSnapshot
 	agent               parser.AgentType
 	sessionID           string
 	project             string
@@ -14883,6 +14884,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 		return processResult{}, false
 	}
 
+	var rateLimits []parser.RateLimitSnapshot
 	parseFn := func(
 		_ string, inc *db.IncrementalInfo,
 	) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, []parser.ParsedToolCallUpdate, []parser.ParsedMessageTokenUsageUpdate, time.Time, int64, *string, []byte, error) {
@@ -14935,6 +14937,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		default:
 			var terminationStatus *string
+			rateLimits = outcome.RateLimits
 			if outcome.TerminationStatus != nil {
 				status := string(*outcome.TerminationStatus)
 				terminationStatus = &status
@@ -14947,10 +14950,14 @@ func (e *Engine) tryProviderIncrementalAppend(
 		}
 	}
 
-	return e.tryIncrementalJSONL(
+	result, applied := e.tryIncrementalJSONL(
 		ctx, file, info, file.Agent, parseFn,
 		checkpoint, fullHash, hashState,
 	)
+	if result.incremental != nil {
+		result.incremental.rateLimits = rateLimits
+	}
+	return result, applied
 }
 
 // incrementalParseFunc reads new JSONL lines from a file
@@ -18915,6 +18922,7 @@ func (e *Engine) writeIncremental(
 		inc.sessionID,
 		dbMsgs,
 		db.IncrementalSessionUpdate{
+			RateLimits:               inc.rateLimits,
 			EndedAt:                  endedAt,
 			TerminationStatus:        inc.terminationStatus,
 			MsgCount:                 msgCount,
@@ -19658,6 +19666,7 @@ func toDBSessionContext(
 		return db.Session{}, err
 	}
 	s := db.Session{
+		RateLimits:           pw.sess.RateLimits,
 		ID:                   pw.sess.ID,
 		Project:              pw.sess.Project,
 		Machine:              pw.sess.Machine,

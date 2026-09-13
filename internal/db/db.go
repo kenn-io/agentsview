@@ -487,7 +487,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Subagent tool calls from Other to Task so delegation renders as a task call
 // and leaves the Other analytics bucket; subagent transcripts themselves are
 // new sources and need no re-parse.)
-const dataVersion = 107
+// (108: Codex token-count events retain rate-limit windows and credits.)
+const dataVersion = 108
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

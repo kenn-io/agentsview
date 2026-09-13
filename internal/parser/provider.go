@@ -1086,6 +1086,7 @@ type IncrementalRequest struct {
 
 // IncrementalOutcome is the append-only parse output.
 type IncrementalOutcome struct {
+	RateLimits               []RateLimitSnapshot
 	SessionID                string
 	Messages                 []ParsedMessage
 	SubagentLinks            []ClaudeSubagentLink

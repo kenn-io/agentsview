@@ -715,6 +715,7 @@ func (p *codexProvider) ParseIncremental(
 		}
 	}
 	return IncrementalOutcome{
+		RateLimits:               result.rateLimits,
 		SessionID:                req.SessionID,
 		Messages:                 result.messages,
 		ToolCallUpdates:          result.toolCallUpdates,

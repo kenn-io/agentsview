@@ -3,7 +3,9 @@
  */
 import type {
   Comparison,
+  DbRateLimitSeries,
   DbTopSessionEntry,
+  GetApiV1RateLimitsParams,
   GetApiV1UsageComparisonParams,
   GetApiV1UsagePairwiseComparisonParams,
   GetApiV1UsageSummaryParams,
@@ -13,6 +15,35 @@ import type {
 } from "../models";
 
 import { orvalFetch } from "../../runtime.ts";
+
+export const getGetApiV1RateLimitsUrl = (params?: GetApiV1RateLimitsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/v1/rate-limits?${stringifiedParams}`
+    : `/api/v1/rate-limits`;
+};
+
+/**
+ * @summary Get recent Codex rate limits
+ */
+export const getApiV1RateLimits = async (
+  params?: GetApiV1RateLimitsParams,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<DbRateLimitSeries[]> => {
+  return orvalFetch<DbRateLimitSeries[]>(getGetApiV1RateLimitsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
 
 export const getGetApiV1UsageComparisonUrl = (params: GetApiV1UsageComparisonParams) => {
   const normalizedParams = new URLSearchParams();

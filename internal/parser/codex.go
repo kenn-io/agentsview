@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json/v2"
 
 	"errors"
 	"fmt"
@@ -57,6 +58,7 @@ type codexSessionIndexEntry struct {
 // JSONL session file line by line.
 type codexSessionBuilder struct {
 	codexCursorState
+	rateLimits []RateLimitSnapshot
 	// sink receives every normalized operation; the collecting
 	// implementation keeps the slice-based behavior, the streaming one
 	// batches into a scratch store.
@@ -400,7 +402,7 @@ func (b *codexSessionBuilder) processLine(
 		if b.suppresses(codexTypeEventMsg, payload) {
 			return false
 		}
-		b.handleEventMsg(payload)
+		b.handleEventMsg(payload, ts)
 	}
 	return false
 }
@@ -538,12 +540,25 @@ func (b *codexSessionBuilder) handleAgentMessage(
 	})
 }
 
-func (b *codexSessionBuilder) handleEventMsg(payload gjson.Result) {
+func (b *codexSessionBuilder) handleEventMsg(payload gjson.Result, ts time.Time) {
 	eventType := payload.Get("type").Str
 	switch eventType {
 	case "task_started", "task_complete", "turn_aborted":
 		b.observeTaskEvent(eventType)
 	case "token_count":
+		b.rateLimitOrdinal++
+		raw := payload.Get("rate_limits")
+		if b.rateLimits != nil && raw.IsObject() && !ts.IsZero() {
+			var snapshot RateLimitSnapshot
+			if json.Unmarshal([]byte(raw.Raw), &snapshot) == nil {
+				if snapshot.LimitID == "" {
+					snapshot.LimitID = "codex"
+				}
+				snapshot.ObservedAt = ts
+				snapshot.Ordinal = b.rateLimitOrdinal
+				b.rateLimits = append(b.rateLimits, snapshot)
+			}
+		}
 		b.handleTokenCountEvent(payload)
 	case "collab_agent_spawn_end":
 		b.handleCollabAgentSpawnEnd(payload)
@@ -1772,6 +1787,9 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		ctx, includeExec, p.parentTurnResolver(ctx, path), sink,
 	)
 	malformedLines := 0
+	if p.spec.agent == AgentCodex {
+		b.rateLimits = []RateLimitSnapshot{}
+	}
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -1872,6 +1890,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	}
 
 	sess := &ParsedSession{
+		RateLimits:         b.rateLimits,
 		ID:                 sessionID,
 		Project:            b.project,
 		Machine:            machine,
@@ -2356,6 +2375,7 @@ func codexSafeResumeOffsetFile(f *os.File, offset int64) (bool, error) {
 }
 
 type codexIncrementalParseResult struct {
+	rateLimits          []RateLimitSnapshot
 	messages            []ParsedMessage
 	toolCallUpdates     []ParsedToolCallUpdate
 	messageUsageUpdates []ParsedMessageTokenUsageUpdate
@@ -2532,6 +2552,9 @@ func (p *codexProvider) parseSessionFromWithSources(
 		NewCodexCollectingSink(startOrdinal),
 	)
 	b.codexCursorState = seed.codexCursorState
+	if p.spec.agent == AgentCodex {
+		b.rateLimits = []RateLimitSnapshot{}
+	}
 	b.overflowPendingCalls = seed.overflowPendingCalls
 	if committedUsageTarget != nil {
 		ordinal := *committedUsageTarget
@@ -2583,6 +2606,7 @@ func (p *codexProvider) parseSessionFromWithSources(
 		}
 	}
 	result := codexIncrementalParseResult{
+		rateLimits:      b.rateLimits,
 		messages:        b.sink.Messages(),
 		toolCallUpdates: b.sink.ToolCallUpdates(),
 		messageUsageUpdates: append(

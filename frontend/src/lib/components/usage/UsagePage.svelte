@@ -25,6 +25,7 @@
     type RangeSelection,
   } from "../shared/rangeSelection.js";
   import UsageSummaryCards from "./UsageSummaryCards.svelte";
+  import RateLimitsSection from "./RateLimitsSection.svelte";
   import UsagePairwiseComparisonPanel from "./UsagePairwiseComparisonPanel.svelte";
   import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
   import AttributionPanel from "./AttributionPanel.svelte";
@@ -54,6 +55,7 @@
   import { usageChartColorMaps } from "../../utils/usageChartColors.js";
 
   let mounted = false;
+  let rateLimitsRefresh = $state(0);
   let unsubEvents: (() => void) | undefined;
 
   const chartColorMaps = $derived(
@@ -518,7 +520,10 @@
       <RefreshControl
         lastUpdatedAt={usage.lastUpdatedAt}
         busy={usage.isQuerying}
-        onRefresh={() => usage.fetchAll({ preserveTimeRange: true })}
+        onRefresh={() => {
+          rateLimitsRefresh++;
+          return usage.fetchAll({ preserveTimeRange: true });
+        }}
         label={m.usage_refresh()}
         title={m.shared_refresh()}
       />
@@ -550,6 +555,7 @@
     {/if}
 
     <UsageSummaryCards />
+    <RateLimitsSection machine={sessions.filters.machine} from={usage.from} to={usage.to} refreshKey={rateLimitsRefresh} />
 
     <Card level="default" padding="none" class="chart-panel wide">
       <CostTimeSeriesChart

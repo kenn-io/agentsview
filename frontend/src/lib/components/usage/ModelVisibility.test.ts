@@ -17,6 +17,7 @@ const api = vi.hoisted(() => {
     tokensPerSession: null,
   };
   return {
+    getApiV1RateLimits: vi.fn().mockResolvedValue([]),
     getApiV1UsageSummary: vi.fn(),
     getApiV1UsageComparison: vi.fn().mockResolvedValue({
       priorFrom: "2023-12-01",

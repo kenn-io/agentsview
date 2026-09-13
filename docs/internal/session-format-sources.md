@@ -365,6 +365,19 @@ add an archived or maintained mirror without replacing the original identity.
 
 ## Codex (`codex`)
 
+- **Rate limits (2026-09-11):** Reverified `TokenCountEvent`,
+  `RateLimitSnapshot`, `RateLimitWindow`, and `CreditsSnapshot` in the pinned
+  [protocol types](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/protocol.rs#L1993-L2051).
+  Optional windows report percent used, duration in minutes, and Unix-second
+  resets; credits report availability, unlimited status, and an optional string
+  balance. Optional `limit_name` supplies the display name. SQLite retains
+  complete observations; the API returns the latest reading and up to 512 samples
+  in the selected Usage dates per machine and limit. The latest reading is
+  independent of those dates. This is local SQLite only, not remote mode. An absent
+  limit ID uses `codex`, matching the pinned
+  [producer default](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/codex-api/src/rate_limits.rs#L53-L66).
+  TraeX is excluded.
+
 - **Tool-result image check (2026-09-08):** Reverified the pinned
   [output payload types and array tests](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/protocol/src/models.rs).
   `function_call_output.output` accepts a string or a content-item array.

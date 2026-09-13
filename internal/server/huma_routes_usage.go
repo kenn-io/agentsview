@@ -17,6 +17,8 @@ import (
 )
 
 func (s *Server) registerUsageRoutes() {
+	s.get(newRouteGroup(s.api, "/api/v1", "Usage"), "/rate-limits",
+		"Get recent Codex rate limits", s.humaRateLimits)
 	group := newRouteGroup(s.api, "/api/v1/usage", "Usage")
 
 	s.get(group, "/summary", "Get usage summary", s.humaUsageSummary)

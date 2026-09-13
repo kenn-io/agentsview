@@ -286,6 +286,19 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_session
 CREATE INDEX IF NOT EXISTS idx_usage_events_occurred
     ON usage_events(occurred_at);
 
+CREATE TABLE IF NOT EXISTS rate_limit_snapshots (
+    vendor TEXT NOT NULL,
+    machine TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    limit_id TEXT NOT NULL,
+    observed_at INTEGER NOT NULL,
+    snapshot TEXT NOT NULL,
+    PRIMARY KEY (vendor, source_id, ordinal)
+);
+CREATE INDEX IF NOT EXISTS idx_rate_limit_recent
+    ON rate_limit_snapshots(vendor, machine, limit_id, observed_at DESC, source_id DESC, ordinal DESC);
+
 CREATE TABLE IF NOT EXISTS cursor_usage_events (
     id INTEGER PRIMARY KEY,
     occurred_at TEXT NOT NULL,
