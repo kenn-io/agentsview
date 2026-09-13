@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,9 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/server"
+	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
 func TestUsageCommandsDeferStartupSyncOnlyForDaily(t *testing.T) {
@@ -34,8 +38,15 @@ func TestUsageCommandsDeferStartupSyncOnlyForDaily(t *testing.T) {
 				ts, _ = newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "codex:session-a"})
 			}
 			started := false
-			stubStartBackgroundServeForTransport(t, func(_ context.Context, cfg *config.Config, _ time.Duration) (*DaemonRuntime, error) {
+			stubStartBackgroundServeForTransport(t, func(ctx context.Context, cfg *config.Config, _ time.Duration) (*DaemonRuntime, error) {
 				started = true
+				if command == "statusline" {
+					deadline, ok := ctx.Deadline()
+					assert.True(t, ok, "prompt refresh must have a deadline")
+					if ok {
+						assert.InDelta(t, 30, time.Until(deadline).Seconds(), 1)
+					}
+				}
 				assert.Equal(t, command == "daily", cfg.SkipInitialSync)
 				assert.False(t, cfg.NoSync)
 				return daemonRuntimeFromTestURL(t, ts.URL), nil
@@ -56,6 +67,59 @@ func TestUsageCommandsDeferStartupSyncOnlyForDaily(t *testing.T) {
 				}
 			})
 			assert.True(t, started, "exercise daemon startup rather than an existing daemon")
+		})
+	}
+}
+
+func TestUsageCommandsReconcileDaemonStartedByDaily(t *testing.T) {
+	for _, sessionQuery := range []bool{false, true} {
+		t.Run(fmt.Sprintf("session=%t", sessionQuery), func(t *testing.T) {
+			cfg := testConfigWithClaudeFixture(t)
+			database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+			engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+				AgentDirs: cfg.AgentDirs, Machine: cfg.InstallationID,
+				DeferStartupMaintenance: true,
+			})
+			t.Cleanup(engine.Close)
+			ts := httptest.NewUnstartedServer(nil)
+			cfg.Host, cfg.Port = "127.0.0.1", ts.Listener.Addr().(*net.TCPAddr).Port
+			srv := server.New(cfg, database, engine)
+			ts.Config.Handler = srv.Handler()
+			ts.Start()
+			t.Cleanup(ts.Close)
+			stubStartBackgroundServeForTransport(t, func(_ context.Context, launch *config.Config, _ time.Duration) (*DaemonRuntime, error) {
+				assert.True(t, launch.SkipInitialSync)
+				registerTestRuntime(t, cfg.DataDir, ts.URL, false)
+				return daemonRuntimeFromTestURL(t, ts.URL), nil
+			})
+			policy := archiveQueryPolicy{AutoStart: true, SkipInitialSync: true}
+			daily, closeDaily, err := resolveArchiveQueryBackendWithConfig(t.Context(), cfg, policy)
+			require.NoError(t, err)
+			defer closeDaily()
+			_, err = daily.DailyUsage(t.Context(), dailyUsageQuery{})
+			require.NoError(t, err)
+			assert.False(t, engine.StartupReconciled(), "daily usage must not force ingestion")
+
+			policy.SkipInitialSync = false
+			fresh, closeFresh, err := resolveArchiveQueryBackendWithConfig(t.Context(), cfg, policy)
+			require.NoError(t, err)
+			defer closeFresh()
+			if sessionQuery {
+				out, _, err := fresh.SessionUsage(t.Context(), sessionUsageQuery{SessionID: "session0", OwnOnly: true})
+				require.NoError(t, err)
+				require.NotNil(t, out, "lookup must happen after the missing session is imported")
+			} else {
+				_, err := fresh.DailyUsage(t.Context(), dailyUsageQuery{})
+				require.NoError(t, err)
+				session, err := database.GetSession(t.Context(), "session0")
+				require.NoError(t, err)
+				require.NotNil(t, session, "statusline must query after startup ingestion")
+			}
+			lastSync := engine.LastSyncStartedAt()
+			_, cleanup, err := resolveArchiveQueryBackendWithConfig(t.Context(), cfg, policy)
+			require.NoError(t, err)
+			cleanup()
+			assert.Equal(t, lastSync, engine.LastSyncStartedAt(), "warm prompt refresh must not repeat a full sync")
 		})
 	}
 }
@@ -95,14 +159,21 @@ func TestFetchHTTPDailyUsageStreamsProgressAndResult(t *testing.T) {
 	assert.Equal(t, int64(420_000), got.Totals.TotalCost.Microdollars)
 }
 
-func TestReadUsageSummaryStreamReportsFailures(t *testing.T) {
+func TestFetchHTTPDailyUsageReportsStreamFailures(t *testing.T) {
 	for _, tc := range []struct{ name, input, want string }{
 		{"failed query", "event: error\ndata: {\"error\":\"could not read usage data\"}\n\n", "could not read usage data"},
-		{"interrupted report", "event: progress\ndata: {\"detail\":\"Calculating daily totals\"}\n\n", "connection closed before the report finished"},
-		{"invalid progress", "event: progress\ndata: invalid\n\n", "reading progress"},
+		{"interrupted report", "event: progress\ndata: {\"detail\":\"Calculating daily totals\"}\n\n", "missing done event"},
+		{"invalid progress", "event: progress\ndata: invalid\n\n", "decoding daemon push progress"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := readUsageSummaryStream(strings.NewReader(tc.input), func(string) {})
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, tc.input)
+			}))
+			t.Cleanup(ts.Close)
+			_, err := fetchHTTPDailyUsage(t.Context(), transport{URL: ts.URL}, "", dailyUsageQuery{
+				Progress: func(string) {},
+			})
 			require.ErrorContains(t, err, tc.want)
 		})
 	}

@@ -203,6 +203,10 @@ func newRemoteUsageServer(
 		}
 		reqs.RequestPath = append(reqs.RequestPath, r.URL.Path)
 		switch r.URL.Path {
+		case "/api/v1/sync":
+			assert.Equal(t, http.MethodPost, r.Method)
+			assert.Equal(t, "true", r.URL.Query().Get("startup_only"))
+			writeJSONResponse(w, `{}`)
 		case "/api/v1/version":
 			writeJSONResponse(w, fmt.Sprintf(
 				`{"api_version":%d}`, spec.apiVersion))
@@ -1658,6 +1662,10 @@ func sessionUsageRuntimeServer(
 	) {
 		if r.URL.Path == "/api/ping" {
 			ping.ServeHTTP(w, r)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/sync" && r.URL.Query().Get("startup_only") == "true" {
+			writeJSONResponse(w, `{}`)
 			return
 		}
 		sessionHandler(w, r)

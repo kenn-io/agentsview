@@ -94,6 +94,22 @@ func TestUsageSummaryUsesLongRunningClient(t *testing.T) {
 	assert.Equal(t, "2026-09-01", result.Daily[0].Date)
 }
 
+func TestUsagePairwiseComparisonUsesLongRunningClient(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/usage/pairwise-comparison", r.URL.Path)
+		time.Sleep(50 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"left":{"totalTokens":42}}`))
+	}))
+	t.Cleanup(srv.Close)
+	backend := NewHTTPBackend(srv.URL, "", false).(*httpBackend)
+	backend.client.Timeout = 10 * time.Millisecond
+	result, err := backend.UsagePairwiseComparison(t.Context(), UsagePairwiseComparisonRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, 42, result.Left.TotalTokens)
+}
+
 func TestQueryRecallSemanticModesUseLongRunningClient(t *testing.T) {
 	tests := []struct {
 		name      string

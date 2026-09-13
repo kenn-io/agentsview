@@ -23,8 +23,8 @@ func (s *Server) registerUsageRoutes() {
 	// totals. Its lifetime is the request context, not the normal write limit.
 	s.getLong(group, "/summary", "Get usage summary", s.humaUsageSummary)
 	s.stream(group, http.MethodGet, "/summary/stream", "Get usage summary with progress", s.humaUsageSummaryStream)
-	s.get(group, "/comparison", "Get usage comparison", s.humaUsageComparison)
-	s.get(group, "/pairwise-comparison",
+	s.getLong(group, "/comparison", "Get usage comparison", s.humaUsageComparison)
+	s.getLong(group, "/pairwise-comparison",
 		"Get usage pairwise comparison", s.humaUsagePairwiseComparison,
 	)
 	deltaSchema := s.api.OpenAPI().Components.Schemas.Map()["ServiceUsagePairwiseComparisonDelta"]
@@ -40,7 +40,7 @@ func (s *Server) registerUsageRoutes() {
 		{Type: "null"},
 	}
 	costPerSessionSchema.Ref = ""
-	s.get(group, "/top-sessions", "Get top usage sessions", s.humaUsageTopSessions)
+	s.getLong(group, "/top-sessions", "Get top usage sessions", s.humaUsageTopSessions)
 }
 
 type UsageFilterInput struct {
@@ -205,48 +205,20 @@ func (s *Server) humaUsageSummaryStream(
 		}
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		progress := make(chan string, 1)
 		req.Progress = func(phase string) {
-			select {
-			case progress <- phase:
-			case <-ctx.Done():
-			}
-		}
-		type result struct {
-			summary *service.UsageSummaryResult
-			err     error
-		}
-		done := make(chan result, 1)
-		finished := make(chan struct{})
-		defer func() { cancel(); <-finished }()
-		go func() {
-			defer close(finished)
-			summary, err := s.sessions.UsageSummary(ctx, req)
-			done <- result{summary, err}
-		}()
-		phase := "Preparing usage report from the archive"
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
 			if !stream.SendJSON("progress", map[string]string{"detail": phase}) {
-				return
-			}
-			select {
-			case phase = <-progress:
-			case <-ticker.C:
-			case out := <-done:
-				if out.err != nil {
-					if err := usageSummaryAPIError(out.err); err != nil {
-						stream.SendJSON("error", map[string]string{"error": err.Error()})
-					}
-				} else {
-					stream.SendJSON("done", usageSummaryResponseFromService(out.summary))
-				}
-				return
-			case <-ctx.Done():
-				return
+				cancel()
 			}
 		}
+		req.Progress("Preparing usage report from the archive")
+		summary, err := s.sessions.UsageSummary(ctx, req)
+		if err != nil {
+			if err := usageSummaryAPIError(err); err != nil {
+				stream.SendJSON("error", map[string]string{"error": err.Error()})
+			}
+			return
+		}
+		stream.SendJSON("done", usageSummaryResponseFromService(summary))
 	}}, nil
 }
 

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json/jsontext"
@@ -264,7 +263,8 @@ func runUsageStatusline(cfg UsageStatuslineConfig) {
 		Timezone: timezone,
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
 		Offline:              cfg.Offline,
 		NoSync:               cfg.NoSync,
@@ -609,9 +609,13 @@ func fetchHTTPDailyUsage(
 		if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 			return db.DailyUsageResult{}, fmt.Errorf("usage summary: expected a progress stream, received %q", resp.Header.Get("Content-Type"))
 		}
-		data, err := readUsageSummaryStream(body, query.Progress)
+		data, err := parseDaemonPushSSE[jsontext.Value](body, func(p struct {
+			Detail string `json:"detail"`
+		}) {
+			query.Progress(p.Detail)
+		})
 		if err != nil {
-			return db.DailyUsageResult{}, err
+			return db.DailyUsageResult{}, fmt.Errorf("usage summary: %w", err)
 		}
 		body = bytes.NewReader(data)
 	}
@@ -664,54 +668,6 @@ func newUsageProgressPrinter(w io.Writer) (func(string), func()) {
 		}
 	}()
 	return func(current string) { phase.Store(&current) }, func() { close(stop); <-done }
-}
-
-func readUsageSummaryStream(r io.Reader, progress func(string)) ([]byte, error) {
-	reader := bufio.NewReader(r)
-	var event string
-	var data strings.Builder
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				return nil, fmt.Errorf("usage summary: connection closed before the report finished")
-			}
-			return nil, fmt.Errorf("usage summary: reading progress: %w", err)
-		}
-		line = strings.TrimRight(line, "\r\n")
-		switch {
-		case line == "":
-			switch event {
-			case "progress":
-				var p struct {
-					Detail string `json:"detail"`
-				}
-				if err := json.Unmarshal([]byte(data.String()), &p); err != nil {
-					return nil, fmt.Errorf("usage summary: reading progress: %w", err)
-				}
-				progress(p.Detail)
-			case "done":
-				return []byte(data.String()), nil
-			case "error":
-				var failure struct {
-					Error string `json:"error"`
-				}
-				if err := json.Unmarshal([]byte(data.String()), &failure); err != nil {
-					return nil, fmt.Errorf("usage summary: reading error: %w", err)
-				}
-				return nil, fmt.Errorf("usage summary: %s", failure.Error)
-			}
-			event = ""
-			data.Reset()
-		case strings.HasPrefix(line, "event:"):
-			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		case strings.HasPrefix(line, "data:"):
-			if data.Len() > 0 {
-				data.WriteByte('\n')
-			}
-			data.WriteString(strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
-		}
-	}
 }
 
 func printDailyTable(

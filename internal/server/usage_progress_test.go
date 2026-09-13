@@ -29,14 +29,28 @@ func (s delayedUsageStore) GetDailyUsage(ctx context.Context, f db.UsageFilter) 
 	}
 }
 
+func (s delayedUsageStore) GetTopSessionsByCost(ctx context.Context, f db.UsageFilter, limit int) ([]db.TopSessionEntry, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(s.delay):
+		return s.Store.GetTopSessionsByCost(ctx, f, limit)
+	}
+}
+
 func TestUsageSummaryWaitsForPreparationBeyondWriteTimeout(t *testing.T) {
-	for _, path := range []string{"/summary", "/summary/stream"} {
+	for _, path := range []string{
+		"/summary", "/summary/stream", "/top-sessions",
+		"/comparison", "/pairwise-comparison",
+	} {
 		t.Run(path, func(t *testing.T) {
 			s := testServer(t, 10*time.Millisecond)
-			s.sessions = service.NewReadOnlyBackend(delayedUsageStore{Store: s.db, delay: 50 * time.Millisecond})
+			s.db = delayedUsageStore{Store: s.db, delay: 50 * time.Millisecond}
+			s.sessions = service.NewReadOnlyBackend(s.db)
 			ts := httptest.NewServer(s.Handler())
 			t.Cleanup(ts.Close)
-			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/usage"+path+"?"+oneDayUsageRange, nil)
+			params := oneDayUsageRange + "&current_microdollars=0&left_dimension=model&left_value=model-a&right_dimension=model&right_value=model-b"
+			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/usage"+path+"?"+params, nil)
 			require.NoError(t, err)
 			req.Host = "127.0.0.1:0"
 			resp, err := ts.Client().Do(req)
@@ -45,7 +59,9 @@ func TestUsageSummaryWaitsForPreparationBeyondWriteTimeout(t *testing.T) {
 			body, err := io.ReadAll(resp.Body)
 			require.NoError(t, err)
 			require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
-			assert.Contains(t, string(body), `"daily":[]`)
+			if path == "/summary" || path == "/summary/stream" {
+				assert.Contains(t, string(body), `"daily":[]`)
+			}
 			if path == "/summary/stream" {
 				assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
 				assert.Contains(t, string(body), "event: progress\n")

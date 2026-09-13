@@ -602,13 +602,9 @@ probeDaemon:
 		}
 	}
 
-	needsResync, err := db.ArchiveNeedsResync(cfg.DBPath)
-	if err != nil {
-		return nil, err
-	}
 	args := []string{"serve"}
 	args = serveBackgroundArgsWithNoSync(args, cfg.NoSync)
-	args = serveBackgroundArgsWithSkipInitialSync(args, cfg.SkipInitialSync && !needsResync)
+	args = serveBackgroundArgsWithSkipInitialSync(args, cfg.SkipInitialSync)
 	child, logPath, err := startServeBackgroundProcessForEnsure(*cfg, args)
 	if err != nil {
 		return nil, err
@@ -623,6 +619,11 @@ probeDaemon:
 		ctx, cfg.DataDir, cfg.AuthToken, waitCh, waitTimeout,
 	)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, daemonWaitCanceledError("daemon autostart", backgroundLaunchResult{
+				childPID: child.Process.Pid, LogPath: logPath,
+			})
+		}
 		return nil, fmt.Errorf(
 			"server exited before becoming ready: %w; logs: %s",
 			err, logPath,
@@ -649,7 +650,10 @@ func waitForExternalServeStartup(
 	if waitTimeout <= 0 {
 		waitTimeout = backgroundServeReadyTimeout
 	}
-	deadline := time.Now().Add(waitTimeout)
+	started := time.Now()
+	deadline := started.Add(waitTimeout)
+	progress := daemonLaunchProgressWriter{w: os.Stderr}
+	var lastUpdate time.Time
 	for isExternalDaemonStarting(dataDir) {
 		if err := ctx.Err(); err != nil {
 			return nil, true, err
@@ -658,6 +662,12 @@ func waitForExternalServeStartup(
 			!rt.ReadOnly && rt.RuntimeFallback {
 			return rt, true, nil
 		}
+		state := readStartupState(dataDir)
+		if state != nil && state.UpdatedAt.After(lastUpdate) {
+			lastUpdate = state.UpdatedAt
+			deadline = time.Now().Add(waitTimeout)
+		}
+		progress.progress(state, startupSnapshotElapsed(state, started, time.Now()))
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return nil, true, errServeStartupInProgress

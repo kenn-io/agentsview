@@ -682,7 +682,8 @@ can continue in the daemon.
 
 Restart older daemons after upgrading so they provide the usage progress
 endpoint. `session usage`, `token-use`, and `usage statusline` still wait for
-initial sync when they start a daemon.
+initial sync, including when they reuse a daemon started by daily usage.
+Statusline limits the complete wait and report request to 30 seconds.
 
 ```bash
 agentsview usage daily [flags]
@@ -697,8 +698,8 @@ agentsview usage daily [flags]
 | `--all`       | `false`       | Scan all history; overrides the default 30-day window                    |
 | `--agent`     |               | Filter by agent name                                                     |
 | `--breakdown` | `false`       | Show per-model rows and populate detailed JSON breakdown arrays          |
-| `--offline`   | `false`       | Skip the pricing catalog fetch; use embedded fallback                    |
-| `--no-sync`   | `false`       | Start the daemon without automatic sync                                 |
+| `--offline`   | `false`       | Read the archive directly without sync or pricing fetches                |
+| `--no-sync`   | `false`       | Skip source refresh; a new daemon starts without automatic sync          |
 | `--timezone`  | system        | IANA timezone name for date bucketing                                    |
 
 **Examples:**
@@ -722,13 +723,13 @@ status lines.
 agentsview usage statusline [flags]
 ```
 
-| Flag        | Default | Description                        |
-| ----------- | ------- | ---------------------------------- |
-| `--format`  | `human` | Output format: `human` or `json`   |
-| `--json`    | `false` | Alias for `--format json`          |
-| `--agent`   |         | Filter by agent name               |
-| `--offline` | `false` | Use embedded fallback pricing only |
-| `--no-sync` | `false` | Skip on-demand sync                |
+| Flag        | Default | Description                                      |
+| ----------- | ------- | ------------------------------------------------ |
+| `--format`  | `human` | Output format: `human` or `json`                 |
+| `--json`    | `false` | Alias for `--format json`                        |
+| `--agent`   |         | Filter by agent name                             |
+| `--offline` | `false` | Read the archive without sync or pricing fetches |
+| `--no-sync` | `false` | Skip source refresh                              |
 
 **Example:**
 

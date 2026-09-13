@@ -7,4 +7,8 @@ export type PostApiV1SyncParams = {
    * Wait for an active sync or maintenance pass before starting this sync
    */
   wait?: boolean;
+  /**
+   * Complete deferred startup ingestion without repeating a completed startup sync
+   */
+  startup_only?: boolean;
 };

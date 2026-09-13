@@ -194,6 +194,15 @@ func runServe(cfg config.Config, opts serveOptions) {
 	// daemon falls back to its in-process initial sync.
 	var workerStartupResult workerResult
 	workerSyncDone := false
+	if opts.SkipInitialSync && !cfg.NoSync {
+		needsResync, err := db.ArchiveNeedsResync(cfg.DBPath)
+		if err != nil {
+			fatal("checking archive before startup: %v", err)
+		}
+		// A required archive reparse must finish before either launcher
+		// publishes readiness, even when routine ingestion is deferred.
+		opts.SkipInitialSync = !needsResync
+	}
 	if !opts.SkipInitialSync && !cfg.NoSync && !testing.Testing() {
 		startupProgress.SetPhase("initial sync")
 		result, syncErr := runStartupSyncViaWorker(ctx, cfg, startupProgress)

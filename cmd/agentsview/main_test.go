@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -155,6 +156,40 @@ func TestServeRuntimeRecordWriteSuccessDoesNotWarnVisible(t *testing.T) {
 	require.NoError(t, err, string(out))
 	assert.Contains(t, string(out), "runtime record write reached")
 	assert.NotContains(t, string(out), "could not write daemon runtime record")
+}
+
+func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	database, err := db.Open(cfg.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	markArchiveStale(t, cfg.DBPath)
+	data, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	out, err := runRuntimeWarningHelperProcess(t, "serve", "TestServeStaleArchiveHelperProcess",
+		[]string{
+			"AGENTSVIEW_STALE_SERVE_CONFIG=" + string(data),
+			"AGENTSVIEW_STALE_SERVE_SOURCES=" + cfg.AgentDirs[parser.AgentClaude][0],
+		}, "listening at")
+	require.NoError(t, err, string(out))
+	stale, err := db.ArchiveNeedsResync(cfg.DBPath)
+	require.NoError(t, err)
+	assert.False(t, stale, "a direct serve must complete required reparse before publishing readiness")
+}
+
+func TestServeStaleArchiveHelperProcess(t *testing.T) {
+	data := os.Getenv("AGENTSVIEW_STALE_SERVE_CONFIG")
+	if data == "" {
+		return
+	}
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal([]byte(data), &cfg))
+	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
+	cfg.AgentDirs = map[parser.AgentType][]string{
+		parser.AgentClaude: {os.Getenv("AGENTSVIEW_STALE_SERVE_SOURCES")},
+	}
+	runServe(cfg, serveOptions{SkipInitialSync: true})
 }
 
 func TestPGServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {

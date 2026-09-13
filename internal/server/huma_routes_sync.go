@@ -41,7 +41,8 @@ type sessionSyncInput struct {
 }
 
 type syncInput struct {
-	Wait bool `query:"wait" default:"false" doc:"Wait for an active sync or maintenance pass before starting this sync"`
+	Wait        bool `query:"wait" default:"false" doc:"Wait for an active sync or maintenance pass before starting this sync"`
+	StartupOnly bool `query:"startup_only" default:"false" doc:"Complete deferred startup ingestion without repeating a completed startup sync"`
 }
 
 type remoteSyncInput struct {
@@ -235,9 +236,13 @@ func (s *Server) humaTriggerSync(
 	ctx context.Context,
 	in *syncInput,
 ) (*huma.StreamResponse, error) {
-	engine, err := s.syncEngineForRequest()
-	if err != nil {
-		return nil, err
+	engine := s.engine
+	if !in.StartupOnly {
+		var err error
+		engine, err = s.syncEngineForRequest()
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := s.rejectStaleArchiveForSync(); err != nil {
 		return nil, err
@@ -245,7 +250,7 @@ func (s *Server) humaTriggerSync(
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
-			stats, err := s.runSyncWhenReady(ctx, engine, in.Wait, nil)
+			stats, err := s.runSyncWhenReady(ctx, engine, *in, nil)
 			if err != nil {
 				writeHumaJSON(hctx, http.StatusInternalServerError,
 					apiErrorResponse{Message: err.Error()})
@@ -254,7 +259,7 @@ func (s *Server) humaTriggerSync(
 			writeHumaJSON(hctx, http.StatusOK, stats)
 			return
 		}
-		stats, err := s.runSyncWhenReady(ctx, engine, in.Wait, func(p syncpkg.Progress) {
+		stats, err := s.runSyncWhenReady(ctx, engine, *in, func(p syncpkg.Progress) {
 			stream.SendJSON("progress", p)
 		})
 		if err != nil {
@@ -269,15 +274,18 @@ func (s *Server) humaTriggerSync(
 // behavior for other clients. ErrSyncInProgress means the runner never acquired
 // the engine lock; retrying it cannot repeat a partially completed sync.
 func (s *Server) runSyncWhenReady(
-	ctx context.Context, engine *syncpkg.Engine, wait bool,
+	ctx context.Context, engine *syncpkg.Engine, in syncInput,
 	progress func(syncpkg.Progress),
 ) (syncpkg.SyncStats, error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return syncpkg.SyncStats{}, err
 		}
+		if in.StartupOnly && (engine == nil || engine.StartupReconciled()) {
+			return syncpkg.SyncStats{}, nil
+		}
 		stats, err := s.runSyncWithResyncFallback(ctx, engine, progress)
-		if !wait || !errors.Is(err, syncpkg.ErrSyncInProgress) {
+		if !in.Wait || !errors.Is(err, syncpkg.ErrSyncInProgress) {
 			return stats, err
 		}
 		if progress != nil {

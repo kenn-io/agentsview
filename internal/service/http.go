@@ -707,7 +707,7 @@ func (b *httpBackend) UsagePairwiseComparison(
 	}
 
 	var out UsagePairwiseComparisonResponse
-	err := b.getJSON(
+	err := b.getJSONLong(
 		ctx,
 		"/api/v1/usage/pairwise-comparison?"+q.Encode(),
 		&out,

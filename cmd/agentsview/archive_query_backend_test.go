@@ -94,12 +94,19 @@ func TestResolveArchiveQueryBackendRefusesReadOnlyDaemonForFreshQueries(t *testi
 
 func TestResolveArchiveQueryBackendUsesGeneratedAutostartToken(t *testing.T) {
 	testDataDir(t)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer generated-token", r.Header.Get("Authorization"))
+		assert.Equal(t, "/api/v1/sync", r.URL.Path)
+		assert.Equal(t, "true", r.URL.Query().Get("startup_only"))
+		writeJSONResponse(w, `{}`)
+	}))
+	t.Cleanup(ts.Close)
 
 	stubStartBackgroundServeForTransport(t, func(
 		_ context.Context, cfg *config.Config, _ time.Duration,
 	) (*DaemonRuntime, error) {
 		cfg.AuthToken = "generated-token"
-		return &DaemonRuntime{Host: "127.0.0.1", Port: 12345}, nil
+		return daemonRuntimeFromTestURL(t, ts.URL), nil
 	})
 
 	backend := resolveTestArchiveQueryBackend(t, defaultArchiveQueryPolicy(
