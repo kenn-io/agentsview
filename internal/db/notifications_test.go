@@ -115,6 +115,34 @@ func TestNotificationCandidatesCarriesLastMessage(t *testing.T) {
 	assert.Equal(t, "All done, tests pass.", cands[0].LastMessage)
 }
 
+func TestNotificationCandidatesOldestFirst(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	readyAt := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	since := readyAt.Add(-time.Minute)
+
+	for _, id := range []string{"c-newest", "c-oldest", "c-middle"} {
+		notifTestSession(t, d, id,
+			withTermination("awaiting_user"), withNextOrdinal(10))
+	}
+	setModifiedAt(t, d, "c-oldest",
+		readyAt.Add(time.Minute).Format(time.RFC3339Nano))
+	setModifiedAt(t, d, "c-middle",
+		readyAt.Add(2*time.Minute).Format(time.RFC3339Nano))
+	setModifiedAt(t, d, "c-newest",
+		readyAt.Add(3*time.Minute).Format(time.RFC3339Nano))
+
+	cands, err := d.NotificationCandidates(ctx, since, readyAt, 64)
+	require.NoError(t, err)
+	ids := make([]string, 0, len(cands))
+	for _, c := range cands {
+		ids = append(ids, c.SessionID)
+	}
+	// Oldest first is load-bearing: the Hub drains a burst larger
+	// than the cap by resuming above the newest row it processed.
+	assert.Equal(t, []string{"c-oldest", "c-middle", "c-newest"}, ids)
+}
+
 func TestNotificationStateRoundtripAndRestart(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

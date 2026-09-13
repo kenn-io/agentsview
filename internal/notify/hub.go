@@ -7,6 +7,11 @@ import (
 	"time"
 )
 
+// candidateBatchLimit is the per-check candidate batch size. It
+// matches the store's own cap; a batch that comes back full means
+// the store may hold newer candidates still to process.
+const candidateBatchLimit = 64
+
 // Store is the persistence surface the Hub needs. Implemented by
 // the archive DB layer; every method is best-effort from the
 // notification path's point of view.
@@ -53,6 +58,12 @@ type Hub struct {
 	mu        gosync.Mutex
 	subs      map[chan Notification]struct{}
 	lastCheck time.Time
+	// backlog is set when the last candidate batch filled the cap,
+	// meaning the store may still hold newer candidates. The next
+	// check then resumes strictly above lastCheck instead of
+	// re-scanning the look-back overlap, so a burst larger than
+	// the cap always makes forward progress.
+	backlog bool
 }
 
 // NewHub builds a Hub. readyAt should be the time startup sync was
@@ -92,6 +103,8 @@ func (h *Hub) MarkReady(t time.Time) {
 	if h.lastCheck.Before(t) {
 		h.lastCheck = t
 	}
+	// A new readiness window supersedes any in-flight backlog.
+	h.backlog = false
 	h.mu.Unlock()
 }
 
@@ -160,15 +173,29 @@ func (h *Hub) Run(ctx context.Context, scopes <-chan string) {
 
 // Check evaluates candidates once. Safe to call concurrently; the
 // lastCheck window and decider reference are taken under the mutex.
+//
+// The store returns the oldest candidates first and caps the
+// batch, so a burst larger than the cap is drained over successive
+// checks: when a batch comes back full the cursor advances to the
+// newest candidate actually processed and the next check resumes
+// strictly above it. Re-scanning is harmless because the persisted
+// per-session State suppresses sessions already notified.
 func (h *Hub) Check(ctx context.Context) {
 	h.mu.Lock()
 	since := h.lastCheck.Add(-2 * h.debounce)
+	if h.backlog {
+		// The previous batch filled the cap: resume strictly
+		// above the last processed candidate rather than
+		// re-reading the look-back overlap, which would keep
+		// returning the same full batch and stall.
+		since = h.lastCheck
+	}
 	decider := h.decider
 	readyAt := h.readyAt
 	h.mu.Unlock()
 
 	candidates, err := h.store.NotificationCandidates(
-		ctx, since, readyAt, 64,
+		ctx, since, readyAt, candidateBatchLimit,
 	)
 	if err != nil {
 		// Leave lastCheck untouched: the failed window is still
@@ -180,6 +207,9 @@ func (h *Hub) Check(ctx context.Context) {
 	for _, s := range candidates {
 		st, err := h.store.NotificationState(ctx, s.SessionID)
 		if err != nil {
+			// A corrupt or unreadable dedup row must not be
+			// mistaken for "never notified": skip the session
+			// this round and let the next check retry.
 			log.Printf("notify: state load %s: %v", s.SessionID, err)
 			continue
 		}
@@ -201,9 +231,19 @@ func (h *Hub) Check(ctx context.Context) {
 		h.fanOut(d.Notification)
 	}
 
-	// The query succeeded, so this window has been fully
-	// evaluated; advance the cursor to close it.
 	h.mu.Lock()
-	h.lastCheck = h.now()
+	if len(candidates) == candidateBatchLimit {
+		// Full batch: the store may still hold newer candidates.
+		// Advance only to the newest processed one (allowing a
+		// bounded step back into the look-back overlap when the
+		// batch was entirely older rows) and mark the backlog so
+		// the next check resumes strictly above it.
+		h.lastCheck = candidates[len(candidates)-1].LocalModifiedAt
+		h.backlog = true
+	} else {
+		// The window is exhausted; close it.
+		h.backlog = false
+		h.lastCheck = h.now()
+	}
 	h.mu.Unlock()
 }

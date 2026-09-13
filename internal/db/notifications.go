@@ -31,11 +31,14 @@ const (
 )
 
 // NotificationCandidates returns sessions whose transcript changed
-// after since AND after the daemon's readyAt snapshot, bounded to
-// the most recent notificationCandidateCap rows. Metadata-only
-// mutations never touch local_modified_at, and initial sync /
-// history rebuilds operate on pre-readyAt content, so both stay
-// silent by construction.
+// after since AND after the daemon's readyAt snapshot, oldest
+// change first, bounded to notificationCandidateCap rows. Oldest
+// first is load-bearing: the Hub processes the batch and resumes
+// above the newest row it saw, so a burst larger than the cap
+// drains across successive checks instead of dropping the oldest
+// candidates forever. Metadata-only mutations never touch
+// local_modified_at, and initial sync / history rebuilds operate
+// on pre-readyAt content, so both stay silent by construction.
 func (d *DB) NotificationCandidates(
 	ctx context.Context, since time.Time, readyAt time.Time, limit int,
 ) ([]notify.Snapshot, error) {
@@ -60,7 +63,7 @@ func (d *DB) NotificationCandidates(
 		  AND s.next_ordinal > 0
 		  AND COALESCE(s.local_modified_at, '') > ?
 		  AND COALESCE(s.local_modified_at, '') > ?
-		ORDER BY s.local_modified_at DESC
+		ORDER BY s.local_modified_at ASC, s.id ASC
 		LIMIT ?`,
 		since.UTC().Format(time.RFC3339Nano),
 		readyAt.UTC().Format(time.RFC3339Nano),

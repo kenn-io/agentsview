@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -84,7 +85,7 @@ func (a *archiveLikeStore) NotificationCandidates(
 		}
 	}
 	slices.SortFunc(out, func(x, y Snapshot) int {
-		return y.LocalModifiedAt.Compare(x.LocalModifiedAt)
+		return x.LocalModifiedAt.Compare(y.LocalModifiedAt)
 	})
 	if len(out) > limit {
 		out = out[:limit]
@@ -202,6 +203,50 @@ func TestHubFailedCandidateQueryDoesNotAdvanceCursor(t *testing.T) {
 	got := collect(t, ch, 1)
 	require.Len(t, got, 1)
 	assert.Equal(t, "s1", got[0].SessionID)
+}
+
+func TestHubBurstExceedingCandidateCapNotifiesEverySession(t *testing.T) {
+	const total = 100
+	store := &archiveLikeStore{fakeStore: newFakeStore()}
+	base := readyAt.Add(time.Minute)
+	for i := range total {
+		id := fmt.Sprintf("burst-%03d", i)
+		// A tight burst: every session lands well inside one
+		// debounce window, so the next check's look-back overlap
+		// still contains the whole batch.
+		modified := base.Add(time.Duration(i) * time.Millisecond)
+		store.candidates = append(store.candidates,
+			hubTestSnapshot(id, 10, func(s *Snapshot) {
+				s.LocalModifiedAt = modified
+			}))
+	}
+
+	// Production debounce is EventsCoalesceInterval (10s); use it
+	// so the -2*debounce look-back is realistic.
+	hub := NewHub(store, enabledCfg, readyAt, 10*time.Second)
+	// Freeze the clock just past the newest candidate so the
+	// fallback cursor is deterministic.
+	now := base.Add(time.Second)
+	hub.now = func() time.Time { return now }
+
+	// Successive checks must make forward progress until the whole
+	// burst is covered. The decided-notification log is the
+	// authoritative record: it is written for every decision even
+	// with no subscriber attached (the SSE channel is lossy by
+	// design and would drop a 64-event burst).
+	seen := map[string]int{}
+	for round := 0; round < total && len(seen) < total; round++ {
+		hub.Check(context.Background())
+		seen = map[string]int{}
+		for _, n := range store.events {
+			seen[n.SessionID]++
+		}
+	}
+
+	require.Len(t, seen, total, "every eligible session must be notified")
+	for id, count := range seen {
+		assert.Equal(t, 1, count, "session %s notified %d times", id, count)
+	}
 }
 
 func TestHubWorksWithoutSubscribers(t *testing.T) {
