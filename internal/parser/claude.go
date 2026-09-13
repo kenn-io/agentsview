@@ -125,6 +125,7 @@ func claudeParseFile(
 		cwd              string
 		gitBranch        string
 		displayName      string
+		renameSeen       bool
 		compatibleName   string
 		compatibleAI     string
 		compatibleCustom string
@@ -186,24 +187,27 @@ func claudeParseFile(
 		}
 
 		entryType := gjson.GetBytes(lineBytes, "type").Str
-		if opts.compatibleTitleEvents {
-			if compatibleName == "" {
+		if opts.compatibleTitleEvents || opts.aiTitleFallback {
+			if opts.compatibleTitleEvents && compatibleName == "" {
 				compatibleName = strings.Clone(strings.TrimSpace(
 					gjson.GetBytes(lineBytes, "sessionName").Str,
 				))
 			}
+			if entryType == "ai-title" {
+				if value := strings.TrimSpace(
+					gjson.GetBytes(lineBytes, "aiTitle").Str,
+				); value != "" {
+					compatibleAI = strings.Clone(value)
+				}
+			}
+		}
+		if opts.compatibleTitleEvents {
 			switch entryType {
 			case "custom-title":
 				if value := strings.TrimSpace(
 					gjson.GetBytes(lineBytes, "customTitle").Str,
 				); value != "" {
 					compatibleCustom = strings.Clone(value)
-				}
-			case "ai-title":
-				if value := strings.TrimSpace(
-					gjson.GetBytes(lineBytes, "aiTitle").Str,
-				); value != "" {
-					compatibleAI = strings.Clone(value)
 				}
 			}
 		}
@@ -296,6 +300,7 @@ func claudeParseFile(
 				gjson.GetBytes(lineBytes, "content").Str,
 			); ok {
 				displayName = strings.Clone(name)
+				renameSeen = true
 			}
 			continue
 		}
@@ -420,6 +425,8 @@ func claudeParseFile(
 		displayName = firstNonEmptyJSONLString(
 			compatibleCustom, compatibleAI, compatibleName, displayName,
 		)
+	} else if opts.aiTitleFallback && !renameSeen {
+		displayName = compatibleAI
 	}
 
 	meta := claudeSessionMeta{

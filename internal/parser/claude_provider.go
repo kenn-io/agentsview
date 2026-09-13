@@ -236,6 +236,7 @@ func (p *claudeProvider) Parse(
 		ctx:                         ctx,
 		siblingLineage:              claudeSourceIsProjectLevel(req.Source, path),
 		persistedOutputPathResolver: persistedOutputPathResolver,
+		aiTitleFallback:             true,
 	}
 	results, excludedIDs, err := claudeParseFile(path, project, machine, opts)
 	if err != nil {

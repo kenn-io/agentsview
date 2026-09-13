@@ -110,6 +110,13 @@ add an archived or maintained mirror without replacing the original identity.
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.
 
+- **Title evidence (2026-09-13):** A local corpus measure sampled 768 files
+  and found 12,261 `ai-title` records, with a mean of 15.96 records per file
+  and a maximum of 454. No sampled `aiTitle` value was empty. `custom-title`
+  occurred in 7 files, and `sessionName` did not occur. Native Claude parsing
+  adopts non-empty `aiTitle` when no `/rename` is present; this target leaves
+  `custom-title` and `sessionName` to compatible producer parsing.
+
 - **Evidence:** `no-public-source`.
 
 - **Upstream:** The public
