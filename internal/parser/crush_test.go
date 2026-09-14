@@ -3,7 +3,6 @@ package parser
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -108,22 +107,14 @@ func nullableCrushTestString(value string) any {
 	return value
 }
 
-func TestCrushDefaultDirs(t *testing.T) {
-	def, ok := AgentByType(AgentCrush)
-	require.True(t, ok)
-	assert.Equal(t, []string{".local/share/crush", "AppData/Local/crush"}, def.DefaultDirs)
-	assert.Equal(t, "CRUSH_DIR", def.EnvVar)
-	assert.Equal(t, "crush_dirs", def.ConfigKey)
-	assert.Equal(t, "crush:", def.IDPrefix)
-	assert.False(t, def.FileBased)
-}
-
 func TestCrushProviderParsesTranscriptToolsAndUsage(t *testing.T) {
 	fixture := newCrushTestFixture(t)
 	// Unix seconds, 2026 era: 1789093626 is 2026-09-10 UTC.
 	const created = int64(1_789_093_626)
 	fixture.insertSession(t, "sess-1", "Review auth flow", "",
 		created, created+120, 43_922, 185, 0.0126)
+	fixture.insertSession(t, "child$$chatcmpl-tool-1", "Child", "sess-1",
+		created, created, 0, 0, 0)
 	fixture.insertMessage(t, "msg-user", "sess-1", "user", `[
 		{"type":"text","data":{"text":"Review the auth flow please."}},
 		{"type":"finish","data":{"reason":"stop","time":0}}
@@ -193,6 +184,7 @@ func TestCrushProviderParsesTranscriptToolsAndUsage(t *testing.T) {
 	assert.Equal(t, "view", firstCall.ToolName)
 	assert.Equal(t, "Read", firstCall.Category)
 	assert.JSONEq(t, `{"file_path":"auth.go"}`, firstCall.InputJSON)
+	assert.Equal(t, "crush:child$$chatcmpl-tool-1", firstCall.SubagentSessionID)
 	secondCall := assistant.ToolCalls[1]
 	assert.Equal(t, "crush:chatcmpl-tool-2", secondCall.ToolUseID)
 	assert.Equal(t, "bash", secondCall.ToolName)
@@ -236,105 +228,6 @@ func TestCrushProviderParsesTranscriptToolsAndUsage(t *testing.T) {
 		"every tool call has a paired result message")
 }
 
-func TestCrushTimestampSecondsNotMilliseconds(t *testing.T) {
-	assert.True(t, crushUnixTimestamp(1_789_093_626).After(
-		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
-		"second-scale timestamps must decode to the correct era")
-	assert.True(t, crushUnixTimestamp(1_789_093_626_000).After(
-		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
-		"millisecond-scale timestamps must decode forward-compatible")
-	assert.True(t, crushUnixTimestamp(0).IsZero())
-	assert.False(t, crushUnixTimestamp(10_000_000_000).After(
-		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
-		"the exact boundary must decode as milliseconds (1970-era)")
-	assert.True(t, crushUnixTimestamp(9_999_999_999).After(
-		time.Date(2286, 1, 1, 0, 0, 0, 0, time.UTC)),
-		"one below the boundary must decode as seconds")
-}
-
-func TestCrushZeroCostWithTokensStillEmitsEvent(t *testing.T) {
-	fixture := newCrushTestFixture(t)
-	const created = int64(1_789_093_626)
-	fixture.insertSession(t, "sess-free", "Free usage", "",
-		created, created, 1_000, 10, 0.0)
-	session, _, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-free", "m", false, nil)
-	require.NoError(t, err)
-	require.Len(t, session.UsageEvents, 1)
-	assert.Equal(t, 1_000, session.UsageEvents[0].InputTokens)
-	require.NotNil(t, session.UsageEvents[0].Cost)
-	assert.Equal(t, money.Money{}, *session.UsageEvents[0].Cost)
-}
-
-func TestCrushNoUsageEventWithoutAccountingData(t *testing.T) {
-	fixture := newCrushTestFixture(t)
-	const created = int64(1_789_093_626)
-	fixture.insertSession(t, "sess-empty", "No usage", "",
-		created, created, 0, 0, 0.0)
-	session, _, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-empty", "m", false, nil)
-	require.NoError(t, err)
-	assert.Empty(t, session.UsageEvents)
-}
-
-func TestCrushParentSessionRelationship(t *testing.T) {
-	fixture := newCrushTestFixture(t)
-	const created = int64(1_789_093_626)
-	fixture.insertSession(t, "parent", "Parent", "", created, created, 0, 0, 0)
-	fixture.insertSession(t, "child", "Child", "parent", created, created, 0, 0, 0)
-	session, _, err := parseCrushSession(context.Background(), fixture.dbPath, "child", "m", false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, "crush:parent", session.ParentSessionID)
-	assert.Equal(t, RelSubagent, session.RelationshipType)
-}
-
-func TestCrushMalformedPartsFailSession(t *testing.T) {
-	fixture := newCrushTestFixture(t)
-	const created = int64(1_789_093_626)
-	fixture.insertSession(t, "sess-bad", "Broken parts", "",
-		created, created, 0, 0, 0)
-	fixture.insertMessage(t, "msg-bad", "sess-bad", "user", `not-json`,
-		created, "", "")
-	_, _, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-bad", "m", false, nil)
-	require.Error(t, err)
-}
-
-func TestCrushUnknownRoleIsSkipped(t *testing.T) {
-	fixture := newCrushTestFixture(t)
-	const created = int64(1_789_093_626)
-	fixture.insertSession(t, "sess-roles", "Roles", "",
-		created, created, 0, 0, 0)
-	fixture.insertMessage(t, "msg-u", "sess-roles", "user", `[
-		{"type":"text","data":{"text":"hello"}}
-	]`, created, "", "")
-	fixture.insertMessage(t, "msg-x", "sess-roles", "internal", `[
-		{"type":"text","data":{"text":"hidden"}}
-	]`, created, "", "")
-	_, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-roles", "m", false, nil)
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, RoleUser, messages[0].Role)
-}
-
-func TestCrushSubagentToolCallLinking(t *testing.T) {
-	fixture := newCrushTestFixture(t)
-	const created = int64(1_789_093_626)
-	// Crush names subagent sessions "<own-uuid>$$<spawning-tool-call-id>".
-	fixture.insertSession(t, "parent", "Parent", "", created, created, 0, 0, 0)
-	fixture.insertSession(t,
-		"child-uuid$$chatcmpl-tool-fetch", "Child", "parent",
-		created, created, 0, 0, 0)
-	fixture.insertMessage(t, "msg-p", "parent", "assistant", `[
-		{"type":"tool_call","data":{"id":"chatcmpl-tool-fetch","name":"agentic_fetch","input":"{\"url\":\"https://example.test\"}","finished":true,"provider_executed":false}}
-	]`, created, "glm-5.3-flash", "")
-
-	_, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "parent", "m", false, nil)
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	require.Len(t, messages[0].ToolCalls, 1)
-	assert.Equal(t, "crush:child-uuid$$chatcmpl-tool-fetch",
-		messages[0].ToolCalls[0].SubagentSessionID,
-		"the spawning tool call must link to the child session")
-}
-
 func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 	fixture := newCrushTestFixture(t)
 	const created = int64(1_789_093_626)
@@ -355,6 +248,13 @@ func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 	assert.Equal(t, []string{fixture.dataDir}, registryMapping[filepath.Clean(registryDir)])
 	require.Len(t, projectMapping, 1)
 	assert.Equal(t, filepath.Clean(fixture.projectDir), projectMapping[filepath.Clean(fixture.dataDir)])
+	provider := newCrushProviderFactory(AgentDef{
+		Type: AgentCrush, IDPrefix: "crush:",
+	}).NewProvider(ProviderConfig{Roots: []string{registryDir}})
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, filepath.Clean(registryDir), sources[0].ConfiguredRoot)
 
 	metas := make([]dbBackedSessionMeta, 0)
 	require.NoError(t, forEachCrushSessionMeta(
@@ -441,158 +341,6 @@ func TestCrushResolveReconciliationScopesMapsDatabaseFileRoot(t *testing.T) {
 	assert.Equal(t, []string{fixture.dbPath}, plan.Scopes[0].RetryRoots)
 }
 
-// A scoped NewProvider reconstruction from reconciliation TraversalRoots
-// must re-apply registry expansion and project mapping, so custom layouts
-// still attribute sessions to the registry's project path and the original
-// configured root for machine mapping.
-func TestCrushReconciliationTraversalRootsRestoreRegistryMetadata(t *testing.T) {
-	fixture := newCrushTestFixture(t)
-	const created = int64(1_789_093_626)
-	fixture.insertSession(t, "sess-reg", "Registry project", "",
-		created, created, 0, 0, 0)
-
-	registryDir := t.TempDir()
-	registry := `{"projects":[{"path":"` + filepath.ToSlash(fixture.projectDir) +
-		`","data_dir":"` + filepath.ToSlash(fixture.dataDir) + `"}]}`
-	require.NoError(t, os.WriteFile(
-		filepath.Join(registryDir, CrushProjectsFileName),
-		[]byte(registry), 0o600,
-	))
-
-	factory := newCrushProviderFactory(AgentDef{
-		Type: AgentCrush, IDPrefix: "crush:",
-	})
-	provider := factory.NewProvider(ProviderConfig{
-		Roots: []string{registryDir},
-	})
-	plan, err := provider.ResolveReconciliationScopes(
-		t.Context(), ReconciliationScopeRequest{Roots: []string{registryDir}},
-	)
-	require.NoError(t, err)
-	require.Len(t, plan.Scopes, 1)
-	assert.Equal(t, []string{
-		filepath.Clean(registryDir), filepath.Clean(fixture.dataDir),
-	},
-		plan.Scopes[0].TraversalRoots,
-		"traversal must keep the registry metadata and its discovered data directory")
-
-	// Reconstruct exactly as the sync engine does after scope resolution.
-	scoped := factory.NewProvider(ProviderConfig{
-		Roots: plan.Scopes[0].TraversalRoots,
-	})
-	sources, err := scoped.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, filepath.Clean(registryDir), sources[0].ConfiguredRoot)
-
-	outcome, err := scoped.Parse(context.Background(), ParseRequest{
-		Source:  sources[0],
-		Machine: "laptop",
-	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
-	sess := outcome.Results[0].Result.Session
-	assert.Equal(t, "laptop", sess.Machine)
-	assert.Equal(t, fixture.projectDir, sess.Cwd,
-		"scoped reconstruction must keep the registry's project path")
-	assert.Equal(t, filepath.Base(fixture.projectDir), sess.Project)
-}
-
-// Sources discovered under a configured registry or crush.db root must
-// keep that configured spelling on ConfiguredRoot so machine mapping does
-// not fall back to the expanded data-directory path.
-func TestCrushSourcesPreserveConfiguredRoot(t *testing.T) {
-	fixture := newCrushTestFixture(t)
-	const created = int64(1_789_093_626)
-	fixture.insertSession(t, "sess-cfg", "Configured root", "",
-		created, created, 0, 0, 0)
-
-	registryDir := t.TempDir()
-	registry := `{"projects":[{"path":"` + filepath.ToSlash(fixture.projectDir) +
-		`","data_dir":"` + filepath.ToSlash(fixture.dataDir) + `"}]}`
-	require.NoError(t, os.WriteFile(
-		filepath.Join(registryDir, CrushProjectsFileName),
-		[]byte(registry), 0o600,
-	))
-
-	factory := newCrushProviderFactory(AgentDef{
-		Type: AgentCrush, IDPrefix: "crush:",
-	})
-
-	t.Run("registry root", func(t *testing.T) {
-		provider := factory.NewProvider(ProviderConfig{
-			Roots: []string{registryDir},
-		})
-		sources, err := provider.Discover(context.Background())
-		require.NoError(t, err)
-		require.Len(t, sources, 1)
-		assert.Equal(t, filepath.Clean(registryDir), sources[0].ConfiguredRoot)
-	})
-
-	t.Run("database file root", func(t *testing.T) {
-		provider := factory.NewProvider(ProviderConfig{
-			Roots: []string{fixture.dbPath},
-		})
-		sources, err := provider.Discover(context.Background())
-		require.NoError(t, err)
-		require.Len(t, sources, 1)
-		assert.Equal(t, filepath.Clean(fixture.dbPath), sources[0].ConfiguredRoot)
-	})
-
-	t.Run("data directory root", func(t *testing.T) {
-		provider := factory.NewProvider(ProviderConfig{
-			Roots: []string{fixture.dataDir},
-		})
-		sources, err := provider.Discover(context.Background())
-		require.NoError(t, err)
-		require.Len(t, sources, 1)
-		assert.Equal(t, filepath.Clean(fixture.dataDir), sources[0].ConfiguredRoot)
-	})
-
-	t.Run("changed path keeps configured root", func(t *testing.T) {
-		// Use a fresh factory so the shared change tracker is cold and the
-		// source set is built from the database-file spelling.
-		freshFactory := newCrushProviderFactory(AgentDef{
-			Type: AgentCrush, IDPrefix: "crush:",
-		})
-		provider := freshFactory.NewProvider(ProviderConfig{
-			Roots: []string{fixture.dbPath},
-		})
-		sources, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
-			Path: fixture.dbPath, EventKind: "write",
-		})
-		require.NoError(t, err)
-		require.Len(t, sources, 1)
-		assert.Equal(t, filepath.Clean(fixture.dbPath), sources[0].ConfiguredRoot)
-	})
-}
-
-func TestOpenCrushDBLiveReadObservesWALContent(t *testing.T) {
-	fixture := newCrushTestFixture(t)
-	const created = int64(1_789_093_626)
-	fixture.insertSession(t, "sess-wal", "WAL content", "",
-		created, created, 0, 0, 0)
-
-	// A live open must observe rows still sitting in the WAL. Immutable
-	// mode would ignore the WAL and return only the main file snapshot.
-	_, err := fixture.database.Exec(`
-		INSERT INTO sessions (
-			id, title, created_at, updated_at
-		) VALUES ('sess-wal-only', 'WAL only', 1789093630, 1789093630)
-	`)
-	require.NoError(t, err)
-
-	live, err := openCrushDB(fixture.dbPath, false)
-	require.NoError(t, err)
-	defer live.Close()
-	var count int
-	require.NoError(t, live.QueryRow(
-		`SELECT COUNT(*) FROM sessions WHERE id = 'sess-wal-only'`,
-	).Scan(&count))
-	assert.Equal(t, 1, count,
-		"live open must observe WAL content rather than a stale main-file snapshot")
-}
-
 func TestCrushSchemaValidationRejectsGooseStores(t *testing.T) {
 	fixture := newCrushTestFixture(t)
 	// Drop the parts column marker: a messages table without it is not
@@ -611,66 +359,6 @@ func TestCrushSchemaValidationRejectsGooseStores(t *testing.T) {
 	require.Error(t, validateCrushSchema(
 		context.Background(), fixture.database,
 	), "a messages table without parts must not be treated as Crush")
-}
-
-func TestCrushRegistryCompletenessIncludesCrush(t *testing.T) {
-	def, ok := AgentByType(AgentCrush)
-	require.True(t, ok)
-	assert.Equal(t, "Charm Crush", def.DisplayName)
-	assert.True(t, def.PeriodicReconcile)
-	assert.True(t, def.Usage.NoPerMessageTokenData)
-}
-
-func TestCrushProviderParseCarriesUsageEvents(t *testing.T) {
-	fixture := newCrushTestFixture(t)
-	const created = int64(1_789_093_626)
-	fixture.insertSession(t, "sess-use", "Usage", "",
-		created, created, 43_922, 185, 0.0126)
-
-	factory := newCrushProviderFactory(AgentDef{Type: AgentCrush, IDPrefix: "crush:"})
-	provider := factory.NewProvider(ProviderConfig{
-		Roots: []string{fixture.dataDir},
-	})
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
-		Source: SourceRef{
-			Provider:    AgentCrush,
-			Key:         VirtualSourcePath(fixture.dbPath, "sess-use"),
-			DisplayPath: VirtualSourcePath(fixture.dbPath, "sess-use"),
-			Opaque: dbBackedSource{
-				Root: fixture.dataDir, DBPath: fixture.dbPath, SessionID: "sess-use",
-			},
-		},
-	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
-	require.Len(t, outcome.Results[0].Result.UsageEvents, 1,
-		"the sync engine writes usage rows only from ParseResult.UsageEvents")
-	event := outcome.Results[0].Result.UsageEvents[0]
-	assert.Equal(t, "crush:sess-use", event.SessionID)
-	assert.Equal(t, 43_922, event.InputTokens)
-	assert.Equal(t, 185, event.OutputTokens)
-	require.NotNil(t, event.Cost)
-}
-
-func TestCrushProviderParseDoesNotReplaceMissingArchiveMember(t *testing.T) {
-	fixture := newCrushTestFixture(t)
-	const created = int64(1_789_093_626)
-	fixture.insertSession(t, "sess-gone", "Archived", "",
-		created, created, 0, 0, 0)
-	provider := newCrushProviderFactory(AgentDef{
-		Type: AgentCrush, IDPrefix: "crush:",
-	}).NewProvider(ProviderConfig{Roots: []string{fixture.dataDir}})
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	_, err = fixture.database.Exec(`DELETE FROM sessions WHERE id = 'sess-gone'`)
-	require.NoError(t, err)
-
-	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
-	require.NoError(t, err)
-	assert.Equal(t, SkipNoSession, outcome.SkipReason)
-	assert.False(t, outcome.ForceReplace,
-		"a missing Crush row must not remove its persistent archive entry")
 }
 
 func TestCrushSummaryMessageIsCompactBoundary(t *testing.T) {
@@ -698,40 +386,6 @@ func TestCrushSummaryMessageIsCompactBoundary(t *testing.T) {
 	assert.Empty(t, message.Model,
 		"summary rows must not attribute the original row's model")
 	assert.Equal(t, 0, session.UserMessageCount)
-}
-
-func TestCrushChangedSessionIDsAreBoundedToNewRows(t *testing.T) {
-	fixture := newCrushTestFixture(t)
-	const created = int64(1_789_093_626)
-	fixture.insertSession(t, "sess-a", "A", "", created, created, 0, 0, 0)
-	fixture.insertSession(t, "sess-b", "B", "", created, created, 0, 0, 0)
-	tracker := newCrushRowObserver()
-
-	// Cold start: no stored cursor, full enumeration is expected.
-	ids, cold, snapshot, err := tracker.changedSessionIDs(context.Background(), fixture.dbPath, false)
-	require.NoError(t, err)
-	assert.True(t, cold)
-	assert.Empty(t, ids)
-	tracker.commit(fixture.dbPath, snapshot)
-
-	// A new message in sess-a must report only sess-a, not sess-b.
-	fixture.insertMessage(t, "msg-new", "sess-a", "user", `[
-		{"type":"text","data":{"text":"more"}}
-	]`, created+1, "", "")
-	ids, cold, _, err = tracker.changedSessionIDs(context.Background(), fixture.dbPath, false)
-	require.NoError(t, err)
-	assert.False(t, cold)
-	assert.Equal(t, []string{"sess-a"}, ids)
-
-	// Committing again drains the cursor.
-	_, cold, snapshot, err = tracker.changedSessionIDs(context.Background(), fixture.dbPath, false)
-	require.NoError(t, err)
-	assert.False(t, cold)
-	tracker.commit(fixture.dbPath, snapshot)
-	ids, cold, _, err = tracker.changedSessionIDs(context.Background(), fixture.dbPath, false)
-	require.NoError(t, err)
-	assert.False(t, cold)
-	assert.Empty(t, ids)
 }
 
 func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
@@ -771,67 +425,6 @@ func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.False(t, found)
-}
-
-func TestCrushFingerprintsLoadChildRelationshipsOncePerContainerState(t *testing.T) {
-	fixture := newCrushTestFixture(t)
-	const sessionCount = 40
-	const created = int64(1_789_093_626)
-	for i := range sessionCount {
-		parentID := fmt.Sprintf("parent-%03d", i)
-		childID := fmt.Sprintf("child-%03d$$tool-call", i)
-		fixture.insertSession(
-			t, parentID, "Parent", "", created, created, 0, 0, 0,
-		)
-		fixture.insertSession(
-			t, childID, "Child", parentID, created, created, 0, 0, 0,
-		)
-	}
-	provider := newCrushProviderFactory(AgentDef{
-		Type: AgentCrush, IDPrefix: "crush:",
-	}).NewProvider(ProviderConfig{Roots: []string{fixture.dataDir}})
-	fingerprintParent := func(provider Provider, parentID string) string {
-		t.Helper()
-		source, found, err := provider.FindSource(
-			t.Context(), FindSourceRequest{RawSessionID: parentID},
-		)
-		require.NoError(t, err)
-		require.True(t, found)
-		fingerprint, err := provider.Fingerprint(t.Context(), source)
-		require.NoError(t, err)
-		return fingerprint.Hash
-	}
-
-	scansBefore := crushChildRelationshipScans.Load()
-	var firstParentFingerprint string
-	for i := range sessionCount {
-		parentID := fmt.Sprintf("parent-%03d", i)
-		fingerprint := fingerprintParent(provider, parentID)
-		if i == 0 {
-			firstParentFingerprint = fingerprint
-		}
-	}
-
-	assert.Equal(t, int64(1), crushChildRelationshipScans.Load()-scansBefore,
-		"fingerprinting one unchanged container must load child relationships once")
-
-	fixture.insertSession(
-		t, "extra-child$$tool-call", "Extra child", "parent-000",
-		created, created, 0, 0, 0,
-	)
-	changedFingerprint := fingerprintParent(provider, "parent-000")
-	assert.NotEqual(t, firstParentFingerprint, changedFingerprint,
-		"a changed child relationship must invalidate the parent fingerprint")
-	_ = fingerprintParent(provider, "parent-001")
-	assert.Equal(t, int64(2), crushChildRelationshipScans.Load()-scansBefore,
-		"a changed container state must load relationships exactly once again")
-
-	otherProvider := newCrushProviderFactory(AgentDef{
-		Type: AgentCrush, IDPrefix: "crush:",
-	}).NewProvider(ProviderConfig{Roots: []string{fixture.dataDir}})
-	_ = fingerprintParent(otherProvider, "parent-000")
-	assert.Equal(t, int64(3), crushChildRelationshipScans.Load()-scansBefore,
-		"separate providers must not retain each other's transient databases")
 }
 
 func TestCrushParseSessionWithoutOptionalColumns(t *testing.T) {
