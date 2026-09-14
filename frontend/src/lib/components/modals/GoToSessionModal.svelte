@@ -14,7 +14,11 @@
     type FindCompositionState,
   } from "../../search/find-input.js";
   import { LatestRead } from "../../utils/latest-read.js";
-  import { resolveSessionId, type SessionIdResolution } from "../../utils/go-to-session.js";
+  import {
+    resolveSessionId,
+    sessionLookupPartial,
+    type SessionIdResolution,
+  } from "../../utils/go-to-session.js";
 
   const SESSION_ID_LIMIT = 1000;
   type ErrorKind = Exclude<SessionIdResolution["kind"], "resolved"> | "failed";
@@ -41,8 +45,6 @@
     switch (kind) {
       case "empty":
         return m.go_to_session_empty();
-      case "invalid":
-        return m.go_to_session_invalid();
       case "unknown":
         return m.go_to_session_not_found();
       case "ambiguous":
@@ -67,19 +69,13 @@
       return;
     }
 
-    const validation = resolveSessionId(value, [], false);
-    if (validation.kind === "invalid") {
-      setError("invalid");
-      return;
-    }
-
     errorKind = null;
     const signal = lookup.begin();
     try {
       const response = await callGenerated(
         (options) =>
           SessionsService.getApiV1SessionIdsResolve(
-            { partial: value.toLowerCase(), limit: SESSION_ID_LIMIT },
+            { partial: sessionLookupPartial(value), limit: SESSION_ID_LIMIT },
             options,
           ),
         signal,
@@ -151,6 +147,7 @@
     <div class="go-to-session-input" use:protectFindInput={composition}>
       <label for="go-to-session-input">{m.go_to_session_input_label()}</label>
       <TextInput
+        class="go-to-session-control"
         id="go-to-session-input"
         bind:value={inputValue}
         bind:inputEl
@@ -183,6 +180,15 @@
     display: flex;
     flex-direction: column;
     gap: 5px;
+  }
+
+  :global(.go-to-session-control.kit-text-input:focus-within),
+  :global(.go-to-session-control.kit-text-input:has(.kit-text-input__control:focus-visible)) {
+    outline: none;
+  }
+
+  :global(.go-to-session-control .kit-text-input__control:focus-visible) {
+    outline: none;
   }
 
   label {

@@ -20,8 +20,10 @@ const MISSING_UUID = "123e4567-e89b-12d3-a456-426614174001";
 const UNKNOWN_UUID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const TARGET_ID = `remote-host~codex:${TARGET_UUID}`;
 const MISSING_ID = `remote-host~codex:${MISSING_UUID}`;
+const OPAQUE_ID = "test-session-project-reclassification-nested";
 const TARGET_PATH = `/sessions/${encodeURIComponent(TARGET_ID)}`;
 const MISSING_PATH = `/sessions/${encodeURIComponent(MISSING_ID)}`;
+const OPAQUE_PATH = `/sessions/${encodeURIComponent(OPAQUE_ID)}`;
 
 const now = "2026-09-14T12:00:00Z";
 
@@ -75,6 +77,8 @@ test.describe("go to session", () => {
         await route.fulfill({ json: { ids: [TARGET_ID] } });
       } else if (partial === MISSING_UUID) {
         await route.fulfill({ json: { ids: [MISSING_ID] } });
+      } else if (partial === OPAQUE_ID) {
+        await route.fulfill({ json: { ids: [OPAQUE_ID] } });
       } else {
         await route.fulfill({ json: { ids: [] } });
       }
@@ -100,6 +104,8 @@ test.describe("go to session", () => {
         await route.fulfill({ json: session(TARGET_ID, "Off-list target") });
       } else if (id === MISSING_ID) {
         await route.fulfill({ status: 404, json: { error: "session not found" } });
+      } else if (id === OPAQUE_ID) {
+        await route.fulfill({ json: session(OPAQUE_ID, "Opaque session ID") });
       } else {
         await route.fallback();
       }
@@ -117,6 +123,13 @@ test.describe("go to session", () => {
         });
       } else if (id === MISSING_ID) {
         await route.fulfill({ status: 404, json: { error: "session not found" } });
+      } else if (id === OPAQUE_ID) {
+        await route.fulfill({
+          json: {
+            messages: [message(OPAQUE_ID, "Opaque session ID content")],
+            count: 1,
+          },
+        });
       } else {
         await route.fallback();
       }
@@ -142,13 +155,18 @@ test.describe("go to session", () => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.keyboard.press(`${modifier}+g`);
     const dialog = page.getByRole("dialog", { name: "Go to session" });
-    const input = page.getByRole("textbox", { name: "Session UUID" });
+    const input = page.getByRole("textbox", { name: "Session ID or UUID" });
     await expect(dialog).toBeVisible();
     await expect(input).toBeFocused();
+    const focusStyles = await page.locator(".go-to-session-control").evaluate((element) => ({
+      control: getComputedStyle(element).outlineStyle,
+      input: getComputedStyle(element.querySelector("input")!).outlineStyle,
+    }));
+    expect(focusStyles).toEqual({ control: "none", input: "none" });
 
     await input.fill(UNKNOWN_UUID);
     await input.press("Enter");
-    await expect(page.getByRole("alert")).toHaveText("No session matches that UUID.");
+    await expect(page.getByRole("alert")).toHaveText("No session matches that ID or UUID.");
     await expect(page).toHaveURL(/\/usage\?desktop=1$/);
 
     for (const width of [1280, 768, 400]) {
@@ -225,6 +243,14 @@ test.describe("go to session", () => {
 
     await page.keyboard.press("Escape");
     await expect(findInput).toHaveCount(0);
+    await page.keyboard.press(`${modifier}+g`);
+    await expect(input).toBeFocused();
+    await input.fill(OPAQUE_ID);
+    await input.press("Enter");
+
+    await expect(page).toHaveURL(new RegExp(`${OPAQUE_PATH.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\?desktop=1$`));
+    await expect(page.getByText("Opaque session ID content")).toBeVisible();
+
     await page.keyboard.press(`${modifier}+g`);
     await expect(input).toBeFocused();
     await input.fill(MISSING_UUID);

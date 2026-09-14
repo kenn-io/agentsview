@@ -98,7 +98,7 @@ describe("GoToSessionModal", () => {
     await open();
 
     expect(input()).toBe(document.activeElement);
-    expect(input().getAttribute("placeholder")).toBe("Paste a session UUID");
+    expect(input().getAttribute("placeholder")).toBe("Paste a session ID or UUID");
   });
 
   it("resolves one canonical ID and sends it to both navigation owners", async () => {
@@ -134,10 +134,26 @@ describe("GoToSessionModal", () => {
     expect(harness.sessions.navigateToSession).toHaveBeenCalledExactlyOnceWith(canonical);
   });
 
+  it("resolves an opaque session ID", async () => {
+    const id = "test-session-project-reclassification-nested";
+    await open();
+    harness.resolveSessionIds.mockResolvedValue({ ids: [id] });
+    await setInput(id);
+
+    await pressKey("Enter");
+
+    expect(harness.resolveSessionIds).toHaveBeenCalledExactlyOnceWith(
+      { partial: id, limit: 1000 },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(harness.sessions.navigateToSession).toHaveBeenCalledExactlyOnceWith(id);
+    expect(harness.router.navigateToSession).toHaveBeenCalledExactlyOnceWith(id);
+    expect(ui.activeModal).toBeNull();
+  });
+
   it.each([
-    ["empty", "", "Enter a session UUID."],
-    ["invalid", "codex:123e4567-e89b-12d3-a456-426614174000", "Enter a complete UUID without a prefix."],
-    ["unknown", UUID, "No session matches that UUID."],
+    ["empty", "", "Enter a session ID or UUID."],
+    ["unknown", UUID, "No session matches that ID or UUID."],
   ] as const)("keeps the dialog open for %s input", async (_name, value, message) => {
     await open();
     await setInput(value);
@@ -148,7 +164,7 @@ describe("GoToSessionModal", () => {
     expect(ui.activeModal).toBe("goToSession");
     expect(harness.sessions.navigateToSession).not.toHaveBeenCalled();
     expect(harness.router.navigateToSession).not.toHaveBeenCalled();
-    if (_name === "empty" || _name === "invalid") {
+    if (_name === "empty") {
       expect(harness.resolveSessionIds).not.toHaveBeenCalled();
     }
   });
@@ -163,7 +179,7 @@ describe("GoToSessionModal", () => {
     await pressKey("Enter");
 
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-      "Multiple sessions match that UUID. Open the desired session from an existing link.",
+      "Multiple sessions match that ID or UUID. Open the desired session from an existing link.",
     );
     expect(ui.activeModal).toBe("goToSession");
     expect(harness.router.navigateToSession).not.toHaveBeenCalled();
@@ -179,7 +195,7 @@ describe("GoToSessionModal", () => {
     await pressKey("Enter");
 
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-      "Too many sessions match. Open the desired session from an existing link.",
+      "Too many sessions match that ID or UUID. Open the desired session from an existing link.",
     );
     expect(ui.activeModal).toBe("goToSession");
     expect(harness.router.navigateToSession).not.toHaveBeenCalled();

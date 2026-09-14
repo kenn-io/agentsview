@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { resolveSessionId } from "./go-to-session.js";
+import { resolveSessionId, sessionLookupPartial } from "./go-to-session.js";
 
 const UUID = "123e4567-e89b-12d3-a456-426614174000";
 
@@ -16,15 +16,26 @@ describe("resolveSessionId", () => {
     expect(resolveSessionId(UUID, [id], false)).toEqual({ kind: "resolved", id });
   });
 
-  it.each([
-    ["", "empty"],
-    ["123e4567-e89b-12d3-a456-42661417400", "invalid"],
-    [`${UUID.slice(0, 8)} ${UUID.slice(9)}`, "invalid"],
-    [`codex:${UUID}`, "invalid"],
-    [`https://example.test/sessions/${UUID}`, "invalid"],
-    ["123e4567-e89b-12d3-a456-42661417400z", "invalid"],
-  ] as const)("rejects %j as %s", (input, kind) => {
-    expect(resolveSessionId(input, [`codex:${UUID}`], false)).toEqual({ kind });
+  it("resolves an opaque session ID", () => {
+    const id = "test-session-project-reclassification-nested";
+    expect(resolveSessionId(id, [id], false)).toEqual({ kind: "resolved", id });
+  });
+
+  it("treats a matching opaque ID as exact among partial results", () => {
+    const id = "session-name-123";
+    expect(resolveSessionId(id, ["session-name-1234", id], false)).toEqual({
+      kind: "resolved",
+      id,
+    });
+  });
+
+  it("reports an empty value", () => {
+    expect(resolveSessionId("", [`codex:${UUID}`], false)).toEqual({ kind: "empty" });
+  });
+
+  it("preserves opaque ID casing while normalizing bare UUID lookup", () => {
+    expect(sessionLookupPartial(" test-session-ABC ")).toBe("test-session-ABC");
+    expect(sessionLookupPartial(` ${UUID.toUpperCase()} `)).toBe(UUID);
   });
 
   it("reports an unknown UUID when no canonical candidate matches", () => {
