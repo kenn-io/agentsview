@@ -1035,6 +1035,9 @@ func (q *workerQueueFixture) HeartbeatRawParseJob(
 	lease JobLease,
 	duration time.Duration,
 ) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	q.heartbeats.Add(1)
 	if q.heartbeat != nil {
 		return q.heartbeat(ctx, lease, duration)
