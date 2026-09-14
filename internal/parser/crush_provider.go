@@ -9,16 +9,10 @@ import (
 	"hash"
 	"maps"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 )
-
-// crushChildRelationshipScans lets the regression test observe full-table
-// relationship loads without relying on query timing.
-var crushChildRelationshipScans atomic.Int64
 
 type crushChildRelationshipsCacheEntry struct {
 	mu       sync.Mutex
@@ -34,13 +28,15 @@ type crushChildRelationshipsCache struct {
 
 type crushProviderFactory struct {
 	def     AgentDef
-	tracker *sqliteRowObserver
+	tracker *sqliteChangeTracker
 }
 
 func newCrushProviderFactory(def AgentDef) ProviderFactory {
 	return &crushProviderFactory{
-		def:     cloneAgentDef(def),
-		tracker: newCrushRowObserver(),
+		def: cloneAgentDef(def),
+		tracker: &sqliteChangeTracker{
+			agent: AgentCrush, open: openCrushDB, schema: crushCursorSchema,
+		},
 	}
 }
 
@@ -66,10 +62,10 @@ func (f *crushProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 		spec:    spec,
 		sources: newDBBackedSourceSet(spec, cfg.Roots),
 	}
+	base.sources.tracker = f.tracker
+	base.sources.stableSnapshot = cfg.StableSourceSnapshots
 	p := &crushProvider{
 		dbBackedProvider: base,
-		tracker:          f.tracker,
-		originalRoots:    originalRoots,
 		registryMapping:  registryMapping,
 		projectMapping:   projectMapping,
 		configuredRoot:   crushConfiguredRootByExpanded(originalRoots, registryMapping),
@@ -98,8 +94,6 @@ func (f *crushProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 
 type crushProvider struct {
 	*dbBackedProvider
-	tracker         *sqliteRowObserver
-	originalRoots   []string
 	registryMapping map[string][]string
 	projectMapping  map[string]string
 	childCache      crushChildRelationshipsCache
@@ -254,112 +248,29 @@ func (p *crushProvider) reconciliationContainer(requested string) (string, bool)
 }
 
 func (p *crushProvider) Discover(ctx context.Context) ([]SourceRef, error) {
-	watermarks := p.captureDiscoveryWatermarks(ctx)
 	sources, err := p.dbBackedProvider.Discover(ctx)
 	if err != nil {
 		return nil, err
 	}
-	p.tracker.storeDiscoveryWatermarks(watermarks)
 	return p.withConfiguredRoots(sources), nil
 }
 
 func (p *crushProvider) DiscoverEach(
 	ctx context.Context, yield func(SourceRef) error,
 ) error {
-	watermarks := p.captureDiscoveryWatermarks(ctx)
-	err := p.dbBackedProvider.DiscoverEach(ctx, func(source SourceRef) error {
+	return p.dbBackedProvider.DiscoverEach(ctx, func(source SourceRef) error {
 		return yield(p.withConfiguredRoot(source))
 	})
-	if err != nil {
-		return err
-	}
-	p.tracker.storeDiscoveryWatermarks(watermarks)
-	return nil
 }
 
-// captureDiscoveryWatermarks reads the change cursors before enumeration.
-// Publishing them only after a successful pass leaves rows committed during
-// discovery available to the next watcher event. A single unreadable database
-// is skipped so healthy roots can still be discovered.
-func (p *crushProvider) captureDiscoveryWatermarks(
-	ctx context.Context,
-) []sqliteRowObserverWatermark {
-	watermarks := make([]sqliteRowObserverWatermark, 0, len(p.sources.roots))
-	for _, root := range p.sources.roots {
-		dbPath := p.spec.findDB(root)
-		if dbPath == "" {
-			continue
-		}
-		state, err := p.tracker.capture(ctx, dbPath, p.Config.StableSourceSnapshots)
-		if err != nil {
-			continue
-		}
-		watermarks = append(watermarks, sqliteRowObserverWatermark{
-			dbPath: dbPath,
-			state:  state,
-		})
-	}
-	return watermarks
-}
-
-// SourcesForChangedPath returns only Crush sessions with newly inserted
-// session or message rows. Scheduled reconciliation refreshes metadata-only
-// updates. It deliberately ignores deleted rows so archived sessions remain
-// until the user deletes them in AgentsView.
 func (p *crushProvider) SourcesForChangedPath(
 	ctx context.Context, req ChangedPathRequest,
 ) ([]SourceRef, error) {
-	if err := ctx.Err(); err != nil {
+	sources, err := p.dbBackedProvider.SourcesForChangedPath(ctx, req)
+	if err != nil {
 		return nil, err
 	}
-	for _, root := range p.sources.roots {
-		if req.WatchRoot != "" && !samePath(req.WatchRoot, root) {
-			continue
-		}
-		if ref, ok := p.sources.sourceRef(root, req.Path, true); ok {
-			return []SourceRef{p.withConfiguredRoot(ref)}, nil
-		}
-		dbPath, ok := p.sources.dbPathForEvent(root, req.Path)
-		if !ok {
-			continue
-		}
-		if !IsRegularFile(dbPath) {
-			// The SQLite archive is persistent. A vanished physical database
-			// cannot prove that any archived Crush member was deleted.
-			return nil, nil
-		}
-		ids, cold, snapshot, err := p.tracker.changedSessionIDs(
-			ctx, dbPath, p.Config.StableSourceSnapshots,
-		)
-		if err != nil {
-			return nil, err
-		}
-		if cold {
-			sources, err := p.dbBackedProvider.SourcesForChangedPath(ctx, ChangedPathRequest{
-				Path:      req.Path,
-				EventKind: req.EventKind,
-				WatchRoot: req.WatchRoot,
-			})
-			if err != nil {
-				return nil, err
-			}
-			p.tracker.commit(dbPath, snapshot)
-			return p.withConfiguredRoots(sources), nil
-		}
-
-		sources := make([]SourceRef, 0, len(ids))
-		for _, id := range ids {
-			sources = append(sources, p.sources.newSourceRef(
-				root, dbPath, id, VirtualSourcePath(dbPath, id),
-			))
-		}
-		p.tracker.commit(dbPath, snapshot)
-		sort.Slice(sources, func(i, j int) bool {
-			return sources[i].DisplayPath < sources[j].DisplayPath
-		})
-		return p.withConfiguredRoots(sources), nil
-	}
-	return nil, nil
+	return p.withConfiguredRoots(sources), nil
 }
 
 func (p *crushProvider) FindSource(
@@ -669,7 +580,6 @@ func (c *crushChildRelationshipsCache) entry(
 func loadCrushChildSessionIDs(
 	ctx context.Context, db *sql.DB,
 ) (map[string][]string, error) {
-	crushChildRelationshipScans.Add(1)
 	rows, err := db.QueryContext(ctx, `
 		SELECT parent_session_id, id
 		FROM sessions
@@ -699,59 +609,32 @@ func crushWriteFingerprintField(hasher hash.Hash, value string) {
 	_, _ = hasher.Write([]byte(value))
 }
 
-func newCrushRowObserver() *sqliteRowObserver {
-	return newSQLiteRowObserver(sqliteRowObserverSpec{
-		open: openCrushDB,
-		schemaIdentity: func(ctx context.Context, db *sql.DB) (string, error) {
-			version, err := crushSchemaVersion(ctx, db)
-			return strconv.Itoa(version), err
-		},
-		tables: crushObservedTables,
-	})
-}
-
-func crushObservedTables(
+func crushCursorSchema(
 	ctx context.Context, db *sql.DB,
-) ([]sqliteObservedTable, error) {
-	observed := make([]sqliteObservedTable, 0, 2)
-	for _, table := range []struct {
-		name      string
-		sessionID string
-	}{
-		{name: "sessions", sessionID: "id"},
-		{name: "messages", sessionID: "session_id"},
-	} {
-		columns, err := crushTableColumns(ctx, db, table.name)
-		if err != nil {
-			return nil, fmt.Errorf("inspecting crush %s columns: %w", table.name, err)
-		}
-		identity, ok := crushRowIdentityExpression(table.name, columns)
-		if !ok {
-			return nil, fmt.Errorf("unsupported crush cursor table %q", table.name)
-		}
-		observed = append(observed, sqliteObservedTable{
-			name: table.name, cursorExpression: "rowid",
-			sessionIDExpression: table.sessionID,
-			identityExpression:  identity,
-		})
+) (int, []sqliteCursorTable, error) {
+	version, err := crushSchemaVersion(ctx, db)
+	if err != nil {
+		return 0, nil, err
 	}
-	return observed, nil
-}
-
-func crushRowIdentityExpression(table string, columns map[string]bool) (string, bool) {
-	switch table {
-	case "sessions":
-		return "CAST(id AS TEXT)", true
-	case "messages":
-		expr := "session_id || char(31) || COALESCE(role, '') || char(31) || " +
-			"CAST(COALESCE(created_at, 0) AS TEXT)"
-		if columns["finished_at"] {
-			expr += " || char(31) || COALESCE(CAST(finished_at AS TEXT), '')"
-		}
-		return expr, true
-	default:
-		return "", false
+	columns, err := crushTableColumns(ctx, db, "messages")
+	if err != nil {
+		return 0, nil, fmt.Errorf("inspecting crush messages columns: %w", err)
 	}
+	messageIdentity := "session_id || char(31) || COALESCE(role, '') || char(31) || " +
+		"CAST(COALESCE(created_at, 0) AS TEXT)"
+	if columns["finished_at"] {
+		messageIdentity += " || char(31) || COALESCE(CAST(finished_at AS TEXT), '')"
+	}
+	return version, []sqliteCursorTable{
+		{
+			name: "sessions", rowID: "rowid", sessionID: "id",
+			identity: "CAST(id AS TEXT)",
+		},
+		{
+			name: "messages", rowID: "rowid", sessionID: "session_id",
+			identity: messageIdentity,
+		},
+	}, nil
 }
 
 // crushSchemaVersion reads the vendored goose migration version so a
