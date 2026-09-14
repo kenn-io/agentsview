@@ -559,13 +559,13 @@ func TestPiProviderParsesOMPParentSession(t *testing.T) {
 	}
 }
 
-// TestPiProviderNativeParentSessionUsesFilenameIdentity verifies that native
-// Pi parentSession paths use persisted filename identity rather than a parent
-// header UUID.
-func TestPiProviderNativeParentSessionUsesFilenameIdentity(t *testing.T) {
+// TestPiProviderNativeParentSessionUsesHeaderIdentity verifies that native
+// Pi parentSession paths resolve to the parent's persisted header ID when the
+// filename stem and header ID differ.
+func TestPiProviderNativeParentSessionUsesHeaderIdentity(t *testing.T) {
 	root := t.TempDir()
-	parentPath := filepath.Join(root, "persisted-parent.jsonl")
-	childPath := filepath.Join(root, "child.jsonl")
+	parentPath := filepath.Join(root, "2026-07-03T06-00-00-000Z_parent-file.jsonl")
+	childPath := filepath.Join(root, "2026-07-03T06-30-00-000Z_child-file.jsonl")
 	parentContent := `{"type":"session","version":3,"id":"header-id-does-not-match-filename","timestamp":"2026-07-03T06:00:00.000Z","cwd":"/repos/x"}` + "\n"
 	childContent := `{"type":"session","version":3,"id":"child","timestamp":"2026-07-03T06:30:00.000Z","cwd":"/repos/x","parentSession":"` + parentPath + `"}` + "\n"
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentContent), 0o644))
@@ -577,9 +577,8 @@ func TestPiProviderNativeParentSessionUsesFilenameIdentity(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "pi:header-id-does-not-match-filename", parent.ID)
-	assert.Equal(t, "pi:persisted-parent", child.ParentSessionID)
-	assert.NotEqual(t, parent.ID, child.ParentSessionID,
-		"native parentSession follows persisted filename identity, not header UUID")
+	assert.Equal(t, parent.ID, child.ParentSessionID,
+		"native parentSession must resolve to the parent's stored header ID")
 }
 
 // TestPiProviderOMPParentSessionMatchesParentID proves the mapped

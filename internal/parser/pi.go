@@ -90,20 +90,18 @@ func parsePiLikeSession(
 	}
 
 	// Branch lineage. Pi records persisted parents as file paths in
-	// branchedFrom or parentSession; use the basename without extension so
-	// the mapped value matches the parent's stored filename identity. OMP
-	// records a raw ID in parentSession, while Prime Agent may need to resolve
-	// its persisted path against a sibling. branchedFrom wins when present.
+	// branchedFrom or parentSession. OMP records a raw ID in parentSession,
+	// while Prime Agent and native Pi may need to resolve a persisted path
+	// against a sibling. branchedFrom wins when present.
 	var parentSessionID string
 	if branchedFrom := gjson.Get(headerLine, "branchedFrom").Str; branchedFrom != "" {
 		parentSessionID = idPrefix + piPersistedPathSessionID(branchedFrom)
-	} else if parentSession := gjson.Get(headerLine, "parentSession").Str;
-		parentSession != "" &&
+	} else if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" &&
 		(agent == AgentPi || agent == AgentOMP || agent == AgentPrimeAgent) {
 		if agent == AgentPrimeAgent {
 			parentSession = primeParentSessionID(path, parentSession)
 		} else if agent == AgentPi {
-			parentSession = piPersistedPathSessionID(parentSession)
+			parentSession = primeParentSessionID(path, parentSession)
 		}
 		parentSessionID = idPrefix + parentSession
 	}

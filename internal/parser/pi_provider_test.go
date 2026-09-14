@@ -334,6 +334,45 @@ func ompSubagentFixture(id string) string {
 	}, "\n") + "\n"
 }
 
+// TestPiProviderDiscoversAndParsesNativeParentSession verifies that native Pi
+// parentSession resolves to the parent's header identity during discovery and
+// parsing, even when the normal timestamp_UUID filename does not contain it.
+func TestPiProviderDiscoversAndParsesNativeParentSession(t *testing.T) {
+	root := t.TempDir()
+	proj := filepath.Join(root, "encoded-cwd")
+	parentPath := filepath.Join(proj, "2026-07-14T06-45-53-798Z_parent-uuid.jsonl")
+	childPath := filepath.Join(proj, "2026-07-14T06-48-08-907Z_child-uuid.jsonl")
+	writeSourceFile(t, parentPath, strings.Join([]string{
+		`{"type":"session","version":3,"id":"actual-parent-header","timestamp":"2026-07-14T06:45:53.798Z","cwd":"/home/u/repos/x"}`,
+		`{"type":"message","id":"p1","timestamp":"2026-07-14T06:45:54Z","message":{"role":"user","content":"root"}}`,
+		"",
+	}, "\n"))
+	writeSourceFile(t, childPath, strings.Join([]string{
+		`{"type":"session","version":3,"id":"child-uuid","timestamp":"2026-07-14T06:48:08.907Z","cwd":"/home/u/repos/x","parentSession":"` + parentPath + `"}`,
+		`{"type":"message","id":"c1","timestamp":"2026-07-14T06:48:09Z","message":{"role":"user","content":"child"}}`,
+		"",
+	}, "\n"))
+
+	provider, ok := NewProvider(AgentPi, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 2)
+
+	byPath := make(map[string]ParsedSession, len(discovered))
+	for _, source := range discovered {
+		outcome, err := provider.Parse(context.Background(), ParseRequest{Source: source})
+		require.NoError(t, err)
+		require.Len(t, outcome.Results, 1)
+		byPath[source.DisplayPath] = outcome.Results[0].Result.Session
+	}
+
+	parent := byPath[parentPath]
+	child := byPath[childPath]
+	assert.Equal(t, "pi:actual-parent-header", parent.ID)
+	assert.Equal(t, parent.ID, child.ParentSessionID)
+}
+
 // TestOMPProviderDiscoversNestedSubagents verifies that OMP subagent
 // transcripts, which live one directory deeper than the main session
 // (<project>/<session>/<agent>.jsonl) and nest recursively, are discovered
