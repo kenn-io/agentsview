@@ -172,7 +172,7 @@
   .go-to-session-form {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: var(--space-4);
   }
 
   :global(.go-to-session-control.kit-text-input:focus-within),
