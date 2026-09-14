@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { fireEvent, screen } from "@testing-library/svelte";
+import { fireEvent, screen, within } from "@testing-library/svelte";
 import { mount, unmount } from "svelte";
 // @ts-ignore
 import AgentRemapRules from "./AgentRemapRules.svelte";
-import { SettingsService } from "../../api/generated/index";
+import { MetadataService, SettingsService } from "../../api/generated/index";
 
 vi.mock("../../api/runtime.js", async (importOriginal) => {
   const orig = await importOriginal<typeof import("../../api/runtime.js")>();
@@ -18,6 +18,9 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
   const orig = await importOriginal<typeof import("../../api/generated/index")>();
   return {
     ...orig,
+    MetadataService: {
+      getApiV1Agents: vi.fn(),
+    },
     SettingsService: {
       getApiV1SettingsAgentRemapRules: vi.fn(),
       postApiV1SettingsAgentRemapRules: vi.fn(),
@@ -36,6 +39,10 @@ const settingsService = SettingsService as unknown as {
   deleteApiV1SettingsAgentRemapRulesById: ReturnType<typeof vi.fn>;
   postApiV1SettingsAgentRemapRulesPreview: ReturnType<typeof vi.fn>;
   postApiV1SettingsAgentRemapRulesApply: ReturnType<typeof vi.fn>;
+};
+
+const metadataService = MetadataService as unknown as {
+  getApiV1Agents: ReturnType<typeof vi.fn>;
 };
 
 function rule(overrides: Record<string, unknown> = {}) {
@@ -98,6 +105,14 @@ describe("AgentRemapRules", () => {
     settingsService.postApiV1SettingsAgentRemapRulesApply.mockResolvedValue(
       previewResponse({ token: "", samples: [] }),
     );
+    metadataService.getApiV1Agents.mockReset();
+    metadataService.getApiV1Agents.mockResolvedValue({
+      agents: [
+        { name: "goose", session_count: 113 },
+        { name: "codex", session_count: 40 },
+        { name: "claude", session_count: 10 },
+      ],
+    });
     onMutated = vi.fn<() => void>();
   });
 
@@ -197,5 +212,124 @@ describe("AgentRemapRules", () => {
     expect(document.body.textContent).toContain(
       "agent remap preview changed",
     );
+  });
+
+  // The source and target agent Typeaheads share the placeholder (and
+  // therefore the accessible name) "Select agent"; the title prop is the
+  // stable per-field discriminator.
+  function typeaheadTrigger(title: string): HTMLElement {
+    const triggers = screen
+      .getAllByRole("button")
+      .filter((button) => button.getAttribute("title") === title);
+    expect(triggers).toHaveLength(1);
+    return triggers[0]!;
+  }
+
+  async function openTypeahead(title: string) {
+    fireEvent.click(typeaheadTrigger(title));
+    await flush();
+  }
+
+  function listbox() {
+    return within(screen.getByRole("listbox"));
+  }
+
+  function optionText(option: HTMLElement): string {
+    return option.textContent?.trim() ?? "";
+  }
+
+  // The project does not register jest-dom matchers; assert the DOM property.
+  function saveButton(): HTMLButtonElement {
+    return screen.getByRole("button", { name: "Add rule" }) as HTMLButtonElement;
+  }
+
+  it("offers archived and catalog agents as source options", async () => {
+    settingsService.getApiV1SettingsAgentRemapRules.mockResolvedValue([]);
+
+    component = mountRules();
+    await flush();
+    await openTypeahead("Source agent");
+
+    const options = listbox().getAllByRole("option");
+    const texts = options.map(optionText);
+    expect(texts).toContain("Goose");
+    expect(texts).toContain("Augure Desktop");
+  });
+
+  it("selecting a source agent updates the form state", async () => {
+    settingsService.getApiV1SettingsAgentRemapRules.mockResolvedValue([]);
+
+    component = mountRules();
+    await flush();
+    await openTypeahead("Source agent");
+
+    const goose = listbox()
+      .getAllByRole("option")
+      .find((option) => optionText(option) === "Goose");
+    expect(goose).toBeDefined();
+    fireEvent.mouseDown(goose!);
+    await flush();
+
+    await openTypeahead("Target agent");
+    const augure = listbox()
+      .getAllByRole("option")
+      .find((option) => optionText(option) === "Augure Desktop");
+    expect(augure).toBeDefined();
+    fireEvent.mouseDown(augure!);
+    await flush();
+
+    expect(saveButton().disabled).toBe(false);
+  });
+
+  it("ID prefix offers agent prefixes and a clear row", async () => {
+    settingsService.getApiV1SettingsAgentRemapRules.mockResolvedValue([]);
+
+    component = mountRules();
+    await flush();
+    await openTypeahead("ID prefix");
+
+    expect(
+      listbox()
+        .getAllByRole("option")
+        .map(optionText),
+    ).toContain("Any ID (no prefix)");
+
+    const input = screen.getByRole("combobox");
+    fireEvent.input(input, { target: { value: "goose" } });
+    await flush();
+
+    const texts = listbox()
+      .getAllByRole("option")
+      .map(optionText);
+    expect(texts).toContain("Goose:");
+  });
+
+  it("custom agent values remain selectable", async () => {
+    settingsService.getApiV1SettingsAgentRemapRules.mockResolvedValue([]);
+
+    component = mountRules();
+    await flush();
+    await openTypeahead("Source agent");
+
+    const input = screen.getByRole("combobox");
+    fireEvent.input(input, { target: { value: "my-fork-agent" } });
+    await flush();
+
+    const custom = listbox()
+      .getAllByRole("option")
+      .find((option) => optionText(option) === 'Use agent "my-fork-agent"');
+    expect(custom).toBeDefined();
+    fireEvent.mouseDown(custom!);
+    await flush();
+
+    await openTypeahead("Target agent");
+    const augure = listbox()
+      .getAllByRole("option")
+      .find((option) => optionText(option) === "Augure Desktop");
+    expect(augure).toBeDefined();
+    fireEvent.mouseDown(augure!);
+    await flush();
+
+    expect(saveButton().disabled).toBe(false);
   });
 });
