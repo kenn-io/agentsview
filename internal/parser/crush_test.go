@@ -743,8 +743,9 @@ func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
 		{"type":"text","data":{"text":"before"}}
 	]`, created, "", "")
 
+	var childCache crushChildRelationshipsCache
 	first, found, err := crushSessionFingerprint(
-		context.Background(), fixture.dbPath, "sess-fp", false,
+		context.Background(), fixture.dbPath, "sess-fp", false, &childCache,
 	)
 	require.NoError(t, err)
 	require.True(t, found)
@@ -757,7 +758,7 @@ func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
 	`)
 	require.NoError(t, err)
 	second, found, err := crushSessionFingerprint(
-		context.Background(), fixture.dbPath, "sess-fp", false,
+		context.Background(), fixture.dbPath, "sess-fp", false, &childCache,
 	)
 	require.NoError(t, err)
 	require.True(t, found)
@@ -766,7 +767,7 @@ func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
 
 	// A vanished session reports not-found rather than a stale hash.
 	_, found, err = crushSessionFingerprint(
-		context.Background(), fixture.dbPath, "sess-missing", false,
+		context.Background(), fixture.dbPath, "sess-missing", false, &childCache,
 	)
 	require.NoError(t, err)
 	assert.False(t, found)
@@ -789,7 +790,7 @@ func TestCrushFingerprintsLoadChildRelationshipsOncePerContainerState(t *testing
 	provider := newCrushProviderFactory(AgentDef{
 		Type: AgentCrush, IDPrefix: "crush:",
 	}).NewProvider(ProviderConfig{Roots: []string{fixture.dataDir}})
-	fingerprintParent := func(parentID string) string {
+	fingerprintParent := func(provider Provider, parentID string) string {
 		t.Helper()
 		source, found, err := provider.FindSource(
 			t.Context(), FindSourceRequest{RawSessionID: parentID},
@@ -805,7 +806,7 @@ func TestCrushFingerprintsLoadChildRelationshipsOncePerContainerState(t *testing
 	var firstParentFingerprint string
 	for i := range sessionCount {
 		parentID := fmt.Sprintf("parent-%03d", i)
-		fingerprint := fingerprintParent(parentID)
+		fingerprint := fingerprintParent(provider, parentID)
 		if i == 0 {
 			firstParentFingerprint = fingerprint
 		}
@@ -818,12 +819,19 @@ func TestCrushFingerprintsLoadChildRelationshipsOncePerContainerState(t *testing
 		t, "extra-child$$tool-call", "Extra child", "parent-000",
 		created, created, 0, 0, 0,
 	)
-	changedFingerprint := fingerprintParent("parent-000")
+	changedFingerprint := fingerprintParent(provider, "parent-000")
 	assert.NotEqual(t, firstParentFingerprint, changedFingerprint,
 		"a changed child relationship must invalidate the parent fingerprint")
-	_ = fingerprintParent("parent-001")
+	_ = fingerprintParent(provider, "parent-001")
 	assert.Equal(t, int64(2), crushChildRelationshipScans.Load()-scansBefore,
 		"a changed container state must load relationships exactly once again")
+
+	otherProvider := newCrushProviderFactory(AgentDef{
+		Type: AgentCrush, IDPrefix: "crush:",
+	}).NewProvider(ProviderConfig{Roots: []string{fixture.dataDir}})
+	_ = fingerprintParent(otherProvider, "parent-000")
+	assert.Equal(t, int64(3), crushChildRelationshipScans.Load()-scansBefore,
+		"separate providers must not retain each other's transient databases")
 }
 
 func TestCrushParseSessionWithoutOptionalColumns(t *testing.T) {
@@ -870,8 +878,9 @@ func TestCrushParseSessionWithoutOptionalColumns(t *testing.T) {
 
 	// Fingerprint freshness is mandatory for Crush sync; a minimal accepted
 	// schema without messages.updated_at must still produce a hash.
+	var childCache crushChildRelationshipsCache
 	hash, found, err := crushSessionFingerprint(
-		context.Background(), dbPath, "sess-min", false,
+		context.Background(), dbPath, "sess-min", false, &childCache,
 	)
 	require.NoError(t, err)
 	require.True(t, found,

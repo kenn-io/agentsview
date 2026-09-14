@@ -37,6 +37,12 @@ needed to map new rows to logical sessions. The helper supplies locking,
 cold-start behavior, database-replacement detection, cursor validation, and
 ordered deduplication.
 
+Providers supply trusted SQL expressions from source code, never user input. The
+cursor must return a non-null signed 64-bit integer that is stable, unique, and
+strictly increases for each inserted row. The session ID and row identity must
+return deterministic, non-null text. The row identity must change when a cursor
+value is reused for a different row.
+
 Use `SQLiteContainerState` for physical database identity and SQLite change
 markers. Do not repeat file identity, write-ahead-log, or replacement logic in
 the Crush provider. Keep schema-version checks in the provider callback because

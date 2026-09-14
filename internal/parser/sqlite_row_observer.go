@@ -84,12 +84,7 @@ func (o *sqliteRowObserver) entry(dbPath string) *sqliteRowObserverEntry {
 func (o *sqliteRowObserver) capture(
 	ctx context.Context, dbPath string, stableSnapshot bool,
 ) (sqliteRowObserverState, error) {
-	container, ok := StatSQLiteContainerState(dbPath)
-	if !ok {
-		return sqliteRowObserverState{}, fmt.Errorf(
-			"read SQLite container state for %s", dbPath,
-		)
-	}
+	container, _ := StatSQLiteContainerState(dbPath)
 	database, err := o.spec.open(dbPath, stableSnapshot)
 	if err != nil {
 		return sqliteRowObserverState{}, err
@@ -188,17 +183,17 @@ func (e *sqliteRowObserverEntry) mergeLocked(state sqliteRowObserverState) {
 		}
 		return
 	}
-	merged := cloneSQLiteRowObserverState(state)
-	for name, previous := range e.state.tables {
+	newer, older := state, e.state
+	if e.state.sequence > state.sequence {
+		newer, older = e.state, state
+	}
+	merged := cloneSQLiteRowObserverState(newer)
+	for name, previous := range older.tables {
 		current, ok := merged.tables[name]
 		if ok && previous.cursor.id > current.cursor.id {
 			current.cursor = previous.cursor
 			merged.tables[name] = current
 		}
-	}
-	if e.state.sequence > state.sequence {
-		merged.sequence = e.state.sequence
-		merged.container = e.state.container
 	}
 	e.state = merged
 }
@@ -240,13 +235,8 @@ func (o *sqliteRowObserver) changedSessionIDs(
 	known := entry.known
 	entry.mu.Unlock()
 
-	container, ok := StatSQLiteContainerState(dbPath)
-	if !ok {
-		return nil, false, sqliteRowObserverState{}, fmt.Errorf(
-			"read SQLite container state for %s", dbPath,
-		)
-	}
-	if known && previous.container == container {
+	container, captured := StatSQLiteContainerState(dbPath)
+	if captured && known && previous.container == container {
 		return nil, false, previous, nil
 	}
 	database, err := o.spec.open(dbPath, stableSnapshot)
@@ -258,7 +248,7 @@ func (o *sqliteRowObserver) changedSessionIDs(
 	if err != nil {
 		return nil, false, sqliteRowObserverState{}, err
 	}
-	if !known || sqliteRowObserverDatabaseReplaced(previous, current) {
+	if !captured || !known || sqliteRowObserverDatabaseReplaced(previous, current) {
 		return nil, true, current, nil
 	}
 

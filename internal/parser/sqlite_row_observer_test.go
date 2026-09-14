@@ -176,6 +176,39 @@ func TestSQLiteRowObserverDoesNotRetreatPublishedCursors(t *testing.T) {
 	assert.Equal(t, []string{"b"}, ids)
 }
 
+func TestSQLiteRowObserverStaleSnapshotKeepsNewerEqualCursorIdentity(t *testing.T) {
+	dbPath, database := newSQLiteRowObserverTestDB(t)
+	_, err := database.Exec(`INSERT INTO sessions (id) VALUES ('a'), ('b')`)
+	require.NoError(t, err)
+	observer := newSQLiteRowObserver(sqliteRowObserverTestSpec())
+
+	_, cold, staleSnapshot, err := observer.changedSessionIDs(
+		t.Context(), dbPath, false,
+	)
+	require.NoError(t, err)
+	require.True(t, cold)
+	observer.commit(dbPath, staleSnapshot)
+
+	_, err = database.Exec(`UPDATE sessions SET id = 'c' WHERE id = 'b'`)
+	require.NoError(t, err)
+	ids, cold, currentSnapshot, err := observer.changedSessionIDs(
+		t.Context(), dbPath, false,
+	)
+	require.NoError(t, err)
+	require.False(t, cold)
+	assert.Empty(t, ids)
+	observer.commit(dbPath, currentSnapshot)
+
+	observer.commit(dbPath, staleSnapshot)
+	_, err = database.Exec(`INSERT INTO sessions (id) VALUES ('d')`)
+	require.NoError(t, err)
+	ids, cold, _, err = observer.changedSessionIDs(t.Context(), dbPath, false)
+	require.NoError(t, err)
+	assert.False(t, cold)
+	assert.Equal(t, []string{"d"}, ids,
+		"an older equal cursor must not replace the newer row identity")
+}
+
 func TestSQLiteRowObserverTreatsDatabaseReplacementAsCold(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("SQLite file identity is unavailable on Windows")
@@ -202,6 +235,29 @@ func TestSQLiteRowObserverTreatsDatabaseReplacementAsCold(t *testing.T) {
 	require.NoError(t, err)
 
 	ids, cold, _, err := observer.changedSessionIDs(t.Context(), dbPath, false)
+	require.NoError(t, err)
+	assert.True(t, cold)
+	assert.Empty(t, ids)
+}
+
+func TestSQLiteRowObserverFallsBackToColdWhenContainerMarkerIsUnreadable(t *testing.T) {
+	dbPath, database := newSQLiteRowObserverTestDB(t)
+	_, err := database.Exec(`INSERT INTO sessions (id) VALUES ('a')`)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	require.NoError(t, os.WriteFile(dbPath+"-wal", make([]byte, 33), 0o600))
+	_, ok := StatSQLiteContainerState(dbPath)
+	require.False(t, ok)
+
+	spec := sqliteRowObserverTestSpec()
+	spec.open = func(dbPath string, _ bool) (*sql.DB, error) {
+		return sql.Open(
+			"sqlite3", "file:"+sqliteURIPath(dbPath)+"?mode=ro&immutable=1",
+		)
+	}
+	observer := newSQLiteRowObserver(spec)
+	ids, cold, _, err := observer.changedSessionIDs(t.Context(), dbPath, true)
+
 	require.NoError(t, err)
 	assert.True(t, cold)
 	assert.Empty(t, ids)

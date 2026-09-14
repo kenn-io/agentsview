@@ -251,16 +251,14 @@ func TestReconcileProviderRootsCrushRegistryKeepsSiblingWithinTraversal(t *testi
 	require.NoError(t, err)
 
 	registryDir := t.TempDir()
+	registryPath := filepath.Join(registryDir, parser.CrushProjectsFileName)
 	registry := `{"projects":[` +
 		`{"path":"` + filepath.ToSlash(filepath.Dir(firstDataDir)) +
 		`","data_dir":"` + filepath.ToSlash(firstDataDir) + `"},` +
 		`{"path":"` + filepath.ToSlash(filepath.Dir(secondDataDir)) +
 		`","data_dir":"` + filepath.ToSlash(secondDataDir) + `"}` +
 		`]}`
-	require.NoError(t, os.WriteFile(
-		filepath.Join(registryDir, parser.CrushProjectsFileName),
-		[]byte(registry), 0o600,
-	))
+	require.NoError(t, os.WriteFile(registryPath, []byte(registry), 0o600))
 
 	database := openTestDB(t)
 	engine := NewEngine(database, EngineConfig{
@@ -279,6 +277,18 @@ func TestReconcileProviderRootsCrushRegistryKeepsSiblingWithinTraversal(t *testi
 	require.NoError(t, err)
 	require.NotNil(t, sibling)
 	assert.Nil(t, sibling.SourceMissingAt)
+
+	require.NoError(t, os.WriteFile(
+		registryPath, []byte(`{"projects":[]}`), 0o600,
+	))
+	require.NoError(t, engine.ReconcileProviderRoots(
+		context.Background(), parser.AgentCrush, []string{registryDir},
+	))
+	archived, err := database.GetSessionFull(context.Background(), "crush:sess-001")
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	assert.Nil(t, archived.SourceMissingAt,
+		"removing a Crush project mapping must preserve its archived sessions")
 }
 
 func TestReconcileProviderRootsCrushDBFileRootPreservesDeletedSourceSession(t *testing.T) {
