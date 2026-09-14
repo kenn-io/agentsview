@@ -1745,6 +1745,8 @@ var readOnlyRequiredTables = []string{
 	"pinned_messages",
 	"starred_sessions",
 	"excluded_sessions",
+	"agent_remap_rules",
+	"duplicate_group_members",
 	"worktree_project_mappings",
 	"archive_metadata",
 	"background_migrations",
@@ -2933,6 +2935,43 @@ func (db *DB) migrateColumns(ctx context.Context) error {
 	); err != nil {
 		return fmt.Errorf(
 			"creating post-migration tables and indexes: %w", err,
+		)
+	}
+
+	if _, err := w.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS duplicate_group_members (
+			session_id   TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+			group_key    TEXT NOT NULL,
+			role         TEXT NOT NULL CHECK (role IN ('canonical','duplicate')),
+			canonical_id TEXT NOT NULL DEFAULT '',
+			member_count INTEGER NOT NULL DEFAULT 0,
+			computed_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		);
+		CREATE INDEX IF NOT EXISTS idx_duplicate_group_members_group
+			ON duplicate_group_members(group_key);
+	`); err != nil {
+		return fmt.Errorf(
+			"creating duplicate_group_members: %w", err,
+		)
+	}
+
+	if _, err := w.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS agent_remap_rules (
+			id           INTEGER PRIMARY KEY,
+			source_agent TEXT NOT NULL,
+			model_glob   TEXT NOT NULL DEFAULT '',
+			id_prefix    TEXT NOT NULL DEFAULT '',
+			target_agent TEXT NOT NULL,
+			enabled      INTEGER NOT NULL DEFAULT 1,
+			created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			UNIQUE(source_agent, model_glob, id_prefix)
+		);
+		CREATE INDEX IF NOT EXISTS idx_agent_remap_rules_match
+			ON agent_remap_rules(enabled, source_agent);
+	`); err != nil {
+		return fmt.Errorf(
+			"creating agent_remap_rules: %w", err,
 		)
 	}
 

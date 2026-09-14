@@ -8,6 +8,8 @@
   import ProjectInventoryTable from "./ProjectInventoryTable.svelte";
   import ProjectWorkspace from "./ProjectWorkspace.svelte";
   import WorktreeMappingRules from "./WorktreeMappingRules.svelte";
+  import AgentRemapRules from "./AgentRemapRules.svelte";
+  import DuplicateSessionReview from "./DuplicateSessionReview.svelte";
   import { SegmentedControl, type SegmentedControlOption } from "@kenn-io/kit-ui";
 
   const viewOptions: SegmentedControlOption[] = $derived([
@@ -92,6 +94,11 @@
         onMutated={() => void data.load({ background: true })}
       />
     {/key}
+    <AgentRemapRules
+      readOnly={dataReadOnly}
+      onMutated={() => void data.load({ background: true })}
+    />
+    <DuplicateSessionReview readOnly={dataReadOnly} />
   {:else if data.inventory}
     <!-- Inventory-first ordering: once inventory has loaded once it keeps
          rendering through background reloads; loading/error below only

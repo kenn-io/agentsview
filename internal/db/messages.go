@@ -1488,7 +1488,7 @@ func (db *DB) insertMessages(
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	db.notifyUsageSessions(sessionIDs)
+	db.notifyUsageSessionsWithDuplicates(sessionIDs)
 	return nil
 }
 
@@ -1789,7 +1789,7 @@ func (db *DB) writeSessionIncremental(
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("committing incremental write tx: %w", err)
 	}
-	db.notifyUsageSessions([]string{sessionID})
+	db.notifyUsageSessionsWithDuplicates([]string{sessionID})
 	return signalsMaintained, nil
 }
 
@@ -2000,7 +2000,7 @@ func (db *DB) replaceSessionMessages(
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	db.notifyUsageSessions([]string{sessionID})
+	db.notifyUsageSessionsWithDuplicates([]string{sessionID})
 	pendingRecallRevocations.flush()
 	return nil
 }
@@ -2402,7 +2402,7 @@ func (db *DB) replaceSessionContent(
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	db.notifyUsageSessions([]string{sessionID})
+	db.notifyUsageSessionsWithDuplicates([]string{sessionID})
 	pendingRecallRevocations.flush()
 	return nil
 }
@@ -3340,7 +3340,7 @@ func (db *DB) SetToolCallSubagentSession(
 		return err
 	}
 	if changed {
-		db.notifyUsageSessions([]string{sessionID})
+		db.notifyUsageSessionsWithDuplicates([]string{sessionID})
 	}
 	return nil
 }

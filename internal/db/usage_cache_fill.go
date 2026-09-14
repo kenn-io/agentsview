@@ -492,7 +492,11 @@ func (c *usageFillCoordinator) extractSessions(
 	}
 	defer func() { _ = spoolTx.Rollback() }()
 	indexes := make(map[string]int, len(versions))
-	spoolWriter := usageFactSpoolWriter{ctx: ctx, tx: spoolTx}
+	spoolWriter := usageFactSpoolWriter{
+		ctx:                   ctx,
+		tx:                    spoolTx,
+		suppressTokenEligible: c.suppressTokenEligibleSessions(ctx, tx),
+	}
 	if err := extractUsageMessageFacts(ctx, tx, &spoolWriter, indexes); err != nil {
 		return nil, nil, err
 	}
@@ -513,6 +517,53 @@ func (c *usageFillCoordinator) extractSessions(
 	}
 	fail = false
 	return spool, extracted, nil
+}
+
+// suppressTokenEligibleSessions returns the sessions, among the fill's
+// temporary usage_fill_sessions set, whose duplicate-group membership says
+// their usage facts must lose token eligibility. It runs inside the archive
+// read snapshot so the verdict is consistent with the extracted facts.
+// Errors are logged and returned as nil rather than failing the fill:
+// suppression is an accounting nicety, and the next refill after a
+// membership rebuild corrects the cache.
+func (c *usageFillCoordinator) suppressTokenEligibleSessions(
+	ctx context.Context, tx *sql.Tx,
+) map[string]bool {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT m.session_id
+		FROM duplicate_group_members m
+		JOIN usage_fill_sessions f ON f.session_id = m.session_id
+		WHERE m.role = 'duplicate' AND m.canonical_id <> ''
+			AND (EXISTS(
+				SELECT 1 FROM messages v
+				WHERE v.session_id = m.canonical_id
+					AND v.token_usage != '' AND v.model != ''
+					AND v.model != '<synthetic>')
+			OR EXISTS(
+				SELECT 1 FROM usage_events u
+				WHERE u.session_id = m.canonical_id AND u.model != ''))`)
+	if err != nil {
+		log.Printf("warning: usage fill duplicate suppression lookup failed: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	suppressed := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			log.Printf("warning: usage fill duplicate suppression scan failed: %v", err)
+			return nil
+		}
+		suppressed[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("warning: usage fill duplicate suppression iteration failed: %v", err)
+		return nil
+	}
+	if len(suppressed) == 0 {
+		return nil
+	}
+	return suppressed
 }
 
 func extractUsageMessageFacts(
@@ -629,14 +680,23 @@ type usageFactSpoolRow struct {
 }
 
 type usageFactSpoolWriter struct {
-	ctx  context.Context
-	tx   *sql.Tx
-	rows []usageFactSpoolRow
+	ctx context.Context
+	tx  *sql.Tx
+	// suppressTokenEligible lists sessions whose facts must lose token
+	// eligibility because duplicate-session suppression applies to them.
+	suppressTokenEligible map[string]bool
+	rows                  []usageFactSpoolRow
 }
 
 func (w *usageFactSpoolWriter) Add(
 	sessionID string, index int, fact usagefacts.Fact,
 ) error {
+	if w.suppressTokenEligible[sessionID] {
+		// Duplicate-session suppression: this session's group's canonical
+		// carries token-eligible usage, so this copy's facts must not
+		// double count. Activity eligibility is unchanged.
+		fact.TokenEligible = false
+	}
 	w.rows = append(w.rows, usageFactSpoolRow{
 		sessionID: sessionID, index: index, fact: fact,
 	})

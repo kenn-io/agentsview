@@ -1093,6 +1093,9 @@ func (s *Sync) pushSession(
 	if err := s.upsertSession(ctx, exec, sess, fingerprint); err != nil {
 		return 0, err
 	}
+	if err := pushDuplicateGroupMember(ctx, exec, sess); err != nil {
+		return 0, err
+	}
 	msgs, err := s.local.GetAllMessages(ctx, sess.ID)
 	if err != nil {
 		return 0, fmt.Errorf("reading local messages for %s: %w", sess.ID, err)
@@ -1119,6 +1122,42 @@ func (s *Sync) pushSession(
 	return len(msgs), nil
 }
 
+// pushDuplicateGroupMember mirrors the session's duplicate-group membership
+// into duplicate_group_members. A session with no membership drops any stale
+// mirror row so role flips and group dissolutions propagate.
+func pushDuplicateGroupMember(
+	ctx context.Context, exec duckMutationExecutor, sess db.Session,
+) error {
+	if err := s_exec(ctx, exec,
+		`DELETE FROM duplicate_group_members WHERE session_id = ?`, sess.ID,
+	); err != nil {
+		return fmt.Errorf(
+			"clearing duckdb duplicate group member %s: %w", sess.ID, err)
+	}
+	if sess.DuplicateRole == "" {
+		return nil
+	}
+	if err := s_exec(ctx, exec, `
+		INSERT INTO duplicate_group_members
+			(session_id, group_key, role, canonical_id, member_count, computed_at)
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		sess.ID, sess.DuplicateGroupKey, sess.DuplicateRole,
+		sess.DuplicateCanonicalID, sess.DuplicateMemberCount,
+	); err != nil {
+		return fmt.Errorf(
+			"inserting duckdb duplicate group member %s: %w", sess.ID, err)
+	}
+	return nil
+}
+
+func s_exec(
+	ctx context.Context, exec duckMutationExecutor,
+	query string, args ...any,
+) error {
+	_, err := exec.ExecContext(ctx, query, args...)
+	return err
+}
+
 func (s *Sync) replaceSessionDependents(
 	ctx context.Context, exec duckMutationExecutor, sessionID string,
 ) error {
@@ -1142,6 +1181,7 @@ func (s *Sync) deleteMirrorSession(
 	for _, stmt := range []string{
 		`DELETE FROM pinned_messages WHERE session_id = ?`,
 		`DELETE FROM starred_sessions WHERE session_id = ?`,
+		`DELETE FROM duplicate_group_members WHERE session_id = ?`,
 		`DELETE FROM secret_findings WHERE session_id = ?`,
 		`DELETE FROM tool_result_events WHERE session_id = ?`,
 		`DELETE FROM tool_calls WHERE session_id = ?`,

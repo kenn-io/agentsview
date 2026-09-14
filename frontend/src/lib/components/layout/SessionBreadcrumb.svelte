@@ -1133,7 +1133,45 @@
   <SignalPanel {session} />
 {/if}
 
+{#if session?.duplicate_role}
+  <div class="duplicate-banner" role="note">
+    {#if session.duplicate_role === "canonical"}
+      {m.duplicate_banner_canonical({
+        count: (session.duplicate_member_count ?? 2) - 1,
+      })}
+    {:else}
+      {m.duplicate_banner_duplicate()}
+    {/if}
+    {#if session.duplicate_canonical_id}
+      <a
+        class="duplicate-banner-link"
+        href={router.buildSessionHref(session.duplicate_canonical_id)}
+      >{m.duplicate_banner_open_canonical()}</a>
+    {/if}
+  </div>
+{/if}
+
 <style>
+  .duplicate-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 14px;
+    border-bottom: 1px solid var(--border-muted);
+    background: var(--bg-warning-weak, rgba(255, 193, 7, 0.08));
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .duplicate-banner-link {
+    color: var(--accent-blue);
+    text-decoration: none;
+  }
+
+  .duplicate-banner-link:hover {
+    text-decoration: underline;
+  }
+
   .session-breadcrumb {
     display: flex;
     align-items: center;

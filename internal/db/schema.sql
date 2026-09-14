@@ -792,6 +792,33 @@ CREATE INDEX IF NOT EXISTS idx_worktree_project_mappings_match
 CREATE INDEX IF NOT EXISTS idx_worktree_project_mappings_project
     ON worktree_project_mappings(machine, project);
 
+CREATE TABLE IF NOT EXISTS agent_remap_rules (
+    id           INTEGER PRIMARY KEY,
+    source_agent TEXT NOT NULL,
+    model_glob   TEXT NOT NULL DEFAULT '',
+    id_prefix    TEXT NOT NULL DEFAULT '',
+    target_agent TEXT NOT NULL,
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE(source_agent, model_glob, id_prefix)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_remap_rules_match
+    ON agent_remap_rules(enabled, source_agent);
+
+CREATE TABLE IF NOT EXISTS duplicate_group_members (
+    session_id   TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    group_key    TEXT NOT NULL,
+    role         TEXT NOT NULL CHECK (role IN ('canonical','duplicate')),
+    canonical_id TEXT NOT NULL DEFAULT '',
+    member_count INTEGER NOT NULL DEFAULT 0,
+    computed_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_duplicate_group_members_group
+    ON duplicate_group_members(group_key);
+
 CREATE TABLE IF NOT EXISTS archive_metadata (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,

@@ -32,9 +32,10 @@ vi.mock("../../api/generated/index", () => ({
 vi.mock("../../api/runtime.js", () => ({
   callGenerated: (request: () => Promise<unknown>) => request(),
   isAbortError: () => false,
+  isNotFoundError: () => false,
 }));
 vi.mock("../../stores/router.svelte.js", () => ({
-  router: { params: {}, replaceParams: vi.fn() },
+  router: { params: {}, replaceParams: vi.fn(), buildSessionHref: vi.fn(() => "#") },
 }));
 vi.mock("../../stores/sync.svelte.js", () => ({ sync: syncMock }));
 

@@ -48,6 +48,9 @@ export interface SessionGroupInput {
   is_automated?: boolean;
   is_teammate?: boolean;
   is_index_only?: boolean;
+  duplicate_role?: string;
+  duplicate_canonical_id?: string;
+  duplicate_member_count?: number;
 }
 
 export interface SessionGroup {
@@ -1576,6 +1579,8 @@ function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Sessio
     is_automated: row.is_automated,
     is_teammate: row.is_teammate ?? false,
     is_index_only: true,
+    duplicate_role: row.duplicate_role,
+    duplicate_member_count: row.duplicate_member_count,
     created_at: row.created_at,
   };
   if (!existing || existing.is_index_only) return skinny;
@@ -1599,6 +1604,9 @@ function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Sessio
     is_automated: skinny.is_automated,
     is_teammate: skinny.is_teammate ?? existing.is_teammate,
     is_index_only: false,
+    duplicate_role: skinny.duplicate_role ?? existing.duplicate_role,
+    duplicate_member_count:
+      skinny.duplicate_member_count ?? existing.duplicate_member_count,
     created_at: skinny.created_at,
   };
 }

@@ -314,6 +314,21 @@ CREATE TABLE IF NOT EXISTS session_aliases (
         REFERENCES sessions(id) ON DELETE CASCADE
 );
 
+-- Mirror of the SQLite duplicate_group_members derived table. Rows are
+-- pushed alongside their session and rewritten wholesale on membership
+-- rebuilds; see internal/db/duplicate_groups.go.
+CREATE TABLE IF NOT EXISTS duplicate_group_members (
+    session_id   TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    group_key    TEXT NOT NULL,
+    role         TEXT NOT NULL CHECK (role IN ('canonical','duplicate')),
+    canonical_id TEXT NOT NULL DEFAULT '',
+    member_count INTEGER NOT NULL DEFAULT 0,
+    computed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_duplicate_group_members_group
+    ON duplicate_group_members(group_key);
+
 CREATE TABLE IF NOT EXISTS pinned_messages (
     id          BIGSERIAL PRIMARY KEY,
     session_id  TEXT NOT NULL,
