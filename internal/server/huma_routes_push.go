@@ -440,10 +440,10 @@ func (s *Server) syncThenRunForPush(
 		if !currentArchive {
 			return incomplete
 		}
-		// A failed source must retain its retry acknowledgement, but it must
-		// not hold back unrelated rows already committed to a current archive.
-		// SyncThenRun deliberately skips work on incomplete processing. Copy
-		// the archive under its lock, then still report the ingestion failure.
+		// Local sync owns retries for failed sources. An unscoped mirror push
+		// must report its own outcome so the client does not repeat a completed
+		// copy or lose row-level errors from its result. SyncThenRun skips work
+		// on incomplete processing, so copy the archive under its lock here.
 		pushErr := engine.RunExclusiveFlushed(func() error {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -456,7 +456,8 @@ func (s *Server) syncThenRunForPush(
 		if pushErr != nil {
 			return errors.Join(incomplete, pushErr)
 		}
-		return fmt.Errorf("archived sessions pushed; %w", incomplete)
+		log.Printf("local ingestion warning during archive push: %v", incomplete)
+		return nil
 	}
 	if _, err := s.runResyncWithFallback(ctx, engine, nil); err != nil {
 		return err

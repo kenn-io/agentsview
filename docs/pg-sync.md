@@ -135,10 +135,13 @@ on the next run. The exit code is 1 when any errors occur, 0 otherwise.
 
 When a daemon handles an incremental push against a current archive, an
 incomplete local ingestion pass still allows committed sessions to be copied.
-The command reports `archived sessions pushed; local sync processing incomplete`
-and retains the failed ingestion work for retry. A failed full resync still
-blocks the push. Watcher batches keep their acknowledgement rules; the startup
-and periodic unscoped pushes allow healthy archived sessions to catch up.
+The daemon logs the incomplete ingestion pass, while the command returns the
+mirror push result, including any row errors or deferred vectors. Local sync
+retries failed sources independently; a completed mirror push does not trigger
+an immediate mirror retry just because ingestion was incomplete. A failed full
+resync still blocks the push. Watcher batches keep their acknowledgement rules;
+the startup and periodic unscoped pushes allow healthy archived sessions to
+catch up.
 
 #### Automatic Push Watcher
 
