@@ -170,6 +170,21 @@ func materializedProviderRoots(
 	materialized *Materialization,
 ) []string {
 	root := materialized.Root()
+	if manifest.Manifest.Provider == parser.AgentCrush {
+		var roots []string
+		for _, entry := range manifest.Manifest.Entries {
+			if path.Base(entry.Path) != parser.CrushDBName {
+				continue
+			}
+			local, err := materialized.EntryPath(entry.Path)
+			if err == nil {
+				roots = append(roots, filepath.Dir(local))
+			}
+		}
+		if len(roots) != 0 {
+			return roots
+		}
+	}
 	if manifest.Manifest.Provider != parser.AgentCodex {
 		return []string{root}
 	}
