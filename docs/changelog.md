@@ -31,6 +31,12 @@ description: Release history for AgentsView
 
 **Improvements**
 
+- Sync sessions faster by reusing Git repository lookups for repeated working
+  directories within each sync operation. OpenCode and its Kilo and MiMoCode
+  forks, Command Code, and Kiro CLI now respect disabled filesystem discovery
+  during remote imports and capture. These sessions use recorded paths to name
+  projects, so their project names may change when re-parsed. (#1759)
+
 - Expand a **Cursor CLI** session in the sidebar to read the transcripts of
   the subagents it delegated to. Transcripts stored in a parent session's
   `subagents` directory are now discovered, synced, and linked to the
@@ -95,6 +101,9 @@ description: Release history for AgentsView
   re-pushes every session once.
 
 **Bug fixes**
+
+- Keep remotely imported project names independent of local repositories when
+  importing changed files, matching full-import behavior. (#1759)
 
 - Generate insights and session analyses when opening AgentsView over HTTP
   outside localhost. Starting a report no longer requires a browser UUID API

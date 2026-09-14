@@ -65,7 +65,7 @@ func TestParseKiroSQLiteSession(t *testing.T) {
 	)
 
 	sess, msgs, err := parseKiroSQLiteSession(
-		dbPath, "sqlite-session", "test-machine",
+		t.Context(), dbPath, "sqlite-session", "test-machine",
 	)
 	require.NoError(t, err, "parseKiroSQLiteSession")
 	require.NotNil(t, sess, "expected session")
@@ -160,7 +160,7 @@ func TestParseKiroSQLiteSessionRejectsMalformedPayload(t *testing.T) {
 		1, 2,
 	)
 	_, _, err := parseKiroSQLiteSession(
-		dbPath, "broken-session", "test-machine",
+		t.Context(), dbPath, "broken-session", "test-machine",
 	)
 	require.Error(t, err, "expected malformed payload error")
 }

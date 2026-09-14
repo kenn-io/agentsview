@@ -110,14 +110,14 @@ add an archived or maintained mirror without replacing the original identity.
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.
 
-- **Title evidence (2026-09-13):** A local corpus measure sampled 768 files
-  and found 12,261 `ai-title` records, with a mean of 15.96 records per file
-  and a maximum of 454. No sampled `aiTitle` value was empty. `custom-title`
+- **Title evidence (2026-09-13):** A local corpus measure sampled 768 files and
+  found 12,261 `ai-title` records, with a mean of 15.96 records per file and a
+  maximum of 454. No sampled `aiTitle` value was empty. `custom-title`
   occurred in 7 files, and `sessionName` did not occur. Native Claude parsing
   adopts non-empty `aiTitle` when no `/rename` is present; this target leaves
-  `custom-title` and `sessionName` to compatible producer parsing.
-  A title appended after the session is stored is persisted by one escalating
-  full parse while the stored name is still empty, and repeated records stay
+  `custom-title` and `sessionName` to compatible producer parsing. A title
+  appended after the session is stored is persisted by one escalating full
+  parse while the stored name is still empty, and repeated records stay
   incremental after that parse. A transcript that is no longer being written
   is not re-read, so it re-titles on its next full parse.
 
@@ -2081,7 +2081,11 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 
 - **Agentsview:** `internal/parser/kiro.go`, `internal/parser/kiro_sqlite.go`,
   and `internal/parser/kiro_provider.go`; both generations must remain
-  discoverable.
+  discoverable. SQLite project attribution uses `conversations_v2.key`, with
+  recorded environment metadata as the fallback when the key is empty. Bulk
+  and single-session parsing honor the caller's filesystem-discovery policy;
+  `TestKiroProviderSQLiteProjectDiscoveryPolicy` verifies project names and
+  filesystem probes with discovery enabled and disabled.
 
 ## Kiro IDE (`kiro-ide`)
 

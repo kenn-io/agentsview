@@ -52,6 +52,7 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 	options ChangedPathSyncOptions,
 	onProgress ProgressFunc,
 ) (ChangedPathSyncResult, error) {
+	ctx = e.parsePolicyContext(ctx)
 	result := ChangedPathSyncResult{
 		CachedSourceKeys:        make(map[string]struct{}),
 		CachedFallbackProviders: make(map[parser.AgentType]int),
@@ -132,6 +133,7 @@ func (e *Engine) SyncChangedPathPlanWithOptionsContext(
 	preContainerStates := e.captureSQLiteContainerStates(physicalPaths)
 	e.beginSQLiteContainerPass(files, preContainerStates)
 	processingCtx := context.WithValue(ctx, deferGlobalLinkContextKey{}, true)
+	processingCtx = parser.WithProjectRootMemo(processingCtx)
 	results := e.startWorkers(processingCtx, files)
 	affectedSessionIDs := make(map[string]struct{})
 	stats = e.collectAndBatchWithOptions(

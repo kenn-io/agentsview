@@ -246,18 +246,20 @@ func ExtractProjectFromCwdWithBranchContext(
 	ctx context.Context, cwd, gitBranch string,
 ) string {
 	return extractProjectFromCwdWithBranchPolicy(
-		cwd, gitBranch, !filesystemProjectDiscoveryDisabled(ctx),
+		ctx, cwd, gitBranch, !filesystemProjectDiscoveryDisabled(ctx),
 	)
 }
 
 func extractProjectFromCwdWithBranch(
 	cwd, gitBranch string,
 ) string {
-	return extractProjectFromCwdWithBranchPolicy(cwd, gitBranch, true)
+	return extractProjectFromCwdWithBranchPolicy(
+		context.Background(), cwd, gitBranch, true,
+	)
 }
 
 func extractProjectFromCwdWithBranchPolicy(
-	cwd, gitBranch string, discoverFilesystem bool,
+	ctx context.Context, cwd, gitBranch string, discoverFilesystem bool,
 ) string {
 	if cwd == "" {
 		return ""
@@ -278,7 +280,11 @@ func extractProjectFromCwdWithBranchPolicy(
 	if discoverFilesystem && filepath.IsAbs(cleaned) &&
 		!isForeignOSPath(cwd, cleaned, winPath) &&
 		probeGitRootForCwd(cleaned) {
-		if root, linkedToRecordedPath := findGitRepoRoot(cleaned); root != "" &&
+		rootResult := projectRootMemoFrom(ctx).root(cleaned, func() gitRootResult {
+			root, linked := findGitRepoRootCtx(ctx, cleaned)
+			return gitRootResult{root: root, linked: linked}
+		})
+		if root, linkedToRecordedPath := rootResult.root, rootResult.linked; root != "" &&
 			(linkedToRecordedPath || anchoredProject == "") {
 			name := filepath.Base(root)
 			if isInvalidPathBase(name) {
@@ -644,12 +650,12 @@ func isInvalidPathBase(name string) bool {
 	return false
 }
 
-// findGitRepoRoot walks upward from cwd to find the enclosing git
+// findGitRepoRootCtx walks upward from cwd to find the enclosing git
 // repository root. Supports both standard repos (.git directory)
 // and linked worktrees/submodules (.git file). When cwd no longer
 // exists on disk, sibling directories are checked for worktree
 // .git files that can reveal the true repo root.
-func findGitRepoRoot(cwd string) (string, bool) {
+func findGitRepoRootCtx(ctx context.Context, cwd string) (string, bool) {
 	if cwd == "" {
 		return "", false
 	}
@@ -686,7 +692,7 @@ func findGitRepoRoot(cwd string) (string, bool) {
 			}
 			sibDir = parent
 		}
-		if root := repoRootFromSiblings(sibDir, cwd); root != "" {
+		if root := repoRootFromSiblingsCtx(ctx, sibDir, cwd); root != "" {
 			return root, deletedChildIsWorktree(sibDir, cwd, root)
 		}
 	}
@@ -736,22 +742,43 @@ func findGitRepoRootLocal(
 	}
 }
 
-// repoRootFromSiblings checks child directories of dir for
+// repoRootFromSiblingsCtx checks child directories of dir for
 // linked-worktree .git files and uses them to discover the
 // true repo root. Submodule .git files are skipped, and all
 // candidates must agree on the same root to avoid
 // misattributing unrelated paths.
-func repoRootFromSiblings(dir, cwd string) string {
+func repoRootFromSiblingsCtx(
+	ctx context.Context, dir, cwd string,
+) string {
+	scan := projectRootMemoFrom(ctx).scan(dir, func() siblingScanResult {
+		return scanSiblingRepoCandidates(dir)
+	})
+	if scan.selfIsRepo {
+		return ""
+	}
+	if scan.worktreeCount == 0 {
+		if scan.dirCount != 1 ||
+			!deletedChildIsWorktree(dir, cwd, scan.singleDirRoot) {
+			return ""
+		}
+		return scan.singleDirRoot
+	}
+	return scan.agreedRoot
+}
+
+func scanSiblingRepoCandidates(dir string) siblingScanResult {
+	var result siblingScanResult
 	// If dir is itself a repo or worktree, let the normal upward walk
 	// handle it. A refused .git symlink counts too: it is a boundary the
 	// walk stops at, and typing it must not follow the link.
 	if _, err := statGitEntry(filepath.Join(dir, ".git")); err == nil ||
 		errors.Is(err, errRefusedGitEntry) {
-		return ""
+		result.selfIsRepo = true
+		return result
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return ""
+		return result
 	}
 	worktreeMarker := string(filepath.Separator) + ".git" +
 		string(filepath.Separator) + "worktrees" +
@@ -822,14 +849,12 @@ func repoRootFromSiblings(dir, cwd string) string {
 	}
 
 	// Count worktree and directory siblings.
-	var worktreeCount, dirCount int
-	var singleDirRoot string
 	for _, s := range siblings {
 		if s.isDir {
-			dirCount++
-			singleDirRoot = s.root
+			result.dirCount++
+			result.singleDirRoot = s.root
 		} else {
-			worktreeCount++
+			result.worktreeCount++
 		}
 	}
 
@@ -838,16 +863,8 @@ func repoRootFromSiblings(dir, cwd string) string {
 	// accept a single main checkout only if its
 	// .git/worktrees/ exists, proving it has (or had)
 	// linked worktrees.
-	if worktreeCount == 0 {
-		if dirCount != 1 {
-			return ""
-		}
-		// Verify the deleted child matches a known worktree
-		// entry under .git/worktrees/.
-		if !deletedChildIsWorktree(dir, cwd, singleDirRoot) {
-			return ""
-		}
-		return singleDirRoot
+	if result.worktreeCount == 0 {
+		return result
 	}
 
 	var found string
@@ -855,10 +872,11 @@ func repoRootFromSiblings(dir, cwd string) string {
 		if found == "" {
 			found = s.root
 		} else if found != s.root {
-			return ""
+			return result
 		}
 	}
-	return found
+	result.agreedRoot = found
+	return result
 }
 
 // deletedChildIsWorktree checks whether the first missing

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"os"
@@ -19,9 +20,9 @@ type commandCodeMeta struct {
 	Cwd         string `json:"cwd"`
 }
 
-// parseSession parses a Command Code JSONL transcript.
-func (p *commandCodeProvider) parseSession(
-	path, machine string,
+// parseSessionContext parses a Command Code JSONL transcript.
+func (p *commandCodeProvider) parseSessionContext(
+	ctx context.Context, path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -168,7 +169,7 @@ func (p *commandCodeProvider) parseSession(
 		sessionID = strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	}
 
-	project := ExtractProjectFromCwd(cwd)
+	project := ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 	if project == "" {
 		project = NormalizeName(filepath.Base(filepath.Dir(path)))
 	}

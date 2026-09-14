@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"os"
@@ -114,11 +115,11 @@ func loadKiroMetaStrict(jsonlPath string) (*kiroMeta, error) {
 	return &m, nil
 }
 
-// parseLegacySession parses a Kiro CLI session from its JSONL file.
+// parseLegacySessionContext parses a Kiro CLI session from its JSONL file.
 // Returns (nil, nil, nil) if the file doesn't exist or contains
 // no user/assistant messages.
-func (p *kiroProvider) parseLegacySession(
-	path, machine string,
+func (p *kiroProvider) parseLegacySessionContext(
+	ctx context.Context, path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -243,7 +244,7 @@ func (p *kiroProvider) parseLegacySession(
 		}
 		cwd = meta.Cwd
 		if cwd != "" {
-			project = ExtractProjectFromCwd(cwd)
+			project = ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 		}
 		if meta.Title != "" && firstMessage == "" {
 			firstMessage = meta.Title
@@ -293,7 +294,9 @@ type kiroCurrentMeta struct {
 	WorkspacePaths []string `json:"workspacePaths"`
 }
 
-func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*ParsedSession, []ParsedMessage, error) {
+func (p *kiroProvider) parseCurrentSessionContext(
+	ctx context.Context, path, sessionID, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -389,7 +392,7 @@ func (p *kiroProvider) parseCurrentSession(path, sessionID, machine string) (*Pa
 	if len(meta.WorkspacePaths) > 0 {
 		cwd = meta.WorkspacePaths[0]
 	}
-	project := ExtractProjectFromCwd(cwd)
+	project := ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 	if project == "" {
 		project = "unknown"
 	}

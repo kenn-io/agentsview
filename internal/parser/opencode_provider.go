@@ -63,9 +63,9 @@ func (s openCodeFormatSourceSet) Parse(
 	)
 	dbPath, sessionID, sqliteSource := s.spec.parseVirtual(path)
 	if sqliteSource {
-		sess, msgs, err = s.spec.parseSQLite(dbPath, sessionID, machine)
+		sess, msgs, err = s.spec.parseSQLite(ctx, dbPath, sessionID, machine)
 	} else {
-		sess, msgs, err = s.spec.parseFile(path, machine)
+		sess, msgs, err = s.spec.parseFile(ctx, path, machine)
 	}
 	if err != nil {
 		return ParseOutcome{}, err
@@ -255,9 +255,9 @@ func (spec openCodeProviderSpec) containerGlobs() []string {
 // parseFile parses a file-backed storage session and relabels it onto
 // this agent's ID prefix when the agent is a fork of OpenCode.
 func (spec openCodeProviderSpec) parseFile(
-	sessionPath, machine string,
+	ctx context.Context, sessionPath, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
-	sess, msgs, err := parseOpenCodeStorageFile(sessionPath, machine)
+	sess, msgs, err := parseOpenCodeStorageFileContext(ctx, sessionPath, machine)
 	if err != nil || sess == nil {
 		return sess, msgs, err
 	}
@@ -270,9 +270,9 @@ func (spec openCodeProviderSpec) parseFile(
 // parseSQLite parses a single SQLite-backed session and relabels it
 // onto this agent's ID prefix when the agent is a fork of OpenCode.
 func (spec openCodeProviderSpec) parseSQLite(
-	dbPath, sessionID, machine string,
+	ctx context.Context, dbPath, sessionID, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
-	sess, msgs, err := parseOpenCodeDBSession(dbPath, sessionID, machine)
+	sess, msgs, err := parseOpenCodeDBSessionContext(ctx, dbPath, sessionID, machine)
 	if err != nil || sess == nil {
 		return sess, msgs, err
 	}

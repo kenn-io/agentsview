@@ -98,7 +98,7 @@ func (p *commandCodeProvider) Parse(
 		return ParseOutcome{}, fmt.Errorf("commandcode source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, err := p.parseSession(path, machine)
+	sess, msgs, err := p.parseSessionContext(ctx, path, machine)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
