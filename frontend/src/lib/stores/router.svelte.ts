@@ -38,6 +38,20 @@ export function getBasePath(): string {
   return href.replace(/\/+$/, "");
 }
 
+function decodePathSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+function sessionPath(id: string): string {
+  const separator = id.indexOf(":");
+  if (separator === -1) return `/sessions/${encodeURIComponent(id)}`;
+  return `/sessions/${encodeURIComponent(id.slice(0, separator))}/${encodeURIComponent(id.slice(separator + 1))}`;
+}
+
 export function parsePath(): {
   route: Route;
   sessionId: string | null;
@@ -58,11 +72,7 @@ export function parsePath(): {
 
   let sessionId: string | null = null;
   if (route === "sessions" && segments.length >= 2) {
-    try {
-      sessionId = decodeURIComponent(segments[1]!);
-    } catch {
-      sessionId = segments[1]!;
-    }
+    sessionId = segments.slice(1, 3).map(decodePathSegment).join(":");
   }
 
   const params = Object.fromEntries(new URLSearchParams(window.location.search));
@@ -170,7 +180,7 @@ export class RouterStore {
 
   /** Build an href for a session link (includes sticky params). */
   buildSessionHref(id: string, params?: Record<string, string>): string {
-    return this.#buildUrl(`/sessions/${encodeURIComponent(id)}`, this.#sessionEntryParams(params));
+    return this.#buildUrl(sessionPath(id), this.#sessionEntryParams(params));
   }
 
   navigate(route: Route, params: Record<string, string> = {}): boolean {
@@ -210,7 +220,7 @@ export class RouterStore {
     clearParams: Iterable<string> = [],
   ) {
     const nextParams = this.#sessionEntryParams(params, clearParams);
-    const url = this.#buildUrl(`/sessions/${encodeURIComponent(id)}`, nextParams);
+    const url = this.#buildUrl(sessionPath(id), nextParams);
     this.#updateSticky(nextParams);
     this.route = "sessions";
     this.params = { ...this.#stickyParams, ...nextParams };
@@ -231,9 +241,7 @@ export class RouterStore {
 
   /** Update query params without creating a history entry. */
   replaceParams(params: Record<string, string>) {
-    const path = this.sessionId
-      ? `/sessions/${encodeURIComponent(this.sessionId)}`
-      : `/${this.route}`;
+    const path = this.sessionId ? sessionPath(this.sessionId) : `/${this.route}`;
     const url = this.#buildUrl(path, params);
     this.#updateSticky(params);
     this.params = { ...this.#stickyParams, ...params };

@@ -110,6 +110,46 @@ describe("parsePath", () => {
     setURL("/sessions/copilot%3Aabc123");
     const result = parsePath();
     expect(result.sessionId).toBe("copilot:abc123");
+    expect(window.location.pathname).toBe("/sessions/copilot%3Aabc123");
+  });
+
+  it("parses the issue provider/raw-ID URL into the canonical ID", () => {
+    setURL("/sessions/codex/01a0a016-fb25-72b2-a65f-30570dbb97aa");
+    expect(parsePath().sessionId).toBe("codex:01a0a016-fb25-72b2-a65f-30570dbb97aa");
+  });
+
+  it.each([
+    ["/sessions/provider/part%3Adetail", "provider:part:detail"],
+    ["/sessions/pr%2Fovider/raw%2Fid%252F%3F%23", "pr/ovider:raw/id%2F?#"],
+    ["/sessions/copilot%3Araw%252Fid", "copilot:raw%2Fid"],
+    ["/sessions/host~abc-123", "host~abc-123"],
+    ["/sessions", null],
+    ["/usage/codex/abc", null],
+  ])("preserves mode/state identity for %s", (path, id) => {
+    setURL(path);
+    expect(parsePath().sessionId).toBe(id);
+    expect(window.location.pathname).toBe(path);
+  });
+
+  it.each([
+    ["/sessions/prov%/raw%20id", "prov%:raw id"],
+    ["/sessions/prov%20ider/raw%E0%A4", "prov ider:raw%E0%A4"],
+    ["/sessions/prov%/raw%", "prov%:raw%"],
+    ["/sessions/copilot%3Araw%", "copilot%3Araw%"],
+  ])("falls back independently on malformed percent encoding in %s", (path, id) => {
+    setURL(path);
+    expect(parsePath().sessionId).toBe(id);
+    expect(window.location.pathname).toBe(path);
+  });
+
+  it.each([
+    ["/sessions/codex", "codex"],
+    ["/sessions/codex/abc", "codex:abc"],
+    ["/sessions/codex/abc/ignored", "codex:abc"],
+  ])("consumes at most 2 session segments in %s", (path, id) => {
+    setURL(path);
+    expect(parsePath().sessionId).toBe(id);
+    expect(window.location.pathname).toBe(path);
   });
 
   it("falls back to raw segment on malformed percent encoding", () => {
@@ -144,6 +184,153 @@ describe("RouterStore", () => {
     store?.destroy();
     setURL("/");
   });
+
+  it("reproduces the issue URL through buildSessionHref and parsing", () => {
+    setURL("/sessions");
+    store = new RouterStore();
+    setURL(store.buildSessionHref("codex:01a0a016-fb25-72b2-a65f-30570dbb97aa"));
+    expect(window.location.pathname).toBe("/sessions/codex/01a0a016-fb25-72b2-a65f-30570dbb97aa");
+    expect(parsePath().sessionId).toBe("codex:01a0a016-fb25-72b2-a65f-30570dbb97aa");
+  });
+
+  it.each([
+    ["codex:abc-123", "/sessions/codex/abc-123"],
+    ["provider:part:detail", "/sessions/provider/part%3Adetail"],
+    ["pr/ovider:raw/id%2F?#", "/sessions/pr%2Fovider/raw%2Fid%252F%3F%23"],
+    ["提供者:雪 id", "/sessions/%E6%8F%90%E4%BE%9B%E8%80%85/%E9%9B%AA%20id"],
+    ["host~codex:abc", "/sessions/host~codex/abc"],
+    ["abc-123", "/sessions/abc-123"],
+    ["host~raw/id%?#", "/sessions/host~raw%2Fid%25%3F%23"],
+  ])("buildSessionHref and navigateToSession round-trip %s", (id, path) => {
+    setURL("/sessions");
+    store = new RouterStore();
+    const href = store.buildSessionHref(id);
+    expect(href).toBe(path);
+    setURL(href);
+    expect(window.location.pathname).toBe(path);
+    expect(parsePath().sessionId).toBe(id);
+
+    store.navigateToSession(id, { msg: "last" });
+    expect(window.location.pathname).toBe(path);
+    expect(window.location.search).toBe("?msg=last");
+    expect(store.sessionId).toBe(id);
+    expect(parsePath()).toEqual({
+      route: "sessions",
+      sessionId: id,
+      params: { msg: "last" },
+      isRootPath: false,
+    });
+  });
+
+  it.each(["", "/agentsview"])(
+    "preserves filters, sticky params and history under base path '%s'",
+    (basePath) => {
+      const base = document.createElement("base");
+      base.href = `${basePath}/`;
+      document.head.appendChild(base);
+      try {
+        setURL(`${basePath}/sessions?desktop=on&project=old&window_days=14&starred=true&msg=stale`);
+        store = new RouterStore();
+        const path = `${basePath}/sessions/codex/abc`;
+        const params = {
+          desktop: "off",
+          project: "new",
+          window_days: "14",
+          starred: "true",
+          msg: "last",
+        };
+        const href = store.buildSessionHref("codex:abc", {
+          desktop: "off",
+          project: "new",
+          msg: "last",
+        });
+        setURL(href);
+        expect(window.location.pathname).toBe(path);
+        expect(parsePath()).toEqual({
+          route: "sessions",
+          sessionId: "codex:abc",
+          params,
+          isRootPath: false,
+        });
+        expect(store.params.desktop).toBe("on");
+
+        const before = window.history.length;
+        store.navigateToSession("codex:abc", { desktop: "off", project: "new", msg: "last" }, [
+          "starred",
+        ]);
+        expect(window.history.length).toBe(before + 1);
+        expect(window.location.pathname).toBe(path);
+        expect(window.location.search).toBe("?desktop=off&project=new&window_days=14&msg=last");
+        expect(store.params).toEqual({
+          desktop: "off",
+          project: "new",
+          window_days: "14",
+          msg: "last",
+        });
+        expect(store.sessionId).toBe("codex:abc");
+        expect(store.route).toBe("sessions");
+        expect(store.isRootPath).toBe(false);
+        expect(parsePath().sessionId).toBe("codex:abc");
+
+        store.replaceParams({ project: "replacement", msg: "2" });
+        expect(window.history.length).toBe(before + 1);
+        expect(window.location.pathname).toBe(path);
+        expect(window.location.search).toBe("?desktop=off&project=replacement&msg=2");
+        expect(store.params).toEqual({ desktop: "off", project: "replacement", msg: "2" });
+        expect(store.sessionId).toBe("codex:abc");
+        expect(parsePath().sessionId).toBe("codex:abc");
+
+        setURL(`${basePath}/sessions/provider/part%3Adetail?desktop=back&project=history&msg=3`);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+        expect(window.location.pathname).toBe(`${basePath}/sessions/provider/part%3Adetail`);
+        expect(store.sessionId).toBe("provider:part:detail");
+        expect(store.route).toBe("sessions");
+        expect(store.params).toEqual({ desktop: "back", project: "history", msg: "3" });
+        expect(store.isRootPath).toBe(false);
+        expect(store.buildSessionHref("codex:next")).toBe(
+          `${basePath}/sessions/codex/next?desktop=back&project=history`,
+        );
+
+        store.navigateFromSession({ project: "history" });
+        expect(window.location.pathname).toBe(`${basePath}/sessions`);
+        expect(window.location.search).toBe("?desktop=back&project=history");
+        expect(store.sessionId).toBeNull();
+      } finally {
+        base.remove();
+      }
+    },
+  );
+
+  it("replaceParams preserves a directly loaded provider/raw-ID path", () => {
+    setURL("/sessions/provider/part%3Adetail?desktop=on&project=old");
+    store = new RouterStore();
+    const before = window.history.length;
+    store.replaceParams({ project: "new", desktop: "off" });
+    expect(window.location.pathname).toBe("/sessions/provider/part%3Adetail");
+    expect(window.location.search).toBe("?desktop=off&project=new");
+    expect(window.history.length).toBe(before);
+    expect(store.sessionId).toBe("provider:part:detail");
+    expect(parsePath().sessionId).toBe("provider:part:detail");
+  });
+
+  it.each(["/sessions/copilot%3Aabc123", "/sessions/copilot/abc123"])(
+    "hands the canonical ID to consumers from %s and popstate",
+    (path) => {
+      setURL(path);
+      store = new RouterStore();
+      expect(store.sessionId).toBe("copilot:abc123");
+      expect(window.location.pathname).toBe(path);
+      store.navigate("usage");
+      expect(store.sessionId).toBeNull();
+      setURL(`${path}?msg=5`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      expect(store.sessionId).toBe("copilot:abc123");
+      expect(store.params).toEqual({ msg: "5" });
+      expect(store.route).toBe("sessions");
+      expect(store.isRootPath).toBe(false);
+      expect(window.location.pathname).toBe(path);
+    },
+  );
 
   it("initializes with parsed path", () => {
     setURL("/sessions?project=test");
