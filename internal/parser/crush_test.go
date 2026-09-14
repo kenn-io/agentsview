@@ -286,6 +286,31 @@ func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 	assert.Equal(t, []string{registryDir + "-missing"}, dataDirs)
 }
 
+func TestCrushRawDiscoveryRefreshesRegistryAfterProviderConstruction(t *testing.T) {
+	first := newCrushTestFixture(t)
+	second := newCrushTestFixture(t)
+	registryDir := t.TempDir()
+	registryPath := filepath.Join(registryDir, CrushProjectsFileName)
+	require.NoError(t, os.WriteFile(registryPath, []byte(`{"projects":[{"path":"`+
+		filepath.ToSlash(first.projectDir)+`","data_dir":"`+
+		filepath.ToSlash(first.dataDir)+`"}]}`), 0o600))
+	provider := newCrushProviderFactory(AgentDef{
+		Type: AgentCrush, IDPrefix: "crush:",
+	}).NewProvider(ProviderConfig{Roots: []string{registryDir}})
+
+	require.NoError(t, os.WriteFile(registryPath, []byte(`{"projects":[`+
+		`{"path":"`+filepath.ToSlash(first.projectDir)+`","data_dir":"`+
+		filepath.ToSlash(first.dataDir)+`"},`+
+		`{"path":"`+filepath.ToSlash(second.projectDir)+`","data_dir":"`+
+		filepath.ToSlash(second.dataDir)+`"}]}`), 0o600))
+	discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
+
+	require.NoError(t, err)
+	assert.True(t, discovery.Complete)
+	require.Len(t, discovery.Sources, 2,
+		"a periodic raw-sync audit must see projects registered after startup")
+}
+
 // A configured database-file root must map onto the data directory that
 // holds virtual session members, so reconciliation can prove the whole
 // membership rather than the bare crush.db path.

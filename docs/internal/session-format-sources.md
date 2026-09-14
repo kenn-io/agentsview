@@ -3061,10 +3061,13 @@ schemas keep their existing ordering behavior.
   still invalidate freshness (`FingerprintHashRequiredForFreshness`). Watcher
   events use bounded rowid cursors over `sessions` and `messages` so work
   stays proportional to inserted rows, with a periodic reconciliation pass
-  covering metadata-only edits. Source row deletion is not authoritative.
-  Archived sessions remain active until the user deletes them in AgentsView. A
-  malformed `parts` value fails that session's parse rather than degrading
-  silently, matching the goose parser's policy.
+  covering metadata-only edits. Raw-sync audits re-read the project registry,
+  and raw snapshots carry the registry-derived project path in the database's
+  logical manifest path because the database does not store it. Source row
+  deletion is not authoritative. Archived sessions remain active until the
+  user deletes them in AgentsView. A malformed `parts` value fails that
+  session's parse rather than degrading silently, matching the goose parser's
+  policy.
 
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
