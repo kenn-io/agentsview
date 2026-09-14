@@ -20,12 +20,104 @@ import (
 
 var _ Provider = (*hermesProvider)(nil)
 
+// hermesProviderSpec parameterizes the one shared Hermes provider for Hermes
+// itself and its Augure Desktop fork. Both reuse the same discovery,
+// fingerprinting, and state-DB parsing code; they differ only in the agent
+// label and ID prefix applied via relabel after parsing. Hermes keeps its
+// stored output byte-identical because its spec carries a nil relabel.
+type hermesProviderSpec struct {
+	agent AgentType
+	// relabel rewrites a parsed Hermes-format result onto this agent's
+	// identity (session IDs, agent label, usage-event session IDs), and is
+	// nil for Hermes itself.
+	relabel func(*ParseResult)
+}
+
+func hermesProviderSpecForAgent(agent AgentType) hermesProviderSpec {
+	switch agent {
+	case AgentAugureDesktop:
+		return hermesProviderSpec{
+			agent:   AgentAugureDesktop,
+			relabel: relabelHermesResultAsAugureDesktop,
+		}
+	default:
+		return hermesProviderSpec{agent: AgentHermes}
+	}
+}
+
 type hermesProviderFactory struct {
-	def AgentDef
+	def  AgentDef
+	spec hermesProviderSpec
 }
 
 func newHermesProviderFactory(def AgentDef) ProviderFactory {
-	return hermesProviderFactory{def: cloneAgentDef(def)}
+	return hermesProviderFactory{
+		def:  cloneAgentDef(def),
+		spec: hermesProviderSpecForAgent(AgentHermes),
+	}
+}
+
+// newAugureDesktopProviderFactory serves Augure Desktop v3's Hermes-schema
+// state.db with the Hermes provider, relabeling every parsed session onto
+// the augure-desktop: ID prefix. Configured roots are accepted as given
+// (the user pointed the agent at them deliberately); the fork gate exists
+// so default discovery under a Hermes root can never claim a stock store.
+func newAugureDesktopProviderFactory(def AgentDef) ProviderFactory {
+	return &augureDesktopProviderFactory{
+		def:  cloneAgentDef(def),
+		spec: hermesProviderSpecForAgent(AgentAugureDesktop),
+		fallback: hermesProviderFactory{
+			def:  cloneAgentDef(def),
+			spec: hermesProviderSpecForAgent(AgentHermes),
+		},
+	}
+}
+
+// augureDesktopProviderFactory is the Hermes provider factory plus the
+// fork-marker gate: roots without an .augure-desktop path component are
+// silently empty rather than claimed, so a root that merely looks like
+// Hermes (a state.db in a non-fork path) stays with the Hermes agent.
+type augureDesktopProviderFactory struct {
+	def      AgentDef
+	spec     hermesProviderSpec
+	fallback hermesProviderFactory
+}
+
+func (f *augureDesktopProviderFactory) Definition() AgentDef {
+	return cloneAgentDef(f.def)
+}
+
+func (f *augureDesktopProviderFactory) Capabilities() Capabilities {
+	return hermesProviderCapabilities()
+}
+
+func (f *augureDesktopProviderFactory) NewProvider(
+	cfg ProviderConfig,
+) Provider {
+	cfg = cfg.Clone()
+	var roots []string
+	for _, root := range cfg.Roots {
+		if isAugureDesktopForkRoot(root) {
+			roots = append(roots, root)
+		}
+	}
+	if len(roots) == 0 {
+		// Every configured root was rejected: serve the empty root set
+		// through the Hermes factory so the provider still satisfies the
+		// capability contract (empty discovery, valid WatchPlan) without
+		// claiming anything.
+		empty := f.fallback
+		empty.def = cloneAgentDef(f.def)
+		return empty.NewProvider(ProviderConfig{Roots: nil, Machine: cfg.Machine})
+	}
+	cfg.Roots = roots
+	return &hermesProvider{
+		Def:     cloneAgentDef(f.def),
+		Caps:    hermesProviderCapabilities(),
+		Config:  cfg,
+		spec:    f.spec,
+		sources: newHermesSourceSet(f.spec.agent, cfg.Roots),
+	}
 }
 
 func (f hermesProviderFactory) Definition() AgentDef {
@@ -42,12 +134,14 @@ func (f hermesProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 		Def:     cloneAgentDef(f.def),
 		Caps:    hermesProviderCapabilities(),
 		Config:  cfg,
-		sources: newHermesSourceSet(cfg.Roots),
+		spec:    f.spec,
+		sources: newHermesSourceSet(f.spec.agent, cfg.Roots),
 	}
 }
 
 type hermesProvider struct {
 	ProviderBase
+	spec    hermesProviderSpec
 	sources hermesSourceSet
 }
 
@@ -78,7 +172,7 @@ func (p *hermesProvider) ResolveReconciliationScopes(
 	_ context.Context, req ReconciliationScopeRequest,
 ) (ReconciliationScopePlan, error) {
 	if err := ValidateReconciliationScopeRoots(
-		AgentHermes, p.sources.roots, req.Roots,
+		p.sources.agent, p.sources.roots, req.Roots,
 	); err != nil {
 		return ReconciliationScopePlan{}, err
 	}
@@ -104,7 +198,7 @@ func (p *hermesProvider) ReconciliationAggregateMemberPaths(
 	if filepath.Base(path) != "state.db" {
 		return nil
 	}
-	rawID := strings.TrimPrefix(fullSessionID, "hermes:")
+	rawID := strings.TrimPrefix(fullSessionID, string(p.sources.agent)+":")
 	if rawID == fullSessionID || !IsValidSessionID(rawID) {
 		return nil
 	}
@@ -223,6 +317,9 @@ func (p *hermesProvider) Parse(
 			results[i].Session.File.Path = path
 			results[i].Session.File.Size = size
 			results[i].Session.File.Mtime = mtime
+			if p.spec.relabel != nil {
+				p.spec.relabel(&results[i])
+			}
 			out = append(out, ParseResultOutcome{
 				Result:      results[i],
 				DataVersion: DataVersionCurrent,
@@ -247,6 +344,17 @@ func (p *hermesProvider) Parse(
 	}
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
+	}
+	if p.spec.relabel != nil {
+		result := ParseResult{Session: *sess, Messages: msgs}
+		p.spec.relabel(&result)
+		return ParseOutcome{
+			Results: []ParseResultOutcome{{
+				Result:      result,
+				DataVersion: DataVersionCurrent,
+			}},
+			ResultSetComplete: true,
+		}, nil
 	}
 	return ParseOutcome{
 		Results: []ParseResultOutcome{{
@@ -288,6 +396,9 @@ func (p *hermesProvider) parseStateMember(
 	if !ok {
 		return ParseOutcome{ResultSetComplete: true, ForceReplace: true, SkipReason: SkipNoSession}, nil
 	}
+	if p.spec.relabel != nil {
+		p.spec.relabel(&result)
+	}
 	result.Session.File.Path = src.Path
 	if fingerprint.Hash != "" {
 		result.Session.File.Hash = fingerprint.Hash
@@ -321,11 +432,19 @@ type hermesSource struct {
 }
 
 type hermesSourceSet struct {
+	// agent labels the sources this set emits. Hermes-format forks share
+	// the store layout but must not share a discovery namespace: keying
+	// sources by agent keeps an Augure Desktop session ID from colliding
+	// with a Hermes one.
+	agent AgentType
 	roots []string
 }
 
-func newHermesSourceSet(roots []string) hermesSourceSet {
-	return hermesSourceSet{roots: cleanJSONLRoots(roots)}
+func newHermesSourceSet(agent AgentType, roots []string) hermesSourceSet {
+	if agent == "" {
+		agent = AgentHermes
+	}
+	return hermesSourceSet{agent: agent, roots: cleanJSONLRoots(roots)}
 }
 
 // The default Hermes roots include the stable profiles container rather than
@@ -440,7 +559,7 @@ func (s hermesSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 	var discoveryErr error
 	appendDiscoveryErr := func(err error) {
 		err = incompleteDiscoveryError(
-			AgentHermes, "stream configured root", err,
+			s.agent, "stream configured root", err,
 		)
 		if discoveryErr == nil {
 			discoveryErr = err
@@ -550,7 +669,7 @@ func (s hermesSourceSet) discoverStateEach(
 		}
 		observeStreamingDiscoveryBuffer(ctx, 1)
 		yieldedAny = true
-		if err := yield(hermesStateMemberSourceRef(root, stateDB, id)); err != nil {
+		if err := yield(s.stateMemberSourceRef(root, stateDB, id)); err != nil {
 			return yieldedAny, discoveryYieldError{cause: err}
 		}
 	}
@@ -605,7 +724,7 @@ func (s hermesSourceSet) discoverTranscriptEach(
 				return nil
 			}
 		}
-		ref, ok := hermesTranscriptSourceRef(root, filepath.Join(sessionsDir, name))
+		ref, ok := s.transcriptSourceRef(root, filepath.Join(sessionsDir, name))
 		if !ok {
 			return nil
 		}
@@ -661,11 +780,11 @@ func (s hermesSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 				Path:         root,
 				Recursive:    true,
 				IncludeGlobs: []string{"state.db", "state.db-wal", "*.jsonl", "session_*.json"},
-				DebounceKey:  string(AgentHermes) + ":profiles:" + root,
+				DebounceKey:  string(s.agent) + ":profiles:" + root,
 			})
 			continue
 		}
-		roots = append(roots, hermesWatchRoots(root)...)
+		roots = append(roots, hermesWatchRoots(s.agent, root)...)
 	}
 	return WatchPlan{Roots: roots}, nil
 }
@@ -942,9 +1061,9 @@ func (s hermesSourceSet) SourceForReconciliation(
 		} else if stateDB, sessionsDir, archive := hermesStatePaths(root); archive {
 			switch {
 			case samePath(path, stateDB):
-				source, ok = hermesArchiveSourceRef(root, stateDB)
+				source, ok = s.archiveSourceRef(root, stateDB)
 			case hermesPathInTranscriptDir(sessionsDir, path) && IsRegularFile(path):
-				source, ok = hermesTranscriptSourceRef(root, path)
+				source, ok = s.transcriptSourceRef(root, path)
 			}
 		} else {
 			source, ok = s.sourceRef(root, path)
@@ -1086,7 +1205,7 @@ func (s hermesSourceSet) FindSource(
 				)
 			case !found:
 			default:
-				return hermesStateMemberSourceRef(root, stateDB, req.RawSessionID), true, nil
+				return s.stateMemberSourceRef(root, stateDB, req.RawSessionID), true, nil
 			}
 		}
 		transcriptRoot := hermesTranscriptRoot(root)
@@ -1213,14 +1332,14 @@ func (s hermesSourceSet) sourceForChangedPath(
 	if stateDB, sessionID, ok := ParseVirtualSourcePathForBase(path, "state.db"); ok {
 		if expected, _, valid := hermesArchivePathsForEvent(root, stateDB); valid &&
 			samePath(expected, stateDB) && IsValidSessionID(sessionID) {
-			return hermesStateMemberSourceRef(root, stateDB, sessionID), true
+			return s.stateMemberSourceRef(root, stateDB, sessionID), true
 		}
 		return SourceRef{}, false
 	}
 	if stateDB, sessionsDir, ok := hermesStatePaths(root); ok {
 		if hermesStatePathAffectsArchive(path, stateDB) ||
 			hermesPathInTranscriptDir(sessionsDir, path) {
-			return hermesArchiveSourceRef(root, stateDB)
+			return s.archiveSourceRef(root, stateDB)
 		}
 		return SourceRef{}, false
 	}
@@ -1228,11 +1347,11 @@ func (s hermesSourceSet) sourceForChangedPath(
 		if stateDB, sessionsDir, ok := hermesArchivePathsForEvent(root, path); ok &&
 			(hermesStatePathAffectsArchive(path, stateDB) ||
 				hermesPathInTranscriptDir(sessionsDir, path)) {
-			return hermesArchiveSourceRef(root, stateDB)
+			return s.archiveSourceRef(root, stateDB)
 		}
 		transcriptRoot := hermesTranscriptRoot(root)
 		if hermesPathInTranscriptDir(transcriptRoot, path) {
-			return hermesTranscriptSourceRef(root, path)
+			return s.transcriptSourceRef(root, path)
 		}
 	}
 	return s.sourceRef(root, path)
@@ -1246,20 +1365,22 @@ func (s hermesSourceSet) sourceRef(root, path string) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	if stateDB, _, ok := hermesStatePaths(root); ok && samePath(path, stateDB) {
-		return hermesArchiveSourceRef(root, stateDB)
+		return s.archiveSourceRef(root, stateDB)
 	}
 	transcriptRoot := hermesTranscriptRoot(root)
 	if !hermesPathInTranscriptDir(transcriptRoot, path) || !IsRegularFile(path) {
 		return SourceRef{}, false
 	}
-	return hermesTranscriptSourceRef(root, path)
+	return s.transcriptSourceRef(root, path)
 }
 
-func hermesArchiveSourceRef(root, stateDB string) (SourceRef, bool) {
+func (s hermesSourceSet) archiveSourceRef(
+	root, stateDB string,
+) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	stateDB = filepath.Clean(stateDB)
 	return SourceRef{
-		Provider:       AgentHermes,
+		Provider:       s.agent,
 		ConfiguredRoot: root,
 		Key:            stateDB,
 		DisplayPath:    stateDB,
@@ -1271,10 +1392,12 @@ func hermesArchiveSourceRef(root, stateDB string) (SourceRef, bool) {
 	}, true
 }
 
-func hermesStateMemberSourceRef(root, stateDB, sessionID string) SourceRef {
+func (s hermesSourceSet) stateMemberSourceRef(
+	root, stateDB, sessionID string,
+) SourceRef {
 	path := VirtualSourcePath(stateDB, sessionID)
 	return SourceRef{
-		Provider:       AgentHermes,
+		Provider:       s.agent,
 		ConfiguredRoot: filepath.Clean(root),
 		Key:            path,
 		DisplayPath:    path,
@@ -1284,11 +1407,13 @@ func hermesStateMemberSourceRef(root, stateDB, sessionID string) SourceRef {
 	}
 }
 
-func hermesTranscriptSourceRef(root, path string) (SourceRef, bool) {
+func (s hermesSourceSet) transcriptSourceRef(
+	root, path string,
+) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	return SourceRef{
-		Provider:       AgentHermes,
+		Provider:       s.agent,
 		ConfiguredRoot: root,
 		Key:            path,
 		DisplayPath:    path,
@@ -1300,20 +1425,20 @@ func hermesTranscriptSourceRef(root, path string) (SourceRef, bool) {
 	}, true
 }
 
-func hermesWatchRoots(root string) []WatchRoot {
+func hermesWatchRoots(agent AgentType, root string) []WatchRoot {
 	root = filepath.Clean(root)
 	if stateDB, sessionsDir, ok := hermesArchiveRootPaths(root); ok {
 		watchRoots := []WatchRoot{{
 			Path:         filepath.Dir(stateDB),
 			Recursive:    false,
 			IncludeGlobs: []string{"state.db", "state.db-wal"},
-			DebounceKey:  string(AgentHermes) + ":archive:" + root,
+			DebounceKey:  string(agent) + ":archive:" + root,
 		}}
 		watchRoots = append(watchRoots, WatchRoot{
 			Path:         sessionsDir,
 			Recursive:    true,
 			IncludeGlobs: []string{"*.jsonl", "session_*.json"},
-			DebounceKey:  string(AgentHermes) + ":sessions:" + root,
+			DebounceKey:  string(agent) + ":sessions:" + root,
 		})
 		return watchRoots
 	}
@@ -1321,7 +1446,7 @@ func hermesWatchRoots(root string) []WatchRoot {
 		Path:         root,
 		Recursive:    true,
 		IncludeGlobs: []string{"state.db", "state.db-wal", "*.jsonl", "session_*.json"},
-		DebounceKey:  string(AgentHermes) + ":sessions:" + root,
+		DebounceKey:  string(agent) + ":sessions:" + root,
 	}}
 }
 

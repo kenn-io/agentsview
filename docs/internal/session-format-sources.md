@@ -622,6 +622,78 @@ add an archived or maintained mirror without replacing the original identity.
   unmarked legacy notification rows. Transcript-only archive copies apply the
   same pre-version-100 user-row removal as Codex.
 
+## Augure CLI (`augure`)
+
+- **Format:** Codex-compatible rollout JSONL under a dated `YYYY/MM/DD` tree at
+  `~/.augure/sessions` (one home-relative root on all platforms). Newer rollouts
+  add a top-level `ordinal` on every record; older files omit it. The
+  `event_msg:thread_settings_applied` record carries the applied
+  `model`/`reasoning_effort`/provider id, while `turn_context` remains the
+  parser's model source. No `archived_sessions/` directory, `history.jsonl`, or
+  `session_index.jsonl` sidecar has been observed under `~/.augure`.
+- **Evidence:** `no-public-source`.
+- **Upstream:** Augure publishes no producer source; https://augureai.ca was
+  checked 2026-09-11 and offers no public repo. The equivalence to Codex rests
+  on local Augure CLI 1.0.2-1.0.6 rollouts with `originator: "codex-tui"`,
+  `rate_limits.limit_id: "codex"`, Codex field shapes throughout
+  (`session_meta`, `response_item`, `event_msg:token_count`, `turn_context`),
+  plus Augure's own `legacy_migration.json` documenting a one-time import from
+  a stock `~/.codex` layout, which identifies it as a fork of the evidenced
+  codex-rs recorder rather than an independent format. A de-identified rollout
+  is retained as a fixture. The companion `~/.augure/state_5.sqlite` and
+  `thread_history_1.sqlite` projection databases are redundant for parsing and
+  are deliberately not consumed; their `_sqlx_migrations` bookkeeping tables
+  are not format markers.
+- **Usage and cost:** `token_count` records carry the Codex fields, so
+  normalization follows the Codex entry. Models observed are proprietary Augure
+  slugs (`ossington-5`, `ossington-4-1`, `rosedale-1`) absent from the pricing
+  catalog, so their events price as unpriced until catalog coverage appears.
+- **Agentsview:** `internal/parser/augure.go` relabels the shared Codex parser
+  (`internal/parser/codex.go`, `internal/parser/codex_provider.go`) onto the
+  `augure:` ID namespace, and `internal/sync` gates the format-shaped branches
+  on `isCodexFormatAgent`. The `session_index.jsonl` and S3 branches stay
+  Codex-only because Augure writes no index file and has no archive layout.
+- **Archive projection (2026-09-13):** Augure sessions share the Codex
+  unmarked-notification shape, so the archive curation user-row removal that
+  covers Codex and TraeX also covers `augure`.
+
+## Augure Desktop v3 (`augure-desktop`)
+
+- **Format:** Hermes Agent state.db schema at `~/.augure-desktop/state.db`
+  (`sessions`, `messages`, `messages_fts*`, `session_model_usage`,
+  `session_turn_leases`, `gateway_routing`, `async_delegations`,
+  `compression_locks`, `system_prompts`, `state_meta`, `schema_version`) plus
+  the `sessions/` transcript sibling. Timestamps are REAL epoch seconds;
+  observed rows carry `source = "desktop"`. Hermes-style (`20260910_075655_ca54ab`)
+  and UUID session ids coexist in one store.
+- **Evidence:** `no-public-source`.
+- **Upstream:** The app is closed and publishes no producer source; it was
+  checked 2026-09-11. Its `install-stamp.json` names branch
+  `release/desktop-v3-candidate`, commit `d419438f`, built 2026-09-09 (Augure
+  Desktop 3.0.0-beta.7). The data root comes from the bundled
+  `hermes_constants.py`: `DEFAULT_HERMES_HOME_DIRNAME = ".augure-desktop"`,
+  `DEFAULT_HERMES_HOME_DIRNAME_WINDOWS = "augure-desktop"`,
+  `LEGACY_HERMES_HOME_DIRNAME = ".hermes"`, plus a 340-file `hermes_*` Python
+  runtime in the app bundle, identifying a Hermes Agent fork. The fork's
+  `schema_version` was 26 the same day stock `~/.hermes/state.db` measured 30:
+  same table family, independent version lines. The fork marker is the
+  store's own root name (`.augure-desktop` / `%LOCALAPPDATA%\augure-desktop`),
+  never the schema shape or `schema_version` number.
+- **Usage and cost:** the state DB's own authoritative session columns
+  (`input_tokens`, `output_tokens`, cache columns, `reasoning_tokens`,
+  `estimated_cost_usd`, `actual_cost_usd`, `cost_status`, `cost_source`),
+  decoded exactly like stock Hermes: `actual_cost_usd` 0 (SQL 0, not NULL) is
+  a present-zero, estimated 0 does not masquerade as $0. Models observed are
+  proprietary Augure slugs (`ossington-5`), absent from the pricing catalog,
+  so their events price as unpriced until catalog coverage appears.
+- **Agentsview:** `internal/parser/augure_desktop.go` relabels the shared
+  Hermes provider (`internal/parser/hermes.go`,
+  `internal/parser/hermes_provider.go`) onto the `augure-desktop:` ID prefix
+  through the `hermesProviderSpec` seam; `internal/sync` treats it like Hermes
+  for fingerprint-hash freshness and provider fingerprint file info. The
+  provider declines roots without the fork marker so a stock Hermes-shaped
+  store stays with Hermes.
+
 ## GitHub Copilot CLI (`copilot`)
 
 - **Format:** Flat session JSONL or a session directory containing
@@ -2395,6 +2467,17 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   2026-09-10 with `TestHostedSkillInferenceKeepsNamesLexical` that hosted tool
   parsing derives skill names from recorded paths without reading worker-local
   frontmatter; local parsing retains frontmatter lookup.
+
+- **Augure Desktop v2 no-op (2026-09-14):** Augure Desktop v2 previously
+  shipped a branded Goose fork and migrated its store to the stock
+  `~/.local/share/goose/sessions/sessions.db` location. Augure-branded
+  sessions there (titles like "Augure Pro Balance Usage") carry empty
+  `provider_name` and no desktop-only marker columns, while
+  `provider_name='ossington'` marks a model-provider choice a stock Goose
+  user can also configure. No schema-15 discriminator separates them, so a
+  distinct `augure-desktop` agent backed by the Goose store is not
+  implementable without misclassifying stock Goose sessions; the separate
+  store is intentionally left syncing as `goose`.
 
 ## Zed (`zed`)
 
