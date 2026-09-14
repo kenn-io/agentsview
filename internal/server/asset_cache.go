@@ -17,6 +17,8 @@ const (
 
 var readAssetFile = os.ReadFile
 
+var openAssetReadOnly = os.Open
+
 type assetCacheEntry struct {
 	body          []byte
 	contentType   string
@@ -50,9 +52,9 @@ func newAssetCache() *assetCache {
 func (cache *assetCache) read(
 	filename, filePath, contentType string,
 ) ([]byte, error) {
-	file, err := os.Open(filePath)
+	file, err := openAssetReadOnly(filePath)
 	if err != nil {
-		return readAssetFile(filePath)
+		return nil, err
 	}
 	info, statErr := file.Stat()
 	closeErr := file.Close()

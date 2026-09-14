@@ -105,29 +105,58 @@ func TestImageRenderCacheRepeatedRequestReadsOriginalOnce(t *testing.T) {
 	}
 	t.Cleanup(func() { readAssetFile = previousReadAssetFile })
 
-	base := &Server{
+	srv := &Server{
 		cfg:        config.Config{DataDir: dataDir},
 		assetCache: newAssetCache(),
 	}
-	base.assetCache.maxEntries = 0
-	firstBase := assetResponse(t, base, filename)
-	secondBase := assetResponse(t, base, filename)
-	assert.Equal(t, testPNG, firstBase.Body)
-	assert.Equal(t, testPNG, secondBase.Body)
-	assert.Equal(t, int32(2), fullBodyReads.Load())
-
-	fullBodyReads.Store(0)
-	head := &Server{
-		cfg:        config.Config{DataDir: dataDir},
-		assetCache: newAssetCache(),
-	}
-	firstHead := assetResponse(t, head, filename)
-	secondHead := assetResponse(t, head, filename)
-	assert.Equal(t, testPNG, firstHead.Body)
-	assert.Equal(t, testPNG, secondHead.Body)
+	first := assetResponse(t, srv, filename)
+	second := assetResponse(t, srv, filename)
+	assert.Equal(t, testPNG, first.Body)
+	assert.Equal(t, testPNG, second.Body)
 	assert.Equal(t, int32(1), fullBodyReads.Load())
-	assert.Equal(t, firstHead.ContentType, secondHead.ContentType)
-	t.Logf("base: full-body reads = 2; head: full-body reads = 1")
+	assert.Equal(t, first.ContentType, second.ContentType)
+	t.Logf("head: full-body reads = 1")
+}
+
+func TestImageRenderCacheWarmedEntryOpenFailure(t *testing.T) {
+	dataDir := t.TempDir()
+	body := append([]byte(nil), testPNG...)
+	filename, filePath := writeTestAsset(t, dataDir, "image/png", body)
+	srv := &Server{
+		cfg:        config.Config{DataDir: dataDir},
+		assetCache: newAssetCache(),
+	}
+	assetResponse(t, srv, filename)
+	beforeBody, err := os.ReadFile(filePath)
+	require.NoError(t, err)
+	beforeInfo, err := os.Stat(filePath)
+	require.NoError(t, err)
+
+	var fullBodyReads atomic.Int32
+	previousReadAssetFile := readAssetFile
+	readAssetFile = func(path string) ([]byte, error) {
+		fullBodyReads.Add(1)
+		return os.ReadFile(path)
+	}
+	previousOpenAssetReadOnly := openAssetReadOnly
+	openAssetReadOnly = func(string) (*os.File, error) {
+		return nil, fmt.Errorf("read-only eligibility denied")
+	}
+	t.Cleanup(func() {
+		readAssetFile = previousReadAssetFile
+		openAssetReadOnly = previousOpenAssetReadOnly
+	})
+
+	assert.Equal(t, http.StatusNotFound, assetErrorStatus(t, srv, filename))
+	assert.Zero(t, fullBodyReads.Load(), "an open failure must not fall through to a body read")
+	afterBody, err := os.ReadFile(filePath)
+	require.NoError(t, err)
+	afterInfo, err := os.Stat(filePath)
+	require.NoError(t, err)
+	assert.Equal(t, beforeBody, afterBody)
+	assert.True(t, beforeInfo.ModTime().Equal(afterInfo.ModTime()))
+	assert.Equal(t, beforeInfo.Size(), afterInfo.Size())
+	t.Logf("open-only failure: status=%d; full-body reads=%d; source=%d bytes", http.StatusNotFound, fullBodyReads.Load(), afterInfo.Size())
 }
 
 func TestImageRenderCacheAgeBoundary(t *testing.T) {
