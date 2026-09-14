@@ -78,22 +78,6 @@ func assetErrorStatus(t *testing.T, srv *Server, filename string) int {
 	return statusErr.GetStatus()
 }
 
-func waitForAssetCacheServer(t *testing.T, addr string) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for {
-		conn, err := net.DialTimeout("tcp", addr, 50*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			return
-		}
-		if time.Now().After(deadline) {
-			require.NoError(t, err)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
 func TestImageRenderCacheRepeatedRequestReadsOriginalOnce(t *testing.T) {
 	dataDir := t.TempDir()
 	filename, _ := writeTestAsset(t, dataDir, "image/png", testPNG)
@@ -200,26 +184,51 @@ func TestImageRenderCacheCapacity(t *testing.T) {
 	secondName, secondSize, _ := cacheAsset(t, "image/png", second)
 	thirdName, thirdSize, _ := cacheAsset(t, "image/png", third)
 
-	cache := newAssetCache()
-	cache.maxEntries = 2
-	cache.maxBytes = firstSize + secondSize
 	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
-	cache.now = func() time.Time { return now }
-	require.True(t, cache.put(firstName, "image/png", first, firstSize, modTime))
+	entryCache := newAssetCache()
+	entryCache.maxEntries = 2
+	entryCache.maxBytes = firstSize * 4
+	entryCache.now = func() time.Time { return now }
+	require.True(t, entryCache.put(firstName, "image/png", first, firstSize, modTime))
 	now = now.Add(time.Second)
-	require.True(t, cache.put(secondName, "image/png", second, secondSize, modTime))
+	require.True(t, entryCache.put(secondName, "image/png", second, secondSize, modTime))
 	now = now.Add(time.Second)
-	require.True(t, cache.put(thirdName, "image/png", third, thirdSize, modTime))
-	_, firstPresent := cache.get(firstName, "image/png", firstSize, modTime)
+	require.True(t, entryCache.put(thirdName, "image/png", third, thirdSize, modTime))
+	_, firstPresent := entryCache.get(firstName, "image/png", firstSize, modTime)
 	assert.False(t, firstPresent)
-	assert.Len(t, cache.entries, 2)
-	assert.LessOrEqual(t, cache.bytes, cache.maxBytes)
+	_, secondPresent := entryCache.get(secondName, "image/png", secondSize, modTime)
+	assert.True(t, secondPresent)
+	_, thirdPresent := entryCache.get(thirdName, "image/png", thirdSize, modTime)
+	assert.True(t, thirdPresent)
+	assert.Len(t, entryCache.entries, 2)
+	assert.Equal(t, secondSize+thirdSize, entryCache.bytes)
+
+	byteCache := newAssetCache()
+	byteCache.maxEntries = 4
+	byteCache.maxBytes = firstSize + secondSize
+	now = now.Add(time.Second)
+	byteCache.now = func() time.Time { return now }
+	require.True(t, byteCache.put(firstName, "image/png", first, firstSize, modTime))
+	now = now.Add(time.Second)
+	require.True(t, byteCache.put(secondName, "image/png", second, secondSize, modTime))
+	now = now.Add(time.Second)
+	require.True(t, byteCache.put(thirdName, "image/png", third, thirdSize, modTime))
+	_, firstPresent = byteCache.get(firstName, "image/png", firstSize, modTime)
+	assert.False(t, firstPresent)
+	_, secondPresent = byteCache.get(secondName, "image/png", secondSize, modTime)
+	assert.True(t, secondPresent)
+	_, thirdPresent = byteCache.get(thirdName, "image/png", thirdSize, modTime)
+	assert.True(t, thirdPresent)
+	assert.Len(t, byteCache.entries, 2)
+	assert.Equal(t, firstSize+secondSize, byteCache.bytes)
 
 	oversize := newAssetCache()
+	oversize.maxEntries = 4
 	oversize.maxBytes = int64(len(first) - 1)
 	assert.False(t, oversize.put(firstName, "image/png", first, firstSize, modTime))
 	assert.Empty(t, oversize.entries)
-	t.Logf("capacity: entries=%d; bytes=%d/%d", len(cache.entries), cache.bytes, cache.maxBytes)
+	assert.Zero(t, oversize.bytes)
+	t.Logf("capacity: entry-limit entries=%d; bytes=%d; byte-limit entries=%d; bytes=%d/%d; oversize entries=%d", len(entryCache.entries), entryCache.bytes, len(byteCache.entries), byteCache.bytes, byteCache.maxBytes, len(oversize.entries))
 }
 
 func TestImageRenderCachePreservesDurableAssets(t *testing.T) {
@@ -353,45 +362,62 @@ func TestImageRenderCacheFallbackAndLegacy(t *testing.T) {
 }
 
 func TestImageRenderCacheLifecycle(t *testing.T) {
-	cache := newAssetCache()
-	assert.Empty(t, cache.entries)
-	assert.NotNil(t, cache.notify)
-
+	dataDir := t.TempDir()
 	body := append([]byte(nil), testPNG...)
-	filename, size, modTime := cacheAsset(t, "image/png", body)
-	cache.maxAge = 20 * time.Millisecond
-	cache.now = time.Now
-	require.True(t, cache.put(filename, "image/png", body, size, modTime))
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		cache.Run(ctx)
-		close(done)
-	}()
-	require.Eventually(t, func() bool {
-		cache.mu.Lock()
-		defer cache.mu.Unlock()
-		return len(cache.entries) == 0
-	}, time.Second, 5*time.Millisecond)
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("cache did not stop after cancellation")
-	}
-
-	srv := New(config.Config{Host: "127.0.0.1", DataDir: t.TempDir()}, dbtest.OpenTestDB(t), nil)
+	filename, filePath := writeTestAsset(t, dataDir, "image/png", body)
+	info, err := os.Stat(filePath)
+	require.NoError(t, err)
+	size := info.Size()
+	modTime := info.ModTime()
+	srv := New(config.Config{Host: "127.0.0.1", DataDir: dataDir}, dbtest.OpenTestDB(t), nil)
 	assert.NotNil(t, srv.assetCache)
+	assert.Empty(t, srv.assetCache.entries)
+	assert.NotNil(t, srv.assetCache.notify)
+	srv.assetCache.maxAge = 20 * time.Millisecond
+	srv.assetCache.now = time.Now
+	require.True(t, srv.assetCache.put(filename, "image/png", body, size, modTime))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	serveDone := make(chan error, 1)
-	go func() { serveDone <- srv.Serve(listener) }()
-	waitForAssetCacheServer(t, listener.Addr().String())
-	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
-	require.NoError(t, srv.Shutdown(ctx))
-	cancel()
-	assert.ErrorIs(t, <-serveDone, http.ErrServerClosed)
-	t.Logf("lifecycle: construction is idle; Run expires entries and Serve shuts it down")
+	go func() {
+		serveDone <- srv.Serve(listener)
+	}()
+	serveDoneReceived := false
+	shutdown := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		return srv.Shutdown(ctx)
+	}
+	t.Cleanup(func() {
+		if serveDoneReceived {
+			return
+		}
+		_ = shutdown()
+		select {
+		case <-serveDone:
+		case <-time.After(time.Second):
+			t.Errorf("Serve did not stop during cleanup")
+		}
+	})
+	require.Eventually(t, func() bool {
+		srv.mu.RLock()
+		defer srv.mu.RUnlock()
+		return srv.httpSrv != nil
+	}, time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool {
+		srv.assetCache.mu.Lock()
+		defer srv.assetCache.mu.Unlock()
+		return len(srv.assetCache.entries) == 0
+	}, time.Second, 5*time.Millisecond)
+	require.NoError(t, shutdown())
+	select {
+	case err := <-serveDone:
+		serveDoneReceived = true
+		assert.ErrorIs(t, err, http.ErrServerClosed)
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not stop after Shutdown")
+	}
+	t.Logf("lifecycle: server registered; own resident entry expired without a request; Serve shut down")
 }
 
 func TestImageRenderCacheExpiryWorkBound(t *testing.T) {
