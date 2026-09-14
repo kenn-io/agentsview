@@ -101,12 +101,14 @@ removed content.
 
 ### Remove archived images
 
-Use the image cleanup control in **Settings > Archive content** to preview and
-remove images from stored tool results. Filter by project or a cutoff date. The
-date uses each session's end time, then its start time, then its creation time
-when earlier fields are missing. Selected sessions can include parents, trashed
-sessions, and sessions whose sources are gone. Provider transcripts and
+Use the image cleanup control in **Settings > Tool-result images** to preview
+and remove images from stored tool results. Filter by project or a cutoff date.
+The date uses each session's end time, then its start time, then its creation
+time when earlier fields are missing. Selected sessions can include parents,
+trashed sessions, and sessions whose sources are gone. Provider transcripts and
 standalone image files stay unchanged.
+
+![Stored tool-result image cleanup preview](/docs/assets/generated/screenshots/settings-image-cleanup.png)
 
 The command-line equivalent is
 [`agentsview db strip --images`](/docs/commands/#agentsview-db-strip-images).

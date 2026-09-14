@@ -99,6 +99,11 @@ commands. Do not copy their catalogues into this file.
 - Verify release notes against the release tags and source. Credit contributors
   from merged pull requests or commit history; do not infer contributions from
   names or issue participation alone.
+- Regenerate the full screenshot set for every release and store it on the
+  `docs-generated-assets` orphan branch. Add captures for new visible
+  features, inspect the images, and preview the assembled website locally
+  before opening the release documentation pull request. Follow
+  `docs/screenshots/README.md`.
 
 ## Definition of Done
 

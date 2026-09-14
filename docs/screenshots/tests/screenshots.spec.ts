@@ -6,12 +6,15 @@ const DIR = process.env.SCREENSHOT_DIR || join(
 );
 
 const FULL = { width: 1440, height: 900 };
+// Imported session IDs can contain original machine names.
+const CAPTURE_STYLE = '.session-id { visibility: hidden !important; }';
 
 // PG serve instance for pg-sync screenshots (machine labels, etc.)
 const PG_BASE_URL = process.env.PG_BASE_URL || '';
 
 async function snap(page: Page, name: string) {
   await page.screenshot({
+    style: CAPTURE_STYLE,
     path: join(DIR, `${name}.png`),
     type: 'png',
   });
@@ -19,6 +22,7 @@ async function snap(page: Page, name: string) {
 
 async function snapEl(loc: Locator, name: string) {
   await loc.screenshot({
+    style: CAPTURE_STYLE,
     path: join(DIR, `${name}.png`),
     type: 'png',
   });
@@ -41,6 +45,7 @@ async function snapRange(
     lastBox.x + lastBox.width
   );
   await page.screenshot({
+    style: CAPTURE_STYLE,
     path: join(DIR, `${name}.png`),
     type: 'png',
     clip: {
@@ -353,7 +358,13 @@ test.describe('Dashboard', () => {
 
 test.describe('Activity dashboard', () => {
   async function navigateToActivity(page: Page, path = '/activity') {
-    await page.goto(path);
+    // Anchor the range to the fixture, so a release run never captures an empty today.
+    const response = await page.request.get('/api/v1/sessions?limit=1');
+    const latest = (await response.json()).sessions[0];
+    const date = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Chicago',
+    }).format(new Date(latest.started_at));
+    await page.goto(`${path}${path.includes('?') ? '&' : '?'}date=${date}`);
     await page.waitForSelector('.activity-page', { timeout: 10_000 });
     await expect(
       page.locator('.activity-page .summary-cards .card').first()
@@ -383,6 +394,9 @@ test.describe('Activity dashboard', () => {
     await navigateToActivity(page, '/activity?preset=week');
     const panel = page.locator('.activity-page .chart-panel:has(.timeline)');
     await expect(panel).toBeVisible({ timeout: 5_000 });
+    for (const category of ['interactive', 'subagent', 'automated']) {
+      await expect(panel.locator(`.concurrency-seg.${category}`).first()).toBeVisible();
+    }
     await panel.scrollIntoViewIfNeeded();
     await page.waitForTimeout(500);
     await snapEl(panel, 'activity-concurrency');
@@ -815,11 +829,12 @@ test.describe('Message viewer', () => {
   });
 
   test('Codex desktop resume menu', async ({ page }) => {
-    const codexSession = page.locator(
-      '.session-item:has(.agent-tag:text-is("Codex"))'
-    ).first();
-    await expect(codexSession).toBeVisible({ timeout: 10_000 });
-    await codexSession.click();
+    const response = await page.request.get('/api/v1/sessions?agent=codex&limit=200');
+    const session = (await response.json()).sessions.find(
+      (session: { id: string }) => !session.id.includes('~')
+    );
+    expect(session, 'fixture needs a local Codex session').toBeDefined();
+    await page.goto(`/sessions/${encodeURIComponent(session.id)}`);
     await expect(page.locator('.message').first()).toBeVisible({
       timeout: 10_000,
     });
@@ -836,6 +851,28 @@ test.describe('Message viewer', () => {
       /^codex:\/\/threads\//
     );
     await snapEl(menu, 'session-resume-menu');
+  });
+
+  test('remote session resume command', async ({ page }) => {
+    const response = await page.request.get('/api/v1/sessions?agent=claude&limit=1');
+    const source = (await response.json()).sessions[0];
+    const remote = { ...source, id: `work-desktop~${source.id.split('~').pop()}`, machine: 'work-desktop' };
+    const remotePath = `/api/v1/sessions/${encodeURIComponent(remote.id)}`;
+    await page.route(`**${remotePath}**`, async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname === remotePath) return route.fulfill({ json: remote });
+      if (url.pathname.endsWith('/directory')) return route.fulfill({ json: { path: '' } });
+      await route.continue({
+        url: url.href.replace(encodeURIComponent(remote.id), encodeURIComponent(source.id)),
+      });
+    });
+    await page.goto(`/sessions/${encodeURIComponent(remote.id)}`);
+    await expect(page.locator('.message').first()).toBeVisible();
+    await page.locator('.resume-btn').click();
+    const menu = page.locator('.open-menu');
+    await expect(menu.getByRole('button', { name: 'Copy command', exact: true })).toBeVisible();
+    await expect(menu.getByRole('button')).toHaveCount(1);
+    await snap(page, 'remote-resume-command');
   });
 
   test('thinking blocks', async ({ page }) => {
@@ -1126,6 +1163,7 @@ test.describe('Message viewer', () => {
       throw new Error('code-block has no bounding box');
     }
     await page.screenshot({
+      style: CAPTURE_STYLE,
       path: join(DIR, 'code-block-copy-btn.png'),
       type: 'png',
       clip: {
@@ -1409,6 +1447,61 @@ test.describe('Settings', () => {
     await snap(page, 'settings');
   });
 
+  test('settings archive image retention', async ({ page }) => {
+    // Save only in this browser's response fixture; other captures keep their policy.
+    await page.route('**/api/v1/settings', async (route) => {
+      if (route.request().method() !== 'PUT') return route.continue();
+      const current = await (await page.request.get('/api/v1/settings')).json();
+      await route.fulfill({ json: { ...current, ...route.request().postDataJSON() } });
+    });
+    await openSettings(page);
+    const section = await openSettingsPanel(page, 'Archive content');
+    const offload = section.getByRole('radio', { name: 'Offload', exact: true });
+    await offload.click();
+    await expect(offload).toHaveAttribute('aria-checked', 'true');
+    await expect(section.getByRole('status')).toContainText('Restart');
+    await snapEl(section, 'settings-archive-content');
+  });
+
+  test('settings alternate agent homes', async ({ page }) => {
+    await page.route('**/api/v1/settings', async (route) => {
+      const response = await route.fetch();
+      const settings = await response.json();
+      for (const provider of settings.session_providers) {
+        if (provider.id !== 'codex') continue;
+        provider.dirs = ['~/.codex/sessions', '~/.codex-work/sessions'];
+        provider.homes = ['~/.codex-work'];
+      }
+      await route.fulfill({ response, json: settings });
+    });
+    await openSettings(page);
+    const section = await openSettingsPanel(page, 'Session Providers');
+    const card = section.locator('.provider-row').filter({
+      has: page.locator('.provider-name', { hasText: /^Codex$/ }),
+    });
+    await expect(card.getByRole('textbox', { name: 'New Codex home directory' })).toBeVisible();
+    await expect(card.locator('.provider-home')).toContainText('~/.codex-work');
+    await snapEl(card, 'settings-agent-homes');
+  });
+
+  test('settings image cleanup preview', async ({ page }) => {
+    await page.route('**/api/v1/data/strip-images/preview', (route) => route.fulfill({
+      json: {
+        sessions: 3, changed: 3, payloads: 5, stored_bytes: 8192, decoded_bytes: 4096,
+        projects: [
+          { project: 'agentsview', sessions: 2, changed: 2, payloads: 4, stored_bytes: 6144, decoded_bytes: 3072 },
+          { project: 'roborev', sessions: 1, changed: 1, payloads: 1, stored_bytes: 2048, decoded_bytes: 1024 },
+        ],
+      },
+    }));
+    await openSettings(page);
+    const section = await openSettingsPanel(page, 'Tool-result images');
+    await section.getByRole('button', { name: 'Preview', exact: true }).click();
+    await expect(section).toContainText('5 image payloads');
+    await expect(section.getByRole('button', { name: 'Remove image payloads' })).toBeVisible();
+    await snapEl(section, 'settings-image-cleanup');
+  });
+
   test('settings remote access section', async ({ page }) => {
     await openSettings(page);
     const remoteSection = await openSettingsPanel(
@@ -1567,6 +1660,12 @@ test.describe('In-session search', () => {
 
     await snap(page, 'in-session-search');
 
+    await page.getByRole('button', { name: 'Show search results' }).click();
+    await expect(page.getByRole('region', { name: 'Search results' })).toBeVisible();
+    await expect(page.locator('.find-overview-rail')).toBeVisible();
+    await expect(page.locator('.find-result-button').first()).toBeVisible();
+    await snap(page, 'in-session-search-results');
+
     // Close search
     await page.keyboard.press('Escape');
   });
@@ -1581,7 +1680,18 @@ test.describe('Token usage', () => {
   });
 
   test('token usage in session header', async ({ page }) => {
-    await selectRichSession(page);
+    // A fixed recorded effort illustrates the badge even with older source transcripts.
+    await page.route('**/api/v1/sessions/*/messages*', async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      for (const message of body.messages ?? []) {
+        if (message.role === 'assistant') message.reasoning_effort = 'high';
+      }
+      await route.fulfill({ response, json: body });
+    });
+    await page.locator('.session-item:has(.agent-tag:text-is("Codex"))').first().click();
+    await expect(page.locator('.model-badge .model-badge__effort')).toHaveText('high');
+    await expect(page.getByRole('button', { name: 'Copy link to session', exact: true })).toBeVisible();
     await page.waitForTimeout(500);
 
     // Token badge lives in SessionBreadcrumb
@@ -1670,6 +1780,7 @@ test.describe('Follow latest', () => {
     const padX = 100;
     const padY = 14;
     await page.screenshot({
+      style: CAPTURE_STYLE,
       path: join(DIR, 'follow-latest-toggle.png'),
       type: 'png',
       clip: {

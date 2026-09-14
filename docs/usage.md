@@ -754,6 +754,12 @@ Use the arrow buttons or `Enter` / `Shift+Enter` to jump between matches. The
 matching message scrolls into view and the search term is highlighted. Press
 `Esc` to close the search bar.
 
+Click **Show search results** to open matching snippets grouped by message.
+Select a snippet to jump to its occurrence. The overview rail beside the
+transcript shows where matches appear throughout the session.
+
+![In-session search results and overview rail](/docs/assets/generated/screenshots/in-session-search-results.png)
+
 Search follows the transcript's active scope. Block-type filters (see
 [Block-Type Filtering](#block-type-filtering)) and Focused mode both narrow what
 search can find: a hidden category contributes no matches, counts, badges, or
@@ -1020,12 +1026,15 @@ Local Codex sessions add **Open in Codex Desktop**, which deep-links to the
 stored thread. Local Claude sessions add **Open in Claude Code**, which opens a
 new Code session for the stored working directory; when the native Claude
 Desktop opener is detected, it remains available as a separate resume target.
+
+![Session resume menu](/docs/assets/generated/screenshots/session-resume-menu.png)
+
 For supported remote sessions, choose **Copy command** and paste the resume
 command into a shell on the machine that owns the transcript. Launching a
 terminal, opening an editor, and native agent desktop links are local-session
 actions.
 
-![Session resume menu](/docs/assets/generated/screenshots/session-resume-menu.png)
+![Copy command in a remote session's Resume menu](/docs/assets/generated/screenshots/remote-resume-command.png)
 
 The `agentsview session list --resume` and `--active` CLI modes use the same
 recent-activity signal to produce a compact terminal table for picking up
@@ -1187,16 +1196,18 @@ organized into sections:
 
 ![Settings page](/docs/assets/generated/screenshots/settings.png)
 
-| Section           | What You Can Configure                                                                                                                                                                                    |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Language          | Interface language (English, French, Japanese, Korean, Simplified Chinese, or Traditional Chinese)                                                                                                        |
-| Appearance        | Theme (light/dark), high-contrast mode, chart colors, message layout, zoom, block visibility                                                                                                              |
-| Date ranges       | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality                                                                                                  |
-| Agent Directories | Custom paths for each agent's session files. For Devin CLI, point at the local root that contains `cli/` (for example a redacted `.../Application Support/devin` path), not copied config or OAuth files. |
-| Terminal          | Default terminal emulator for session resume                                                                                                                                                              |
-| Embeddings        | Current semantic-index build phase, progress, throughput, ETA, last result, and local generations                                                                                                         |
-| GitHub            | Personal access token for Gist publishing                                                                                                                                                                 |
-| Remote Access     | Remote connections toggle, auth token, connect to remote server                                                                                                                                           |
+| Section            | What You Can Configure                                                                                   |
+| ------------------ | -------------------------------------------------------------------------------------------------------- |
+| Language           | Interface language (English, French, Japanese, Korean, Simplified Chinese, or Traditional Chinese)       |
+| Appearance         | Theme (light/dark), high-contrast mode, chart colors, message layout, zoom, block visibility             |
+| Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality |
+| Session Providers  | Enable session providers, inspect their session directories, and add alternate agent homes               |
+| Archive content    | Choose whether future imports keep, drop, or offload tool-result images                                  |
+| Tool-result images | Preview and remove images from stored tool results                                                       |
+| Terminal           | Default terminal emulator for session resume                                                             |
+| Embeddings         | Current semantic-index build phase, progress, throughput, ETA, last result, and local generations        |
+| GitHub             | Personal access token for Gist publishing                                                                |
+| Remote Access      | Remote connections toggle, auth token, connect to remote server                                          |
 
 ![Embedding build progress](/docs/assets/generated/screenshots/settings-embeddings.png)
 

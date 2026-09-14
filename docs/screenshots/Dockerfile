@@ -10,7 +10,7 @@ ARG AV_COMMIT=unknown
 # leaving apt-get to install Debian's stock nodejs without npm.
 RUN apt-get update && \
     apt-get install -y curl ca-certificates libsqlite3-dev && \
-    curl -fsSL https://deb.nodesource.com/setup_22.x \
+    curl -fsSL https://deb.nodesource.com/setup_24.x \
       -o /tmp/nodesource_setup.sh && \
     bash /tmp/nodesource_setup.sh && \
     apt-get install -y nodejs && \
@@ -26,7 +26,7 @@ RUN make build VERSION="$AV_VERSION" COMMIT="$AV_COMMIT"
 RUN cp agentsview /bin/agentsview
 
 # Stage 2: Run Playwright screenshots
-FROM node:22-bookworm
+FROM node:24-bookworm
 
 WORKDIR /work
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 # Extract only screenshot-safe project sessions from the source
 # database. This runs on the host before the Docker build so the
@@ -108,7 +109,7 @@ rm -f "$OUTPUT"
 # reads one snapshot-isolated pass that concurrent writes do not
 # restart, and does not touch the source. The target must not exist
 # (rm -f above guarantees that).
-sqlite3 "$SOURCE" "VACUUM INTO '$OUTPUT'"
+sqlite3 -readonly "$SOURCE" "VACUUM INTO '$OUTPUT'"
 
 # Delete sessions (and related data) for non-matching projects.
 # The heredoc delimiter is quoted so bash does NOT expand $ or
@@ -127,6 +128,13 @@ INSERT INTO screenshot_projects(name) VALUES
   ('roborev'),
   ('roborev_docs');
 
+-- Host-prefixed imports can expose original machine names in IDs and paths.
+-- Use local transcripts; the capture runner supplies example remote machines.
+INSERT OR IGNORE INTO screenshot_blocked_patterns(pattern)
+SELECT '%' || replace(replace(replace(
+  lower(substr(id, 1, instr(id, '~') - 1)), '\', '\\'), '%', '\%'), '_', '\_') || '%'
+FROM sessions WHERE instr(id, '~') > 0;
+
 CREATE TEMP TABLE screenshot_safe_sessions(id TEXT PRIMARY KEY);
 CREATE TEMP TABLE screenshot_root_sessions(id TEXT PRIMARY KEY);
 CREATE TEMP TABLE screenshot_sessions(id TEXT PRIMARY KEY);
@@ -139,6 +147,7 @@ INSERT INTO screenshot_safe_sessions(id)
 SELECT id
 FROM sessions s
 WHERE s.project IN (SELECT name FROM screenshot_projects)
+  AND instr(s.id, '~') = 0
   AND s.message_count > 0
   AND s.deleted_at IS NULL
   AND NOT EXISTS (

@@ -128,6 +128,11 @@ writes keep inline content, and archives that omit tool content write no assets.
 See [image storage](/docs/data/#ingest-time-image-offload) for retries, backups,
 and remote-backend limits.
 
+You can also select **Offload** under **Settings > Archive content**. The restart
+notice appears after you save a changed policy.
+
+![Tool-result image policy in Settings](/docs/assets/generated/screenshots/settings-archive-content.png)
+
 ## Installation Identity
 
 Local sessions use a random installation ID saved in `telemetry-install-id` in
@@ -1042,6 +1047,8 @@ The Session Providers section of the Settings page edits the same lists. Adding
 or removing a home there updates `homes` in that provider's `[agents.<id>]`
 table in `config.toml`. Like the provider enable toggles, the change takes
 effect after the AgentsView daemon and any separate push-watch process restart.
+
+![Codex alternate homes in Session Providers settings](/docs/assets/generated/screenshots/settings-agent-homes.png)
 
 #### Choosing a layout
 
