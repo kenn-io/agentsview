@@ -301,7 +301,7 @@ describe("AgentRemapRules", () => {
     const texts = listbox()
       .getAllByRole("option")
       .map(optionText);
-    expect(texts).toContain("Goose:");
+    expect(texts).toContain("goose:");
   });
 
   it("custom agent values remain selectable", async () => {
