@@ -2074,8 +2074,8 @@
   "go_to_session_empty": "请输入会话 UUID。",
   "go_to_session_invalid": "请输入不带前缀的完整 UUID。",
   "go_to_session_not_found": "没有匹配此 UUID 的会话。",
-  "go_to_session_ambiguous": "有多个会话匹配此 UUID。请输入完整 ID。",
-  "go_to_session_capped": "匹配的会话太多。请输入完整 ID。",
+  "go_to_session_ambiguous": "有多个会话匹配此 UUID。请通过现有链接打开目标会话。",
+  "go_to_session_capped": "匹配的会话太多。请通过现有链接打开目标会话。",
   "go_to_session_failed": "无法查找该会话。请重试。",
   "shortcuts_go_to_session": "关闭查找后跳转到会话"
 }

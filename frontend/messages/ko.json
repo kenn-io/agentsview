@@ -2074,8 +2074,8 @@
   "go_to_session_empty": "세션 UUID를 입력하세요.",
   "go_to_session_invalid": "접두사 없는 완전한 UUID를 입력하세요.",
   "go_to_session_not_found": "일치하는 세션이 없습니다.",
-  "go_to_session_ambiguous": "여러 세션이 일치합니다. 전체 ID를 입력하세요.",
-  "go_to_session_capped": "일치하는 세션이 너무 많습니다. 전체 ID를 입력하세요.",
+  "go_to_session_ambiguous": "여러 세션이 일치합니다. 기존 링크에서 원하는 세션을 여세요.",
+  "go_to_session_capped": "일치하는 세션이 너무 많습니다. 기존 링크에서 원하는 세션을 여세요.",
   "go_to_session_failed": "세션을 조회하지 못했습니다. 다시 시도하세요.",
   "shortcuts_go_to_session": "찾기를 닫았을 때 세션으로 이동"
 }

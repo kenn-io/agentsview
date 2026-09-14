@@ -2139,8 +2139,8 @@
   "go_to_session_empty": "Enter a session UUID.",
   "go_to_session_invalid": "Enter a complete UUID without a prefix.",
   "go_to_session_not_found": "No session matches that UUID.",
-  "go_to_session_ambiguous": "Multiple sessions match that UUID. Enter the full ID.",
-  "go_to_session_capped": "Too many sessions match. Enter the full ID.",
+  "go_to_session_ambiguous": "Multiple sessions match that UUID. Open the desired session from an existing link.",
+  "go_to_session_capped": "Too many sessions match. Open the desired session from an existing link.",
   "go_to_session_failed": "Could not look up that session. Try again.",
   "shortcuts_go_to_session": "Go to session when find is closed"
 }

@@ -119,6 +119,21 @@ describe("GoToSessionModal", () => {
     expect(ui.activeModal).toBeNull();
   });
 
+  it("normalizes uppercase UUID input before lookup", async () => {
+    await open();
+    const canonical = `codex:${UUID}`;
+    harness.resolveSessionIds.mockResolvedValue({ ids: [canonical] });
+    await setInput(UUID.toUpperCase());
+
+    await pressKey("Enter");
+
+    expect(harness.resolveSessionIds).toHaveBeenCalledExactlyOnceWith(
+      { partial: UUID, limit: 1000 },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(harness.sessions.navigateToSession).toHaveBeenCalledExactlyOnceWith(canonical);
+  });
+
   it.each([
     ["empty", "", "Enter a session UUID."],
     ["invalid", "codex:123e4567-e89b-12d3-a456-426614174000", "Enter a complete UUID without a prefix."],
@@ -148,7 +163,7 @@ describe("GoToSessionModal", () => {
     await pressKey("Enter");
 
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-      "Multiple sessions match that UUID. Enter the full ID.",
+      "Multiple sessions match that UUID. Open the desired session from an existing link.",
     );
     expect(ui.activeModal).toBe("goToSession");
     expect(harness.router.navigateToSession).not.toHaveBeenCalled();
@@ -164,7 +179,7 @@ describe("GoToSessionModal", () => {
     await pressKey("Enter");
 
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-      "Too many sessions match. Enter the full ID.",
+      "Too many sessions match. Open the desired session from an existing link.",
     );
     expect(ui.activeModal).toBe("goToSession");
     expect(harness.router.navigateToSession).not.toHaveBeenCalled();

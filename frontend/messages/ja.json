@@ -2139,8 +2139,8 @@
   "go_to_session_empty": "セッションUUIDを入力してください。",
   "go_to_session_invalid": "プレフィックスなしの完全なUUIDを入力してください。",
   "go_to_session_not_found": "一致するセッションがありません。",
-  "go_to_session_ambiguous": "複数のセッションが一致します。完全なIDを入力してください。",
-  "go_to_session_capped": "一致するセッションが多すぎます。完全なIDを入力してください。",
+  "go_to_session_ambiguous": "複数のセッションが一致します。既存のリンクから目的のセッションを開いてください。",
+  "go_to_session_capped": "一致するセッションが多すぎます。既存のリンクから目的のセッションを開いてください。",
   "go_to_session_failed": "セッションを検索できませんでした。もう一度お試しください。",
   "shortcuts_go_to_session": "検索を閉じてセッションへ移動"
 }

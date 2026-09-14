@@ -79,7 +79,7 @@
       const response = await callGenerated(
         (options) =>
           SessionsService.getApiV1SessionIdsResolve(
-            { partial: value, limit: SESSION_ID_LIMIT },
+            { partial: value.toLowerCase(), limit: SESSION_ID_LIMIT },
             options,
           ),
         signal,

@@ -2074,8 +2074,8 @@
   "go_to_session_empty": "請輸入對話 UUID。",
   "go_to_session_invalid": "請輸入不含前綴的完整 UUID。",
   "go_to_session_not_found": "沒有符合此 UUID 的對話。",
-  "go_to_session_ambiguous": "有多個對話符合此 UUID。請輸入完整 ID。",
-  "go_to_session_capped": "符合的對話太多。請輸入完整 ID。",
+  "go_to_session_ambiguous": "有多個對話符合此 UUID。請透過現有連結開啟目標對話。",
+  "go_to_session_capped": "符合的對話太多。請透過現有連結開啟目標對話。",
   "go_to_session_failed": "無法查詢此對話。請再試一次。",
   "shortcuts_go_to_session": "關閉查找後跳轉至對話"
 }

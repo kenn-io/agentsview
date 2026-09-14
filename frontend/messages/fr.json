@@ -2138,8 +2138,8 @@
   "go_to_session_empty": "Saisissez un UUID de session.",
   "go_to_session_invalid": "Saisissez un UUID complet sans préfixe.",
   "go_to_session_not_found": "Aucune session ne correspond à cet UUID.",
-  "go_to_session_ambiguous": "Plusieurs sessions correspondent à cet UUID. Saisissez l'identifiant complet.",
-  "go_to_session_capped": "Trop de sessions correspondent. Saisissez l'identifiant complet.",
+  "go_to_session_ambiguous": "Plusieurs sessions correspondent à cet UUID. Ouvrez la session souhaitée avec un lien existant.",
+  "go_to_session_capped": "Trop de sessions correspondent. Ouvrez la session souhaitée avec un lien existant.",
   "go_to_session_failed": "Impossible de rechercher cette session. Réessayez.",
   "shortcuts_go_to_session": "Accéder à une session lorsque la recherche est fermée"
 }
