@@ -164,6 +164,23 @@
 
   let isStarred = $derived(starred.isStarred(session.id));
 
+  /** Duplicate-group membership indicator: this session is one copy of a
+   * duplicated interaction (same start second + opening prompt) found in
+   * another agent store. Shown as a small badge with the group size. */
+  let duplicateLabel = $derived.by(() => {
+    if (!session.duplicate_role) return null;
+    const count = session.duplicate_member_count ?? 2;
+    if (count <= 1) return null;
+    return `⧉${count}`;
+  });
+  let duplicateTitle = $derived(
+    session.duplicate_role === "canonical"
+      ? m.sidebar_row_duplicate_canonical_title({
+          count: session.duplicate_member_count ?? 2,
+        })
+      : m.sidebar_row_duplicate_title(),
+  );
+
   let childCount = $derived(
     continuationCount > 1 ? continuationCount - 1 : 0,
   );
@@ -517,6 +534,11 @@
           {/if}
           {#if childCount > 0 && !onToggleExpand}
             <span class="continuation-badge">x{continuationCount}</span>
+          {/if}
+          {#if duplicateLabel}
+            <span class="continuation-badge duplicate-badge" title={duplicateTitle}>
+              {duplicateLabel}
+            </span>
           {/if}
         </div>
       </a>
@@ -901,6 +923,10 @@
     color: var(--accent-blue);
     white-space: nowrap;
     flex-shrink: 0;
+  }
+
+  .duplicate-badge {
+    opacity: 0.75;
   }
 
   .star-btn {

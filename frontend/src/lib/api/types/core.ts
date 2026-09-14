@@ -80,6 +80,10 @@ export interface Session {
    */
   decode_confidence?: string;
   created_at: string;
+  // Duplicate-group membership (absent when the session has none)
+  duplicate_role?: string;
+  duplicate_canonical_id?: string;
+  duplicate_member_count?: number;
 }
 
 /** Matches Go SessionPage struct */
@@ -110,6 +114,8 @@ export interface SidebarSessionIndexRow {
   transcript_revision?: string;
   is_automated: boolean;
   is_teammate?: boolean;
+  duplicate_role?: string;
+  duplicate_member_count?: number;
 }
 
 /** Matches Go SidebarSessionIndex struct. */

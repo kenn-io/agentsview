@@ -42,7 +42,11 @@ const (
 	// at the untagged model's catalog rate. EffectivePricingDigest hashes
 	// only catalog rows, so the same facts and catalog would otherwise keep
 	// the unpriced costs.
-	usageCacheFormatVersion             = 12
+	// Version 13 rebuilds version 12 facts because duplicate-session group
+	// suppression now overrides token eligibility at extraction: facts of
+	// duplicate members whose canonical carries token-eligible usage lose
+	// token eligibility so migrated copies are not double counted.
+	usageCacheFormatVersion             = 13
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1

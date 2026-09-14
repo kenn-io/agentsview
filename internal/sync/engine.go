@@ -637,6 +637,11 @@ type Engine struct {
 	startupReconciledErr    error
 	startupCallbackOnce     gosync.Once
 	onStartupReconciled     func(SyncStats, error)
+	// duplicateRebuildMu guards the single-flight state for background
+	// duplicate-group membership rebuilds scheduled after sync passes.
+	duplicateRebuildMu      gosync.Mutex
+	duplicateRebuildRunning bool
+	duplicateRebuildPending bool
 	// writeBatchOverride is a test seam for exercising reconciliation archive
 	// write failures after discovery and parse have succeeded.
 	writeBatchOverride func([]pendingWrite, syncWriteMode, bool) (int, int, int, int)
@@ -3694,6 +3699,35 @@ func (e *Engine) resyncBuildLocked(
 		}
 	}
 
+	// Re-apply agent remap rules to the rebuilt archive so sessions the
+	// rules govern keep their relabeled agent. Rebuilt databases are fresh
+	// copies of parsed sources, so without this step every remap would be
+	// lost on each full resync.
+	if _, applyErr := ops.applyAgentRemapRules(ctx, newDB); applyErr != nil {
+		warning := fmt.Sprintf(
+			"agent remap apply failed, aborting swap: %v", applyErr,
+		)
+		log.Printf("resync: %s", warning)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings, warning)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, fmt.Errorf("applying agent remap rules: %w", applyErr)
+	}
+
+	// Re-derive duplicate-group membership for the rebuilt archive. The
+	// membership table is derived state and is deliberately not copied by
+	// orphaned.go, so the fresh replacement needs a full detection pass.
+	if _, dgErr := ops.rebuildDuplicateGroups(ctx, newDB); dgErr != nil {
+		log.Printf("resync: rebuild duplicate groups: %v", dgErr)
+		stats.Warnings = append(stats.Warnings,
+			"duplicate group rebuild failed: "+dgErr.Error())
+	}
+
 	// Metadata restoration deliberately copies user-owned deletion state from
 	// the original archive. Reconcile archive-only Claude members afterwards so
 	// an available legacy fork cannot overwrite the source-missing state that
@@ -4675,6 +4709,74 @@ func (e *Engine) ApplyWorktreeReclassification(
 	return mapping, preview, err
 }
 
+// ApplyAgentRemapRules rewrites sessions.agent for every session the
+// enabled remap rules match, after verifying the caller reviewed the preview
+// identified by acceptedToken. Serialized with sync writes via RunExclusive;
+// emits a sessions change when any session was rewritten.
+func (e *Engine) ApplyAgentRemapRules(
+	ctx context.Context, acceptedToken string,
+) (db.AgentRemapPreview, error) {
+	var preview db.AgentRemapPreview
+	err := e.RunExclusive(func() error {
+		var err error
+		preview, err = e.db.ApplyAgentRemapRules(ctx, acceptedToken)
+		return err
+	})
+	if err == nil && preview.MatchedSessions > 0 {
+		e.emit("sessions")
+	}
+	return preview, err
+}
+
+// RebuildDuplicateGroups recomputes duplicate-session group membership,
+// serialized with sync writes via RunExclusive; emits a sessions change
+// when any membership changed so list rows refresh their indicators.
+func (e *Engine) RebuildDuplicateGroups(
+	ctx context.Context,
+) (db.DuplicateGroupsResult, error) {
+	var result db.DuplicateGroupsResult
+	err := e.RunExclusive(func() error {
+		var err error
+		result, err = e.db.RebuildDuplicateGroups(ctx)
+		return err
+	})
+	if err == nil && result.NotifiedIDs > 0 {
+		e.emit("sessions")
+	}
+	return result, err
+}
+
+// scheduleDuplicateGroupRebuild queues one background duplicate-group
+// membership rebuild after a sync pass changed sessions. Concurrent callers
+// coalesce: a running rebuild leaves a pending marker and re-runs itself so
+// a change missed by the in-flight pass is not lost.
+func (e *Engine) scheduleDuplicateGroupRebuild() {
+	e.duplicateRebuildMu.Lock()
+	if e.duplicateRebuildRunning {
+		e.duplicateRebuildPending = true
+		e.duplicateRebuildMu.Unlock()
+		return
+	}
+	e.duplicateRebuildRunning = true
+	e.duplicateRebuildMu.Unlock()
+	go func() {
+		for {
+			_, err := e.db.RebuildDuplicateGroups(context.Background())
+			if err != nil {
+				log.Printf("warning: duplicate group rebuild: %v", err)
+			}
+			e.duplicateRebuildMu.Lock()
+			if !e.duplicateRebuildPending {
+				e.duplicateRebuildRunning = false
+				e.duplicateRebuildMu.Unlock()
+				return
+			}
+			e.duplicateRebuildPending = false
+			e.duplicateRebuildMu.Unlock()
+		}
+	}()
+}
+
 // ApplyWorktreeProjectMappings serializes historical session rewrites and
 // identity publication with watcher and sync writes.
 func (e *Engine) ApplyWorktreeProjectMappings(
@@ -4790,6 +4892,9 @@ func (e *Engine) syncAll(
 		ctx, onProgress, time.Time{}, nil, syncWriteDefault, true,
 		forceFullParse && !allowCachedFailures,
 	)
+	if stats.hasSessionChanges() {
+		e.scheduleDuplicateGroupRebuild()
+	}
 	return
 }
 
@@ -19146,6 +19251,15 @@ func (e *Engine) writeIncremental(
 	)
 	if err != nil {
 		return err
+	}
+	// Agent remap rules run after the worktree mapping so a rule's target
+	// agent is the final stored value for freshly written sessions.
+	if _, err := e.db.ApplyAgentRemapRulesToSession(
+		context.Background(), inc.sessionID,
+	); err != nil {
+		return fmt.Errorf(
+			"apply agent remap rules to session %s: %w", inc.sessionID, err,
+		)
 	}
 	identitySession := db.Session{
 		ID:      inc.sessionID,

@@ -2170,6 +2170,13 @@ func sessionPushFingerprint(
 		fmt.Sprintf("%d", sess.SecretLeakCount),
 		sess.SecretsRulesVersion,
 		usageEventFingerprint,
+		// Duplicate-group membership rides on the session fingerprint so a
+		// rebuild that flips a session's role or group re-pushes the row and
+		// its duplicate_group_members mirror entry.
+		sess.DuplicateRole,
+		sess.DuplicateCanonicalID,
+		sess.DuplicateGroupKey,
+		fmt.Sprintf("%d", sess.DuplicateMemberCount),
 	}
 	var b strings.Builder
 	for _, f := range fields {
@@ -2650,8 +2657,48 @@ func (s *Sync) pushSession(
 			return err
 		}
 	}
+	if err := pushDuplicateGroupMemberTx(ctx, tx, sess); err != nil {
+		return err
+	}
 	if err := replacePGSessionAliases(ctx, tx, sess); err != nil {
 		return err
+	}
+	return nil
+}
+
+// pushDuplicateGroupMemberTx mirrors the session's duplicate-group
+// membership into duplicate_group_members. A session with no membership
+// drops any stale mirror row so role flips and group dissolutions propagate.
+func pushDuplicateGroupMemberTx(
+	ctx context.Context, tx *sql.Tx, sess db.Session,
+) error {
+	if sess.DuplicateRole == "" {
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM duplicate_group_members WHERE session_id = $1`,
+			sess.ID,
+		); err != nil {
+			return fmt.Errorf(
+				"deleting duplicate group member %s: %w", sess.ID, err,
+			)
+		}
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO duplicate_group_members
+			(session_id, group_key, role, canonical_id, member_count)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (session_id) DO UPDATE SET
+			group_key = EXCLUDED.group_key,
+			role = EXCLUDED.role,
+			canonical_id = EXCLUDED.canonical_id,
+			member_count = EXCLUDED.member_count,
+			computed_at = NOW()`,
+		sess.ID, sess.DuplicateGroupKey, sess.DuplicateRole,
+		sess.DuplicateCanonicalID, sess.DuplicateMemberCount,
+	); err != nil {
+		return fmt.Errorf(
+			"upserting duplicate group member %s: %w", sess.ID, err,
+		)
 	}
 	return nil
 }

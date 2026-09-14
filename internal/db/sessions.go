@@ -343,28 +343,38 @@ type Session struct {
 	HealthGrade            *string  `json:"health_grade,omitempty"`
 	// QualitySignals mirrors the scalar persistence fields below for API
 	// schema and JSON transport.
-	QualitySignals              *QualitySignals `json:"quality_signals,omitempty"`
-	HasToolCalls                bool            `json:"-"`
-	HasContextData              bool            `json:"-"`
-	SecretLeakCount             int             `json:"secret_leak_count"`
-	SecretsRulesVersion         string          `json:"-"`
-	QualitySignalVersion        int             `json:"-"`
-	ShortPromptCount            int             `json:"-"`
-	UnstructuredStart           bool            `json:"-"`
-	MissingSuccessCriteriaCount int             `json:"-"`
-	MissingVerificationCount    int             `json:"-"`
-	DuplicatePromptCount        int             `json:"-"`
-	NoCodeContextCount          int             `json:"-"`
-	RunawayToolLoopCount        int             `json:"-"`
-	DataVersion                 int             `json:"-"`
-	Cwd                         string          `json:"cwd,omitempty"`
-	GitBranch                   string          `json:"git_branch,omitempty"`
-	ProjectAssigned             bool            `json:"project_assigned,omitempty"`
-	SourceSessionID             string          `json:"source_session_id,omitempty"`
-	SourceVersion               string          `json:"source_version,omitempty"`
-	TranscriptFidelity          string          `json:"transcript_fidelity,omitempty"`
-	ParserMalformedLines        int             `json:"parser_malformed_lines,omitzero"`
-	IsTruncated                 bool            `json:"is_truncated,omitzero"`
+	QualitySignals      *QualitySignals `json:"quality_signals,omitempty"`
+	HasToolCalls        bool            `json:"-"`
+	HasContextData      bool            `json:"-"`
+	SecretLeakCount     int             `json:"secret_leak_count"`
+	SecretsRulesVersion string          `json:"-"`
+
+	// Duplicate-group indicators (derived from duplicate_group_members;
+	// zero values mean the session is not a duplicate-group member and
+	// are omitted from the JSON transport).
+	DuplicateRole        string `json:"duplicate_role,omitempty"`
+	DuplicateCanonicalID string `json:"duplicate_canonical_id,omitempty"`
+	DuplicateMemberCount int    `json:"duplicate_member_count,omitzero"`
+	// DuplicateGroupKey is the internal group hash; pushed to mirrors but
+	// never serialized to API consumers.
+	DuplicateGroupKey           string `json:"-"`
+	QualitySignalVersion        int    `json:"-"`
+	ShortPromptCount            int    `json:"-"`
+	UnstructuredStart           bool   `json:"-"`
+	MissingSuccessCriteriaCount int    `json:"-"`
+	MissingVerificationCount    int    `json:"-"`
+	DuplicatePromptCount        int    `json:"-"`
+	NoCodeContextCount          int    `json:"-"`
+	RunawayToolLoopCount        int    `json:"-"`
+	DataVersion                 int    `json:"-"`
+	Cwd                         string `json:"cwd,omitempty"`
+	GitBranch                   string `json:"git_branch,omitempty"`
+	ProjectAssigned             bool   `json:"project_assigned,omitempty"`
+	SourceSessionID             string `json:"source_session_id,omitempty"`
+	SourceVersion               string `json:"source_version,omitempty"`
+	TranscriptFidelity          string `json:"transcript_fidelity,omitempty"`
+	ParserMalformedLines        int    `json:"parser_malformed_lines,omitzero"`
+	IsTruncated                 bool   `json:"is_truncated,omitzero"`
 
 	DeletedAt         *string `json:"deleted_at,omitempty"`
 	DeletionCause     *string `json:"-"`
@@ -654,26 +664,28 @@ type SessionPage struct {
 }
 
 type SidebarSessionIndexRow struct {
-	ID                 string  `json:"id"`
-	ParentSessionID    *string `json:"parent_session_id,omitempty"`
-	RelationshipType   string  `json:"relationship_type,omitempty"`
-	Project            string  `json:"project"`
-	ProjectAssigned    bool    `json:"project_assigned,omitempty"`
-	Machine            string  `json:"machine"`
-	Agent              string  `json:"agent"`
-	AgentLabel         string  `json:"agent_label,omitempty"`
-	Entrypoint         string  `json:"entrypoint,omitempty"`
-	SessionKind        string  `json:"session_kind,omitempty"`
-	DisplayName        *string `json:"display_name,omitempty"`
-	StartedAt          *string `json:"started_at"`
-	EndedAt            *string `json:"ended_at"`
-	CreatedAt          string  `json:"created_at"`
-	TerminationStatus  *string `json:"termination_status,omitempty"`
-	MessageCount       int     `json:"message_count"`
-	UserMessageCount   int     `json:"user_message_count"`
-	TranscriptRevision *string `json:"transcript_revision,omitempty"`
-	IsAutomated        bool    `json:"is_automated"`
-	IsTeammate         bool    `json:"is_teammate"`
+	ID                   string  `json:"id"`
+	ParentSessionID      *string `json:"parent_session_id,omitempty"`
+	RelationshipType     string  `json:"relationship_type,omitempty"`
+	Project              string  `json:"project"`
+	Machine              string  `json:"machine"`
+	Agent                string  `json:"agent"`
+	AgentLabel           string  `json:"agent_label,omitempty"`
+	Entrypoint           string  `json:"entrypoint,omitempty"`
+	SessionKind          string  `json:"session_kind,omitempty"`
+	DisplayName          *string `json:"display_name,omitempty"`
+	StartedAt            *string `json:"started_at"`
+	EndedAt              *string `json:"ended_at"`
+	CreatedAt            string  `json:"created_at"`
+	TerminationStatus    *string `json:"termination_status,omitempty"`
+	MessageCount         int     `json:"message_count"`
+	UserMessageCount     int     `json:"user_message_count"`
+	TranscriptRevision   *string `json:"transcript_revision,omitempty"`
+	IsAutomated          bool    `json:"is_automated"`
+	IsTeammate           bool    `json:"is_teammate"`
+	ProjectAssigned      bool    `json:"project_assigned,omitempty"`
+	DuplicateRole        string  `json:"duplicate_role,omitempty"`
+	DuplicateMemberCount int     `json:"duplicate_member_count,omitzero"`
 }
 
 type SidebarSessionIndex struct {
@@ -770,6 +782,7 @@ func (db *DB) ListSessions(
 			NextSessionCursor(&last, rs, total, f),
 		)
 	}
+	db.decorateSessionsWithDuplicateRoles(page.Sessions)
 
 	return page, nil
 }
@@ -1138,6 +1151,11 @@ func (db *DB) getSidebarSessionIndexPage(
 			fmt.Errorf("iterating sidebar tree page: %w", err)
 	}
 
+	// Duplicate indicators ride on the index rows so the sidebar can badge
+	// skinny rows without waiting for hydration. Membership lookup reuses
+	// the same in-query decoration as the list loaders.
+	db.decorateSidebarIndexWithDuplicateRoles(index.Sessions)
+
 	return index, nil
 }
 
@@ -1159,7 +1177,9 @@ func (db *DB) GetSession(
 	if err != nil {
 		return nil, fmt.Errorf("getting session %s: %w", id, err)
 	}
-	return &s, nil
+	decorated := []Session{s}
+	db.decorateSessionsWithDuplicateRoles(decorated)
+	return &decorated[0], nil
 }
 
 // GetSessionFull returns a single session by ID with all file metadata.
@@ -1178,10 +1198,15 @@ func (db *DB) GetSessionFull(
 	if s.DisplayName == nil {
 		s.DisplayName = s.SessionName
 	}
+	decorated := []Session{*s}
+	db.decorateSessionsWithDuplicateRoles(decorated)
+	// decorateSessionsWithDuplicateRoles mutates slice elements, and the
+	// single-element literal above is a copy; write the decorated fields
+	// back so full-session callers actually see them.
+	*s = decorated[0]
 	return s, nil
 }
 
-// GetArtifactExportSession returns raw user- and agent-owned session names so
 // canonical manifests do not publish session_name as a user display_name.
 func (db *DB) GetArtifactExportSession(
 	ctx context.Context, id string,
@@ -5932,7 +5957,11 @@ func (db *DB) ListSessionsModifiedBetween(
 		}
 		sessions = append(sessions, s)
 	}
-	return sessions, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating sessions: %w", err)
+	}
+	db.decorateSessionsWithDuplicateRoles(sessions)
+	return sessions, nil
 }
 
 // ListSessionsForMirrorWindow returns sessions whose sync_marker lies in
@@ -6041,7 +6070,11 @@ func (db *DB) ListSessionsForMirrorWindow(
 		}
 		sessions = append(sessions, s)
 	}
-	return sessions, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating sessions: %w", err)
+	}
+	db.decorateSessionsWithDuplicateRoles(sessions)
+	return sessions, nil
 }
 
 // CountSessionsForMirrorScope returns the number of sessions in the given

@@ -85,6 +85,8 @@ type rebuildOperations struct {
 	reopen                            func(*db.DB) error
 	listActiveWorktreeMappingMachines func(context.Context, *db.DB) ([]string, error)
 	applyWorktreeMappings             func(context.Context, *db.DB, string) (db.ApplyWorktreeProjectMappingsResult, error)
+	applyAgentRemapRules              func(context.Context, *db.DB) (db.AgentRemapPreview, error)
+	rebuildDuplicateGroups            func(context.Context, *db.DB) (db.DuplicateGroupsResult, error)
 }
 
 var productionRebuildOperations = rebuildOperations{
@@ -102,6 +104,16 @@ var productionRebuildOperations = rebuildOperations{
 		ctx context.Context, database *db.DB, machine string,
 	) (db.ApplyWorktreeProjectMappingsResult, error) {
 		return database.ApplyWorktreeProjectMappingsFromSync(ctx, machine)
+	},
+	applyAgentRemapRules: func(
+		ctx context.Context, database *db.DB,
+	) (db.AgentRemapPreview, error) {
+		return database.ApplyAgentRemapRulesFromSync(ctx)
+	},
+	rebuildDuplicateGroups: func(
+		ctx context.Context, database *db.DB,
+	) (db.DuplicateGroupsResult, error) {
+		return database.RebuildDuplicateGroups(ctx)
 	},
 }
 
@@ -122,6 +134,14 @@ func (ops rebuildOperations) withDefaults() rebuildOperations {
 	if ops.applyWorktreeMappings == nil {
 		ops.applyWorktreeMappings =
 			productionRebuildOperations.applyWorktreeMappings
+	}
+	if ops.applyAgentRemapRules == nil {
+		ops.applyAgentRemapRules =
+			productionRebuildOperations.applyAgentRemapRules
+	}
+	if ops.rebuildDuplicateGroups == nil {
+		ops.rebuildDuplicateGroups =
+			productionRebuildOperations.rebuildDuplicateGroups
 	}
 	return ops
 }

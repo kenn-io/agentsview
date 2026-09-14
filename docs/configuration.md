@@ -1285,6 +1285,52 @@ from a project's observed session folders:
 Mappings only mutate the session's `project` field; the rest of the session
 record is preserved through the bulk-resync rebuild-and-copy path.
 
+### Agent Remap Rules
+
+Some agents cannot be told apart at parse time. When a client migrates its
+sessions into another agent's store — Augure Desktop v2 into the shared Goose
+store, or early Augure CLI releases into the stock Codex store — the archived
+sessions carry the hosting agent's name. On the Data page's **Rules** view,
+**agent remap rules** reclassify such sessions by pattern:
+
+- A rule reads: sessions whose agent is **source agent**, whose message models
+  match the optional **model pattern** (a GLOB where `|` separates
+  alternatives, e.g. `ossington-*|rosedale-*|tofino-*`), and whose session ID
+  starts with the optional **ID prefix**, are relabeled **target agent**.
+- Rules apply to new sessions as they sync, to already-imported sessions via
+  the **Preview remap → Apply remap** flow, and are re-applied automatically
+  after a full resync.
+- The parser is never involved: only the session's `agent` field changes, and
+  session IDs keep their original prefix (a remapped `goose:20260908_2` keeps
+  its ID). Rewritten sessions propagate to PostgreSQL and DuckDB mirrors
+  normally, and usage rollups are reclassified.
+- Deleting a rule does not revert past applies; edit a rule's target back to
+  the original agent and apply again to revert.
+
+Example: `goose` + model pattern `ossington-*|rosedale-*|tofino-*` →
+`augure-desktop`, and `codex` + the same pattern → `augure`, recover Augure
+sessions that other agents' stores host.
+
+### Duplicate Sessions
+
+When a client migrates its sessions to a new store location, the old store
+usually keeps its copies, so the same interaction can appear under two agents.
+AgentsView detects these without touching either copy: sessions that share a
+machine, start second, and normalized opening prompt are grouped, and the copy
+with the most messages is the group's **canonical** entry. Detection runs
+automatically after each sync, after a full resync, and from the **Duplicate
+sessions** card on the Data page's Rules view (**Recheck duplicates**).
+
+Nothing is deleted or hidden. The sidebar shows a copy badge (`⧉2`) on grouped
+sessions, the session detail view shows a banner linking to the canonical
+copy, and usage totals count each group once: a duplicate whose canonical copy
+carries usage contributes nothing extra to daily, top-session, and billed-count
+totals, while a canonical without usage keeps its duplicate's usage counted
+(because migrations often copy transcripts but not usage). The same one-count
+rule applies to PostgreSQL and DuckDB mirrors. Per-session usage and
+matching-session counts intentionally ignore the grouping so you can always
+inspect each copy on its own.
+
 ## Automated Session Detection
 
 AgentsView classifies a session as "automated" when it has one or fewer real

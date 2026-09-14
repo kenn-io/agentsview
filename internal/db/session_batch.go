@@ -214,7 +214,7 @@ func (db *DB) WriteSessionBatchContext(
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("committing batch tx: %w", err)
 	}
-	db.notifyUsageSessions(writtenUsageIDs)
+	db.notifyUsageSessionsWithDuplicates(writtenUsageIDs)
 	pendingRecallRevocations.flush()
 	return result, nil
 }
@@ -301,7 +301,7 @@ func (db *DB) WriteSessionBatchAtomic(
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("committing batch tx: %w", err)
 	}
-	db.notifyUsageSessions(writtenUsageIDs)
+	db.notifyUsageSessionsWithDuplicates(writtenUsageIDs)
 	pendingRecallRevocations.flush()
 	return result, nil
 }

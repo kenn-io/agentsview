@@ -18,6 +18,7 @@ func (s *Server) registerSettingsRoutes() {
 
 	s.get(group, "", "Get settings", s.humaGetSettings)
 	s.put(group, "", "Update settings", s.humaUpdateSettings)
+
 	s.get(group, "/worktree-mappings", "List worktree mappings", s.humaListWorktreeMappings)
 	s.post(group, "/worktree-mappings", "Create worktree mapping", s.humaCreateWorktreeMapping)
 	s.put(group, "/worktree-mappings/{id}", "Update worktree mapping", s.humaUpdateWorktreeMapping)
@@ -27,6 +28,21 @@ func (s *Server) registerSettingsRoutes() {
 		"Preview worktree project reclassification", s.humaPreviewWorktreeReclassification)
 	s.post(group, "/worktree-mappings/reclassify",
 		"Apply worktree project reclassification", s.humaReclassifyWorktreeProject)
+
+	s.get(group, "/agent-remap-rules", "List agent remap rules", s.humaListAgentRemapRules)
+	s.post(group, "/agent-remap-rules", "Create agent remap rule", s.humaCreateAgentRemapRule)
+	s.put(group, "/agent-remap-rules/{id}", "Update agent remap rule", s.humaUpdateAgentRemapRule)
+	s.deleteRoute(group, "/agent-remap-rules/{id}", "Delete agent remap rule", s.humaDeleteAgentRemapRule)
+	s.post(group, "/agent-remap-rules/preview",
+		"Preview agent remap rules", s.humaPreviewAgentRemapRules)
+	s.post(group, "/agent-remap-rules/apply",
+		"Apply agent remap rules", s.humaApplyAgentRemapRules)
+
+	s.get(group, "/duplicate-groups", "List duplicate session groups",
+		s.humaListDuplicateGroups)
+	s.post(group, "/duplicate-groups/rebuild", "Rebuild duplicate session groups",
+		s.humaRebuildDuplicateGroups)
+
 	s.put(group, "/session-project-assignments/{session_id}",
 		"Assign one session to a project", s.humaAssignSessionProject)
 	s.deleteRoute(group, "/session-project-assignments/{session_id}",

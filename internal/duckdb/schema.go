@@ -16,8 +16,9 @@ import (
 // must be rebuilt with 'agentsview duckdb push --full'. v12 adds the 1h
 // cache-write rate columns on top of v11's raw GenAI pricing document. v13
 // adds row-level provider identity to messages and usage events. v14 adds
-// reasoning effort to messages. v15 adds explicit session-project assignment state.
-const SchemaVersion = 15
+// reasoning effort to messages. v15 adds explicit session-project assignment
+// state. v16 adds the duplicate_group_members mirror.
+const SchemaVersion = 16
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -760,6 +761,30 @@ var mirrorTables = []tableSpec{
 			"CREATE INDEX IF NOT EXISTS idx_pinned_session ON pinned_messages(session_id)",
 			"CREATE INDEX IF NOT EXISTS idx_pinned_message ON pinned_messages(message_id)",
 			"CREATE INDEX IF NOT EXISTS idx_pinned_created ON pinned_messages(created_at)",
+		},
+	},
+	{
+		// Mirror of the SQLite duplicate_group_members derived table; rows
+		// ride on the session push (see pushDuplicateGroupMember in push.go).
+		name: "duplicate_group_members",
+		create: `CREATE TABLE IF NOT EXISTS duplicate_group_members (
+			session_id TEXT PRIMARY KEY,
+			group_key TEXT NOT NULL,
+			role TEXT NOT NULL,
+			canonical_id TEXT NOT NULL DEFAULT '',
+			member_count INTEGER NOT NULL DEFAULT 0,
+			computed_at TIMESTAMP
+		)`,
+		columns: []columnSpec{
+			{"session_id", "session_id TEXT NOT NULL"},
+			{"group_key", "group_key TEXT NOT NULL DEFAULT ''"},
+			{"role", "role TEXT NOT NULL DEFAULT ''"},
+			{"canonical_id", "canonical_id TEXT NOT NULL DEFAULT ''"},
+			{"member_count", "member_count INTEGER NOT NULL DEFAULT 0"},
+			{"computed_at", "computed_at TIMESTAMP"},
+		},
+		indexes: []string{
+			"CREATE INDEX IF NOT EXISTS idx_dgm_group ON duplicate_group_members(group_key)",
 		},
 	},
 }
