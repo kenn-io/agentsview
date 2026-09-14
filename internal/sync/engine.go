@@ -6298,7 +6298,7 @@ func isOpenCodeFormatAgent(agent parser.AgentType) bool {
 // no index file and has no S3 path convention.
 func isCodexFormatAgent(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentCodex, parser.AgentTraeX:
+	case parser.AgentCodex, parser.AgentTraeX, parser.AgentAugure:
 		return true
 	default:
 		return false
@@ -6682,7 +6682,7 @@ func reconciliationReplacementIdentity(
 		return ""
 	}
 	switch agent {
-	case parser.AgentCodex, parser.AgentTraeX:
+	case parser.AgentCodex, parser.AgentTraeX, parser.AgentAugure:
 		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(storedPath))
 		if uuid == "" {
 			return ""
@@ -14296,7 +14296,7 @@ func (e *Engine) providerFingerprintHashMatchesDB(
 // members instead of the whole archive. Providers whose fingerprint stat is
 // per-source stay stat-gated: a stat mismatch there means real change.
 func providerFingerprintHashEstablishesFreshness(agent parser.AgentType) bool {
-	return agent == parser.AgentHermes
+	return agent == parser.AgentHermes || agent == parser.AgentAugureDesktop
 }
 
 // providerSourceHashFreshDespiteStat is the stat-mismatch arm of
@@ -20662,7 +20662,8 @@ func applyProviderFingerprintFileInfo(
 	fingerprint parser.SourceFingerprint,
 	results []parser.ParseResultOutcome,
 ) {
-	if agent != parser.AgentDevin && agent != parser.AgentHermes {
+	if agent != parser.AgentDevin && agent != parser.AgentHermes &&
+		agent != parser.AgentAugureDesktop {
 		return
 	}
 	for i := range results {

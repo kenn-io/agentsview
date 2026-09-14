@@ -43,6 +43,11 @@ func codexProviderSpecForAgent(agent AgentType) codexProviderSpec {
 			agent:   AgentTraeX,
 			relabel: relabelCodexResultAsTraeX,
 		}
+	case AgentAugure:
+		return codexProviderSpec{
+			agent:   AgentAugure,
+			relabel: relabelCodexResultAsAugure,
+		}
 	default:
 		return codexProviderSpec{agent: AgentCodex}
 	}
@@ -70,6 +75,17 @@ func newTraeXProviderFactory(def AgentDef) ProviderFactory {
 	return &codexProviderFactory{
 		def:             cloneAgentDef(def),
 		spec:            codexProviderSpecForAgent(AgentTraeX),
+		cursorCache:     newProductionCodexCursorCache(),
+		parentTurnCache: newCodexProductionParentTurnCache(),
+	}
+}
+
+// newAugureProviderFactory serves Augure CLI's rollout archive with the Codex
+// provider, relabeling every parsed session onto the augure: ID prefix.
+func newAugureProviderFactory(def AgentDef) ProviderFactory {
+	return &codexProviderFactory{
+		def:             cloneAgentDef(def),
+		spec:            codexProviderSpecForAgent(AgentAugure),
 		cursorCache:     newProductionCodexCursorCache(),
 		parentTurnCache: newCodexProductionParentTurnCache(),
 	}

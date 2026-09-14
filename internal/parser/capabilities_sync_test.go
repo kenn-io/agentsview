@@ -28,6 +28,12 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 			FingerprintHashRequiredForFreshness: true,
 			SkipCacheFreshWithoutStoredRow:      true,
 		},
+		// Augure shares the Codex provider, so it must share its semantics.
+		AgentAugure: {
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
+			SkipCacheFreshWithoutStoredRow:      true,
+		},
 		AgentDevin: {
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
@@ -41,6 +47,11 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 			FingerprintHashRequiredForFreshness: true,
 		},
 		AgentHermes: {
+			FingerprintHashRequiredForFreshness: true,
+		},
+		// Augure Desktop shares the Hermes provider, so it must share its
+		// semantics.
+		AgentAugureDesktop: {
 			FingerprintHashRequiredForFreshness: true,
 		},
 		AgentGemini: {

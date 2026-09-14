@@ -206,7 +206,10 @@ func NormalizeToolCategory(rawName string) string {
 	case "browser_navigate", "browser_snapshot", "browser_click",
 		"browser_type", "browser_scroll", "browser_press",
 		"browser_back", "browser_close", "browser_vision",
-		"browser_console", "browser_get_images":
+		"browser_console", "browser_get_images",
+		// Augure Desktop v3's browser automation step executes commands
+		// against a browser session; it is not a shell.
+		"browser_exec":
 		return "Tool"
 	case "vision_analyze":
 		return "Read"
