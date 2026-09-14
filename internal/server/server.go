@@ -81,6 +81,7 @@ type Server struct {
 	activeDisabledAgents  []parser.AgentType
 	db                    db.Store
 	activityReports       *activityReportCache
+	assetCache            *assetCache
 	activityReportFlights *activityReportBuildGroup
 	engine                *sync.Engine
 	onDemandEngine        *sync.Engine
@@ -258,6 +259,7 @@ func New(
 	if s.version.DataVersion == 0 {
 		s.version.DataVersion = db.CurrentDataVersion()
 	}
+	s.assetCache = newAssetCache()
 	s.routes()
 	return s
 }
@@ -1282,6 +1284,22 @@ func (s *Server) Serve(ln net.Listener) error {
 		cacheCtx, stopCache := context.WithCancel(cacheCtx)
 		go cache.Run(cacheCtx)
 		defer stopCache()
+	}
+	if cache := s.assetCache; cache != nil {
+		cacheCtx := context.Background()
+		if s.baseCtx != nil {
+			cacheCtx = s.baseCtx
+		}
+		cacheCtx, stopCache := context.WithCancel(cacheCtx)
+		cacheDone := make(chan struct{})
+		go func() {
+			cache.Run(cacheCtx)
+			close(cacheDone)
+		}()
+		defer func() {
+			stopCache()
+			<-cacheDone
+		}()
 	}
 	log.Printf("Starting server at http://%s", addr)
 	return srv.Serve(ln)

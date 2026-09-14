@@ -37,7 +37,13 @@ func (s *Server) humaGetAsset(
 		return nil, apiError(http.StatusForbidden, "unsupported asset type")
 	}
 	filePath := filepath.Join(s.cfg.DataDir, "assets", filename)
-	data, err := os.ReadFile(filePath)
+	var data []byte
+	var err error
+	if s.assetCache == nil {
+		data, err = os.ReadFile(filePath)
+	} else {
+		data, err = s.assetCache.read(filename, filePath, contentType)
+	}
 	if err != nil {
 		return nil, apiError(http.StatusNotFound, "asset not found")
 	}

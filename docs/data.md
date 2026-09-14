@@ -142,4 +142,11 @@ Set `tool_result_images = "offload"` to move supported inline tool-result PNG, J
 
 If an asset write fails, ingestion and copied-session resync keep the original inline content. Retry retained inline payloads with `agentsview db migrate --images` after restoring access to the asset directory. Complete unreferenced objects from a failed database transaction remain available for reuse; the store does not automatically remove them. Back up the asset directory with the archive and copy both to another local serving host.
 
+The daemon may retain recently served canonical image bytes in a bounded
+in-process cache for up to seven days from generation. Entries can leave sooner
+under the 64-entry or 64 MiB limits, and process exit clears them. The cache is
+separate from the durable `{dataDir}/assets` store and from the browser's own
+cache policy. Evicting a cache entry never changes the durable asset or its
+backup.
+
 PostgreSQL and CockroachDB preserve the placeholder and reference text but cannot resolve the local asset. DuckDB, artifact exports, and the normalized Markdown server session export at `/api/v1/sessions/{id}/md` carry the stored content. The HTML export keeps its existing contract. The raw `agentsview session export` command streams provider source bytes, so its output retains the original inline payloads.
