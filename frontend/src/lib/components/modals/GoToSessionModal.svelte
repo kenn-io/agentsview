@@ -145,7 +145,6 @@
 >
   <div class="go-to-session-form">
     <div class="go-to-session-input" use:protectFindInput={composition}>
-      <label for="go-to-session-input">{m.go_to_session_input_label()}</label>
       <TextInput
         class="go-to-session-control"
         id="go-to-session-input"
@@ -176,12 +175,6 @@
     gap: 10px;
   }
 
-  .go-to-session-input {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-  }
-
   :global(.go-to-session-control.kit-text-input:focus-within),
   :global(.go-to-session-control.kit-text-input:has(.kit-text-input__control:focus-visible)) {
     outline: none;
@@ -189,12 +182,6 @@
 
   :global(.go-to-session-control .kit-text-input__control:focus-visible) {
     outline: none;
-  }
-
-  label {
-    color: var(--text-primary);
-    font-size: 12px;
-    font-weight: var(--font-weight-medium, 500);
   }
 
   .go-to-session-error {
