@@ -124,6 +124,12 @@ SVG payloads stay inline. A separate serving host needs the matching
 otherwise follows the same transaction, revision, and publication sequence as
 `db strip --images`. Back up `{dataDir}/assets` together with the archive.
 
+The daemon may retain recently served canonical image bytes in a bounded
+in-process cache for up to seven days from generation. Entries can leave sooner
+when the cache reaches its entry or byte limit, and process exit clears them.
+`{dataDir}/assets` remains the durable image store and backup target. Cache
+eviction never changes it, and the browser's own cache policy is separate.
+
 ## Backend Parity
 
 Reporting project-label keys are not repository identities. The reporting
