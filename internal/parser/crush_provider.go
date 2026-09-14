@@ -27,10 +27,10 @@ type crushChildRelationshipsCacheEntry struct {
 	children map[string][]string
 }
 
-var (
-	crushChildRelationshipsCacheMu sync.Mutex
-	crushChildRelationshipsCache   = map[string]*crushChildRelationshipsCacheEntry{}
-)
+type crushChildRelationshipsCache struct {
+	mu      sync.Mutex
+	entries map[string]*crushChildRelationshipsCacheEntry
+}
 
 type crushProviderFactory struct {
 	def     AgentDef
@@ -102,6 +102,7 @@ type crushProvider struct {
 	originalRoots   []string
 	registryMapping map[string][]string
 	projectMapping  map[string]string
+	childCache      crushChildRelationshipsCache
 	// configuredRoot maps each expanded data directory back onto the
 	// configured registry, crush.db, or data-directory root that produced
 	// it, so source-machine mapping stays bound to the user's spelling.
@@ -253,10 +254,7 @@ func (p *crushProvider) reconciliationContainer(requested string) (string, bool)
 }
 
 func (p *crushProvider) Discover(ctx context.Context) ([]SourceRef, error) {
-	watermarks, err := p.captureDiscoveryWatermarks(ctx)
-	if err != nil {
-		return nil, err
-	}
+	watermarks := p.captureDiscoveryWatermarks(ctx)
 	sources, err := p.dbBackedProvider.Discover(ctx)
 	if err != nil {
 		return nil, err
@@ -268,11 +266,8 @@ func (p *crushProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 func (p *crushProvider) DiscoverEach(
 	ctx context.Context, yield func(SourceRef) error,
 ) error {
-	watermarks, err := p.captureDiscoveryWatermarks(ctx)
-	if err != nil {
-		return err
-	}
-	err = p.dbBackedProvider.DiscoverEach(ctx, func(source SourceRef) error {
+	watermarks := p.captureDiscoveryWatermarks(ctx)
+	err := p.dbBackedProvider.DiscoverEach(ctx, func(source SourceRef) error {
 		return yield(p.withConfiguredRoot(source))
 	})
 	if err != nil {
@@ -288,7 +283,7 @@ func (p *crushProvider) DiscoverEach(
 // is skipped so healthy roots can still be discovered.
 func (p *crushProvider) captureDiscoveryWatermarks(
 	ctx context.Context,
-) ([]sqliteRowObserverWatermark, error) {
+) []sqliteRowObserverWatermark {
 	watermarks := make([]sqliteRowObserverWatermark, 0, len(p.sources.roots))
 	for _, root := range p.sources.roots {
 		dbPath := p.spec.findDB(root)
@@ -304,12 +299,13 @@ func (p *crushProvider) captureDiscoveryWatermarks(
 			state:  state,
 		})
 	}
-	return watermarks, nil
+	return watermarks
 }
 
 // SourcesForChangedPath returns only Crush sessions with newly inserted
-// session or message rows. Metadata-only updates and row deletes are
-// intentionally handled by the provider's scheduled reconciliation pass.
+// session or message rows. Scheduled reconciliation refreshes metadata-only
+// updates. It deliberately ignores deleted rows so archived sessions remain
+// until the user deletes them in AgentsView.
 func (p *crushProvider) SourcesForChangedPath(
 	ctx context.Context, req ChangedPathRequest,
 ) ([]SourceRef, error) {
@@ -389,6 +385,7 @@ func (p *crushProvider) Fingerprint(
 	}
 	hash, found, err := crushSessionFingerprint(
 		ctx, src.DBPath, src.SessionID, p.Config.StableSourceSnapshots,
+		&p.childCache,
 	)
 	if err != nil {
 		return SourceFingerprint{}, err
@@ -531,6 +528,7 @@ func crushDBPath(dir string) string {
 // though the store's second-resolution timestamps did not move.
 func crushSessionFingerprint(
 	ctx context.Context, dbPath, sessionID string, stableSnapshot bool,
+	childCache *crushChildRelationshipsCache,
 ) (string, bool, error) {
 	db, err := openCrushDB(dbPath, stableSnapshot)
 	if err != nil {
@@ -608,7 +606,7 @@ func crushSessionFingerprint(
 	if err := messageRows.Err(); err != nil {
 		return "", false, err
 	}
-	children, err := crushChildSessionIDsCached(ctx, db, dbPath)
+	children, err := crushChildSessionIDsCached(ctx, db, dbPath, childCache)
 	if err != nil {
 		return "", false, fmt.Errorf("fingerprinting crush child sessions: %w", err)
 	}
@@ -622,8 +620,9 @@ func crushSessionFingerprint(
 // reuses the grouped result until SQLiteContainerState proves the DB changed.
 func crushChildSessionIDsCached(
 	ctx context.Context, db *sql.DB, dbPath string,
+	cache *crushChildRelationshipsCache,
 ) (map[string][]string, error) {
-	entry := crushChildRelationshipsEntry(dbPath)
+	entry := cache.entry(dbPath)
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 
@@ -650,14 +649,19 @@ func crushChildSessionIDsCached(
 	return children, nil
 }
 
-func crushChildRelationshipsEntry(dbPath string) *crushChildRelationshipsCacheEntry {
-	crushChildRelationshipsCacheMu.Lock()
-	defer crushChildRelationshipsCacheMu.Unlock()
+func (c *crushChildRelationshipsCache) entry(
+	dbPath string,
+) *crushChildRelationshipsCacheEntry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	key := filepath.Clean(dbPath)
-	entry := crushChildRelationshipsCache[key]
+	if c.entries == nil {
+		c.entries = make(map[string]*crushChildRelationshipsCacheEntry)
+	}
+	entry := c.entries[key]
 	if entry == nil {
 		entry = &crushChildRelationshipsCacheEntry{}
-		crushChildRelationshipsCache[key] = entry
+		c.entries[key] = entry
 	}
 	return entry
 }
