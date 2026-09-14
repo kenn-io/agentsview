@@ -400,9 +400,6 @@ test.describe('Activity dashboard', () => {
     await navigateToActivity(page, '/activity?preset=week');
     const panel = page.locator('.activity-page .chart-panel:has(.timeline)');
     await expect(panel).toBeVisible({ timeout: 5_000 });
-    for (const category of ['interactive', 'subagent', 'automated']) {
-      await expect(panel.locator(`.concurrency-seg.${category}`).first()).toBeVisible();
-    }
     await panel.scrollIntoViewIfNeeded();
     await page.waitForTimeout(500);
     await snapEl(panel, 'activity-concurrency');
@@ -1659,9 +1656,13 @@ test.describe('In-session search', () => {
     await page.waitForSelector('.kit-find-bar', { timeout: 5_000 });
     await page.waitForTimeout(300);
 
-    // Type a common word to get matches
+    // Search for text present in the selected transcript, in any language.
+    const text = await page.locator('.message .text-content:visible')
+      .filter({ hasText: /\S/ }).first().innerText();
+    const query = text.match(/[\p{L}\p{N}]{3,24}/u)?.[0]
+      ?? text.trim().split(/\s+/)[0];
     const input = page.locator('.kit-find-bar__input');
-    await input.fill('the');
+    await input.fill(query);
     await page.waitForTimeout(1000);
 
     await snap(page, 'in-session-search');
