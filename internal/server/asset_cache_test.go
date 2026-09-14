@@ -474,11 +474,8 @@ func TestImageRenderCacheConcurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, len(files)*8)
 	for _, file := range files {
-		file := file
 		for range 8 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				for range 50 {
 					got, err := cache.read(file.filename, file.path, "image/png")
 					if err != nil {
@@ -490,7 +487,7 @@ func TestImageRenderCacheConcurrent(t *testing.T) {
 						return
 					}
 				}
-			}()
+			})
 		}
 	}
 	wg.Wait()
