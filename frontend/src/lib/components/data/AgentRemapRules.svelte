@@ -66,11 +66,13 @@
       ...option,
       // Session IDs are namespaced as "<agent>:..."; offer each known
       // agent's prefix with the colon included so selecting a row writes
-      // the exact value the matcher expects. A prefix's popularity is not
+      // the exact value the matcher expects. Display the raw slug (not
+      // the capitalized agent label) so the row text matches the actual
+      // prefix case, and zero the count — a prefix's popularity is not
       // the agent's session count.
       name: `${option.name}:`,
-      label: `${option.label}:`,
-      displayLabel: `${option.displayLabel ?? option.label}:`,
+      label: `${option.name}:`,
+      displayLabel: `${option.name}:`,
       count: 0,
     })),
   );
