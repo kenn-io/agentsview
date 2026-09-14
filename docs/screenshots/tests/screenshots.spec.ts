@@ -361,9 +361,15 @@ test.describe('Activity dashboard', () => {
     // Anchor the range to the fixture, so a release run never captures an empty today.
     const response = await page.request.get('/api/v1/sessions?limit=1');
     const latest = (await response.json()).sessions[0];
+    const timestamp = new Date(
+      latest.ended_at || latest.started_at || latest.created_at
+    );
+    expect(
+      timestamp.getTime(), 'latest session must have a valid activity date'
+    ).not.toBeNaN();
     const date = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'America/Chicago',
-    }).format(new Date(latest.started_at));
+    }).format(timestamp);
     await page.goto(`${path}${path.includes('?') ? '&' : '?'}date=${date}`);
     await page.waitForSelector('.activity-page', { timeout: 10_000 });
     await expect(
