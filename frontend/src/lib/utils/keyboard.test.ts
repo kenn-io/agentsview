@@ -5,6 +5,7 @@ import { sessions } from "../stores/sessions.svelte.js";
 import { starred } from "../stores/starred.svelte.js";
 import { router } from "../stores/router.svelte.js";
 import { messages } from "../stores/messages.svelte.js";
+import { inSessionSearch } from "../stores/inSessionSearch.svelte.js";
 import { SessionsService } from "../api/generated/index";
 import { copyToClipboard } from "../utils/clipboard.js";
 import AppHeader from "../components/layout/AppHeader.svelte";
@@ -23,6 +24,17 @@ function fireKey(key: string, opts: Partial<KeyboardEventInit> = {}) {
     ...opts,
   });
   document.dispatchEvent(event);
+}
+
+function fireCancelableKey(key: string, opts: Partial<KeyboardEventInit> = {}) {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    bubbles: true,
+    cancelable: true,
+    ...opts,
+  });
+  document.dispatchEvent(event);
+  return event;
 }
 
 describe("registerShortcuts", () => {
@@ -889,5 +901,125 @@ describe("registerShortcuts", () => {
       expect(copyToClipboard).toHaveBeenCalledWith("claude --resume 'run:keyboard-session'");
     });
     messages.clear();
+  });
+});
+
+describe("go to session shortcut", () => {
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    ui.activeModal = null;
+    router.route = "quality";
+    inSessionSearch.close();
+    cleanup = registerShortcuts({ navigateMessage: vi.fn(), navigateUserPrompt: vi.fn() });
+  });
+
+  afterEach(() => {
+    cleanup();
+    inSessionSearch.close();
+    ui.activeModal = null;
+    router.route = "sessions";
+    document.body.innerHTML = "";
+    vi.restoreAllMocks();
+  });
+
+  it.each([{ ctrlKey: true }, { metaKey: true }])(
+    "opens the modal and prevents the browser default for an eligible shortcut %j",
+    (modifier) => {
+      const event = fireCancelableKey("g", modifier);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(ui.activeModal).toBe("goToSession");
+    },
+  );
+
+  it.each([
+    { shiftKey: true },
+    { altKey: true },
+    { isComposing: true },
+    { keyCode: 229 },
+  ])("leaves the browser default for a guarded event %j", (options) => {
+    const event = fireCancelableKey("g", { ctrlKey: true, ...options });
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(ui.activeModal).toBeNull();
+  });
+
+  it("leaves an already-consumed event alone", () => {
+    const event = new KeyboardEvent("keydown", {
+      key: "g",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    event.preventDefault();
+    document.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(ui.activeModal).toBeNull();
+  });
+
+  it("leaves an active modal in charge", () => {
+    ui.activeModal = "shortcuts";
+
+    const event = fireCancelableKey("g", { ctrlKey: true });
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(ui.activeModal).toBe("shortcuts");
+  });
+
+  it.each(["input", "textarea", "select"])(
+    "leaves Ctrl+G available to a focused %s",
+    (tag) => {
+      const input = document.createElement(tag);
+      document.body.appendChild(input);
+      input.focus();
+
+      const event = fireCancelableKey("g", { ctrlKey: true });
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(ui.activeModal).toBeNull();
+    },
+  );
+
+  it("leaves Ctrl+G available to a focused contenteditable", () => {
+    const editor = document.createElement("div");
+    Object.defineProperty(editor, "isContentEditable", { value: true });
+    document.body.appendChild(editor);
+    editor.tabIndex = 0;
+    editor.focus();
+
+    const event = fireCancelableKey("g", { ctrlKey: true });
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(ui.activeModal).toBeNull();
+  });
+
+  it("still opens from a focused button", () => {
+    const button = document.createElement("button");
+    document.body.appendChild(button);
+    button.focus();
+
+    const event = fireCancelableKey("g", { ctrlKey: true });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(ui.activeModal).toBe("goToSession");
+  });
+
+  it("keeps Cmd+G and Cmd+Shift+G on in-session find navigation", () => {
+    router.route = "sessions";
+    sessions.activeSessionId = "session-1";
+    inSessionSearch.isOpen = true;
+    const next = vi.spyOn(inSessionSearch, "next");
+    const prev = vi.spyOn(inSessionSearch, "prev");
+
+    const nextEvent = fireCancelableKey("g", { metaKey: true });
+    const prevEvent = fireCancelableKey("G", { metaKey: true, shiftKey: true });
+
+    expect(nextEvent.defaultPrevented).toBe(true);
+    expect(prevEvent.defaultPrevented).toBe(true);
+    expect(next).toHaveBeenCalledExactlyOnceWith();
+    expect(prev).toHaveBeenCalledExactlyOnceWith();
+    expect(ui.activeModal).toBeNull();
   });
 });
