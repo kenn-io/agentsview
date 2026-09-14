@@ -3,34 +3,30 @@ title: Session Intelligence
 description: Health scores, outcomes, and session-quality analytics in AgentsView
 ---
 
-AgentsView 0.23.0 adds a session-intelligence layer on top of the
-raw transcript archive. Instead of only showing message history,
-AgentsView now computes per-session health signals, outcome
-classifications, and aggregate health analytics so you can quickly
-spot sessions that went well, sessions that stalled out, and
-patterns that keep recurring across projects.
+Use session health scores to find stalled sessions, repeated tool failures, and
+patterns across projects. AgentsView reads the recorded transcript to estimate
+each session's outcome and show the evidence behind its score.
 
 !!! note
-    These signals are heuristics, not ground truth. They are meant to
-    help with triage and pattern-finding, not to replace your own
-    judgment about whether a session was actually successful.
+
+    These signals are heuristics, not ground truth. They are meant to help with
+    triage and pattern-finding, not to replace your own judgment about whether a
+    session was actually successful.
 
 ## Where It Appears
 
 Session intelligence shows up in four places:
 
-- **Session detail UI** — the session header now includes a health
-  grade badge. Click it to open the in-session signal panel.
-- **Analytics dashboard** — the dashboard includes a **Session
-  Health** section with score, outcome, tool-failure, compaction,
-  trend, agent, and project breakdowns.
+- **Session detail UI** — the session header includes a health grade badge.
+    Click it to open the in-session signal panel.
+- **Analytics dashboard** — the dashboard includes a **Session Health** section
+    with score, outcome, tool-failure, compaction, trend, agent, and project
+    breakdowns.
 - **Programmatic session surface** — `agentsview session get` and
-  `agentsview session list` expose health and outcome fields, plus
-  filters such as `--health-grade`, `--outcome`, and
-  `--min-tool-failures`.
-- **CLI health view** — `agentsview health` shows either a recent
-  session list with grade and outcome columns, or detailed signals
-  for a single session.
+    `agentsview session list` expose health and outcome fields, plus filters
+    such as `--health-grade`, `--outcome`, and `--min-tool-failures`.
+- **CLI health view** — `agentsview health` shows either a recent session list
+    with grade and outcome columns, or detailed signals for a single session.
 
 ## Health Score
 

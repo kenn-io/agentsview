@@ -1,7 +1,11 @@
 # agentsview
 
-Browse, search, and track costs across all your AI coding agents. One binary, no
-accounts, everything local.
+Browse, search, and track costs across your AI coding agents. Your session
+archive stays on your machine unless you choose a feature that shares it.
+
+This README and the [documentation](https://agentsview.io/docs/) follow `main`.
+Check the [changelog](https://agentsview.io/docs/changelog/) for released
+features.
 
 <p align="center">
   <img src="https://agentsview.io/assets/generated/screenshots/dashboard.png" alt="Analytics dashboard" width="720">
@@ -60,27 +64,19 @@ reports its URL and exits. `daemon stop` and `serve stop` both stop that
 writable server, including sync; `serve stop` also stops read-only mirror
 servers for the same data directory.
 
-For Devin CLI, point `DEVIN_DIR` or `agents.devin.dirs` at the local root that
-contains `cli/` — for example `~/Library/Application Support/devin` on macOS,
-`~/.local/share/devin` on Linux, or a redacted path like
-`.../Application Support/devin`. AgentsView reads session data under
-`<root>/cli/...` and intentionally ignores copied config or OAuth paths. Do not
-paste tokens, OAuth files, or other secrets into bug reports.
-
-Claude and Codex sources can also be configured as `s3://` roots, so a central
-AgentsView instance can read sessions that other machines push to S3-compatible
-object storage. Add those roots to `agents.claude.dirs` or `agents.codex.dirs`;
-AgentsView lists object metadata and only downloads changed sessions during
-sync. S3 change detection uses size, modified time, and available object
-fingerprints such as ETag, version ID, or checksums.
+For custom directories, additional agent homes, and supported S3 sources, see
+[Session discovery](https://agentsview.io/docs/configuration/#session-discovery).
+The same guide explains how to choose
+[what content to archive](https://agentsview.io/docs/configuration/#archive-content).
 
 The desktop app and ordinary session CLI commands share a detached local daemon
 and start one when needed. Dedicated diagnostics such as
 `db adopt-machine --list` and `doctor sync` read the archive without starting
-it. Commands that need fresh data or need to write, such as `sync`, `usage`,
-`token-use`, `pg push`, and `duckdb push`, auto-start the daemon when needed.
-The server remains running after these commands exit and also serves the web UI.
-For a one-shot sync with no background server, stop the daemon first and run
+it. Commands such as `sync`, `usage`, `token-use`, `pg push`, and `duckdb push`
+auto-start the daemon when needed. Daily usage reports read saved archive data;
+run `agentsview sync` first to include new source changes. The server remains
+running after these commands exit and also serves the web UI. For a one-shot
+sync with no background server, stop the daemon first and run
 `AGENTSVIEW_NO_DAEMON=1 agentsview sync`.
 
 Use `agentsview daemon start` when you want to start the writable SQLite daemon

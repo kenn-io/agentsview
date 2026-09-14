@@ -56,20 +56,25 @@ For local desktop-style MCP clients, use stdio:
 Restart or reload your MCP client after adding the server. Once connected, the
 client will see these tools:
 
-| Tool                   | Purpose                                                            |
-| ---------------------- | ------------------------------------------------------------------ |
-| `search_sessions`      | Full-text search across recorded sessions                          |
-| `list_sessions`        | List recent or filtered sessions                                   |
-| `get_session_overview` | Fetch metadata and a compact message preview                       |
-| `get_messages`         | Read paginated message bodies from one session                     |
-| `search_content`       | Substring, regex, semantic, or hybrid search over raw session text |
-| `get_usage_summary`    | Aggregate token and cost usage                                     |
+| Tool                   | Purpose                                                                  |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `search_sessions`      | Full-text search across recorded sessions                                |
+| `list_sessions`        | List recent or filtered sessions                                         |
+| `get_session_overview` | Fetch metadata and a compact message preview                             |
+| `get_messages`         | Read paginated message bodies from one session                           |
+| `search_content`       | Substring, regex, semantic, or hybrid search over raw session text       |
+| `get_usage_summary`    | Aggregate token and cost usage                                           |
+| `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
 
 `search_sessions` accepts optional `date_from` and `date_to` bounds in
 `YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates
 include sessions whose activity overlaps the requested days in UTC. Either bound
 can be omitted; omitting both preserves unrestricted date matching. Malformed
 dates and ranges where `date_from` is after `date_to` return an error.
+
+`search_sessions` and `search_content` exclude sessions active in the last ten
+minutes by default, including the current conversation. Set
+`include_active: true` when you need that recent work.
 
 When a vector search index is configured, prefer `search_content` with
 `mode: "hybrid"` or `mode: "semantic"` for questions about prior work,

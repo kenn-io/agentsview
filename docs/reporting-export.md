@@ -3,10 +3,10 @@ title: Reporting Export
 description: Canonical hourly activity and usage exports for reporting integrations
 ---
 
-`agentsview export hour`, `day`, and `digest` expose a versioned, canonical
-reporting contract from the local SQLite archive. The commands are intended for
-durable reporting integrations that need exact UTC-hour correction and
-content-derived change detection.
+Use `agentsview export hour`, `day`, and `digest` to build reports from the
+local SQLite archive. Each export identifies its UTC period and includes a
+content digest: a checksum that changes when the exported data changes. Your
+integration can use these digests to find corrections and replace saved hours.
 
 ## Commands
 
@@ -402,11 +402,12 @@ require that daemon to be running. It does not switch to PostgreSQL or DuckDB:
 the local archive is the canonical source for the device's reporting payload,
 dedup order, pricing view, and archive-scoped project keys.
 
-Costs are estimates computed from the pricing catalog visible to the read
-transaction. Reporting exports do not pin a closed hour to the catalog revision
-that was current when the hour closed, so a later catalog change can change cost
-and therefore the hour digest without changing token facts. Integrations should
-treat such a digest change as an ordinary source correction.
+Costs use reported charges when available and catalog estimates otherwise.
+Estimates use the pricing catalog visible when the export reads the archive. The
+export does not preserve the catalog revision from when an hour closed. A later
+pricing change can therefore change an hour's estimated cost and digest without
+changing token counts. Treat that change as an ordinary correction and replace
+the saved hour.
 
 When the archive has no stored model-pricing rows, the read-only reporting
 command applies the embedded fallback catalog and configured custom prices in
