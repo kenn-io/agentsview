@@ -431,11 +431,32 @@ func (s *Server) syncThenRunForPush(
 		return err
 	}
 	if s.localResyncRunner == nil || (!full && !local.NeedsResync()) {
+		currentArchive := !full && !local.NeedsResync()
 		stats, err := engine.SyncThenRun(ctx, full, nil, work)
-		if err == nil {
-			err = requireProcessingComplete(stats)
+		if err != nil || stats.ProcessingComplete() {
+			return err
 		}
-		return err
+		incomplete := requireProcessingComplete(stats)
+		if !currentArchive {
+			return incomplete
+		}
+		// A failed source must retain its retry acknowledgement, but it must
+		// not hold back unrelated rows already committed to a current archive.
+		// SyncThenRun deliberately skips work on incomplete processing. Copy
+		// the archive under its lock, then still report the ingestion failure.
+		pushErr := engine.RunExclusiveFlushed(func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if local.NeedsResync() {
+				return incomplete
+			}
+			return work(false)
+		})
+		if pushErr != nil {
+			return errors.Join(incomplete, pushErr)
+		}
+		return fmt.Errorf("archived sessions pushed; %w", incomplete)
 	}
 	if _, err := s.runResyncWithFallback(ctx, engine, nil); err != nil {
 		return err

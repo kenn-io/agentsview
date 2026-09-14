@@ -563,6 +563,38 @@ func TestSyncThenRunForPushRunnerErrorSkipsPush(t *testing.T) {
 	assert.Contains(t, err.Error(), "resync build reported failed")
 }
 
+func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T) {
+	root := t.TempDir()
+	f := newSyncRouteFixture(t, withDisabledAgents(nil, map[parser.AgentType][]string{
+		parser.AgentDeepSeekHarness: {root},
+	}))
+	f.writeClaudeSession(t, "proj/healthy.jsonl", "keep replicating this session")
+	dir := filepath.Join(root, "--workspace-example--", "broken")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "session.jsonl"), []byte(`{"type":"session","version":0,"id":"broken","createdAt":1700000000000,"cwd":"/workspace/example","delegationDepth":0,"agentPreset":"coding"}
+{"type":"turn/start","seq":0,"time":1700000000001,"data":{"turn":1}}
+{"type":"user/message","seq":2,"time":1700000000003,"data":{"id":"user","role":"user","source":{"kind":"user"},"content":[{"type":"text","text":"missing event"}]},"surfaceOp":"append"}
+{"type":"turn/end","seq":3,"time":1700000000004,"data":{"turn":1,"status":"completed"}}
+`), 0o600))
+	engine := f.srv.syncEngineForLocal(f.db)
+	t.Cleanup(engine.Close)
+	for range 2 {
+		var copied []string
+		err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil,
+			func(forceFull bool) error {
+				assert.False(t, forceFull)
+				session, err := f.db.GetSession(t.Context(), "healthy")
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				copied = append(copied, session.ID)
+				return nil
+			})
+		require.ErrorContains(t, err, "local sync processing incomplete")
+		assert.Equal(t, []string{"healthy"}, copied,
+			"failed sources must remain retryable without blocking archived sessions")
+	}
+}
+
 func TestSyncThenRunForPushDeferredWorkerSkipsPush(t *testing.T) {
 	f := newSyncRouteFixture(t, withLocalResyncRunner(func(
 		context.Context, func(syncpkg.Progress),
