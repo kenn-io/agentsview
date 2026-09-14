@@ -15,7 +15,9 @@
   } from "../../api/generated/index";
   import { callGenerated, isAbortError } from "../../api/runtime.js";
   import { m } from "../../i18n/index.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
   import { LatestRead } from "../../utils/latest-read.js";
+  import { agentTypeaheadOptions } from "../../utils/agents.js";
 
   interface Props {
     readOnly?: boolean;
@@ -53,8 +55,29 @@
     sourceAgent.trim() !== "" && targetAgent.trim() !== "",
   );
 
+  // Agents known to the UI: everything in the archive (with session
+  // counts) plus the built-in catalog. loadAgents() is dedup-guarded, so
+  // calling it here is enough to populate sessions.agents on a direct
+  // visit to the Data page.
+  const agentOptions = $derived(agentTypeaheadOptions(sessions.agents));
+
+  const prefixOptions = $derived(
+    agentOptions.map((option) => ({
+      ...option,
+      // Session IDs are namespaced as "<agent>:..."; offer each known
+      // agent's prefix with the colon included so selecting a row writes
+      // the exact value the matcher expects. A prefix's popularity is not
+      // the agent's session count.
+      name: `${option.name}:`,
+      label: `${option.label}:`,
+      displayLabel: `${option.displayLabel ?? option.label}:`,
+      count: 0,
+    })),
+  );
+
   $effect(() => {
     void loadRules();
+    void sessions.loadAgents();
   });
 
   async function loadRules() {
@@ -318,11 +341,18 @@
       <div class="form-grid">
         <label class="field">
           <span>{m.agent_remap_source()}</span>
-          <TextInput
-            bind:value={sourceAgent}
-            block
-            ariaLabel={m.agent_remap_source()}
-            placeholder="goose"
+          <Typeahead
+            options={agentOptions}
+            value={sourceAgent}
+            fallbackLabel={sourceAgent || m.agent_remap_select_agent()}
+            placeholder={m.agent_remap_select_agent()}
+            title={m.agent_remap_source()}
+            emptyLabel={m.agent_remap_no_matching_agent()}
+            allowCustom
+            customLabel={m.agent_remap_use_custom_agent({ query: "{query}" })}
+            onselect={(value) => {
+              sourceAgent = value;
+            }}
           />
           <div class="hint">{m.agent_remap_source_hint()}</div>
         </label>
@@ -338,21 +368,37 @@
         </label>
         <label class="field">
           <span>{m.agent_remap_id_prefix()}</span>
-          <TextInput
-            bind:value={idPrefix}
-            block
-            ariaLabel={m.agent_remap_id_prefix()}
-            placeholder="goose:"
+          <Typeahead
+            options={prefixOptions}
+            value={idPrefix}
+            fallbackLabel={idPrefix || m.agent_remap_any_prefix()}
+            placeholder={m.agent_remap_filter_prefix()}
+            title={m.agent_remap_id_prefix()}
+            emptyLabel={m.agent_remap_no_matching_prefix()}
+            allowClear
+            clearLabel={m.agent_remap_any_prefix()}
+            allowCustom
+            customLabel={m.agent_remap_use_custom_prefix({ query: "{query}" })}
+            onselect={(value) => {
+              idPrefix = value;
+            }}
           />
           <div class="hint">{m.agent_remap_id_prefix_hint()}</div>
         </label>
         <label class="field">
           <span>{m.agent_remap_target()}</span>
-          <TextInput
-            bind:value={targetAgent}
-            block
-            ariaLabel={m.agent_remap_target()}
-            placeholder="augure-desktop"
+          <Typeahead
+            options={agentOptions}
+            value={targetAgent}
+            fallbackLabel={targetAgent || m.agent_remap_select_agent()}
+            placeholder={m.agent_remap_select_agent()}
+            title={m.agent_remap_target()}
+            emptyLabel={m.agent_remap_no_matching_agent()}
+            allowCustom
+            customLabel={m.agent_remap_use_custom_agent({ query: "{query}" })}
+            onselect={(value) => {
+              targetAgent = value;
+            }}
           />
         </label>
         <div class="field checkbox-field">
