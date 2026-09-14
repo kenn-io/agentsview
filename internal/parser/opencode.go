@@ -272,7 +272,7 @@ func ForEachOpenCodeSessionMeta(
 			"FROM " + from + " s"
 		if composite {
 			openCodeContainerChildScans.Add(1)
-			v2, err := openCodeV2SupportedCached(db, dbPath)
+			v2, err := openCodeProjectionFormatCached(db, dbPath)
 			if err != nil {
 				return err
 			}
@@ -353,7 +353,7 @@ func openCodeSessionCompositeMtime(
 		"FROM " + from + " s WHERE s.id = ?"
 	if composite {
 		openCodeSessionChildLookups.Add(1)
-		v2, err := openCodeV2SupportedCached(db, dbPath)
+		v2, err := openCodeProjectionFormatCached(db, dbPath)
 		if err != nil {
 			return 0, "", false, err
 		}
@@ -409,7 +409,7 @@ func openCodeSessionWatermark(
 
 	query := "SELECT s.time_updated FROM " + from + " s WHERE s.id = ?"
 	if composite {
-		v2, err := openCodeV2SupportedCached(db, dbPath)
+		v2, err := openCodeProjectionFormatCached(db, dbPath)
 		if err != nil {
 			return 0, false, err
 		}
@@ -417,7 +417,7 @@ func openCodeSessionWatermark(
 		if table == "session_v2" {
 			watermark = openCodeSessionRowWatermarkExpr
 		}
-		if v2 {
+		if v2 != openCodeProjectionAbsent {
 			watermark = "MAX(" + watermark + ", COALESCE((SELECT MAX(time_updated) FROM session_message WHERE session_id = s.id), 0))"
 		}
 		query = "SELECT " + watermark +
@@ -829,7 +829,7 @@ type openCodeSessionSchemaCacheEntry struct {
 	directoryColumns  map[string]bool
 	hasComposite      bool
 	compositeOnce     bool
-	hasV2             bool
+	projectionFormat  openCodeProjectionFormat
 	v2Once            bool
 	sessionTables     []string
 	hasTimeIdle       bool
@@ -1279,7 +1279,7 @@ func buildOpenCodeSessionContext(
 		fileMtime = composite
 	}
 
-	v2, err := openCodeV2SupportedCached(db, dbPath)
+	v2, err := openCodeProjectionFormatCached(db, dbPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1289,8 +1289,8 @@ func buildOpenCodeSessionContext(
 	}
 	var projected []ParsedMessage
 	var projectionHash string
-	if v2 {
-		projected, _, projectionHash, err = loadOpenCodeV2Messages(db, s.id, cwd)
+	if v2 != openCodeProjectionAbsent {
+		projected, _, projectionHash, err = loadOpenCodeV2Messages(db, s.id, cwd, v2)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1299,7 +1299,7 @@ func buildOpenCodeSessionContext(
 	var parts map[string][]openCodePartRow
 	parsed := projected
 	if table == "session" {
-		msgs, err = loadOpenCodeMessages(db, s.id, v2)
+		msgs, err = loadOpenCodeMessages(db, s.id, v2 != openCodeProjectionAbsent)
 		if err != nil {
 			return nil, nil, fmt.Errorf("loading messages for %s: %w", s.id, err)
 		}
@@ -1332,7 +1332,7 @@ func buildOpenCodeSessionContext(
 	}
 	metadata := buildOpenCodeSessionFingerprint(s, cwd, projectWorktree, msgs, parts)
 	sess.File.Hash = metadata
-	if v2 {
+	if v2 != openCodeProjectionAbsent {
 		sess.File.Hash = fmt.Sprintf("opencode-v2:%x", sha256.Sum256([]byte(metadata+projectionHash)))
 	}
 	return sess, parsed, nil

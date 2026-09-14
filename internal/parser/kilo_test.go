@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -113,4 +114,56 @@ func TestKiloSQLiteVirtualPathRoundTrips(t *testing.T) {
 		filepath.Join(t.TempDir(), "opencode.db")+"#ses_kilo",
 	)
 	assert.False(t, ok)
+}
+
+func TestKiloSQLiteProjectionWithoutSequence(t *testing.T) {
+	for _, projection := range []bool{false, true} {
+		t.Run(fmt.Sprint("projection=", projection), func(t *testing.T) {
+			path, seed, writer := newTestDB(t)
+			t.Cleanup(func() { writer.Close() })
+			seed.AddProject("project-a", "/workspace/project-a")
+			seed.AddSession("ses_kilo", "project-a", "", "", 1700000000000, 1700000060000)
+			// Released Kilo schema before the projection-order migration.
+			_, err := writer.Exec(`CREATE TABLE session_message (
+ id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
+ time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+ INSERT INTO message VALUES ('msg_legacy', 'ses_kilo', 1700000000000, 1700000000000, '{"role":"user"}');
+ INSERT INTO part VALUES ('part_legacy', 'msg_legacy', 'ses_kilo', 1700000000000, 1700000000000, '{"type":"text","text":"Earlier question"}');`)
+			require.NoError(t, err)
+			if projection {
+				_, err = writer.Exec(`INSERT INTO session_message VALUES
+ ('msg_z', 'ses_kilo', 'user', 1700000001000, 1700000001000, '{"text":"Next question"}'),
+ ('msg_b', 'ses_kilo', 'assistant', 1700000002000, 1700000002000, '{"content":[{"type":"text","text":"Second answer"}]}'),
+ ('msg_a', 'ses_kilo', 'assistant', 1700000002000, 1700000002000, '{"content":[{"type":"text","text":"First answer"}]}');`)
+				require.NoError(t, err)
+			}
+			metas, err := ListKiloSessionMeta(path)
+			require.NoError(t, err)
+			require.Len(t, metas, 1)
+			_, messages, err := parseOpenCodeDBSession(path, "ses_kilo", "testmachine")
+			require.NoError(t, err)
+			var content []string
+			for _, message := range messages {
+				content = append(content, message.Content)
+			}
+			if !projection {
+				assert.Equal(t, []string{"Earlier question"}, content)
+				return
+			}
+			assert.Equal(t, []string{"Earlier question", "Next question", "First answer", "Second answer"}, content)
+			_, before, _, err := openCodeSessionCompositeMtime(writer, path, "ses_kilo")
+			require.NoError(t, err)
+			// Same row count and update-time maximum, but a different ordering key.
+			_, err = writer.Exec(`UPDATE session_message SET time_created = 1700000003000 WHERE id = 'msg_a'`)
+			require.NoError(t, err)
+			_, after, _, err := openCodeSessionCompositeMtime(writer, path, "ses_kilo")
+			require.NoError(t, err)
+			assert.NotEqual(t, before, after)
+			_, messages, err = parseOpenCodeDBSession(path, "ses_kilo", "testmachine")
+			require.NoError(t, err)
+			require.Len(t, messages, 4)
+			assert.Equal(t, "Second answer", messages[2].Content)
+			assert.Equal(t, "First answer", messages[3].Content)
+		})
+	}
 }

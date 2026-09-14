@@ -1244,6 +1244,19 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   Kilo migrations mean the pinned current source must be compared with legacy
   fixtures when changing compatibility.
 
+**Projection ordering check (2026-09-14):** The
+[released reader](https://github.com/Kilo-Org/kilocode/blob/2266489ef8b5a0dba701bf335c7fa6406a72f6cd/packages/opencode/src/v2/session.ts)
+orders `session_message` rows by `time_created`, then `id`. The pinned
+[projection-order migration](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/packages/core/migration/20260603040000_session_message_projection_order/migration.sql)
+adds `seq` to that existing table. A `data` column alone therefore does not
+identify the sequenced format. Discovery and parsing inspect the ordering
+column, retain populated projections without `seq`, and still import unmatched
+legacy message/part rows when the projection table is empty or partially used.
+Projection fingerprints include the applicable ordering column. The regression
+`TestKiloSQLiteProjectionWithoutSequence` covers discovery, message ordering,
+legacy message retention, and detection of reordered projections. Sequenced
+schemas keep their existing ordering behavior.
+
 ## Kilo (legacy) (`kilo-legacy`)
 
 - **Format:** Pre-OpenCode Kilo VSCode extension (`kilocode.kilo-code`) task

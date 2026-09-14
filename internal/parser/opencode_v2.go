@@ -99,51 +99,77 @@ func openCodeSessionFromCached(db *sql.DB, dbPath, table string) (string, error)
 
 const openCodeV2BaseCountsExpr = `s.time_updated, COALESCE(pr.time_updated, 0), 0, 0, '', ''`
 
-// OpenCode v2 stores complete message states, updated in place; seq is their
-// original event order. Early previews select message format per session.
-func openCodeV2SupportedCached(db *sql.DB, dbPath string) (bool, error) {
+type openCodeProjectionFormat uint8
+
+const (
+	openCodeProjectionAbsent openCodeProjectionFormat = iota
+	openCodeProjectionChronological
+	openCodeProjectionSequenced
+)
+
+// OpenCode v2 stores complete message states, updated in place. Released Kilo
+// databases order them by creation time and ID; newer schemas add event seq.
+func openCodeProjectionFormatCached(db *sql.DB, dbPath string) (openCodeProjectionFormat, error) {
 	state, cacheable := StatSQLiteContainerState(dbPath)
 	openCodeSessionSchemaCacheMu.Lock()
 	entry, hit := openCodeSessionSchemaCache[dbPath]
 	openCodeSessionSchemaCacheMu.Unlock()
 	if cacheable && hit && entry.state == state && entry.v2Once {
-		return entry.hasV2, nil
+		return entry.projectionFormat, nil
 	}
 	has, err := openCodeTableHasColumn(db, "session_message", "data")
-	if err != nil || !cacheable {
-		return has, err
+	if err != nil {
+		return openCodeProjectionAbsent, err
+	}
+	format := openCodeProjectionAbsent
+	if has {
+		format = openCodeProjectionChronological
+		seq, err := openCodeTableHasColumn(db, "session_message", "seq")
+		if err != nil {
+			return openCodeProjectionAbsent, err
+		}
+		if seq {
+			format = openCodeProjectionSequenced
+		}
+	}
+	if !cacheable {
+		return format, nil
 	}
 	openCodeSessionSchemaCacheMu.Lock()
 	previous := openCodeSessionSchemaCache[dbPath]
 	if previous.state != state {
 		previous = openCodeSessionSchemaCacheEntry{state: state}
 	}
-	previous.hasV2, previous.v2Once = has, true
+	previous.projectionFormat, previous.v2Once = format, true
 	openCodeSessionSchemaCache[dbPath] = previous
 	openCodeSessionSchemaCacheMu.Unlock()
-	return has, nil
+	return format, nil
 }
 
 // Full discovery groups the projection table once. Polls and single-session
 // fingerprints use the producer's session_id index and never read other sessions.
-// Include seq in the identity because it determines transcript order.
-func openCodeV2AggregateSQL(v2, single bool) (columns, joins string) {
-	if !v2 {
+// Include the ordering column in the identity to detect transcript reordering.
+func openCodeV2AggregateSQL(format openCodeProjectionFormat, single bool) (columns, joins string) {
+	if format == openCodeProjectionAbsent {
 		return ", 0, 0, ''", ""
 	}
-	if single {
-		return `, COALESCE((SELECT MAX(time_updated) FROM session_message WHERE session_id = s.id), 0),
-		(SELECT COUNT(*) FROM session_message WHERE session_id = s.id),
-		(SELECT COALESCE(group_concat(id || ':' || seq || ':' || time_updated), '')
-		 FROM (SELECT id, seq, time_updated FROM session_message WHERE session_id = s.id ORDER BY id))`, ""
+	orderColumn := "seq"
+	if format == openCodeProjectionChronological {
+		orderColumn = "time_created"
 	}
-	return ", COALESCE(v.mx, 0), COALESCE(v.n, 0), COALESCE(v.ident, '')", `
+	if single {
+		return fmt.Sprintf(`, COALESCE((SELECT MAX(time_updated) FROM session_message WHERE session_id = s.id), 0),
+		(SELECT COUNT(*) FROM session_message WHERE session_id = s.id),
+		(SELECT COALESCE(group_concat(id || ':' || ordering || ':' || time_updated), '')
+		 FROM (SELECT id, %s AS ordering, time_updated FROM session_message WHERE session_id = s.id ORDER BY id))`, orderColumn), ""
+	}
+	return ", COALESCE(v.mx, 0), COALESCE(v.n, 0), COALESCE(v.ident, '')", fmt.Sprintf(`
 	LEFT JOIN (
 		SELECT session_id, MAX(time_updated) mx, COUNT(*) n,
-		       group_concat(id || ':' || seq || ':' || time_updated) ident
-		FROM (SELECT session_id, id, seq, time_updated FROM session_message ORDER BY session_id, id)
+		       group_concat(id || ':' || ordering || ':' || time_updated) ident
+		FROM (SELECT session_id, id, %s AS ordering, time_updated FROM session_message ORDER BY session_id, id)
 		GROUP BY session_id
-	) v ON v.session_id = s.id`
+	) v ON v.session_id = s.id`, orderColumn)
 }
 
 type openCodeV2Message struct {
@@ -196,8 +222,12 @@ type openCodeV2Content struct {
 	} `json:"state"`
 }
 
-func loadOpenCodeV2Messages(db *sql.DB, sessionID, cwd string) ([]ParsedMessage, bool, string, error) {
-	rows, err := db.Query(`SELECT id, type, time_created, data FROM session_message WHERE session_id = ? ORDER BY seq`, sessionID)
+func loadOpenCodeV2Messages(db *sql.DB, sessionID, cwd string, format openCodeProjectionFormat) ([]ParsedMessage, bool, string, error) {
+	order := "seq"
+	if format == openCodeProjectionChronological {
+		order = "time_created, id"
+	}
+	rows, err := db.Query(`SELECT id, type, time_created, data FROM session_message WHERE session_id = ? ORDER BY `+order, sessionID)
 	if err != nil {
 		return nil, false, "", fmt.Errorf("loading opencode v2 messages: %w", err)
 	}
