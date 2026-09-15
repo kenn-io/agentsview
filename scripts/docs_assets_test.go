@@ -469,6 +469,7 @@ var builtDocsRoutes = func() []string {
 		"quality",
 		"commands",
 		"session-export",
+		"conversation-export",
 		"reporting-export",
 		"stats",
 		"session-api",

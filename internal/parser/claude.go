@@ -526,7 +526,19 @@ func claudeParseFile(
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
+	if !opts.conversationProjection {
+		clearConversationProjection(kept)
+	}
 	return kept, excluded, nil
+}
+
+func clearConversationProjection(results []ParseResult) {
+	for i := range results {
+		for j := range results[i].Messages {
+			results[i].Messages[j].VisibleText = nil
+			results[i].Messages[j].ConversationSourceID = ""
+		}
+	}
 }
 
 func isValidClaudeUploadIdentity(id string) bool {
@@ -1250,19 +1262,21 @@ func extractMessagesFrom(
 		if gjson.Get(e.line, "isCompactSummary").Bool() {
 			summary := extractCompactSummary(e.line)
 			messages = append(messages, ParsedMessage{
-				Ordinal:           ordinal,
-				Role:              RoleAssistant,
-				Content:           summary,
-				Timestamp:         e.timestamp,
-				IsSystem:          true,
-				ContentLength:     len(summary),
-				SourceType:        "system",
-				SourceSubtype:     "compact_boundary",
-				SourceUUID:        e.uuid,
-				SourceParentUUID:  e.parentUuid,
-				IsSidechain:       gjson.Get(e.line, "isSidechain").Bool(),
-				PromptSource:      gjson.Get(e.line, "promptSource").Str,
-				IsCompactBoundary: true,
+				Ordinal:              ordinal,
+				Role:                 RoleAssistant,
+				Content:              summary,
+				VisibleText:          visibleTextValue(""),
+				Timestamp:            e.timestamp,
+				IsSystem:             true,
+				ContentLength:        len(summary),
+				SourceType:           "system",
+				SourceSubtype:        "compact_boundary",
+				SourceUUID:           e.uuid,
+				ConversationSourceID: claudeConversationSourceID(e),
+				SourceParentUUID:     e.parentUuid,
+				IsSidechain:          gjson.Get(e.line, "isSidechain").Bool(),
+				PromptSource:         gjson.Get(e.line, "promptSource").Str,
+				IsCompactBoundary:    true,
 			})
 			ordinal++
 			continue
@@ -1275,6 +1289,8 @@ func extractMessagesFrom(
 		}
 
 		content := gjson.Get(e.line, "message.content")
+		visibleText := extractClaudeVisibleText(content)
+		conversationSourceID := claudeConversationSourceID(e)
 		text, thinkingText, hasThinking, hasToolUse, tcs, trs :=
 			ExtractTextContent(context.Background(), content)
 
@@ -1283,6 +1299,7 @@ func extractMessagesFrom(
 		// looks like a command envelope but can't be
 		// normalized, skip it to avoid raw XML in transcripts.
 		if e.entryType == "user" {
+			visibleText = preprocessClaudeVisibleUserText(visibleText)
 			var skip bool
 			text, skip = preprocessClaudeUserText(text)
 			if skip {
@@ -1302,19 +1319,21 @@ func extractMessagesFrom(
 				// assistant replies. is_system + source_subtype
 				// let the UI and filters route them correctly.
 				messages = append(messages, ParsedMessage{
-					Ordinal:          ordinal,
-					Role:             RoleUser,
-					Content:          text,
-					Timestamp:        e.timestamp,
-					IsSystem:         true,
-					ContentLength:    len(text),
-					SourceType:       "system",
-					SourceSubtype:    subtype,
-					ToolResults:      trs,
-					SourceUUID:       e.uuid,
-					SourceParentUUID: e.parentUuid,
-					IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
-					PromptSource:     gjson.Get(e.line, "promptSource").Str,
+					Ordinal:              ordinal,
+					Role:                 RoleUser,
+					Content:              text,
+					VisibleText:          visibleTextValue(""),
+					Timestamp:            e.timestamp,
+					IsSystem:             true,
+					ContentLength:        len(text),
+					SourceType:           "system",
+					SourceSubtype:        subtype,
+					ToolResults:          trs,
+					SourceUUID:           e.uuid,
+					ConversationSourceID: conversationSourceID,
+					SourceParentUUID:     e.parentUuid,
+					IsSidechain:          gjson.Get(e.line, "isSidechain").Bool(),
+					PromptSource:         gjson.Get(e.line, "promptSource").Str,
 				})
 				ordinal++
 				continue
@@ -1333,6 +1352,7 @@ func extractMessagesFrom(
 					// results; keep them on the hidden envelope row
 					// like the standalone classify branch does.
 					hidden.ToolResults = trs
+					hidden.ConversationSourceID = conversationSourceID
 				}
 				messages = append(messages, hidden)
 				ordinal++
@@ -1349,22 +1369,24 @@ func extractMessagesFrom(
 		}
 
 		msg := ParsedMessage{
-			Ordinal:            ordinal,
-			Role:               RoleType(e.entryType),
-			Content:            text,
-			ThinkingText:       thinkingText,
-			Timestamp:          e.timestamp,
-			HasThinking:        hasThinking,
-			HasToolUse:         hasToolUse,
-			ContentLength:      len(text),
-			ToolCalls:          tcs,
-			ToolResults:        trs,
-			SourceType:         e.entryType,
-			SourceUUID:         e.uuid,
-			SourceParentUUID:   e.parentUuid,
-			IsSidechain:        gjson.Get(e.line, "isSidechain").Bool(),
-			PromptSource:       gjson.Get(e.line, "promptSource").Str,
-			tokenPresenceKnown: e.entryType == "assistant",
+			Ordinal:              ordinal,
+			Role:                 RoleType(e.entryType),
+			Content:              text,
+			VisibleText:          visibleText,
+			ThinkingText:         thinkingText,
+			Timestamp:            e.timestamp,
+			HasThinking:          hasThinking,
+			HasToolUse:           hasToolUse,
+			ContentLength:        len(text),
+			ToolCalls:            tcs,
+			ToolResults:          trs,
+			SourceType:           e.entryType,
+			SourceUUID:           e.uuid,
+			ConversationSourceID: conversationSourceID,
+			SourceParentUUID:     e.parentUuid,
+			IsSidechain:          gjson.Get(e.line, "isSidechain").Bool(),
+			PromptSource:         gjson.Get(e.line, "promptSource").Str,
+			tokenPresenceKnown:   e.entryType == "assistant",
 		}
 
 		if e.entryType == "assistant" {
@@ -1938,6 +1960,7 @@ func queuedCommandMessage(
 		return ParsedMessage{
 			Role:          RoleUser,
 			Content:       q.prompt,
+			VisibleText:   visibleTextValue(""),
 			Timestamp:     q.timestamp,
 			IsSystem:      true,
 			ContentLength: len(q.prompt),
@@ -1949,6 +1972,7 @@ func queuedCommandMessage(
 	return ParsedMessage{
 		Role:          RoleUser,
 		Content:       q.prompt,
+		VisibleText:   visibleTextValue(q.prompt),
 		Timestamp:     q.timestamp,
 		ContentLength: len(q.prompt),
 		SourceType:    "user",
@@ -2558,19 +2582,21 @@ func extractMessagesContext(
 		if gjson.Get(e.line, "isCompactSummary").Bool() {
 			summary := extractCompactSummary(e.line)
 			messages = append(messages, ParsedMessage{
-				Ordinal:           ordinal,
-				Role:              RoleAssistant,
-				Content:           summary,
-				Timestamp:         e.timestamp,
-				IsSystem:          true,
-				ContentLength:     len(summary),
-				SourceType:        "system",
-				SourceSubtype:     "compact_boundary",
-				SourceUUID:        e.uuid,
-				SourceParentUUID:  e.parentUuid,
-				IsSidechain:       gjson.Get(e.line, "isSidechain").Bool(),
-				PromptSource:      gjson.Get(e.line, "promptSource").Str,
-				IsCompactBoundary: true,
+				Ordinal:              ordinal,
+				Role:                 RoleAssistant,
+				Content:              summary,
+				VisibleText:          visibleTextValue(""),
+				Timestamp:            e.timestamp,
+				IsSystem:             true,
+				ContentLength:        len(summary),
+				SourceType:           "system",
+				SourceSubtype:        "compact_boundary",
+				SourceUUID:           e.uuid,
+				ConversationSourceID: claudeConversationSourceID(e),
+				SourceParentUUID:     e.parentUuid,
+				IsSidechain:          gjson.Get(e.line, "isSidechain").Bool(),
+				PromptSource:         gjson.Get(e.line, "promptSource").Str,
+				IsCompactBoundary:    true,
 			})
 			ordinal++
 			continue
@@ -2584,6 +2610,8 @@ func extractMessagesContext(
 		}
 
 		content := gjson.Get(e.line, "message.content")
+		visibleText := extractClaudeVisibleText(content)
+		conversationSourceID := claudeConversationSourceID(e)
 		text, thinkingText, hasThinking, hasToolUse, tcs, trs :=
 			ExtractTextContent(ctx, content)
 
@@ -2592,6 +2620,7 @@ func extractMessagesContext(
 		// looks like a command envelope but can't be
 		// normalized, skip it to avoid raw XML in transcripts.
 		if e.entryType == "user" {
+			visibleText = preprocessClaudeVisibleUserText(visibleText)
 			var skip bool
 			text, skip = preprocessClaudeUserText(text)
 			if skip {
@@ -2611,19 +2640,21 @@ func extractMessagesContext(
 		if e.entryType == "user" {
 			if subtype := classifyClaudeSystemMessage(text); subtype != "" {
 				messages = append(messages, ParsedMessage{
-					Ordinal:          ordinal,
-					Role:             RoleUser,
-					Content:          text,
-					Timestamp:        e.timestamp,
-					IsSystem:         true,
-					ContentLength:    len(text),
-					SourceType:       "system",
-					SourceSubtype:    subtype,
-					ToolResults:      trs,
-					SourceUUID:       e.uuid,
-					SourceParentUUID: e.parentUuid,
-					IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
-					PromptSource:     gjson.Get(e.line, "promptSource").Str,
+					Ordinal:              ordinal,
+					Role:                 RoleUser,
+					Content:              text,
+					VisibleText:          visibleTextValue(""),
+					Timestamp:            e.timestamp,
+					IsSystem:             true,
+					ContentLength:        len(text),
+					SourceType:           "system",
+					SourceSubtype:        subtype,
+					ToolResults:          trs,
+					SourceUUID:           e.uuid,
+					ConversationSourceID: conversationSourceID,
+					SourceParentUUID:     e.parentUuid,
+					IsSidechain:          gjson.Get(e.line, "isSidechain").Bool(),
+					PromptSource:         gjson.Get(e.line, "promptSource").Str,
 				})
 				ordinal++
 				continue
@@ -2642,6 +2673,7 @@ func extractMessagesContext(
 					// results; keep them on the hidden envelope row
 					// like the standalone classify branch does.
 					hidden.ToolResults = trs
+					hidden.ConversationSourceID = conversationSourceID
 				}
 				messages = append(messages, hidden)
 				ordinal++
@@ -2656,22 +2688,24 @@ func extractMessagesContext(
 		}
 
 		msg := ParsedMessage{
-			Ordinal:            ordinal,
-			Role:               RoleType(e.entryType),
-			Content:            text,
-			ThinkingText:       thinkingText,
-			Timestamp:          e.timestamp,
-			HasThinking:        hasThinking,
-			HasToolUse:         hasToolUse,
-			ContentLength:      len(text),
-			ToolCalls:          tcs,
-			ToolResults:        trs,
-			SourceType:         e.entryType,
-			SourceUUID:         e.uuid,
-			SourceParentUUID:   e.parentUuid,
-			IsSidechain:        gjson.Get(e.line, "isSidechain").Bool(),
-			PromptSource:       gjson.Get(e.line, "promptSource").Str,
-			tokenPresenceKnown: e.entryType == "assistant",
+			Ordinal:              ordinal,
+			Role:                 RoleType(e.entryType),
+			Content:              text,
+			VisibleText:          visibleText,
+			ThinkingText:         thinkingText,
+			Timestamp:            e.timestamp,
+			HasThinking:          hasThinking,
+			HasToolUse:           hasToolUse,
+			ContentLength:        len(text),
+			ToolCalls:            tcs,
+			ToolResults:          trs,
+			SourceType:           e.entryType,
+			SourceUUID:           e.uuid,
+			ConversationSourceID: conversationSourceID,
+			SourceParentUUID:     e.parentUuid,
+			IsSidechain:          gjson.Get(e.line, "isSidechain").Bool(),
+			PromptSource:         gjson.Get(e.line, "promptSource").Str,
+			tokenPresenceKnown:   e.entryType == "assistant",
 		}
 
 		if e.entryType == "assistant" {
@@ -3235,6 +3269,7 @@ func claudeIDEEnvelopeMessage(
 		Ordinal:          ordinal,
 		Role:             RoleUser,
 		Content:          envelope,
+		VisibleText:      visibleTextValue(""),
 		Timestamp:        e.timestamp,
 		IsSystem:         true,
 		ContentLength:    len(envelope),
@@ -3244,6 +3279,83 @@ func claudeIDEEnvelopeMessage(
 		SourceParentUUID: e.parentUuid,
 		IsSidechain:      gjson.Get(e.line, "isSidechain").Bool(),
 	}
+}
+
+// extractClaudeVisibleText projects only prose blocks whose Claude source
+// shape is understood. It deliberately runs beside, not through,
+// ExtractTextContent so thinking and tool renderings cannot become exportable
+// conversation text.
+func extractClaudeVisibleText(content gjson.Result) *string {
+	if content.Type == gjson.String {
+		return visibleTextValue(content.Str)
+	}
+	if !content.IsArray() {
+		return nil
+	}
+
+	var (
+		parts []string
+		safe  = true
+	)
+	content.ForEach(func(_, block gjson.Result) bool {
+		if !block.IsObject() {
+			safe = false
+			return false
+		}
+		switch block.Get("type").Str {
+		case "text":
+			text := block.Get("text")
+			if text.Type != gjson.String {
+				safe = false
+				return false
+			}
+			if text.Str != "" {
+				parts = append(parts, text.Str)
+			}
+		case "thinking", "tool_use", "toolCall", "tool_result":
+			// Recognized non-conversation blocks contribute no prose.
+		default:
+			safe = false
+			return false
+		}
+		return true
+	})
+	if !safe {
+		return nil
+	}
+	return visibleTextValue(strings.Join(parts, "\n"))
+}
+
+func preprocessClaudeVisibleUserText(visibleText *string) *string {
+	if visibleText == nil {
+		return nil
+	}
+	text, skip := preprocessClaudeUserText(*visibleText)
+	if skip {
+		return visibleTextValue("")
+	}
+	if _, _, remainder, ok := splitClaudeIDEEnvelopePrompt(text); ok {
+		text = remainder
+	}
+	if isClaudeSystemMessage(text) {
+		return visibleTextValue("")
+	}
+	return visibleTextValue(text)
+}
+
+func claudeConversationSourceID(entry dagEntry) string {
+	if entry.entryType == "assistant" {
+		return gjson.Get(entry.line, "message.id").Str
+	}
+	if entry.entryType == "user" {
+		return entry.uuid
+	}
+	return ""
+}
+
+func visibleTextValue(text string) *string {
+	text = strings.Clone(text)
+	return &text
 }
 
 func splitLeadingClaudeIDEEnvelope(
