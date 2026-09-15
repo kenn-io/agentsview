@@ -267,26 +267,26 @@ func (db *DB) upsertAgentRemapRuleTx(
 	if err != nil {
 		return AgentRemapRule{}, err
 	}
-	res, err := tx.ExecContext(ctx, `
+	// RETURNING id instead of LastInsertId: on the ON CONFLICT update
+	// branch SQLite leaves last_insert_rowid pointing at whatever row was
+	// inserted most recently, so an update after any other insert would
+	// read an unrelated rule's ID.
+	var id int64
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO agent_remap_rules
 			(source_agent, model_glob, id_prefix, target_agent, enabled)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(source_agent, model_glob, id_prefix) DO UPDATE SET
 			target_agent = excluded.target_agent,
 			enabled = excluded.enabled,
-			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		RETURNING id`,
 		normalized.SourceAgent, normalized.ModelGlob, normalized.IDPrefix,
 		normalized.TargetAgent, boolInt(normalized.Enabled),
-	)
+	).Scan(&id)
 	if err != nil {
 		return AgentRemapRule{}, fmt.Errorf(
 			"upserting agent remap rule: %w", err,
-		)
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return AgentRemapRule{}, fmt.Errorf(
-			"reading agent remap rule id: %w", err,
 		)
 	}
 	return db.getAgentRemapRuleTx(ctx, tx, id)
@@ -819,4 +819,138 @@ func applyAgentRemapRuleOrder(rules []AgentRemapRule) []AgentRemapRule {
 	out := append([]AgentRemapRule(nil), rules...)
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// ApplyAgentRemapRulesToSessions evaluates the enabled rules against a set
+// of freshly written sessions and rewrites each matched session's agent.
+// Used by the full-parse batch write path (WriteSessionBatch) so sessions
+// that skip the incremental path still land with rules applied. Returns the
+// IDs of sessions whose agent actually changed.
+func (db *DB) ApplyAgentRemapRulesToSessions(
+	ctx context.Context, sessionIDs []string,
+) ([]string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if len(sessionIDs) == 0 {
+		return nil, nil
+	}
+	rules, err := db.ListAgentRemapRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	hasEnabled := false
+	for _, rule := range rules {
+		if rule.Enabled {
+			hasEnabled = true
+			break
+		}
+	}
+	if !hasEnabled {
+		return nil, nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"beginning batch agent remap: %w", err,
+		)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var matched []string
+	seen := make(map[string]bool, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		if seen[sessionID] {
+			continue
+		}
+		seen[sessionID] = true
+		sess, err := getSessionForRemapTx(ctx, tx, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		if sess == nil {
+			continue
+		}
+		models, err := sessionModelsForRemapTx(ctx, tx, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		next := AgentRemapTarget(rules, *sess, models)
+		if next == sess.Agent {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE sessions
+			SET agent = ?,
+				local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			WHERE id = ? AND agent = ? AND deleted_at IS NULL`,
+			next, sessionID, sess.Agent,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"remapping session %s: %w", sessionID, err,
+			)
+		}
+		matched = append(matched, sessionID)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf(
+			"committing batch agent remap: %w", err,
+		)
+	}
+	if len(matched) > 0 {
+		db.notifyUsageSessions(matched)
+	}
+	return matched, nil
+}
+
+// getSessionForRemapTx reads one session's identity fields inside the
+// caller's transaction.
+func getSessionForRemapTx(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+) (*Session, error) {
+	var (
+		sess    Session
+		started sql.NullString
+	)
+	err := tx.QueryRowContext(ctx, `
+		SELECT id, agent, COALESCE(started_at, '')
+		FROM sessions WHERE id = ? AND deleted_at IS NULL`,
+		sessionID,
+	).Scan(&sess.ID, &sess.Agent, &started)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading session %s for remap: %w", sessionID, err)
+	}
+	if started.Valid {
+		sess.StartedAt = &started.String
+	}
+	return &sess, nil
+}
+
+// sessionModelsForRemapTx reads a session's distinct non-empty models
+// inside the caller's transaction.
+func sessionModelsForRemapTx(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+) ([]string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT DISTINCT model FROM messages
+		 WHERE session_id = ? AND model <> ''`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("reading session models: %w", err)
+	}
+	defer rows.Close()
+	var models []string
+	for rows.Next() {
+		var model string
+		if err := rows.Scan(&model); err != nil {
+			return nil, err
+		}
+		models = append(models, model)
+	}
+	return models, rows.Err()
 }

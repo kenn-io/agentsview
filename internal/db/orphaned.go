@@ -1680,6 +1680,43 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
+	// Copy agent remap rules with their IDs and ordering intact: rule ID
+	// order is the evaluation order, and the single-session incremental
+	// apply re-reads rules by ID. Unlike worktree mappings there is no
+	// pre-copy into the temp database (the reviewer flow that motivates
+	// the copy runs after parse), so a plain upsert preserves both sides.
+	if oldDBHasTable(ctx, tx, "agent_remap_rules") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.agent_remap_rules
+				(id, source_agent, model_glob, id_prefix, target_agent,
+				 enabled, created_at, updated_at)
+			SELECT id, source_agent, model_glob, id_prefix, target_agent,
+				enabled, created_at, updated_at
+			FROM old_db.agent_remap_rules
+			WHERE true
+			ON CONFLICT(id) DO UPDATE SET
+				source_agent = excluded.source_agent,
+				model_glob = excluded.model_glob,
+				id_prefix = excluded.id_prefix,
+				target_agent = excluded.target_agent,
+				enabled = excluded.enabled,
+				created_at = excluded.created_at,
+				updated_at = excluded.updated_at`); err != nil {
+			return fmt.Errorf("copying agent remap rules: %w", err)
+		}
+		// A destination row whose id does not exist in the source is a
+		// stale leftover from a pre-copy attempt; rule IDs are user data,
+		// so the source table is authoritative.
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM main.agent_remap_rules
+			WHERE NOT EXISTS (
+				SELECT 1 FROM old_db.agent_remap_rules old_r
+				WHERE old_r.id = main.agent_remap_rules.id
+			)`); err != nil {
+			return fmt.Errorf("reconciling agent remap rules: %w", err)
+		}
+	}
+
 	if d.usageOnlyStorage() {
 		// Pin notes are free text, which a usage archive does not store.
 		if _, err := tx.ExecContext(ctx,
