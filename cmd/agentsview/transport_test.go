@@ -1288,3 +1288,20 @@ func TestServicesUseRunningDaemonBrowserURL(t *testing.T) {
 		})
 	}
 }
+
+func TestServicePreservesIPv6BrowserURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/sessions/codex:session:42", r.URL.Path)
+		fmt.Fprint(w, `{"id":"codex:session:42"}`)
+	}))
+	defer server.Close()
+	browser := browserURLWithPlatform(config.Config{Host: "::1", Port: 8080}, nil, nil)
+	svc, cleanup, err := newService(config.Config{}, transport{
+		Mode: transportHTTP, URL: server.URL, BrowserURL: browser,
+	})
+	require.NoError(t, err)
+	defer cleanup()
+	detail, err := svc.Get(t.Context(), "codex:session:42")
+	require.NoError(t, err)
+	assert.Equal(t, "http://[::1]:8080/sessions/codex/session:42", detail.WebURL)
+}
