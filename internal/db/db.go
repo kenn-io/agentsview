@@ -759,6 +759,11 @@ type DB struct {
 	// repopulated lazily if a reader finds it missing.
 	duplicateMembers   atomic.Pointer[map[string]DuplicateGroupMember]
 	duplicateMembersMu sync.Mutex
+	// duplicateMembersGen counts snapshot publications and invalidations.
+	// The lazy loader pins the generation before its query and publishes
+	// only if unchanged, so a concurrent rebuild or reopen cannot have its
+	// fresh snapshot overwritten by an older read.
+	duplicateMembersGen atomic.Uint64
 	// usageBackfillEnabled records that this process explicitly started
 	// background backfill (the daemon lifecycle). Reopen restarts a pass
 	// only then, so CLI resyncs never trigger an unrequested archive scan.
@@ -5198,7 +5203,10 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	oldReader := db.reader.Swap(reader)
 	// The archive contents changed underneath us (resync swap or compaction),
 	// so drop the cached duplicate-membership snapshot; the lazy loader
-	// repopulates it from the reopened database on the next read.
+	// repopulates it from the reopened database on the next read. Bumping
+	// the generation also discards any in-flight lazy load against the old
+	// database so its stale result is never published.
+	db.duplicateMembersGen.Add(1)
 	db.duplicateMembers.Store(nil)
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set unless the caller keeps it. Without the clear a

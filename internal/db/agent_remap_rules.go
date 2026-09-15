@@ -104,8 +104,10 @@ func agentRemapGlobRegexp(glob string) (*regexp.Regexp, error) {
 				i++
 				continue
 			}
-			negated := strings.HasPrefix(body, "^") ||
-				strings.HasPrefix(body, "!")
+			// SQLite GLOB negates classes with ^ only; ! is an ordinary class
+			// member. Matching [!b] as a negated class here would disagree with
+			// the SQL GLOB predicates used by preview and full-batch evaluation.
+			negated := strings.HasPrefix(body, "^")
 			if negated {
 				body = body[1:]
 			}

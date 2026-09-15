@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -99,7 +100,56 @@ func (db *DB) RebuildDuplicateGroups(
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	return db.rebuildDuplicateGroupsLocked(ctx)
+}
 
+// duplicateGroupsBootstrapKey records that an archive has had at least one
+// successful duplicate-group rebuild. Archives migrated from before the
+// duplicate_group_members table existed get their one backfill rebuild from
+// EnsureDuplicateGroupsBootstrapped; every rebuild (including the resync
+// contributor's) marks it, so a resynced archive is never re-backfilled.
+const duplicateGroupsBootstrapKey = "duplicate_groups_bootstrapped"
+
+// EnsureDuplicateGroupsBootstrapped backfills duplicate-group membership on
+// an archive that has never had a rebuild. The migration that creates
+// duplicate_group_members does not populate it, and a startup whose sources
+// are all skipped produces no sync pass that would schedule a rebuild, so
+// membership would otherwise stay absent until an unrelated change or a
+// manual recheck. Returns whether a bootstrap rebuild ran.
+func (db *DB) EnsureDuplicateGroupsBootstrapped(
+	ctx context.Context,
+) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var marker string
+	err := db.getWriter().QueryRowContext(ctx,
+		`SELECT value FROM archive_metadata WHERE key = ?`,
+		duplicateGroupsBootstrapKey,
+	).Scan(&marker)
+	if err == nil && strings.TrimSpace(marker) == "1" {
+		return false, nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf(
+			"reading duplicate bootstrap marker: %w", err,
+		)
+	}
+	if _, err := db.rebuildDuplicateGroupsLocked(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// rebuildDuplicateGroupsLocked runs the full membership rebuild. Callers
+// must hold db.mu and the writer must be open; the engine's exclusive pass
+// and the startup bootstrap are the intended callers.
+func (db *DB) rebuildDuplicateGroupsLocked(
+	ctx context.Context,
+) (DuplicateGroupsResult, error) {
 	tx, err := db.getWriter().BeginTx(ctx, nil)
 	if err != nil {
 		return DuplicateGroupsResult{}, fmt.Errorf(
@@ -231,6 +281,17 @@ func (db *DB) RebuildDuplicateGroups(
 			)
 		}
 	}
+	// Record that this archive has membership; the startup bootstrap reads
+	// this marker so it runs at most once per archive.
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO archive_metadata (key, value) VALUES (?, '1')
+		ON CONFLICT(key) DO UPDATE SET value = '1'`,
+		duplicateGroupsBootstrapKey,
+	); err != nil {
+		return DuplicateGroupsResult{}, fmt.Errorf(
+			"marking duplicate group bootstrap: %w", err,
+		)
+	}
 	if err := tx.Commit(); err != nil {
 		return DuplicateGroupsResult{}, fmt.Errorf(
 			"committing duplicate group rebuild: %w", err,
@@ -292,10 +353,13 @@ func loadDuplicateMembersTx(
 }
 
 // storeDuplicateMembersSnapshot atomically publishes the rebuilt
-// membership map to the read-path cache.
+// membership map to the read-path cache. Bumping the generation first makes
+// any lazy loader that read the older generation discard its own (stale)
+// publication instead of overwriting the fresh snapshot.
 func (db *DB) storeDuplicateMembersSnapshot(
 	members map[string]DuplicateGroupMember,
 ) {
+	db.duplicateMembersGen.Add(1)
 	db.duplicateMembers.Store(&members)
 }
 
@@ -306,11 +370,27 @@ func (db *DB) duplicateMembersSnapshot() map[string]DuplicateGroupMember {
 	if cached := db.duplicateMembers.Load(); cached != nil {
 		return *cached
 	}
+	// Pin the generation before the query: if a rebuild publishes or a
+	// reopen invalidates while this loader is reading rows, the generation
+	// equality check below discards our snapshot so the authoritative
+	// publication (or a later lazy load against the swapped database)
+	// wins instead of stale data.
+	gen := db.duplicateMembersGen.Load()
 	db.duplicateMembersMu.Lock()
 	defer db.duplicateMembersMu.Unlock()
 	if cached := db.duplicateMembers.Load(); cached != nil {
 		return *cached
 	}
+	members := db.loadDuplicateMembersSnapshot()
+	if gen == db.duplicateMembersGen.Load() {
+		db.duplicateMembers.Store(&members)
+	}
+	return members
+}
+
+// loadDuplicateMembersSnapshot reads the full membership table. Callers hold
+// duplicateMembersMu or otherwise serialize publication.
+func (db *DB) loadDuplicateMembersSnapshot() map[string]DuplicateGroupMember {
 	rows, err := db.getReader().QueryContext(context.Background(), `
 		SELECT session_id, group_key, role, canonical_id, member_count
 		FROM duplicate_group_members`)
@@ -335,7 +415,6 @@ func (db *DB) duplicateMembersSnapshot() map[string]DuplicateGroupMember {
 		log.Printf("warning: duplicate membership iteration failed: %v", err)
 		return map[string]DuplicateGroupMember{}
 	}
-	db.duplicateMembers.Store(&members)
 	return members
 }
 
