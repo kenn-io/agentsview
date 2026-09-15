@@ -64,7 +64,7 @@
       const response = await callGenerated(
         (options) => DataService.getApiV1DataProjectsByProjectKeySessions({
           projectKey,
-        }, { cursor: append ? nextCursor : undefined, limit: 20, include_automated: data.includeAutomatedPreviews }, options),
+        }, { ...data.dateParams, cursor: append ? nextCursor : undefined, limit: 20, include_automated: data.includeAutomatedPreviews }, options),
         signal,
       );
       if (!sessionsRead.isCurrent(signal)) return false;

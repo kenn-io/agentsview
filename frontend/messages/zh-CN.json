@@ -903,7 +903,9 @@
   ],
   "data_batch_label": "批量",
   "data_batch_folders_heading": "已选择的文件夹",
-  "data_batch_folders_intro": "按共同路径分组选定项目中实际记录的文件夹。每台机器优先显示会话较多的分组。",
+  "data_batch_folders_intro": "实际记录的文件夹先按项目、再按机器分组，每台机器内优先显示会话较多的分组。",
+  "data_batch_outside_selection": "此修正还会匹配所选项目之外的项目。确认后将为所有匹配的会话保存规则。",
+  "data_date_filter_scope": "日期筛选项目列表、文件夹建议和会话预览。文件夹修正也可能更改此日期范围之外的会话。",
   "data_batch_correction_heading": "批量更正",
   "data_batch_correction_intro": "将所有列出的文件夹映射到你选择的目标项目。",
   "data_batch_folder_count": [

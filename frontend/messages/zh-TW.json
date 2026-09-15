@@ -903,7 +903,9 @@
   ],
   "data_batch_label": "批次",
   "data_batch_folders_heading": "已選取的資料夾",
-  "data_batch_folders_intro": "依共同路徑分組所選專案中實際記錄的資料夾。每台機器優先顯示工作階段較多的群組。",
+  "data_batch_folders_intro": "實際記錄的資料夾先依專案、再依機器分組，每台機器內優先顯示工作階段較多的群組。",
+  "data_batch_outside_selection": "此修正也會符合所選專案以外的專案。確認後將為所有符合的工作階段儲存規則。",
+  "data_date_filter_scope": "日期會篩選專案清單、資料夾建議和工作階段預覽。資料夾修正也可能變更此日期範圍以外的工作階段。",
   "data_batch_correction_heading": "批次更正",
   "data_batch_correction_intro": "將所有列出的資料夾對應到你選擇的目標專案。",
   "data_batch_folder_count": [

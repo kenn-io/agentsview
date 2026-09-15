@@ -11,6 +11,7 @@
   import type { ProjectInfo } from "../../api/types/core.js";
   import { callGenerated, isAbortError } from "../../api/runtime.js";
   import { m } from "../../i18n/index.js";
+  import { data } from "../../stores/data.svelte.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import CandidateEvidence from "./CandidateEvidence.svelte";
@@ -59,6 +60,7 @@
   let applied = $state(false);
   let refreshing = $state(false);
   let savedCount = $state(0);
+  let reviewing = $state(false);
   let previewTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
   const candidatesRead = new LatestRead();
@@ -69,15 +71,22 @@
     ? m.data_reclassify_refreshing()
     : applying
     ? m.data_batch_saving_progress({ saved: savedCount, count: usableCandidates.length })
+    : reviewing
+    ? m.data_reclassify_confirm_save()
     : m.data_batch_save({ count: usableCandidates.length }));
   const matchedSessions = $derived(
-    previews.reduce((sum, item) => sum + item.preview.matched_sessions, 0),
+    new Set(previews.flatMap(({ preview }) => preview.matched_session_ids)).size,
   );
   const changingSessions = $derived(
-    previews.reduce((sum, item) => sum + item.preview.updated_sessions, 0),
+    new Set(previews.flatMap(({ preview }) => preview.updated_session_ids)).size,
   );
   const affectedProjects = $derived(
     new Set(previews.flatMap(({ preview }) => preview.matched_projects)).size,
+  );
+  const reachesUnselectedProjects = $derived(
+    previews.some(({ preview }) => preview.matched_project_keys.some(
+      (key) => !rows.some((row) => row.project_key === key),
+    )),
   );
   const canApply = $derived(
     !readOnly &&
@@ -109,6 +118,7 @@
             (options) => DataService.getApiV1DataProjectReclassificationCandidates({
               project_label: row.label,
               project_key: row.project_key,
+              ...data.dateParams,
             }, options),
             signal,
           ),
@@ -174,6 +184,7 @@
   }
 
   function clearPreview() {
+    reviewing = false;
     previewRead.cancel();
     previews = [];
     previewLoading = false;
@@ -216,6 +227,10 @@
 
   async function applyAll() {
     if (!canApply) return;
+    if (reachesUnselectedProjects && !reviewing) {
+      reviewing = true;
+      return;
+    }
     applying = true;
     applyError = "";
     savedCount = 0;
@@ -289,6 +304,9 @@
         </div>
 
         <div class="action-row">
+          {#if reviewing && !applying && !applied}
+            <Button label={m.data_reclassify_back()} onclick={() => reviewing = false} />
+          {/if}
           <Button
             class="bulk-save"
             label={saveLabel}
@@ -325,6 +343,9 @@
       {/if}
 
       {#if previewError}<p class="error-text">{previewError}</p>{/if}
+      {#if reviewing}
+        <p class="warning" role="alert">{m.data_batch_outside_selection()}</p>
+      {/if}
       {#if applyError}
         <p class="error-text">
           {applyError}

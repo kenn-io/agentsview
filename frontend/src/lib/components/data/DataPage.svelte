@@ -9,6 +9,8 @@
   import ProjectBatchWorkspace from "./ProjectBatchWorkspace.svelte";
   import ProjectWorkspace from "./ProjectWorkspace.svelte";
   import WorktreeMappingRules from "./WorktreeMappingRules.svelte";
+  import RangePicker from "../shared/RangePicker.svelte";
+  import type { RangeSelection } from "../shared/rangeSelection.js";
   import {
     FlashBanner,
     SegmentedControl,
@@ -102,6 +104,12 @@
     data.selectProject(activeKey);
   }
 
+  function selectDateRange(selection: RangeSelection) {
+    selectedProjectKeys = [];
+    workspaceGeneration += 1;
+    data.setDateSelection(selection);
+  }
+
   async function refreshSingleCorrection(key: string, target: string): Promise<boolean> {
     const refreshed = await data.refreshAfterApply(key, target);
     if (refreshed) {
@@ -156,10 +164,15 @@
           <div class="summary-strip">
             <span>{m.data_summary_projects({ count: data.inventory.total_projects })}</span>
             <span>{m.data_summary_sessions({ count: data.inventory.total_sessions })}</span>
-            <span>{m.data_summary_governed({ count: data.inventory.governed_sessions })}</span>
+            {#if !data.dateFiltered}
+              <span>{m.data_summary_governed({ count: data.inventory.governed_sessions })}</span>
+            {/if}
           </div>
         {/if}
       </div>
+      {#if data.view === "inventory"}
+        <RangePicker selection={data.dateSelection} onSelect={selectDateRange} busy={data.loading} />
+      {/if}
       <SegmentedControl
         options={viewOptions}
         value={data.view}
@@ -167,6 +180,10 @@
         onchange={onViewChange}
       />
     </div>
+  {/if}
+
+  {#if projectWorkspaceEnabled && data.view === "inventory" && data.dateFiltered}
+    <p class="notice">{m.data_date_filter_scope()}</p>
   {/if}
 
   {#if !projectWorkspaceEnabled || data.view === "rules"}
@@ -207,7 +224,7 @@
         </div>
         {#if selectedRows.length > 1}
           <div class="pane-detail">
-            {#key `${tableSelectedKeys.join(":")}:${workspaceGeneration}`}
+            {#key `${tableSelectedKeys.join(":")}:${workspaceGeneration}:${JSON.stringify(data.dateParams)}`}
               <ProjectBatchWorkspace
                 rows={selectedRows}
                 projects={inventoryProjects}
@@ -221,7 +238,7 @@
           </div>
         {:else if selectedRows[0]}
           <div class="pane-detail">
-            {#key `${data.selectedProjectKey}:${workspaceGeneration}`}
+            {#key `${data.selectedProjectKey}:${workspaceGeneration}:${JSON.stringify(data.dateParams)}`}
               <ProjectWorkspace
                 row={selectedRows[0]}
                 projects={inventoryProjects}

@@ -606,7 +606,7 @@ func duckContractDataInventoryRulesCandidates(
 	t.Helper()
 	ctx := context.Background()
 
-	inventory, err := store.GetProjectInventory(ctx)
+	inventory, err := store.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 2, inventory.TotalProjects)
 	assert.Equal(t, 2, inventory.TotalSessions)

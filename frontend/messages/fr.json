@@ -951,7 +951,9 @@
   ],
   "data_batch_label": "Groupé",
   "data_batch_folders_heading": "Dossiers sélectionnés",
-  "data_batch_folders_intro": "Dossiers observés dans les projets sélectionnés, regroupés par chemin commun. Les groupes avec le plus de sessions apparaissent en premier sur chaque machine.",
+  "data_batch_folders_intro": "Dossiers observés regroupés par projet, puis par machine, avec les groupes les plus nombreux en premier sur chaque machine.",
+  "data_batch_outside_selection": "Cette correction concerne aussi des projets hors de votre sélection. Confirmez pour enregistrer les règles pour toutes les sessions correspondantes.",
+  "data_date_filter_scope": "Les dates filtrent la liste des projets, les suggestions de dossiers et les aperçus des sessions. Les corrections de dossiers peuvent aussi modifier des sessions hors de cette période.",
   "data_batch_correction_heading": "Correction groupée",
   "data_batch_correction_intro": "Tous les dossiers répertoriés recevront la destination choisie.",
   "data_batch_folder_count": [

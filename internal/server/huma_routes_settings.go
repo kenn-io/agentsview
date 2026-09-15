@@ -373,6 +373,13 @@ func (s *Server) humaPreviewWorktreeReclassification(
 	if err != nil {
 		return nil, humaWorktreeReclassificationError(err)
 	}
+	projects, err := localDB.BuildProjectIdentityMap(ctx, preview.MatchedProjects)
+	if err != nil {
+		return nil, internalError("resolve preview project identities", err)
+	}
+	for _, label := range preview.MatchedProjects {
+		preview.MatchedProjectKeys = append(preview.MatchedProjectKeys, projects[label].ProjectKey)
+	}
 	return &jsonOutput[db.WorktreeReclassificationPreview]{Body: preview}, nil
 }
 

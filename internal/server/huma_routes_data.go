@@ -37,6 +37,7 @@ type dataProjectRulesResponse struct {
 }
 
 type dataCandidatesInput struct {
+	DataProjectsInput
 	ProjectLabel string `query:"project_label" doc:"Project display label"`
 	ProjectKey   string `query:"project_key" required:"true" doc:"Opaque project identity key"`
 }
@@ -85,16 +86,27 @@ type dataStripImagesApplyRequest struct {
 }
 
 type dataProjectSessionsInput struct {
+	DataProjectsInput
 	ProjectKey       string `path:"project_key" required:"true" doc:"Opaque project identity key"`
 	Cursor           string `query:"cursor" doc:"Opaque pagination cursor"`
 	Limit            int    `query:"limit" minimum:"0" doc:"Maximum number of results per page"`
 	IncludeAutomated bool   `query:"include_automated" doc:"Include automated sessions"`
 }
 
+type DataProjectsInput struct {
+	DateFrom string `query:"date_from" format:"date" doc:"Session activity range start, inclusive"`
+	DateTo   string `query:"date_to" format:"date" doc:"Session activity range end, inclusive"`
+	Timezone string `query:"timezone" doc:"Timezone for date bounds"`
+}
+
+func (in DataProjectsInput) filter() db.ProjectDateFilter {
+	return db.ProjectDateFilter{DateFrom: in.DateFrom, DateTo: in.DateTo, Timezone: in.Timezone}
+}
+
 func (s *Server) humaDataProjects(
-	ctx context.Context, _ *emptyInput,
+	ctx context.Context, in *DataProjectsInput,
 ) (*jsonOutput[db.ProjectInventory], error) {
-	inv, err := s.db.GetProjectInventory(ctx)
+	inv, err := s.db.GetProjectInventory(ctx, in.filter())
 	if err != nil {
 		if handled := handleHumaContextError(err); handled != nil {
 			return nil, handled
@@ -132,6 +144,7 @@ func (s *Server) humaDataProjectSessions(
 		return nil, apiError(http.StatusNotFound, "project not found")
 	}
 	page, err := s.db.ListSessions(ctx, db.SessionFilter{
+		DateFrom: in.DateFrom, DateTo: in.DateTo, Timezone: in.Timezone,
 		ProjectLabels:    resolved,
 		IncludeChildren:  true,
 		IncludeEmpty:     true,
@@ -190,8 +203,9 @@ func (s *Server) humaDataCandidates(
 	}
 	candidates, err := s.db.ListArchiveWorktreeCandidates(ctx,
 		db.ArchiveWorktreeCandidateRequest{
-			ProjectLabel: in.ProjectLabel,
-			ProjectKey:   in.ProjectKey,
+			ProjectDateFilter: in.filter(),
+			ProjectLabel:      in.ProjectLabel,
+			ProjectKey:        in.ProjectKey,
 		})
 	if err != nil {
 		if handled := handleHumaContextError(err); handled != nil {

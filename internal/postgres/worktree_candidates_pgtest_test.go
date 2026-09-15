@@ -143,6 +143,25 @@ func TestPGWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 	assert.Equal(t, "host-b.example", localCandidates[4].Machine,
 		"the other-machine session forms its own group despite sharing a cwd")
 	assert.Equal(t, "fallback", localCandidates[4].EvidenceKind)
+
+	filter := db.ProjectDateFilter{DateFrom: "2020-01-01", DateTo: "2020-01-31", Timezone: "UTC"}
+	req.ProjectDateFilter = filter
+	localFiltered, err := localDB.ListArchiveWorktreeCandidates(ctx, req)
+	require.NoError(t, err)
+	pgFiltered, err := pgStore.ListArchiveWorktreeCandidates(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, localFiltered, pgFiltered)
+	require.Len(t, pgFiltered, 1)
+	assert.Equal(t, 1, pgFiltered[0].ContributingSessions)
+	assert.Equal(t, "old-session", pgFiltered[0].Examples[0].SessionID)
+	localInventory, err := localDB.GetProjectInventory(ctx, filter)
+	require.NoError(t, err)
+	pgInventory, err := pgStore.GetProjectInventory(ctx, filter)
+	require.NoError(t, err)
+	localInventory.Projects = truncateInventoryRows(localInventory.Projects)
+	pgInventory.Projects = truncateInventoryRows(pgInventory.Projects)
+	assert.Equal(t, localInventory, pgInventory)
+	assert.Equal(t, 1, pgInventory.TotalSessions)
 }
 
 func TestPGWorktreeCandidatesCollapseObservedParents(t *testing.T) {

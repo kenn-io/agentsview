@@ -71,7 +71,7 @@ type Store interface {
 	BuildProjectIdentityMap(ctx context.Context, labels []string) (map[string]export.ProjectMapEntry, error)
 
 	// Data (archive inventory).
-	GetProjectInventory(ctx context.Context) (ProjectInventory, error)
+	GetProjectInventory(ctx context.Context, filter ProjectDateFilter) (ProjectInventory, error)
 	ListProjectRules(ctx context.Context, machine string) (ProjectRules, error)
 	ListArchiveWorktreeCandidates(
 		ctx context.Context, request ArchiveWorktreeCandidateRequest,

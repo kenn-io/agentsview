@@ -9,6 +9,7 @@ import { router } from "./router.svelte.js";
 import { LatestRead } from "../utils/latest-read.js";
 import { events } from "./events.svelte.js";
 import { PROJECT_MAPPING_WORKSPACE_ENABLED } from "../feature-flags.js";
+import { resolveRange, selectionFromWindow, type RangeSelection } from "../components/shared/rangeSelection.js";
 
 export type DataView = "inventory" | "rules";
 const DATA_REFRESH_DEBOUNCE_MS = 300;
@@ -20,6 +21,7 @@ class DataStore {
   view: DataView = $state("inventory");
   selectedProjectKey: string = $state("");
   includeAutomatedPreviews: boolean = $state(false);
+  dateSelection: RangeSelection = $state({ mode: "relative", days: 0 });
   rulesMachine: string = $state("");
   rulesRefreshVersion: number = $state(0);
 
@@ -28,6 +30,23 @@ class DataStore {
   #mutationRefreshes = 0;
   #mutationRefreshTail: Promise<void> = Promise.resolve();
   #eventRefreshPending = false;
+
+  get dateFiltered(): boolean {
+    return this.dateSelection.mode !== "relative" || this.dateSelection.days !== 0;
+  }
+
+  get dateParams(): { date_from?: string; date_to?: string; timezone?: string } {
+    if (!this.dateFiltered) return {};
+    const range = resolveRange(this.dateSelection);
+    return { date_from: range.from, date_to: range.to, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
+  }
+
+  setDateSelection(selection: RangeSelection) {
+    this.dateSelection = selection;
+    this.selectedProjectKey = "";
+    this.writeUrl();
+    void this.load();
+  }
 
   /**
    * The inventory row matching selectedProjectKey, or null when there is no
@@ -92,6 +111,9 @@ class DataStore {
    * `project_key` param, if any, selected.
    */
   hydrateFromUrl(params: Record<string, string>, projectWorkspaceEnabled: boolean) {
+    this.dateSelection = params.date_from && params.date_to
+      ? selectionFromWindow({ isPinned: true, windowDays: 0, from: params.date_from, to: params.date_to })
+      : { mode: "relative", days: 0 };
     if (!projectWorkspaceEnabled) {
       this.view = "rules";
       this.rulesMachine = params.view === "rules" ? (params.machine ?? "") : "";
@@ -112,6 +134,11 @@ class DataStore {
   /** Write the current view/selection state to the URL through the router. */
   writeUrl() {
     const p: Record<string, string> = {};
+    const dates = this.dateParams;
+    if (dates.date_from && dates.date_to) {
+      p.date_from = dates.date_from;
+      p.date_to = dates.date_to;
+    }
     if (this.view === "rules") {
       p.view = "rules";
       if (this.rulesMachine) p.machine = this.rulesMachine;
@@ -134,7 +161,7 @@ class DataStore {
     this.error = "";
     try {
       const inventory = await callGenerated(
-        (options) => DataService.getApiV1DataProjects(options),
+        (options) => DataService.getApiV1DataProjects(this.dateParams, options),
         signal,
       );
       if (!this.#inventoryRead.isCurrent(signal) || version !== this.#loadVersion) return false;

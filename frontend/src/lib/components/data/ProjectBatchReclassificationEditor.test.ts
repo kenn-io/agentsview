@@ -78,6 +78,9 @@ describe("ProjectBatchReclassificationEditor", () => {
           updated_sessions: 1,
           distinct_projects: 1,
           matched_projects: [requestBody.original_project],
+          matched_project_keys: [{ "source-alpha": "k1", "source-beta": "k2", "source-gamma": "k3" }[requestBody.original_project]],
+          matched_session_ids: [requestBody.original_project],
+          updated_session_ids: [requestBody.original_project],
           project_samples: [],
           session_samples: [],
         }),
@@ -105,6 +108,9 @@ describe("ProjectBatchReclassificationEditor", () => {
           matched_sessions: 3,
           updated_sessions: 3,
           distinct_projects: original_project === "source-alpha" ? 3 : 2,
+          matched_project_keys: [original_project, "unselected-key"],
+          matched_session_ids: [original_project],
+          updated_session_ids: [original_project],
           matched_projects:
             original_project === "source-alpha"
               ? ["source-alpha", "unselected-project", "shared-project"]
@@ -179,6 +185,45 @@ describe("ProjectBatchReclassificationEditor", () => {
     ]);
     expect(onRefresh).toHaveBeenCalledWith("agentsview");
     expect(onComplete).toHaveBeenCalledWith("agentsview", 3);
+  });
+
+  it("counts overlapping sessions once and requires confirmation outside the selection", async () => {
+    api.preview.mockImplementation(({ original_project }: { original_project: string }) => Promise.resolve({
+      mapping_token: "token",
+      normalized_project: "agentsview",
+      matched_sessions: 2,
+      updated_sessions: 1,
+      distinct_projects: 2,
+      matched_projects: [original_project, "outside"],
+      matched_project_keys: [original_project === "source-alpha" ? "k1" : "k2", "outside-key"],
+      matched_session_ids: original_project === "source-alpha" ? ["s1", "s2"] : ["s2", "s3"],
+      updated_session_ids: ["s2"],
+      project_samples: [],
+      session_samples: [],
+    }));
+    component = mount(ProjectBatchReclassificationEditor, {
+      target: document.body,
+      props: {
+        rows: [row("k1", "source-alpha"), row("k2", "source-beta")],
+        projects: [{ name: "agentsview", session_count: 20 }],
+        onRefresh: vi.fn().mockResolvedValue(true),
+        onComplete: vi.fn(),
+      },
+    });
+    await flush();
+    await fireEvent.click(screen.getByTitle("Project"));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "agentsview (20)" }));
+    await vi.advanceTimersByTimeAsync(300);
+    await flush();
+    expect(screen.getByText("3 sessions matched")).toBeTruthy();
+    expect(screen.getByText("1 session will change")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "Save 2 corrections" }));
+    expect(api.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toContain("outside your selection");
+    await fireEvent.click(screen.getByRole("button", { name: "Confirm and save" }));
+    await flush();
+    await flush();
+    expect(api.apply).toHaveBeenCalledTimes(2);
   });
 
   it("shows completed corrections inside Save while the rest of the batch is pending", async () => {

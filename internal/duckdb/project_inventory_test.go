@@ -168,11 +168,11 @@ func TestDuckProjectInventoryMatchesSQLite(t *testing.T) {
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
-	localInv, err := local.GetProjectInventory(ctx)
+	localInv, err := local.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "local GetProjectInventory")
 
 	duckStore := NewStoreFromDB(syncer.DB())
-	duckInv, err := duckStore.GetProjectInventory(ctx)
+	duckInv, err := duckStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "duckdb GetProjectInventory")
 
 	assert.Equal(t, localInv.TotalProjects, duckInv.TotalProjects)
@@ -233,9 +233,9 @@ func TestDuckGovernedCountExcludesAssignedSiblingEvidence(t *testing.T) {
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	pushDataReadMirror(t, ctx, syncer)
-	localInv, err := local.GetProjectInventory(ctx)
+	localInv, err := local.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err)
-	duckInv, err := NewStoreFromDB(syncer.DB()).GetProjectInventory(ctx)
+	duckInv, err := NewStoreFromDB(syncer.DB()).GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, localInv.GovernedSessions)
 	assert.Equal(t, localInv.GovernedSessions, duckInv.GovernedSessions)
@@ -250,7 +250,7 @@ func TestDuckProjectInventoryKeepsSanitizedLabelCollisionsDistinct(t *testing.T)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	pushDataReadMirror(t, ctx, syncer)
-	inv, err := NewStoreFromDB(syncer.DB()).GetProjectInventory(ctx)
+	inv, err := NewStoreFromDB(syncer.DB()).GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err)
 	require.Len(t, inv.Projects, 2)
 	assert.Equal(t, 2, inv.TotalProjects)
@@ -282,7 +282,7 @@ func TestDuckProjectInventoryIgnoresUnattributedSessions(t *testing.T) {
 	pushDataReadMirror(t, ctx, syncer)
 
 	duckStore := NewStoreFromDB(syncer.DB())
-	before, err := duckStore.GetProjectInventory(ctx)
+	before, err := duckStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "GetProjectInventory before")
 	require.Equal(t, 2, before.GovernedSessions,
 		"alpha-1 and gamma-dynamic governed before provenance is cleared")
@@ -291,7 +291,7 @@ func TestDuckProjectInventoryIgnoresUnattributedSessions(t *testing.T) {
 		`UPDATE sessions SET source_archive_id = '' WHERE id = 'alpha-1'`)
 	require.NoError(t, err, "clear provenance")
 
-	after, err := duckStore.GetProjectInventory(ctx)
+	after, err := duckStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "GetProjectInventory after")
 
 	assert.Equal(t, before.GovernedSessions-1, after.GovernedSessions,
@@ -358,7 +358,7 @@ func TestDuckPushPreservesSessionMachineForGovernance(t *testing.T) {
 		"host-b-session": "host-b",
 	}, machines)
 
-	inventory, err := NewStoreFromDB(syncer.DB()).GetProjectInventory(ctx)
+	inventory, err := NewStoreFromDB(syncer.DB()).GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 2, inventory.GovernedSessions,
 		"each mirrored session must join the mapping from its source machine")
@@ -440,7 +440,7 @@ func TestDuckProjectInventoryCrossArchiveIsolation(t *testing.T) {
 	require.NoError(t, err, "seed archive B session on a different machine")
 
 	duckStore := NewStoreFromDB(syncer.DB())
-	inv, err := duckStore.GetProjectInventory(ctx)
+	inv, err := duckStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "GetProjectInventory")
 
 	byLabel := map[string]db.ProjectInventoryRow{}

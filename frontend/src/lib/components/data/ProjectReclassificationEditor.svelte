@@ -10,6 +10,7 @@
   } from "../../api/generated/index";
   import { callGenerated, isAbortError } from "../../api/runtime.js";
   import { m } from "../../i18n/index.js";
+  import { data } from "../../stores/data.svelte.js";
   import type { ProjectInfo } from "../../api/types/core.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -101,6 +102,7 @@
         (options) => DataService.getApiV1DataProjectReclassificationCandidates({
           project_label: projectLabel,
           project_key: projectKey,
+          ...data.dateParams,
         }, options),
         signal,
       );

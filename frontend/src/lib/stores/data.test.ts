@@ -80,6 +80,7 @@ beforeEach(() => {
   data.error = "";
   data.view = "inventory";
   data.selectedProjectKey = "";
+  data.dateSelection = { mode: "relative", days: 0 };
   data.rulesMachine = "";
   data.rulesRefreshVersion = 0;
   (routerMod.router as unknown as { params: Record<string, string> }).params = {};
@@ -95,6 +96,22 @@ afterEach(() => {
 });
 
 describe("hydrateFromUrl", () => {
+  it("loads a chosen month and preserves its bounds when selecting projects", async () => {
+    api.getApiV1DataProjects.mockResolvedValue(makeInventory([]));
+    data.setDateSelection({ mode: "calendar", unit: "month", anchor: "2026-08-15" });
+    expect(api.getApiV1DataProjects).toHaveBeenLastCalledWith(expect.objectContaining({
+      date_from: "2026-08-01", date_to: "2026-08-31",
+    }), undefined);
+    data.selectProject("k1");
+    expect(routerMod.router.replaceParams).toHaveBeenLastCalledWith({
+      project_key: "k1", date_from: "2026-08-01", date_to: "2026-08-31",
+    });
+    data.setDateSelection({ mode: "relative", days: 0 });
+    expect(api.getApiV1DataProjects).toHaveBeenLastCalledWith({}, undefined);
+    expect(data.selectedProjectKey).toBe("");
+    await Promise.resolve();
+  });
+
   it("defaults to the inventory view with no selection or machine", () => {
     data.hydrateFromUrl({}, true);
     expect(data.view).toBe("inventory");

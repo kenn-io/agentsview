@@ -15,11 +15,12 @@ import (
 
 const worktreeCandidateExampleLimit = 10
 
-// ArchiveWorktreeCandidateRequest selects a project across the whole
-// archive, with no Activity date range or filter scoping.
+// ArchiveWorktreeCandidateRequest selects a project with an optional Data
+// date range, independently of the Activity page's filters.
 type ArchiveWorktreeCandidateRequest struct {
 	ProjectLabel string
 	ProjectKey   string
+	ProjectDateFilter
 }
 
 type WorktreeCandidateExample struct {
@@ -59,7 +60,7 @@ type worktreeCandidateGroup struct {
 
 // ListArchiveWorktreeCandidates returns the machine/path groups for a
 // project selected by (display label, project key) across every visible
-// session in the archive, with no Activity date range or filter scoping.
+// session in the archive that falls within the optional Data date range.
 func (db *DB) ListArchiveWorktreeCandidates(
 	ctx context.Context,
 	request ArchiveWorktreeCandidateRequest,
@@ -67,7 +68,7 @@ func (db *DB) ListArchiveWorktreeCandidates(
 	if strings.TrimSpace(request.ProjectKey) == "" {
 		return nil, fmt.Errorf("project_key is required")
 	}
-	sessions, err := db.archiveWorktreeCandidateSessions(ctx)
+	sessions, err := db.archiveWorktreeCandidateSessions(ctx, request.ProjectDateFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -137,18 +138,21 @@ type archiveCandidateSessionRef struct {
 }
 
 // archiveWorktreeCandidateSessions returns every archive-wide visible
-// session (deleted_at IS NULL) with no date or relationship-type bound.
+// session (deleted_at IS NULL) within the optional Data date range, without
+// excluding child or empty sessions.
 // Data inventory counts these same rows, including zero-message sessions,
 // so the selected project's session count and its folder groups stay
 // reconcilable.
 func (db *DB) archiveWorktreeCandidateSessions(
 	ctx context.Context,
+	filter ProjectDateFilter,
 ) ([]archiveCandidateSessionRef, error) {
+	where, args := BuildSessionBaseFilterSQL(filter.SessionFilter(), SQLiteQueryDialect())
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT id, project
 		FROM sessions
-		WHERE deleted_at IS NULL
-		ORDER BY id`)
+		WHERE `+where+`
+		ORDER BY id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying archive worktree candidate sessions: %w", err)
 	}

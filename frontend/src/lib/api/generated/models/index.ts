@@ -235,6 +235,7 @@ export * from "./getApiV1DataProjectReclassificationCandidatesParams.ts";
 export * from "./getApiV1DataProjectRulesParams.ts";
 export * from "./getApiV1DataProjectsByProjectKeySessionsParams.ts";
 export * from "./getApiV1DataProjectsByProjectKeySessionsPathParameters.ts";
+export * from "./getApiV1DataProjectsParams.ts";
 export * from "./getApiV1EmbeddingsGenerationsParams.ts";
 export * from "./getApiV1EmbeddingsStatusParams.ts";
 export * from "./getApiV1InsightsByIdExportPathParameters.ts";

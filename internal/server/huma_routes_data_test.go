@@ -43,6 +43,42 @@ func TestDataProjectsEndpoint(t *testing.T) {
 	require.Len(t, inv.Projects, 2)
 }
 
+func TestDataProjectsDateRangeAppliesToFoldersAndPreviews(t *testing.T) {
+	te := setup(t)
+	for _, fixture := range []struct{ id, cwd, started string }{
+		{"august", "/work/august", "2026-08-15T12:00:00Z"},
+		{"september", "/work/september", "2026-09-15T12:00:00Z"},
+	} {
+		te.seedSession(t, fixture.id, "alpha", 1, func(s *db.Session) {
+			s.Cwd = fixture.cwd
+			s.StartedAt = &fixture.started
+			s.EndedAt = &fixture.started
+		})
+	}
+	const dates = "date_from=2026-08-01&date_to=2026-08-31&timezone=UTC"
+	w := te.get(t, "/api/v1/data/projects?"+dates)
+	assertStatus(t, w, http.StatusOK)
+	var inv db.ProjectInventory
+	decodeInto(t, w, &inv)
+	require.Len(t, inv.Projects, 1)
+	assert.Equal(t, 1, inv.TotalSessions)
+	key := url.QueryEscape(inv.Projects[0].ProjectKey)
+	w = te.get(t, "/api/v1/data/project-reclassification/candidates?project_label=alpha&project_key="+key+"&"+dates)
+	assertStatus(t, w, http.StatusOK)
+	var folders struct {
+		Candidates []db.WorktreeReclassificationCandidate `json:"candidates"`
+	}
+	decodeInto(t, w, &folders)
+	require.Len(t, folders.Candidates, 1)
+	assert.Equal(t, "/work/august", folders.Candidates[0].SuggestedPrefix)
+	w = te.get(t, "/api/v1/data/projects/"+url.PathEscape(inv.Projects[0].ProjectKey)+"/sessions?"+dates)
+	assertStatus(t, w, http.StatusOK)
+	var page db.SessionPage
+	decodeInto(t, w, &page)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "august", page.Sessions[0].ID)
+}
+
 func TestDataProjectRulesEndpoint(t *testing.T) {
 	te := setup(t)
 	require.NoError(t, te.db.SetSyncState(db.MachineAliasKeyPrefix+"old-workstation", "ws"))

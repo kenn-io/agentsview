@@ -50,11 +50,15 @@ type WorktreeReclassificationPreview struct {
 	SessionSamples    []WorktreeReclassificationSessionSample `json:"session_samples"`
 	// MatchedProjects contains every distinct source label, not just the
 	// bounded samples, so bulk previews can count overlapping projects once.
-	MatchedProjects []string `json:"matched_projects"`
+	MatchedProjects    []string `json:"matched_projects"`
+	MatchedProjectKeys []string `json:"matched_project_keys"`
+	MatchedSessionIDs  []string `json:"matched_session_ids"`
+	UpdatedSessionIDs  []string `json:"updated_session_ids"`
 }
 
 type worktreeReclassificationEvaluation struct {
 	matched     int
+	matchedIDs  []string
 	updates     []worktreeMappingSessionUpdate
 	projects    map[string]int
 	sessions    []WorktreeReclassificationSessionSample
@@ -368,7 +372,7 @@ func evaluateWorktreeMappingsTx(
 
 	impactHash := sha256.New()
 	writeWorktreeTokenFields(impactHash, "impact-v1")
-	evaluation := worktreeReclassificationEvaluation{projects: map[string]int{}}
+	evaluation := worktreeReclassificationEvaluation{projects: map[string]int{}, matchedIDs: []string{}}
 	for _, row := range sessions {
 		if row.assigned {
 			continue
@@ -393,6 +397,7 @@ func evaluateWorktreeMappingsTx(
 			continue
 		}
 		evaluation.matched++
+		evaluation.matchedIDs = append(evaluation.matchedIDs, row.id)
 		evaluation.projects[row.project]++
 		matchCwd := row.matchCwd
 		if matchCwd == "" {
@@ -441,14 +446,21 @@ func worktreeReclassificationPreviewFromEvaluation(
 	sessionLimit := min(len(evaluation.sessions), worktreeReclassificationSampleLimit)
 	sessionSamples := append([]WorktreeReclassificationSessionSample(nil),
 		evaluation.sessions[:sessionLimit]...)
+	updatedIDs := make([]string, 0, len(evaluation.updates))
+	for _, update := range evaluation.updates {
+		updatedIDs = append(updatedIDs, update.id)
+	}
 	return WorktreeReclassificationPreview{
 		MappingToken: token, NormalizedProject: normalizedProject,
-		ExistingMappingID: existingMappingID,
-		MatchedSessions:   evaluation.matched,
-		UpdatedSessions:   len(evaluation.updates),
-		DistinctProjects:  len(evaluation.projects),
-		MatchedProjects:   projectNames,
-		ProjectSamples:    projectSamples, SessionSamples: sessionSamples,
+		ExistingMappingID:  existingMappingID,
+		MatchedSessions:    evaluation.matched,
+		UpdatedSessions:    len(evaluation.updates),
+		DistinctProjects:   len(evaluation.projects),
+		MatchedProjects:    projectNames,
+		MatchedProjectKeys: []string{},
+		MatchedSessionIDs:  evaluation.matchedIDs,
+		UpdatedSessionIDs:  updatedIDs,
+		ProjectSamples:     projectSamples, SessionSamples: sessionSamples,
 	}
 }
 

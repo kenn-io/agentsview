@@ -951,7 +951,9 @@
   ],
   "data_batch_label": "Bulk",
   "data_batch_folders_heading": "Selected folders",
-  "data_batch_folders_intro": "Observed folders from the selected projects, grouped by shared paths. Larger session groups appear first on each machine.",
+  "data_batch_folders_intro": "Observed folders grouped by project, then machine, with larger session groups first within each machine.",
+  "data_batch_outside_selection": "This correction also matches projects outside your selection. Confirm to save the rules for all matching sessions.",
+  "data_date_filter_scope": "Dates filter the project list, folder suggestions, and session previews. Folder corrections can also change sessions outside this range.",
   "data_batch_correction_heading": "Bulk correction",
   "data_batch_correction_intro": "All listed folders will receive the destination you choose.",
   "data_batch_folder_count": [

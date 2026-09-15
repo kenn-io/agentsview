@@ -945,7 +945,9 @@
   ],
   "data_batch_label": "一括",
   "data_batch_folders_heading": "選択したフォルダー",
-  "data_batch_folders_intro": "選択したプロジェクトで記録されたフォルダーを共通パスでまとめています。マシンごとにセッション数の多いグループから表示します。",
+  "data_batch_folders_intro": "記録されたフォルダーをプロジェクト、マシンの順にまとめ、各マシン内ではセッション数の多いグループから表示します。",
+  "data_batch_outside_selection": "この修正は選択外のプロジェクトにも一致します。確認すると、一致するすべてのセッションに対するルールを保存します。",
+  "data_date_filter_scope": "日付でプロジェクト一覧、フォルダー候補、セッションプレビューを絞り込みます。フォルダーの修正は、この期間外のセッションにも適用されることがあります。",
   "data_batch_correction_heading": "一括修正",
   "data_batch_correction_intro": "一覧のすべてのフォルダーを、選択した移動先に割り当てます。",
   "data_batch_folder_count": [

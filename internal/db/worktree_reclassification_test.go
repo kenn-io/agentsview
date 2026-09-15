@@ -64,6 +64,8 @@ func TestWorktreeReclassificationPreviewCountsAlreadyTargetSessionsByProject(
 
 	assert.Equal(t, 2, preview.MatchedSessions)
 	assert.Equal(t, 1, preview.UpdatedSessions)
+	assert.ElementsMatch(t, []string{"already-target", "changes-project"}, preview.MatchedSessionIDs)
+	assert.Equal(t, []string{"changes-project"}, preview.UpdatedSessionIDs)
 	assert.Equal(t, 2, preview.DistinctProjects)
 	assert.Equal(t, []WorktreeReclassificationProjectSample{
 		{Project: "branch", Count: 1},
