@@ -24,7 +24,7 @@ func TestOrderByClause_MultiKey(t *testing.T) {
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	assert.Equal(t,
 		"ORDER BY message_count ASC, "+
-			"COALESCE(NULLIF(started_at, ''), created_at) DESC, id DESC",
+			"COALESCE(NULLIF(started_at, ''), NULLIF(created_at, '')) DESC, id DESC",
 		b.OrderByClause(rs, SessionFilter{}))
 
 	bpg := NewQueryBuilder(PostgresQueryDialect(), 0)
@@ -53,9 +53,9 @@ func TestCursorPredicate_MultiKey(t *testing.T) {
 	assert.Equal(t,
 		"((message_count > ?) OR "+
 			"(message_count = ? AND "+
-			"COALESCE(NULLIF(started_at, ''), created_at) < ?) OR "+
+			"COALESCE(NULLIF(started_at, ''), NULLIF(created_at, '')) < ?) OR "+
 			"(message_count = ? AND "+
-			"COALESCE(NULLIF(started_at, ''), created_at) = ? AND id < ?))",
+			"COALESCE(NULLIF(started_at, ''), NULLIF(created_at, '')) = ? AND id < ?))",
 		gotSQLite)
 	// Six bound params: one comparison at level 0, two at level 1, three at
 	// level 2 (the id tie-break being the last).
@@ -79,7 +79,7 @@ func TestCursorPredicate_SingleKeyRecent(t *testing.T) {
 	rs := resolvedFor(t, "recent:desc")
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	got := b.CursorPredicate(rs, SessionFilter{}, []any{"2024-05-01T00:00:00Z"}, "sid")
-	activity := "COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at)"
+	activity := "COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), NULLIF(created_at, ''))"
 	assert.Equal(t,
 		"(("+activity+" < ?) OR ("+activity+" = ? AND id < ?))",
 		got)

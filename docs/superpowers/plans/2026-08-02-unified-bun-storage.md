@@ -452,6 +452,7 @@ ______________________________________________________________________
         ReadOnly() bool
         Capabilities() BackendCapabilities
         View(context.Context, func(bun.IDB) error) error
+        ConsistentView(context.Context, func(bun.IDB) error) error
         Update(context.Context, func(bun.IDB) error) error
     }
 
@@ -461,13 +462,15 @@ ______________________________________________________________________
         WriteArchive WriteOperation = iota
         WriteCuration
         WriteInsight
+        WriteInsightDelete
         WriteSessionManagement
         WriteRecall
     )
 
     type BackendCapabilities struct {
-        Recall bool
-        Writes map[WriteOperation]bool
+        Recall           bool
+        Writes           map[WriteOperation]bool
+        SessionMutations SessionMutationAdapter
     }
 
     func (c BackendCapabilities) AllowsWrite(op WriteOperation) bool
@@ -498,6 +501,12 @@ ______________________________________________________________________
     setters. Task 5 moves every cursor consumer and removes the concrete cursor
     fields/setters in its cleanup commit. Task 7 does the same for pricing
     state. `BunStore` does not silently generate an independent fallback secret.
+
+    Session mutation adapters own engine-specific clocks and side effects: SQLite
+    supplies application UTC timestamps, clears restore baselines, and removes
+    FTS-backed messages before permanent deletion; PostgreSQL uses database time
+    and advances revisions monotonically. Adapter hooks run inside the shared
+    transaction, and result counts publish only after it succeeds.
 
 - Produces thin composition: SQLite `DB`, `postgres.Store`, and `duckdb.Store`
   embed `*BunStore` but retain their current concrete public types and
@@ -575,9 +584,15 @@ ______________________________________________________________________
 
     PostgreSQL wraps its stable pool with `pgdialect.New()` and delegates close to
     the existing raw-pool owner. Its operation capabilities allow curation,
-    insight (after the existing capability probe), and session-management writes
-    but reject archive/Recall ingestion. DuckDB wraps each mirror generation
-    with `bundialect.New()` and swaps raw/Bun handles together under `handleMu`.
+    insight insertion and deletion (after their independent capability probes),
+    and session-management writes but reject archive/Recall ingestion. DuckDB
+    wraps each mirror generation with `bundialect.New()` and swaps raw/Bun
+    handles together under `handleMu`.
+
+    Quack `ConsistentView` reads an opaque mirror-generation token before and
+    after a callback and may replay that callback when the token changes.
+    Callbacks stage attempt-local results and publish only after the guarded
+    view succeeds.
 
     The Quack resolver returns an `IConn` that formats no values itself: Bun has
     already produced safe DuckDB SQL. `QueryContext` and `QueryRowContext` pass
@@ -757,7 +772,11 @@ ______________________________________________________________________
     an ordinal-only canonical pin.
 
     Update the DuckDB rebuild test to expect schema version 12, the full canonical
-    common table/column set, preserved source rows, and atomic replacement.
+    common table/column set, preserved source rows, and atomic replacement. A
+    fresh schema carries a nonempty opaque mirror-generation token.
+    Compatibility checks and probes reject version-12 mirrors with a missing or
+    empty token, and a metadata failure rolls back every field without
+    publishing a new generation.
 
 - [ ] **Step 3: Verify RED**
 
@@ -819,6 +838,12 @@ ______________________________________________________________________
     creation. Keep only `sync_metadata`, provenance, and DuckDB-specific indexes
     in `internal/duckdb/schema.go`.
 
+    Create the initial opaque mirror-generation token with the fresh schema.
+    Publish later mirror metadata fields and a fresh token in one DuckDB
+    transaction so readers never observe new descriptive metadata under the
+    previous generation. Missing or empty generation metadata is an incompatible
+    schema for local checks, Quack checks, and mirror probing.
+
 - [ ] **Step 5: Verify GREEN on fresh and local upgrade paths**
 
     Run:
@@ -830,7 +855,7 @@ ______________________________________________________________________
     go vet ./...
     ```
 
-    Expected: fresh/legacy SQLite data survives, DuckDB rebuilds at version 10,
+    Expected: fresh/legacy SQLite data survives, DuckDB rebuilds at version 11,
     and all local schema checks pass.
 
 - [ ] **Step 6: Verify PostgreSQL migration GREEN**
@@ -979,10 +1004,11 @@ ______________________________________________________________________
 
 - [ ] **Step 5: Implement common message and metadata queries**
 
-    Query `bunmodel.Message` once, batch-load tool calls and result events with
-    `bun.List(sessionIDs)`, and hydrate through shared maps. Use portable
-    timestamp/order expressions for activity and timing. Implement stats and
-    dimension lists once from canonical rows.
+    Query `bunmodel.Message` once, batch-load tool calls and result events in
+    at-most-500-ordinal `bun.List` chunks, and hydrate through shared maps. Use
+    the adapter's narrow timestamp renderer for SQLite text chronology versus
+    native PostgreSQL/DuckDB timestamps; activity and timing reduction remains
+    shared Go. Implement stats and dimension lists once from canonical rows.
 
 - [ ] **Step 6: Verify the common methods on every backend before deletion**
 
@@ -1036,8 +1062,14 @@ ______________________________________________________________________
 - Create: `internal/db/bun_curation.go`
 - Create: `internal/db/bun_insights.go`
 - Create: `internal/db/bun_mutations.go`
+- Create: `internal/db/bun_recall.go`
 - Create: `internal/db/bun_data_test.go`
 - Create: `internal/db/bun_curation_test.go`
+- Create: `internal/db/bun_recall_test.go`
+- Create: `internal/storetest/recall_contract.go`
+- Modify: `internal/db/bun_store_contract_external_test.go`
+- Modify: `internal/postgres/bun_store_contract_pgtest_test.go`
+- Modify: `internal/duckdb/bun_store_contract_test.go`
 - Modify: `internal/storetest/contract.go`
 - Modify: `internal/db/project_identity.go`
 - Modify: `internal/db/project_inventory.go`
@@ -1097,7 +1129,10 @@ ______________________________________________________________________
     `ErrorIs(db.ErrReadOnly)` and assert reads still return
     mirrored/synchronized curation. Explicitly assert that PostgreSQL remains
     publicly read-only while star, pin, rename, trash, and available insight
-    writes succeed.
+    writes succeed. Run Recall contracts for writable SQLite, read-only SQLite,
+    and unsupported PostgreSQL/DuckDB: read-only SQLite retains canonical reads
+    and non-mutating import dry-runs while every Recall mutation is rejected
+    before SQL.
 
 - [ ] **Step 2: Verify RED**
 
@@ -1116,27 +1151,37 @@ ______________________________________________________________________
     Port identity observations/snapshots, inventory aggregation, project rules,
     and worktree candidates to canonical source-scoped Bun rows. Keep path
     normalization and identity merge algorithms in their existing pure helpers;
-    only database access moves. Task 11 owns the final application-write
-    centralization and removal of trigger-based publication bookkeeping.
+    only database access moves. Opaque project selectors use the complete
+    canonical `source_archives` aggregate scope on every backend; SQLite does not
+    retain a local-only selector-key path. Unresolved or ambiguous response-
+    scoped keys may change whenever archive membership changes through addition,
+    retirement, or replacement; resolved repository identity keys remain stable.
+    Do not add a compatibility lookup for prior response-scoped keys. Task 11
+    owns the final application-write centralization and removal of trigger-based
+    publication bookkeeping.
 
 - [ ] **Step 4: Implement shared curation, insight, and session mutations**
 
     Use Bun transactions and `RETURNING` for generated IDs on writable engines.
     Place the read-only policy before opening a write callback. Preserve
-    PostgreSQL's capability probe for insight generation as an adapter concern,
-    but use the shared insight queries after it succeeds.
+    PostgreSQL's independent capability probes for insight generation and
+    deletion as adapter concerns, but use the shared insight queries after each
+    authorized operation succeeds.
 
     Move Recall Store entry/query/import/event methods onto `BunStore`. Run them
     through the canonical SQLite Bun handle when `Capabilities().Recall` is
     true; otherwise return `db.ErrReadOnly` before issuing SQL. Keep extraction
     jobs, evidence reconciliation, and Recall FTS/vector internals local to
-    SQLite.
+    SQLite. Require `WriteRecall` only for imports that can persist rows;
+    dry-run validation uses the read capability. Composite entry/evidence reads
+    stage a fresh result on every `ConsistentView` attempt, including not-found,
+    and publish only the accepted attempt.
 
 - [ ] **Step 5: Verify the common methods on every backend before deletion**
 
     ```bash
     CGO_ENABLED=1 go test -tags fts5 ./internal/db ./internal/duckdb \
-      -run 'Test.*(Data|Curation)Contract|Test(ProjectIdentity|Inventory|Pins|Stars|Insights|SessionMgmt)' -count=1
+      -run 'Test.*(Data|Curation|Recall)Contract|Test(ProjectIdentity|Inventory|Pins|Stars|Insights|SessionMgmt|GetRecallEntry)' -count=1
     make test-postgres
     go fmt ./...
     go vet ./...
@@ -1149,8 +1194,8 @@ ______________________________________________________________________
 - [ ] **Step 6: Remove concrete duplicates and stubs**
 
     Delete common-method bodies from PostgreSQL/DuckDB curation, identity,
-    inventory, project-rule, candidate, and stub files. Retain operational push
-    functions and adapter capability probes only.
+    inventory, project-rule, candidate, Recall-stub, and stub files. Retain
+    operational push functions and adapter capability probes only.
 
 - [ ] **Step 7: Re-run final contracts and commit**
 
@@ -1181,6 +1226,10 @@ ______________________________________________________________________
 - Modify: `internal/db/usage.go`
 - Modify: `internal/db/usage_events.go`
 - Modify: `internal/db/cursor_usage_events.go`
+- Modify: `internal/db/activityreport.go`
+- Modify: `internal/db/reporting_export.go`
+- Modify: `internal/db/session_export.go`
+- Modify: `internal/db/session_stats.go`
 - Modify: `internal/postgres/pricing.go`
 - Modify: `internal/postgres/usage.go`
 - Modify: `internal/duckdb/analytics_usage.go`
@@ -1205,6 +1254,16 @@ ______________________________________________________________________
 - Keeps SQLite pricing refresh state in `pricing_metadata`. `GetPricingMeta` and
   `SetPricingMeta` never read or create sentinel `model_pricing` rows, and
   actual pricing/band writes require valid canonical timestamps.
+
+- Defines the canonical empty-catalog policy: embedded rates remain the base
+  catalogue when stored pricing rows are absent, custom rates overlay that
+  base, and an explicitly supplied effective catalogue overlays both. Every
+  backend reports the same provenance for that state.
+
+- Runs pricing, normalized usage rows, metadata hydration, and project identity
+  resolution for each public usage operation inside one replay-safe
+  `ConsistentView`. Each callback stages a fresh complete result and publishes
+  only the accepted attempt.
 
 - Keeps cursor/provider normalization and exact microdollar calculation in pure
   shared functions; only row selection and aggregation SQL move to Bun.
@@ -1245,8 +1304,11 @@ ______________________________________________________________________
 - [ ] **Step 4: Implement shared usage aggregations**
 
     Select the smallest normalized row set needed for each API, then aggregate
-    through the existing pure reducers. Use canonical timestamp values and Bun
-    list/tuple expansion for filters. Preserve authoritative reported cost and
+    through the existing pure reducers. Push both padded time bounds and all
+    portable source/session filters into Bun before hydration; retain only the
+    final timezone date check and exact reducers in Go. Render SQLite timestamp
+    bounds through its `julianday` adapter expression so mixed RFC3339 offsets
+    compare as instants. Preserve authoritative reported cost and
     application-count semantics exactly.
 
 - [ ] **Step 5: Verify the common methods on every backend before deletion**
@@ -1552,6 +1614,7 @@ ______________________________________________________________________
 - Modify: `internal/postgres/vector_push.go`
 - Modify: `internal/duckdb/push.go`
 - Modify: `internal/duckdb/rebuild.go`
+- Modify: `internal/duckdb/schema.go`
 - Modify: `internal/duckdb/project_identity_upsert.go`
 - Modify: `internal/duckdb/worktree_mappings_push.go`
 - Modify: `internal/duckdb/sync.go`
@@ -1580,6 +1643,13 @@ ______________________________________________________________________
     SQLite uses the archive-identity stamping invariant established in Task 4;
     this task replaces its SQL implementation with Bun without adding a second
     retrieval or compatibility path.
+
+    Generated curation targets keep their target-assigned pin IDs on logical
+    conflicts. DuckDB mirrors preserve positive source-assigned IDs: before a
+    mirrored upsert, move any stale logical owner off a reused source ID inside
+    the same transaction, then adopt that ID on the current logical pin. Never
+    apply preserve-mode deletion/reconciliation to generated-ID targets; any
+    later insert failure rolls the stale owner and current logical pin back.
 
 - Consumes the canonical pricing/band and star/pin write helpers defined in
   Tasks 6-7; the cross-target fixture never relies on an undefined test-only
@@ -1648,8 +1718,13 @@ ______________________________________________________________________
 
     Keep rebuild/probe/swap, per-session fingerprint gating, metadata cursors, and
     local-only target validation in `internal/duckdb`. Replace common table
-    inserts/replacements with shared Bun helpers. Record `sync_metadata` in the
-    same DuckDB transaction as each successful batch.
+    inserts/replacements with shared Bun helpers. Add a transaction-aware
+    metadata writer in `internal/duckdb/schema.go`. Per-session fingerprints may
+    publish with their completed session batch; operation-level cutoffs,
+    revisions, scope, and the fresh mirror generation publish only after every
+    batch in the complete push succeeds, in the same final DuckDB transaction. A
+    failed later batch therefore cannot advance a cutoff past unprocessed
+    sessions.
 
 - [ ] **Step 6: Verify local and PostgreSQL write paths**
 

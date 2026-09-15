@@ -49,8 +49,8 @@ const pricingWriteBatch = 100
 // FilterChangedModelPricing returns the subset of desired rows that
 // would actually insert or update pricing fields. UpdatedAt-only
 // differences are intentionally ignored to match the upsert WHERE
-// clause used by both SQLite and PostgreSQL, except on sentinel
-// metadata rows, whose value lives in updated_at.
+// clause used by both SQLite and PostgreSQL, except on logical metadata
+// rows used while planning a cross-backend pricing sync.
 func FilterChangedModelPricing(
 	existing, desired []ModelPricing,
 ) (PricingChangeSummary, []ModelPricing) {

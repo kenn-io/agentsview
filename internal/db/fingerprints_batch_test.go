@@ -235,3 +235,39 @@ func TestBatchedFindingsAndPinsMatchPerSession(t *testing.T) {
 	_, hasEmptyPins := pins["fp-empty"]
 	assert.False(t, hasEmptyPins, "pin map omits sessions without pins")
 }
+
+func TestPinnedMessagesBySessionMatchesCanonicalTimeAndTieOrder(t *testing.T) {
+	database := testDB(t)
+	insertSession(t, database, "pin-parity", "alpha")
+	insertMessages(t, database,
+		asstMsg("pin-parity", 0, "first"),
+		asstMsg("pin-parity", 1, "second"),
+	)
+	messages, err := database.GetMessages(
+		t.Context(), "pin-parity", 0, 10, true,
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	for _, message := range messages {
+		_, err := database.PinMessage("pin-parity", message.ID, nil)
+		require.NoError(t, err)
+	}
+	_, err = database.getWriter().ExecContext(t.Context(), `
+		UPDATE pinned_messages
+		SET created_at = '2026-08-03T13:00:00.000Z'
+		WHERE session_id = 'pin-parity'`)
+	require.NoError(t, err)
+
+	want, err := database.ListPinnedMessages(t.Context(), "pin-parity", "")
+	require.NoError(t, err)
+	require.Len(t, want, 2)
+	assert.Greater(t, want[0].ID, want[1].ID)
+	assert.Equal(t, "2026-08-03T13:00:00Z", want[0].CreatedAt)
+	assert.Equal(t, "2026-08-03T13:00:00Z", want[1].CreatedAt)
+
+	bySession, err := database.PinnedMessagesBySession(
+		t.Context(), []string{"pin-parity"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, want, bySession["pin-parity"])
+}

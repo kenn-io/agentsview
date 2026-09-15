@@ -505,6 +505,101 @@ func TestReplaceCurationSkipsStarForSessionAbsentFromMirror(t *testing.T) {
 		"pinned_messages", "session_id = ?", "sess-2", 0)
 }
 
+func TestReplaceCurationReconcilesReusedSourcePinID(t *testing.T) {
+	ctx := t.Context()
+	local, _ := newPushFixture(t, 2)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err := syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+
+	messages, err := local.GetAllMessages(ctx, "sess-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, messages)
+	localPinID, err := local.PinMessage("sess-1", messages[0].ID, nil)
+	require.NoError(t, err)
+
+	var staleMessageID int64
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT id FROM messages WHERE session_id = ? AND ordinal = 0`,
+		"sess-2",
+	).Scan(&staleMessageID))
+	_, err = syncer.DB().ExecContext(ctx, `
+		INSERT INTO pinned_messages (
+			id, session_id, message_id, ordinal, created_at
+		) VALUES (?, ?, ?, 0, current_timestamp)`,
+		localPinID, "sess-2", staleMessageID,
+	)
+	require.NoError(t, err)
+
+	snapshot, err := syncer.loadCurationSnapshot(ctx)
+	require.NoError(t, err)
+	_, err = syncer.replaceCuration(ctx, snapshot)
+	require.NoError(t, err)
+
+	assertDuckDBCountWhere(t, syncer.DB(),
+		"pinned_messages", "session_id = ?", "sess-1", 1)
+	assertDuckDBCountWhere(t, syncer.DB(),
+		"pinned_messages", "session_id = ?", "sess-2", 0)
+	var mirroredPinID int64
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT id FROM pinned_messages WHERE session_id = ? AND ordinal = 0`,
+		"sess-1",
+	).Scan(&mirroredPinID))
+	assert.Equal(t, localPinID, mirroredPinID)
+}
+
+func TestReplaceCurationRollsBackReusedSourcePinReconciliation(t *testing.T) {
+	ctx := t.Context()
+	local, _ := newPushFixture(t, 2)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err := syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+
+	messageIDs := make(map[string]int64)
+	for _, sessionID := range []string{"sess-1", "sess-2"} {
+		var messageID int64
+		require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+			SELECT id FROM messages WHERE session_id = ? AND ordinal = 0`,
+			sessionID,
+		).Scan(&messageID))
+		messageIDs[sessionID] = messageID
+	}
+	const reusedID int64 = 7002
+	_, err = syncer.DB().ExecContext(ctx, `
+		INSERT INTO pinned_messages (
+			id, session_id, message_id, ordinal, created_at
+		) VALUES (?, ?, ?, 0, current_timestamp)`,
+		reusedID, "sess-2", messageIDs["sess-2"],
+	)
+	require.NoError(t, err)
+
+	snapshot := curationSnapshot{pinsBySession: map[string][]db.PinnedMessage{
+		"sess-1": {{
+			ID: reusedID, SessionID: "sess-1", MessageID: messageIDs["sess-1"],
+			Ordinal: 0, CreatedAt: "2026-08-03T12:00:00Z",
+		}},
+		"sess-2": {{
+			ID: 7003, SessionID: "sess-2", MessageID: messageIDs["sess-2"],
+			Ordinal: 0, CreatedAt: "not-a-timestamp",
+		}},
+	}}
+	_, err = syncer.replaceCuration(ctx, snapshot)
+	require.Error(t, err)
+
+	assertDuckDBCountWhere(t, syncer.DB(),
+		"pinned_messages", "session_id = ?", "sess-1", 0)
+	assertDuckDBCountWhere(t, syncer.DB(),
+		"pinned_messages", "session_id = ?", "sess-2", 1)
+	var staleID int64
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT id FROM pinned_messages WHERE session_id = ? AND ordinal = 0`,
+		"sess-2",
+	).Scan(&staleID))
+	assert.Equal(t, reusedID, staleID)
+}
+
 // TestCursorUsageSyncBoundedByAppendedEventsNotHistory is the
 // cardinality-scaling regression for syncCursorUsageEvents: every push
 // used to reload and re-insert the full cursor usage history, so

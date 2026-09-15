@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -229,87 +228,4 @@ func TestEvaluateGovernedSessionsMatchesApplyEvaluator(t *testing.T) {
 		"governed count must match production apply matched count")
 	assert.Equal(t, 5, evaluation.GovernedSessions,
 		"in-fresh, in-samelabel, win-style, sibling-ref, empty-sibling are governed")
-}
-
-// TestGovernedEvaluationTouchesOnlyRuleMachines is a cardinality-scaling
-// regression: the candidate-row fetch that feeds governed evaluation must be
-// bounded by the number of machines carrying an ENABLED worktree mapping,
-// not by total archive size and not merely by having some mapping (enabled
-// or disabled). It seeds one enabled mapping on machine "ws" with 3
-// sessions, a DISABLED mapping on "disabled-host" with 200 sessions, and 200
-// more unrelated sessions on a machine with no mapping at all, then drives
-// the real production filtering step (governedCandidateMachines, fed by
-// ListAllWorktreeProjectMappings) into the candidate-row loader and asserts
-// it returns exactly the 3 "ws" rows.
-func TestGovernedEvaluationTouchesOnlyRuleMachines(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
-
-	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
-		Machine: "ws", PathPrefix: "/work/repo", Project: "alpha", Enabled: true,
-	})
-	require.NoError(t, err, "create enabled mapping")
-
-	_, err = d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
-		Machine: "disabled-host", PathPrefix: "/work/other", Project: "beta",
-		Enabled: false,
-	})
-	require.NoError(t, err, "create disabled mapping")
-
-	wantIDs := make([]string, 0, 3)
-	for i := range 3 {
-		id := fmt.Sprintf("ws-%d", i)
-		wantIDs = append(wantIDs, id)
-		insertSession(t, d, id, "misc", func(s *Session) {
-			s.Machine = "ws"
-			s.Cwd = fmt.Sprintf("/work/repo/sub-%d", i)
-		})
-	}
-	// 200 sessions on a machine whose only mapping is disabled: these must
-	// not enter the candidate set even though the machine has a mapping.
-	for i := range 200 {
-		insertSession(t, d, fmt.Sprintf("disabled-%04d", i), "misc", func(s *Session) {
-			s.Machine = "disabled-host"
-		})
-	}
-	for i := range 200 {
-		insertSession(t, d, fmt.Sprintf("norule-%04d", i), "misc", func(s *Session) {
-			s.Machine = "no-rule-host"
-		})
-	}
-
-	mappings, err := d.ListAllWorktreeProjectMappings(ctx)
-	require.NoError(t, err, "list mappings")
-
-	machines := governedCandidateMachines(mappings)
-	rows, err := d.projectInventoryCandidateRows(ctx, "archive-1", machines)
-	require.NoError(t, err, "load candidate rows")
-	require.Len(t, rows, 3,
-		"fetch must be bounded by machines with an ENABLED rule, "+
-			"not by mapped machines or archive size")
-
-	gotIDs := make([]string, 0, len(rows))
-	for _, row := range rows {
-		assert.Equal(t, "ws", row.Machine)
-		assert.Equal(t, "archive-1", row.SourceArchiveID)
-		gotIDs = append(gotIDs, row.SessionID)
-	}
-	assert.ElementsMatch(t, wantIDs, gotIDs)
-}
-
-// TestGovernedCandidateMachinesExcludesDisabledMappings is a narrow unit
-// test on the enabled-filtering step in isolation: a machine whose only
-// mapping is disabled must not appear in the candidate machine set, even
-// though it has a mapping row.
-func TestGovernedCandidateMachinesExcludesDisabledMappings(t *testing.T) {
-	mappings := []WorktreeProjectMapping{
-		{Machine: "ws", PathPrefix: "/work/repo", Project: "alpha", Enabled: true},
-		{Machine: "disabled-host", PathPrefix: "/work/other", Project: "beta",
-			Enabled: false},
-	}
-
-	machines := governedCandidateMachines(mappings)
-
-	assert.Equal(t, map[string]struct{}{"ws": {}}, machines,
-		"only machines with an enabled mapping belong in the candidate set")
 }

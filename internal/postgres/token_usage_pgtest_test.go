@@ -152,15 +152,18 @@ func TestEnsureSchemaBackfillsTokenCoverageFlags(t *testing.T) {
 	require.NoError(t, EnsureSchema(ctx, pg, "agentsview"), "EnsureSchema initial")
 
 	_, err = pg.Exec(`
+		INSERT INTO source_archives (source_archive_id, source_archive_salt)
+		VALUES ('coverage-archive', 'coverage-salt');
 		INSERT INTO sessions (
 			id, machine, project, agent, message_count,
 			total_output_tokens, peak_context_tokens,
-			has_total_output_tokens, has_peak_context_tokens
+			has_total_output_tokens, has_peak_context_tokens,
+			source_archive_id, source_database_generation
 		) VALUES
 			('pg-legacy-nonzero', 'test-machine', 'proj', 'claude', 0,
-			 200, 600, FALSE, FALSE),
+			 200, 600, FALSE, FALSE, 'coverage-archive', 'coverage-generation'),
 			('pg-legacy-zero', 'test-machine', 'proj', 'claude', 1,
-			 0, 0, FALSE, FALSE)
+			 0, 0, FALSE, FALSE, 'coverage-archive', 'coverage-generation')
 	`)
 	require.NoError(t, err, "insert legacy sessions")
 	_, err = pg.Exec(`

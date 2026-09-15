@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
@@ -54,53 +55,46 @@ func (db *DB) ExportReportingDay(
 		return export.ReportingDay{}, err
 	}
 
-	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return export.ReportingDay{}, fmt.Errorf("begin reporting snapshot: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
+	var day export.ReportingDay
+	err = db.consistentView(ctx, func(store bun.IDB) error {
+		// Establish the snapshot before constructing the in-memory document. The
+		// following implementation stages load all source rows through this tx.
+		var snapshotMarker int
+		if err := store.QueryRowContext(
+			ctx, "SELECT COUNT(*) FROM archive_metadata",
+		).Scan(&snapshotMarker); err != nil {
+			return fmt.Errorf("establish reporting snapshot: %w", err)
+		}
+		if opts.afterSnapshot != nil {
+			opts.afterSnapshot()
+		}
 
-	// Establish the snapshot before constructing the in-memory document. The
-	// following implementation stages load all source rows through this tx.
-	var snapshotMarker int
-	if err := tx.QueryRowContext(
-		ctx, "SELECT COUNT(*) FROM archive_metadata",
-	).Scan(&snapshotMarker); err != nil {
-		return export.ReportingDay{}, fmt.Errorf("establish reporting snapshot: %w", err)
-	}
-	if opts.afterSnapshot != nil {
-		opts.afterSnapshot()
-	}
-
-	hours, err := db.reportingHoursFromSnapshot(
-		ctx, tx, date, hourCount, schemaVersion, opts.ProjectKeys, bucket,
-	)
-	if err != nil {
-		return export.ReportingDay{}, err
-	}
-	day := export.ReportingDay{
-		SchemaVersion: schemaVersion,
-		Date:          date.Format("2006-01-02"),
-		Complete:      complete,
-		Hours:         hours,
-	}
-	if schemaVersion == export.ReportingJointSchemaVersion {
-		day.BucketSeconds = int(bucket / time.Second)
-	}
-	day, _, err = export.FinalizeReportingDay(day)
-	if err != nil {
-		return export.ReportingDay{}, fmt.Errorf("finalize reporting date: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return export.ReportingDay{}, fmt.Errorf("commit reporting snapshot: %w", err)
-	}
-	return day, nil
+		hours, err := db.reportingHoursFromSnapshot(
+			ctx, store, date, hourCount, schemaVersion, opts.ProjectKeys, bucket,
+		)
+		if err != nil {
+			return err
+		}
+		day = export.ReportingDay{
+			SchemaVersion: schemaVersion,
+			Date:          date.Format("2006-01-02"),
+			Complete:      complete,
+			Hours:         hours,
+		}
+		if schemaVersion == export.ReportingJointSchemaVersion {
+			day.BucketSeconds = int(bucket / time.Second)
+		}
+		day, _, err = export.FinalizeReportingDay(day)
+		if err != nil {
+			return fmt.Errorf("finalize reporting date: %w", err)
+		}
+		return nil
+	})
+	return day, err
 }
 
 func (db *DB) reportingHoursFromSnapshot(
-	ctx context.Context, tx *sql.Tx, date time.Time, hourCount, schemaVersion int,
+	ctx context.Context, tx bun.IDB, date time.Time, hourCount, schemaVersion int,
 	projectKeys []string, bucket time.Duration,
 ) ([]export.ReportingHour, error) {
 	hours := make([]export.ReportingHour, hourCount)
@@ -271,7 +265,7 @@ func (db *DB) reportingHoursFromSnapshot(
 
 func (db *DB) reportingUsageSessionsFrom(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.IDB,
 	lowerBound, upperBound string,
 ) ([]activity.SessionMeta, []string, error) {
 	usageRows := dailyUsageRowsSQLWithWhere(
@@ -346,7 +340,7 @@ func (db *DB) reportingUsageSessionsFrom(
 
 func (db *DB) reportingStandaloneUsageCandidatesFrom(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.IDB,
 	query activity.Query,
 ) ([]activity.UsageRow, error) {
 	var tableExists int
@@ -665,7 +659,7 @@ func allocateReportingUsageCosts(
 
 func (db *DB) reportingProjectIdentityMapFrom(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.IDB,
 	labels []string,
 ) (map[string]export.ProjectMapEntry, error) {
 	if len(labels) == 0 {
@@ -703,7 +697,7 @@ func (db *DB) reportingProjectIdentityMapFrom(
 }
 
 func reportingSessionCreatedAtFrom(
-	ctx context.Context, tx *sql.Tx, ids []string,
+	ctx context.Context, tx bun.IDB, ids []string,
 ) (map[string]time.Time, error) {
 	out := make(map[string]time.Time, len(ids))
 	if len(ids) == 0 {

@@ -2,13 +2,13 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"math"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -88,86 +88,77 @@ func (db *DB) captureUsageQuery(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	conn, err := db.getReader().Conn(ctx)
-	if err != nil {
-		return usageQuerySnapshot{}, fmt.Errorf("pinning usage archive connection: %w", err)
-	}
-	defer conn.Close()
-	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return usageQuerySnapshot{}, fmt.Errorf("starting usage archive snapshot: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
 	var snapshot usageQuerySnapshot
 	snapshot.location = filter.location()
-	if err := tx.QueryRowContext(ctx,
-		`SELECT value FROM archive_metadata WHERE key = ?`,
-		archiveMetadataDatabaseIDKey,
-	).Scan(&snapshot.DatabaseID); err != nil {
-		return usageQuerySnapshot{}, fmt.Errorf("reading usage snapshot database id: %w", err)
-	}
-	pricingRows, err := db.loadPricingMapFrom(ctx, tx)
-	if err != nil {
-		return usageQuerySnapshot{}, fmt.Errorf("reading usage snapshot pricing: %w", err)
-	}
-	snapshot.PricingRows = pricingRows
-
-	bounds := usageCandidateBoundsForFilter(filter)
-	query, args := usageCandidateDiscoverySQL(bounds, kind)
-	rows, err := tx.QueryContext(ctx, query, args...)
-	if err != nil {
-		return usageQuerySnapshot{}, fmt.Errorf("discovering usage candidates: %w", err)
-	}
-	var candidateIDs []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return usageQuerySnapshot{}, fmt.Errorf("scanning usage candidate: %w", err)
+	err := db.BunStore.consistentView(ctx, func(store bun.IDB) error {
+		if err := store.QueryRowContext(ctx,
+			`SELECT value FROM archive_metadata WHERE key = ?`,
+			archiveMetadataDatabaseIDKey,
+		).Scan(&snapshot.DatabaseID); err != nil {
+			return fmt.Errorf("reading usage snapshot database id: %w", err)
 		}
-		candidateIDs = append(candidateIDs, id)
-	}
-	if err := rows.Close(); err != nil {
-		return usageQuerySnapshot{}, fmt.Errorf("closing usage candidate rows: %w", err)
-	}
-	if err := rows.Err(); err != nil {
-		return usageQuerySnapshot{}, fmt.Errorf("iterating usage candidates: %w", err)
-	}
-
-	records, err := loadUsageQuerySessionRecords(ctx, tx, candidateIDs, filter)
-	if err != nil {
-		return usageQuerySnapshot{}, err
-	}
-	fingerprints, err := usageEventFingerprintsWithQuerier(ctx, tx, candidateIDs)
-	if err != nil {
-		return usageQuerySnapshot{}, fmt.Errorf("fingerprinting usage events: %w", err)
-	}
-	for i := range records {
-		records[i].version.UsageEventFingerprint =
-			fingerprints[records[i].session.ID]
-		snapshot.Sessions = append(snapshot.Sessions, records[i].session)
-		snapshot.Versions = append(snapshot.Versions, records[i].version)
-	}
-	snapshot.Intervals = usageQueryIntervals(filter)
-	var hasCursorTable bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
-		SELECT 1 FROM sqlite_master
-		WHERE type = 'table' AND name = 'cursor_usage_events'
-	)`).Scan(&hasCursorTable); err != nil {
-		return usageQuerySnapshot{}, fmt.Errorf("checking Cursor usage table: %w", err)
-	}
-	if hasCursorTable {
-		if err := tx.QueryRowContext(ctx,
-			`SELECT COALESCE(MAX(id), 0) FROM cursor_usage_events`,
-		).Scan(&snapshot.CursorHighWater); err != nil {
-			return usageQuerySnapshot{}, fmt.Errorf("reading Cursor usage high-water mark: %w", err)
+		pricingRows, err := db.BunStore.loadPricingMapFrom(ctx, store)
+		if err != nil {
+			return fmt.Errorf("reading usage snapshot pricing: %w", err)
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return usageQuerySnapshot{}, fmt.Errorf("closing usage archive snapshot: %w", err)
-	}
-	return snapshot, nil
+		snapshot.PricingRows = pricingRows
+
+		bounds := usageCandidateBoundsForFilter(filter)
+		query, args := usageCandidateDiscoverySQL(bounds, kind)
+		rows, err := store.QueryContext(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf("discovering usage candidates: %w", err)
+		}
+		var candidateIDs []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("scanning usage candidate: %w", err)
+			}
+			candidateIDs = append(candidateIDs, id)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("closing usage candidate rows: %w", err)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterating usage candidates: %w", err)
+		}
+
+		records, err := loadUsageQuerySessionRecords(ctx, store, candidateIDs, filter)
+		if err != nil {
+			return err
+		}
+		fingerprints, err := usageEventFingerprintsWithQuerier(
+			ctx, store, candidateIDs,
+		)
+		if err != nil {
+			return fmt.Errorf("fingerprinting usage events: %w", err)
+		}
+		for i := range records {
+			records[i].version.UsageEventFingerprint =
+				fingerprints[records[i].session.ID]
+			snapshot.Sessions = append(snapshot.Sessions, records[i].session)
+			snapshot.Versions = append(snapshot.Versions, records[i].version)
+		}
+		snapshot.Intervals = usageQueryIntervals(filter)
+		var hasCursorTable bool
+		if err := store.QueryRowContext(ctx, `SELECT EXISTS(
+			SELECT 1 FROM sqlite_master
+			WHERE type = 'table' AND name = 'cursor_usage_events'
+		)`).Scan(&hasCursorTable); err != nil {
+			return fmt.Errorf("checking Cursor usage table: %w", err)
+		}
+		if hasCursorTable {
+			if err := store.QueryRowContext(ctx,
+				`SELECT COALESCE(MAX(id), 0) FROM cursor_usage_events`,
+			).Scan(&snapshot.CursorHighWater); err != nil {
+				return fmt.Errorf("reading Cursor usage high-water mark: %w", err)
+			}
+		}
+		return nil
+	})
+	return snapshot, err
 }
 
 // usageCandidateBoundsForFilter converts local calendar-day filters to their
@@ -260,7 +251,8 @@ func usageCandidateDiscoverySQL(
 }
 
 func loadUsageQuerySessionRecords(
-	ctx context.Context, tx *sql.Tx, candidateIDs []string, filter UsageFilter,
+	ctx context.Context, tx sessionExportQuerier,
+	candidateIDs []string, filter UsageFilter,
 ) ([]usageQuerySessionRecord, error) {
 	if len(candidateIDs) == 0 {
 		return nil, nil

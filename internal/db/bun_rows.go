@@ -135,6 +135,7 @@ func sessionToBunRow(session Session) (bunmodel.Session, error) {
 		{"ended_at", session.EndedAt, &row.EndedAt},
 		{"signals_pending_since", session.SignalsPendingSince, &row.SignalsPendingSince},
 		{"deleted_at", session.DeletedAt, &row.DeletedAt},
+		{"source_missing_at", session.SourceMissingAt, &row.SourceMissingAt},
 		{"local_modified_at", session.LocalModifiedAt, &row.LocalModifiedAt},
 	}
 	for _, field := range optionalTimestamps {
@@ -218,6 +219,7 @@ func sessionFromBunRow(row bunmodel.Session) Session {
 
 		DeletedAt:          timestampFromBunRow(row.DeletedAt),
 		DeletionCause:      row.DeletionCause,
+		SourceMissingAt:    timestampFromBunRow(row.SourceMissingAt),
 		TerminationStatus:  row.TerminationStatus,
 		FilePath:           row.FilePath,
 		FileSize:           row.FileSize,
@@ -295,7 +297,7 @@ func messageFromBunRow(row bunmodel.Message) Message {
 		ContentLength:     row.ContentLength,
 		IsSystem:          row.IsSystem,
 		Model:             row.Model,
-		TokenUsage:        append(json.RawMessage(nil), row.TokenUsage...),
+		TokenUsage:        DecodeStoredTokenUsage(string(row.TokenUsage)),
 		ContextTokens:     row.ContextTokens,
 		OutputTokens:      row.OutputTokens,
 		ProviderID:        row.ProviderID,

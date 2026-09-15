@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,11 +11,12 @@ import (
 )
 
 type recordingBunBackend struct {
-	readOnly     bool
-	capabilities BackendCapabilities
-	insideGuard  bool
-	viewCalls    int
-	updateCalls  int
+	readOnly            bool
+	capabilities        BackendCapabilities
+	insideGuard         bool
+	viewCalls           int
+	consistentViewCalls int
+	updateCalls         int
 }
 
 func (*recordingBunBackend) Name() string { return "recording" }
@@ -25,10 +27,29 @@ func (b *recordingBunBackend) Capabilities() BackendCapabilities {
 	return b.capabilities
 }
 
+func (*recordingBunBackend) SessionQueryDialect() QueryDialect {
+	return PortableBunSessionQueryDialect()
+}
+
+func (*recordingBunBackend) SessionVersion(
+	context.Context, bun.IDB, string,
+) (int, int64, error) {
+	return 0, 0, sql.ErrNoRows
+}
+
 func (b *recordingBunBackend) View(
 	_ context.Context, fn func(bun.IDB) error,
 ) error {
 	b.viewCalls++
+	b.insideGuard = true
+	defer func() { b.insideGuard = false }()
+	return fn(nil)
+}
+
+func (b *recordingBunBackend) ConsistentView(
+	_ context.Context, fn func(bun.IDB) error,
+) error {
+	b.consistentViewCalls++
 	b.insideGuard = true
 	defer func() { b.insideGuard = false }()
 	return fn(nil)

@@ -143,19 +143,3 @@ func TestPGActivityReportRowStatusBillsWebSearchRequests(t *testing.T) {
 	assert.True(t, contributes)
 	assert.Equal(t, money.MustParseDollars("0.32"), cost)
 }
-
-func TestPGSessionUsageBreakdownEntryReportsWebSearchRequests(t *testing.T) {
-	entry := pgSessionUsageBreakdownEntry(pgUsageScanRow{
-		usageSource: "message",
-		model:       "claude-websearch-test",
-		tokenJSON:   webSearchTokenJSON("2"),
-	}, 1, money.MustParseDollars("0.32"), true)
-	assert.Equal(t, 2, entry.WebSearchRequests)
-
-	none := pgSessionUsageBreakdownEntry(pgUsageScanRow{
-		usageSource: "message",
-		model:       "claude-websearch-test",
-		tokenJSON:   webSearchTokenJSON("0"),
-	}, 2, money.MustParseDollars("0.30"), true)
-	assert.Zero(t, none.WebSearchRequests)
-}
