@@ -20,6 +20,7 @@
 - `Hub.Check` 注释称「可并发调用」，实为竞态安全但两次并发会重复通知（生产仅一个调用方）。出路：串行化，或把注释改成契约措辞。（→ `internal/notify/hub.go:200`）
 - `NotificationState` 只拦语法错误：`null` / `{}` / `{"foo":1}` 仍读成零值（需外部篡改或字段改名才触发）。出路：暂记。（→ `internal/db/notifications.go:168-179`）
 - `SaveNotificationState` 失败时该会话被跳过、游标仍前进：靠 20s look-back 兜住。出路：暂记。（→ `internal/notify/hub.go:250-255`）
-- `applyConfigTOML` 的匿名结构体是 `Config` 的手工镜像、无编译器保障——这正是本次「通知配置只写不读」的根因（已修），但结构本身未动：下一个新增配置段仍会重犯。出路：加一致性测试（reflect 比对带 `toml` tag 的 `Config` 字段是否都在该结构体里），或至少注释声明同步义务。（→ `internal/config/config.go:1483-1521`）
+- `applyConfigTOML` 的匿名结构体是 `Config` 的手工镜像、无编译器保障——本次「通知配置只写不读」的根因已修，并新增一致性测试兜住「`Config` 有 key、镜像漏了」这一向（注入验证过会报 `Offending keys: [notifications]`）。残余：镜像里声明却从不 merge 的死字段仍静默通过（`pg` 即是，实际走 `raw["pg"]`）。（→ `internal/config/config_toml_parity_test.go`、`internal/config/config.go:1511`）
+- 一致性测试自身的三点限制：豁免表 `configKeysAllowedOutsideMirror` 的「理由」无人校验（加一条无理由豁免即失效）；`no_browser` 豁免指向上游修复后可能失效；三笔 commit 属同一单元、不可单独摘除。出路：暂记。（→ `internal/config/config_toml_parity_test.go:76`）
 - 同类「静默丢弃」仍在（均在本次冻结 DoD 之外，且与其他段行为一致）：段内字段名拼错（`enable = true`）静默忽略；`no_browser` 有 `toml` tag 却从不从文件读回；`[Notifications]` 大小写敏感会静默忽略。出路：暂记。（→ `internal/config/config.go:722`）
 - 测试与前端小瑕疵：`TestHubNeverFormatsTimestamps` 是源码文本断言（弱代理）；`hub_test.go` 的 `storeTimestamp` 与 db 侧 layout 常量重复（跨包不可避免）；`notifications_test.go` 多数用例用 `RFC3339Nano` 写列值（非生产格式）；前端 `notification` 监听器无形状校验、未知 kind 落到 turn_end 文案；`TestNotificationsTableIsDefinedInTOMLMeta` 钉的是 BurntSushi/toml 的语义而非本仓行为（重复覆盖，价值在当不变量文档）。（→ 对应文件）
