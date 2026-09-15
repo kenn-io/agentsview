@@ -76,6 +76,9 @@
   const changingSessions = $derived(
     previews.reduce((sum, item) => sum + item.preview.updated_sessions, 0),
   );
+  const affectedProjects = $derived(
+    new Set(previews.flatMap(({ preview }) => preview.matched_projects)).size,
+  );
   const canApply = $derived(
     !readOnly &&
       !applied &&
@@ -317,7 +320,7 @@
           <span>{m.data_batch_folder_count({ count: previews.length })}</span>
           <span>{m.data_reclassify_sessions_matched({ count: matchedSessions })}</span>
           <span>{m.data_reclassify_sessions_changing({ count: changingSessions })}</span>
-          <span>{m.data_reclassify_projects_affected({ count: rows.length })}</span>
+          <span>{m.data_reclassify_projects_affected({ count: affectedProjects })}</span>
         </div>
       {/if}
 

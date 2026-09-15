@@ -95,6 +95,11 @@ func TestWorktreeReclassificationPreviewHonorsSpecificRuleAndBoundsSamples(t *te
 	assert.Equal(t, 14, preview.MatchedSessions)
 	assert.Equal(t, 14, preview.UpdatedSessions)
 	assert.Equal(t, 14, preview.DistinctProjects)
+	assert.Equal(t, []string{
+		"branch_00", "branch_01", "branch_02", "branch_03", "branch_04",
+		"branch_05", "branch_06", "branch_07", "branch_08", "branch_09",
+		"branch_10", "branch_11", "branch_12", "branch_13",
+	}, preview.MatchedProjects)
 	assert.Len(t, preview.ProjectSamples, 10)
 	assert.Len(t, preview.SessionSamples, 10)
 	assert.Equal(t, "branch_00", preview.ProjectSamples[0].Project)

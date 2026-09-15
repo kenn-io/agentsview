@@ -69,16 +69,18 @@ describe("ProjectBatchReclassificationEditor", () => {
         ],
       }),
     );
-    api.preview.mockImplementation((requestBody: { path_prefix: string }) =>
-      Promise.resolve({
-        mapping_token: `token:${requestBody.path_prefix}`,
-        normalized_project: "agentsview",
-        matched_sessions: 1,
-        updated_sessions: 1,
-        distinct_projects: 1,
-        project_samples: [],
-        session_samples: [],
-      }),
+    api.preview.mockImplementation(
+      (requestBody: { path_prefix: string; original_project: string }) =>
+        Promise.resolve({
+          mapping_token: `token:${requestBody.path_prefix}`,
+          normalized_project: "agentsview",
+          matched_sessions: 1,
+          updated_sessions: 1,
+          distinct_projects: 1,
+          matched_projects: [requestBody.original_project],
+          project_samples: [],
+          session_samples: [],
+        }),
     );
     api.apply.mockResolvedValue({ mapping: {}, result: {} });
   });
@@ -89,6 +91,45 @@ describe("ProjectBatchReclassificationEditor", () => {
     document.body.innerHTML = "";
     vi.useRealTimers();
   });
+
+  it.each([
+    { sources: ["source-alpha"], expected: "3 projects" },
+    { sources: ["source-alpha", "source-beta"], expected: "4 projects" },
+  ])(
+    "counts preview projects for $sources, including unselected projects only once",
+    async ({ sources, expected }) => {
+      api.preview.mockImplementation(({ original_project }: { original_project: string }) =>
+        Promise.resolve({
+          mapping_token: "preview-token",
+          normalized_project: "agentsview",
+          matched_sessions: 3,
+          updated_sessions: 3,
+          distinct_projects: original_project === "source-alpha" ? 3 : 2,
+          matched_projects:
+            original_project === "source-alpha"
+              ? ["source-alpha", "unselected-project", "shared-project"]
+              : ["source-beta", "shared-project"],
+          project_samples: [],
+          session_samples: [],
+        }),
+      );
+      component = mount(ProjectBatchReclassificationEditor, {
+        target: document.body,
+        props: {
+          rows: sources.map((source) => row(source, source)),
+          projects: [{ name: "agentsview", session_count: 20 }],
+          onRefresh: vi.fn(),
+          onComplete: vi.fn(),
+        },
+      });
+      await flush();
+      await fireEvent.click(screen.getByTitle("Project"));
+      await fireEvent.mouseDown(screen.getByRole("option", { name: "agentsview (20)" }));
+      await vi.advanceTimersByTimeAsync(300);
+      await flush();
+      expect(screen.getByText(expected)).toBeTruthy();
+    },
+  );
 
   it("maps every selected project's suggested folder to one target", async () => {
     const onRefresh = vi.fn().mockResolvedValue(true);

@@ -8,6 +8,7 @@ export interface DbWorktreeReclassificationPreview {
   distinct_projects: number;
   existing_mapping_id?: number;
   mapping_token: string;
+  matched_projects: string[];
   matched_sessions: number;
   normalized_project: string;
   project_samples: DbWorktreeReclassificationProjectSample[];

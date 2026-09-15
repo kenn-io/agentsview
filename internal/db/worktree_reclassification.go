@@ -48,6 +48,9 @@ type WorktreeReclassificationPreview struct {
 	DistinctProjects  int                                     `json:"distinct_projects"`
 	ProjectSamples    []WorktreeReclassificationProjectSample `json:"project_samples"`
 	SessionSamples    []WorktreeReclassificationSessionSample `json:"session_samples"`
+	// MatchedProjects contains every distinct source label, not just the
+	// bounded samples, so bulk previews can count overlapping projects once.
+	MatchedProjects []string `json:"matched_projects"`
 }
 
 type worktreeReclassificationEvaluation struct {
@@ -444,6 +447,7 @@ func worktreeReclassificationPreviewFromEvaluation(
 		MatchedSessions:   evaluation.matched,
 		UpdatedSessions:   len(evaluation.updates),
 		DistinctProjects:  len(evaluation.projects),
+		MatchedProjects:   projectNames,
 		ProjectSamples:    projectSamples, SessionSamples: sessionSamples,
 	}
 }

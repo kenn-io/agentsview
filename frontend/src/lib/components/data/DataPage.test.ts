@@ -263,6 +263,7 @@ describe("DataPage", () => {
     matched_sessions: 7,
     updated_sessions: 6,
     distinct_projects: 1,
+    matched_projects: ["wrong-project"],
     project_samples: [],
     session_samples: [],
   };
