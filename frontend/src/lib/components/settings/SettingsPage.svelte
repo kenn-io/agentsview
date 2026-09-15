@@ -22,6 +22,7 @@
   import EmbeddingsSettings from "./EmbeddingsSettings.svelte";
   import ToolImageCleanup from "./ToolImageCleanup.svelte";
   import GithubSettings from "./GithubSettings.svelte";
+  import NotificationsSettings from "./NotificationsSettings.svelte";
   import LanguageSettings from "./LanguageSettings.svelte";
   import RemoteSettings from "./RemoteSettings.svelte";
   import { settingsPanels } from "./settingsPanels.js";
@@ -222,6 +223,8 @@
                 <GithubSettings />
               {:else if meta.id === "remote-access"}
                 <RemoteSettings />
+              {:else if meta.id === "notifications"}
+                <NotificationsSettings />
               {/if}
             </SettingsSection>
           </div>

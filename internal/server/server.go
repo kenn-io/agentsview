@@ -25,6 +25,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
+	"go.kenn.io/agentsview/internal/notify"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
@@ -132,6 +133,13 @@ type Server struct {
 	// activity would otherwise surface. Called synchronously; it must not
 	// block.
 	sessionMutationNotify func()
+
+	// notificationHub, when set, fans decided desktop
+	// notifications out to /api/v1/events subscribers. The Hub
+	// itself is driven by the caller (cmd wiring) from the sync
+	// engine's scopes; the server only holds it for SSE delivery.
+	notificationHub *notify.Hub
+
 	// recallCorpusMutationNotify, when set, is called after an import or
 	// extraction-generation action changes accepted recall entries so semantic
 	// mirrors can refresh.
@@ -258,8 +266,37 @@ func New(
 	if s.version.DataVersion == 0 {
 		s.version.DataVersion = db.CurrentDataVersion()
 	}
+	if s.notificationHub != nil {
+		// Notifications read the live config so settings changes
+		// made through the config API apply without a restart.
+		s.notificationHub.SetConfigFn(s.notifyConfig)
+	}
 	s.routes()
 	return s
+}
+
+// notifyConfig adapts the server's live config to the notify
+// package's policy type. Called at each decision point.
+func (s *Server) notifyConfig() notify.Config {
+	s.mu.RLock()
+	nc := s.cfg.Notifications
+	s.mu.RUnlock()
+	suppress := true
+	if nc.SuppressSubagents != nil {
+		suppress = *nc.SuppressSubagents
+	}
+	merge := time.Minute
+	if nc.MergeWindowSeconds > 0 {
+		merge = time.Duration(nc.MergeWindowSeconds) * time.Second
+	}
+	return notify.Config{
+		Enabled:           nc.Enabled,
+		NotifyNewReply:    nc.NotifyNewReply,
+		MergeWindow:       merge,
+		Agents:            nc.Agents,
+		Projects:          nc.Projects,
+		SuppressSubagents: suppress,
+	}
 }
 
 func insightGenerateOptions(cfg config.Config) insight.GenerateOptions {
@@ -412,6 +449,13 @@ func WithHTTPRemoteCleanupRegistry(registry *remotesync.CleanupRegistry) Option 
 // live-refresh SSE; absent in PG serve mode where the engine is nil.
 func WithBroadcaster(b *Broadcaster) Option {
 	return func(s *Server) { s.broadcaster = b }
+}
+
+// WithNotificationHub wires the desktop-notification hub so the
+// /api/v1/events handler can deliver decided notifications. The
+// hub's Run loop is owned by the caller.
+func WithNotificationHub(h *notify.Hub) Option {
+	return func(s *Server) { s.notificationHub = h }
 }
 
 // WithUpdateChecker overrides the update check function,

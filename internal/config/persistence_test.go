@@ -122,6 +122,52 @@ func TestSaveSettingsPersistsDisabledAgents(t *testing.T) {
 	assert.Equal(t, cfg.DisabledAgents, fileCfg.DisabledAgents)
 }
 
+// TestSaveNotificationsConfigRoundTripsThroughLoad is the user-visible
+// regression test: a saved notification policy must survive a process
+// restart, i.e. come back through the real load path rather than being
+// read out of the in-memory struct.
+func TestSaveNotificationsConfigRoundTripsThroughLoad(t *testing.T) {
+	dir := setupTestEnv(t)
+	cfg, err := Default()
+	require.NoError(t, err)
+	cfg.DataDir = dir
+
+	suppressOff := false
+	want := NotificationsConfig{
+		Enabled:            true,
+		NotifyNewReply:     true,
+		MergeWindowSeconds: 42,
+		Agents:             []string{"claude", "codex"},
+		Projects:           []string{"agentsview"},
+		SuppressSubagents:  &suppressOff,
+	}
+	require.NoError(t, cfg.SaveNotificationsConfig(want))
+	assert.Equal(t, want, cfg.Notifications,
+		"save must update the in-memory copy")
+
+	loaded, err := LoadMinimal()
+	require.NoError(t, err, "reload failed")
+	require.Equal(t, dir, loaded.DataDir)
+	assert.Equal(t, want, loaded.Notifications,
+		"saved notification policy was lost across a reload")
+}
+
+func TestLoadWithoutNotificationsSectionKeepsZeroValue(t *testing.T) {
+	dir := setupTestEnv(t)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, configFileName),
+		[]byte("host = \"127.0.0.1\"\n"), 0o600,
+	))
+
+	loaded, err := LoadMinimal()
+	require.NoError(t, err)
+	assert.False(t, loaded.Notifications.Enabled)
+	assert.Nil(t, loaded.Notifications.SuppressSubagents,
+		"nil must be preserved so the server default of suppress=true applies")
+	assert.Zero(t, loaded.Notifications.MergeWindowSeconds,
+		"zero must be preserved so the server default of 1 minute applies")
+}
+
 func TestCursorSecret_GeneratedAndPersisted(t *testing.T) {
 	dir := setupTestEnv(t)
 

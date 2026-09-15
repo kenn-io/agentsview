@@ -130,6 +130,26 @@ export interface DataChangedEvent {
   scope: "messages" | "sessions" | "sync";
 }
 
+/** Payload for /api/v1/events notification frames: one decided
+ * desktop notification from the backend's notify hub. Delivery is
+ * best-effort SSE — dedup state lives in the archive, so a missed
+ * frame is at most a delayed/absent reminder, never a duplicate.
+ *
+ * The frame carries structured fields only: the frontend renders
+ * the localized title/body (it owns paraglide i18n and the native
+ * plugin). `excerpt` is the truncated tail of the latest assistant
+ * message, present only for `new_reply`. */
+export interface DesktopNotification {
+  kind: "turn_end" | "new_reply";
+  session_id: string;
+  project: string;
+  agent: string;
+  display_name?: string;
+  excerpt?: string;
+  deep_link_path: string;
+  created_at: string;
+}
+
 /** Watch a session for live updates via SSE.
  *
  * SECURITY NOTE: The native EventSource API does not support custom
@@ -214,6 +234,8 @@ export function watchSession(
 export const WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS = 5;
 
 export interface WatchEventsOptions {
+  /** Called for each decided desktop notification frame. */
+  onNotification?: (n: DesktopNotification) => void;
   /** Called once when the circuit breaker trips WITHOUT the
    * EventSource ever having reached the OPEN state. That pattern
    * indicates the endpoint is permanently unreachable for this
@@ -275,6 +297,17 @@ export function watchEvents(
       onEvent({ scope });
     } else {
       onEvent({ scope: "sync" });
+    }
+  });
+
+  es.addEventListener("notification", (msg) => {
+    consecutiveErrors = 0;
+    hasOpened = true;
+    if (!opts.onNotification) return;
+    try {
+      opts.onNotification(JSON.parse((msg as MessageEvent).data) as DesktopNotification);
+    } catch (err) {
+      console.warn("notification frame parse failed", err);
     }
   });
 
