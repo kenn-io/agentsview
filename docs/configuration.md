@@ -1283,8 +1283,10 @@ sessions carry the hosting agent's name. On the Data page's **Rules** view,
   session IDs keep their original prefix (a remapped `goose:20260908_2` keeps
   its ID). Rewritten sessions propagate to PostgreSQL and DuckDB mirrors
   normally, and usage rollups are reclassified.
-- Deleting a rule does not revert past applies; edit a rule's target back to
-  the original agent and apply again to revert.
+- Deleting a rule does not revert past applies. To remap matching sessions
+  back to the original agent, edit the rule to swap its source and target
+  agents and apply again; model patterns and ID prefixes still match because
+  a remap changes only the session's agent field.
 
 Example: `goose` + model pattern `ossington-*|rosedale-*|tofino-*` →
 `augure-desktop`, and `codex` + the same pattern → `augure`, recover Augure

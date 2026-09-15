@@ -403,6 +403,7 @@ func (db *DB) ListDuplicateGroups(
 			COALESCE(s.started_at, ''), COALESCE(s.message_count, 0)
 		FROM duplicate_group_members m
 		JOIN sessions s ON s.id = m.session_id
+		WHERE s.deleted_at IS NULL
 		ORDER BY m.member_count DESC, s.started_at DESC, m.session_id`)
 	if err != nil {
 		return nil, fmt.Errorf("listing duplicate groups: %w", err)
@@ -435,7 +436,11 @@ func (db *DB) ListDuplicateGroups(
 	}
 	out := make([]DuplicateGroupInfo, 0, len(order))
 	for _, group := range order {
-		out = append(out, *byGroup[group])
+		info, ok := byGroup[group]
+		if !ok {
+			continue
+		}
+		out = append(out, *info)
 	}
 	return out, nil
 }

@@ -304,7 +304,7 @@ describe("AgentRemapRules", () => {
     expect(texts).toContain("goose:");
   });
 
-  it("custom agent values remain selectable", async () => {
+  it("agent typeaheads offer only known agents, no custom rows", async () => {
     settingsService.getApiV1SettingsAgentRemapRules.mockResolvedValue([]);
 
     component = mountRules();
@@ -315,21 +315,9 @@ describe("AgentRemapRules", () => {
     fireEvent.input(input, { target: { value: "my-fork-agent" } });
     await flush();
 
-    const custom = listbox()
-      .getAllByRole("option")
-      .find((option) => optionText(option) === 'Use agent "my-fork-agent"');
-    expect(custom).toBeDefined();
-    fireEvent.mouseDown(custom!);
-    await flush();
-
-    await openTypeahead("Target agent");
-    const augure = listbox()
-      .getAllByRole("option")
-      .find((option) => optionText(option) === "Augure Desktop");
-    expect(augure).toBeDefined();
-    fireEvent.mouseDown(augure!);
-    await flush();
-
-    expect(saveButton().disabled).toBe(false);
+    // The server validates agents against the parser registry, so the
+    // typeaheads must not offer arbitrary custom values that would 400.
+    const options = listbox().queryAllByRole("option");
+    expect(options).toHaveLength(0);
   });
 });

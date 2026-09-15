@@ -641,6 +641,10 @@ type Engine struct {
 	duplicateRebuildMu      gosync.Mutex
 	duplicateRebuildRunning bool
 	duplicateRebuildPending bool
+	// duplicateRebuildDone is closed when the single-flight background
+	// rebuild goroutine fully drains (no pending re-run). Tests use it to
+	// keep scheduled rebuild work out of measured regions.
+	duplicateRebuildDone chan struct{}
 	// writeBatchOverride is a test seam for exercising reconciliation archive
 	// write failures after discovery and parse have succeeded.
 	writeBatchOverride func([]pendingWrite, syncWriteMode, bool) (int, int, int, int)
@@ -4756,6 +4760,7 @@ func (e *Engine) scheduleDuplicateGroupRebuild() {
 		return
 	}
 	e.duplicateRebuildRunning = true
+	e.duplicateRebuildDone = make(chan struct{})
 	e.duplicateRebuildMu.Unlock()
 	go func() {
 		for {
@@ -4769,12 +4774,39 @@ func (e *Engine) scheduleDuplicateGroupRebuild() {
 			if !e.duplicateRebuildPending {
 				e.duplicateRebuildRunning = false
 				e.duplicateRebuildMu.Unlock()
+				close(e.duplicateRebuildDone)
 				return
 			}
 			e.duplicateRebuildPending = false
 			e.duplicateRebuildMu.Unlock()
 		}
 	}()
+}
+
+// ScheduleDuplicateGroupRebuild requests one background duplicate-group
+// membership rebuild, coalescing with any in-flight or pending rebuild. It
+// is the exported, non-blocking entry point for out-of-band session
+// mutations (trash, restore, permanent delete) that change which sessions
+// may form groups; when the rebuild changes membership it emits "sessions"
+// itself. Safe to call from request paths; never blocks.
+func (e *Engine) ScheduleDuplicateGroupRebuild() {
+	e.scheduleDuplicateGroupRebuild()
+}
+
+// WaitDuplicateGroupRebuildDrained blocks until every duplicate-group
+// rebuild scheduled so far has completed, including pending re-runs queued
+// while a rebuild was in flight. Test-only seam: allocation-measuring tests
+// call it after seeding so scheduled rebuild work cannot land inside a
+// measured region. Without a scheduled rebuild it returns immediately.
+func (e *Engine) WaitDuplicateGroupRebuildDrained() {
+	e.duplicateRebuildMu.Lock()
+	ch := e.duplicateRebuildDone
+	running := e.duplicateRebuildRunning
+	e.duplicateRebuildMu.Unlock()
+	if ch == nil || !running {
+		return
+	}
+	<-ch
 }
 
 // ApplyWorktreeProjectMappings serializes historical session rewrites and
@@ -19303,6 +19335,17 @@ func (e *Engine) writeSessionFullWithResolver(
 	if err := e.db.ClearSessionSourceMissing(s.ID); err != nil {
 		log.Printf("clear source-missing state for session %s: %v", s.ID, err)
 		return err
+	}
+	// Staged and bulk-rebuild writes get a wholesale rule apply after their
+	// batches; this per-session path must apply rules itself or every
+	// freshly discovered or fully reparsed session keeps its parser agent.
+	if _, remapErr := e.db.ApplyAgentRemapRulesToSession(
+		context.Background(), s.ID,
+	); remapErr != nil {
+		log.Printf(
+			"apply agent remap rules to %s: %v", s.ID, remapErr,
+		)
+		return remapErr
 	}
 	return nil
 }

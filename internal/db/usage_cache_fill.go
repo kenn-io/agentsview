@@ -533,7 +533,9 @@ func (c *usageFillCoordinator) suppressTokenEligibleSessions(
 		SELECT m.session_id
 		FROM duplicate_group_members m
 		JOIN usage_fill_sessions f ON f.session_id = m.session_id
+		JOIN sessions cs ON cs.id = m.canonical_id
 		WHERE m.role = 'duplicate' AND m.canonical_id <> ''
+			AND cs.deleted_at IS NULL
 			AND (EXISTS(
 				SELECT 1 FROM messages v
 				WHERE v.session_id = m.canonical_id
