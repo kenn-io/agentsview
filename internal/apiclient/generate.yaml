@@ -1,0 +1,12 @@
+package: apiclient
+generate:
+  client: true
+  client-streaming: true
+output:
+  directory: internal/apiclient
+  use-single-file: true
+  filename: client.gen.go
+filter:
+  include:
+    operation-ids:
+      - get-api-v1-sessions-id-watch
