@@ -13,6 +13,27 @@ parser change that needs a full resync must build a fresh database, sync source
 files, copy orphaned sessions from the old database, and swap the files
 atomically. Preserve sessions even when their source files no longer exist.
 
+### Conversation export
+
+Conversation projection and change state are SQLite-only. Persist parser-proven
+visible prose before flattening tool/reasoning content, in the same transaction
+as messages and parser checkpoints. A missing proof is a gap; stored `content`
+is never a fallback. Usage-only writes publish a session-level coverage gap even
+when policy removes every message. Copied sessions obey the same policy.
+
+Message IDs are opaque archive identities, not row IDs, ordinals, timestamps, or
+text hashes. Preserve them through verified appends, unchanged complete
+reparses, and unambiguous native source IDs, including retained tombstones.
+Changed no-ID replacements must report identity ambiguity. Rebuilds retain these
+IDs and tombstones but use the new database generation for revisions and
+cursors.
+
+Keep only current bodies and compact latest changes, not a body event log.
+Project-only changes publish session invalidations without changing message
+revisions. Manifest and bounded body reads resolve project evidence in their own
+SQLite snapshot; body reads also pin the database generation and message
+revision. This local contract does not widen raw artifacts or mirror schemas.
+
 ### Codex incremental import state
 
 Four SQLite-only tables support local Codex imports: `parser_checkpoints` holds

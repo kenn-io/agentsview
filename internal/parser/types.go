@@ -1386,9 +1386,14 @@ type ParsedToolResultEvent struct {
 
 // ParsedMessage holds a single extracted message.
 type ParsedMessage struct {
-	Ordinal       int
-	Role          RoleType
-	Content       string
+	Ordinal int
+	Role    RoleType
+	Content string
+	// VisibleText is the provider-proven user-visible conversation prose.
+	// Nil means the source shape is unsupported or cannot be classified
+	// safely; a pointer to an empty string means the recognized record has
+	// no permitted prose.
+	VisibleText   *string
 	ThinkingText  string // concatenated text of all thinking blocks; "" if none
 	Timestamp     time.Time
 	HasThinking   bool
@@ -1423,11 +1428,14 @@ type ParsedMessage struct {
 	// on user turns (e.g. "typed", "queued", "system", "sdk"); empty
 	// on older transcripts that predate the field and for agents that
 	// do not emit it.
-	PromptSource      string
-	SourceUUID        string
-	SourceParentUUID  string
-	IsSidechain       bool
-	IsCompactBoundary bool
+	PromptSource string
+	SourceUUID   string
+	// ConversationSourceID is the provider's stable native identity for
+	// this source record. It is never synthesized from order, time, or text.
+	ConversationSourceID string
+	SourceParentUUID     string
+	IsSidechain          bool
+	IsCompactBoundary    bool
 
 	// StopReason is the reason the assistant stopped generating
 	// (Claude: "end_turn", "tool_use", "max_tokens", "stop_sequence";

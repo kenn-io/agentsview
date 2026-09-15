@@ -493,7 +493,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // REPO/.claude/worktrees/<generated-name> so they use the owning repository
 // rather than the generated worktree name, including unchanged sources
 // already parsed at version 108 by v0.43.0.)
-const dataVersion = 109
+// (110: Claude and Codex retain parser-proven conversation prose and source
+// message identity in SQLite-only export state. Reparse unchanged sources to
+// populate this evidence; source-less archived content remains an explicit gap.)
+const dataVersion = 110
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -1782,6 +1785,8 @@ var readOnlyRequiredTables = []string{
 	"artifact_checkpoint_stages",
 	"artifact_checkpoint_stage_sessions",
 	"artifact_imported_sessions",
+	"conversation_messages",
+	"conversation_session_changes",
 }
 
 var (
@@ -2868,6 +2873,9 @@ func (db *DB) migrateColumns(ctx context.Context) error {
 		return err
 	}
 	if err := applySchemaColumnMigrations(w); err != nil {
+		return err
+	}
+	if err := ensureConversationSchemaLocked(ctx, w); err != nil {
 		return err
 	}
 	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerCreatesSQL); err != nil {

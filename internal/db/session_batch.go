@@ -560,6 +560,9 @@ func writeOneSessionBatchTx(
 	msgs := write.Messages
 	var pins []savedPin
 	if replaceMessages && sessionExists {
+		if err := reconcileConversationMessagesTx(queries, write.Session.ID, msgs, true); err != nil {
+			return 0, err
+		}
 		pins, err = savePinsTx(queries, write.Session.ID)
 		if err != nil {
 			return 0, err
@@ -573,6 +576,9 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 		msgs = messagesAfterOrdinal(msgs, maxOrd)
+		if err := reconcileConversationMessagesTx(queries, write.Session.ID, msgs, false); err != nil {
+			return 0, err
+		}
 	}
 	transcriptChanged := len(msgs) > 0
 	if replaceMessages && sessionExists {

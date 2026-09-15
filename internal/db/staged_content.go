@@ -314,12 +314,16 @@ func commitStagedDerivedStateAndCheckpoint(
 	ctx context.Context, conn *sql.Conn, sessionID string,
 	signals *SessionSignalUpdate, findings []SecretFinding,
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
+	msgs []Message,
 ) error {
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, true); err != nil {
+		return err
+	}
 	// The staged transcript is byte-for-byte identical, so preserve every
 	// message/tool row and the transcript revision. Metadata, detector rules,
 	// and prior failed post-processing may still have changed; refresh every
@@ -429,6 +433,9 @@ func (db *DB) replaceSessionContentStaged(
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
+	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, true); err != nil {
+		return err
+	}
 	if err := replaceSessionMessagesTxStaged(
 		ctx, tx, sessionID, msgs, staged, blocked,
 	); err != nil {
@@ -460,7 +467,7 @@ func (db *DB) replaceSessionContentStaged(
 			return err
 		}
 		return commitStagedDerivedStateAndCheckpoint(
-			ctx, conn, sessionID, signals, findings, cp, blobs,
+			ctx, conn, sessionID, signals, findings, cp, blobs, msgs,
 		)
 	}
 	// Summary resolution above recorded per-call content-failure

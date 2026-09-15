@@ -121,6 +121,10 @@ func TestCodexCheckpointAdoptionIsLazyForUpgradedArchive(t *testing.T) {
 	}
 	expected := toDBMessages(pendingWrite{sess: parser.ParsedSession{Agent: parser.AgentCodex}, msgs: msgs}, nil)
 	for i := range expected {
+		// Conversation provenance is parser input to the separate export
+		// projection, not part of the stored display-message contract.
+		expected[i].VisibleText = nil
+		expected[i].ConversationSourceID = ""
 		for j := range expected[i].ToolCalls {
 			// Rendering is parser input to the write projection, not a stored field.
 			expected[i].ToolCalls[j].Rendering = ""
