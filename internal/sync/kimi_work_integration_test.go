@@ -2,11 +2,12 @@ package sync_test
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/uptrace/bun"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -72,7 +73,7 @@ func TestSyncPathsAndSingleSession_KimiWork(t *testing.T) {
 	assert.Nil(t, auxSess, "aux daimon sessions must not be imported")
 
 	// Force a single-session resync; identity and project must hold.
-	require.NoError(t, testDB.Update(func(tx *sql.Tx) error {
+	require.NoError(t, testDB.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET file_mtime = NULL WHERE id = ?",
 			sessionID,

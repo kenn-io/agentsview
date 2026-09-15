@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/uptrace/bun"
 )
 
 const worktreeReclassificationSampleLimit = 10
@@ -111,14 +113,13 @@ func (db *DB) ApplyWorktreeReclassification(
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	bunTx, err := db.beginBunWriteTx(ctx)
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return WorktreeProjectMapping{}, WorktreeReclassificationPreview{}, fmt.Errorf(
 			"beginning worktree reclassification apply: %w", err,
 		)
 	}
-	defer func() { _ = bunTx.Rollback() }()
-	tx := bunTx.Tx
+	defer func() { _ = tx.Rollback() }()
 
 	stored, err := loadWorktreeMappingsForMachineTx(ctx, tx, normalized.Machine)
 	if err != nil {
@@ -157,14 +158,14 @@ func (db *DB) ApplyWorktreeReclassification(
 		updated += changed
 		if changed > 0 {
 			if err := reconcileSessionProjectIdentityAggregatesTx(
-				ctx, bunTx, update.id,
+				ctx, tx, update.id,
 				[]string{update.currentProject, update.nextProject},
 			); err != nil {
 				return WorktreeProjectMapping{}, WorktreeReclassificationPreview{}, err
 			}
 		}
 	}
-	if err := bunTx.Commit(); err != nil {
+	if err := tx.Commit(); err != nil {
 		return WorktreeProjectMapping{}, WorktreeReclassificationPreview{}, fmt.Errorf(
 			"committing worktree reclassification apply: %w", err,
 		)
@@ -194,7 +195,7 @@ func normalizeWorktreeReclassificationDraft(
 
 func previewWorktreeReclassificationTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	draft WorktreeProjectMapping,
 ) (WorktreeReclassificationPreview, error) {
 	stored, err := loadWorktreeMappingsForMachineTx(ctx, tx, draft.Machine)
@@ -218,7 +219,7 @@ func previewWorktreeReclassificationTx(
 
 func loadWorktreeMappingsForMachineTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	machine string,
 ) ([]WorktreeProjectMapping, error) {
 	rows, err := tx.QueryContext(ctx, `
@@ -284,7 +285,7 @@ func enabledWorktreeMappings(
 
 func evaluateWorktreeMappingsTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	machine string,
 	mappings []WorktreeProjectMapping,
 	scope *WorktreeProjectMapping,
@@ -500,7 +501,7 @@ func sameOptionalMappingID(left, right *int64) bool {
 
 func upsertWorktreeReclassificationMappingTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	draft WorktreeProjectMapping,
 	existing *WorktreeProjectMapping,
 ) (WorktreeProjectMapping, error) {

@@ -2,7 +2,6 @@ package storetest
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -300,7 +299,7 @@ func InsertBunMutationFixture(
 // archive schema and seeds its local restore-baseline side effect.
 func InsertSQLiteMutationFixture(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.IDB,
 	archiveID string,
 	generation string,
 	extraTrashRows int,

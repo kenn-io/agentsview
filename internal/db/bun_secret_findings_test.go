@@ -34,13 +34,11 @@ func TestBunStoreListSecretFindingsHydratesCanonicalRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Findings, 1)
 	assert.Equal(t, SecretFindingRow{
-		SecretFinding: SecretFinding{
-			SessionID: "bun-secret", RuleName: "token", Confidence: "definite",
-			LocationKind: "message", MessageOrdinal: 0,
-			MatchStart: 11, MatchEnd: 17, RedactedMatch: "se…et",
-			RulesVersion: "rules-v1",
-		},
-		Project: "alpha", Agent: "claude",
+		SessionID: "bun-secret", RuleName: "token", Confidence: "definite",
+		LocationKind: "message", MessageOrdinal: 0,
+		MatchStart: 11, MatchEnd: 17, RedactedMatch: "se…et",
+		RulesVersion: "rules-v1",
+		Project:      "alpha", Agent: "claude",
 	}, page.Findings[0])
 }
 

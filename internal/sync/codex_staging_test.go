@@ -408,6 +408,42 @@ func codexParityTranscript(uuid string) string {
 	)
 }
 
+// The parser accepts RFC3339 nanoseconds even though the current Codex
+// recorder emits milliseconds. Both archive import routes must apply the
+// canonical microsecond precision to accepted tool-result timestamps.
+func TestCodexStagedToolResultTimestampPrecision(t *testing.T) {
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b10"
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project-a", "codex_cli_rs", "2024-01-01T10:00:00Z"),
+		testjsonl.CodexMsgJSON("user", "read the file", "2024-01-01T10:00:01Z"),
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", nil, "2024-01-01T10:00:02Z"),
+		testjsonl.CodexFunctionCallOutputJSON("call", "done", "2024-01-01T10:00:03.123456789Z"),
+	)
+	for _, route := range []struct {
+		name      string
+		stagedMin int64
+	}{
+		{name: "collecting", stagedMin: 0},
+		{name: "staged", stagedMin: 1},
+	} {
+		t.Run(route.name, func(t *testing.T) {
+			database := openTestDB(t)
+			syncCodexParityEngine(t, database, writeCodexTranscriptRoot(t, uuid, content), route.stagedMin)
+			messages, err := database.GetAllMessages(t.Context(), "codex:"+uuid)
+			require.NoError(t, err)
+			var timestamps []string
+			for _, message := range messages {
+				for _, call := range message.ToolCalls {
+					for _, event := range call.ResultEvents {
+						timestamps = append(timestamps, event.Timestamp)
+					}
+				}
+			}
+			assert.Equal(t, []string{"2024-01-01T10:00:03.123456Z"}, timestamps)
+		})
+	}
+}
+
 // TestCodexEngineStagedSyncParity syncs the same transcript through two
 // real engines — one on the collecting path, one on the staged streaming
 // path (threshold lowered to a byte) — and asserts the stored projections
@@ -1107,4 +1143,68 @@ func TestCodexStagedParseCancellation(t *testing.T) {
 	entries, err := os.ReadDir(stage)
 	require.NoError(t, err)
 	assert.Empty(t, entries, "cancellation releases scratch storage")
+}
+
+func TestCodexStagingKeepsRawAgentIdentityDuringDeduplication(t *testing.T) {
+	sink, err := newCodexStagingSink(t.TempDir(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sink.Close()) })
+	sink.AppendMessage(parser.ParsedMessage{ToolCalls: []parser.ParsedToolCall{{
+		ToolUseID: "call", ToolName: "exec_command", Category: "Bash",
+	}}})
+	for range 2 {
+		for _, agent := range []string{"agent\x00tail", "agenttail", "agent\xfftail"} {
+			sink.AppendToolResultEvent("call", nil, parser.ParsedToolResultEvent{
+				ToolUseID: "call", AgentID: agent, Source: "function_call_output", Content: "same output",
+			})
+		}
+	}
+	require.NoError(t, sink.Err())
+	rows, err := sink.scratch.QueryContext(t.Context(), "SELECT agent_id FROM stage_events ORDER BY seq")
+	require.NoError(t, err)
+	defer rows.Close()
+	var agents []string
+	for rows.Next() {
+		var agent string
+		require.NoError(t, rows.Scan(&agent))
+		agents = append(agents, agent)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []string{"agent\x00tail", "agenttail", "agent\xfftail"}, agents)
+}
+
+func TestStagedBatchSkipsExcludedSessionWithoutFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode syncWriteMode
+	}{
+		{name: "default", mode: syncWriteDefault},
+		{name: "bulk", mode: syncWriteBulk},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := openTestDB(t)
+			const sessionID = "codex:excluded-stage"
+			require.NoError(t, database.UpsertSession(db.Session{
+				ID: sessionID, Agent: "codex", Project: "project", Machine: "local",
+			}))
+			require.NoError(t, database.DeleteSession(sessionID))
+			engine := NewEngine(database, EngineConfig{Machine: "local"})
+			t.Cleanup(engine.Close)
+			staged, err := newCodexStagingSink(t.TempDir(), nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, staged.Close()) })
+			outcome := engine.writeBatchWithOutcome([]pendingWrite{{
+				sess:   parser.ParsedSession{ID: sessionID, Agent: parser.AgentCodex, Project: "project", Machine: "local"},
+				msgs:   []parser.ParsedMessage{{Role: "user", Content: "pending content"}},
+				staged: staged,
+			}}, tc.mode, true)
+			require.Zero(t, outcome.failedSessions)
+			require.Zero(t, outcome.writtenSessions)
+			require.Equal(t, []bool{true}, outcome.resolved)
+			require.True(t, database.IsSessionExcluded(sessionID))
+			messages, err := database.GetAllMessages(t.Context(), sessionID)
+			require.NoError(t, err)
+			require.Empty(t, messages)
+		})
+	}
 }

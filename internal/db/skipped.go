@@ -50,17 +50,11 @@ func (db *DB) ReplaceSkippedFiles(
 		return fmt.Errorf("clearing skipped files: %w", err)
 	}
 
-	stmt, err := tx.Prepare(
-		"INSERT INTO skipped_files" +
-			" (file_path, file_mtime) VALUES (?, ?)",
-	)
-	if err != nil {
-		return fmt.Errorf("prepare: %w", err)
-	}
-	defer stmt.Close()
+	stmt := "INSERT INTO skipped_files" +
+		" (file_path, file_mtime) VALUES (?, ?)"
 
 	for path, mtime := range entries {
-		if _, err := stmt.Exec(path, mtime); err != nil {
+		if _, err := tx.Exec(stmt, path, mtime); err != nil {
 			return fmt.Errorf(
 				"inserting skipped file %s: %w",
 				path, err,

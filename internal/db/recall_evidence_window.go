@@ -11,6 +11,8 @@ import (
 	"log"
 	"sort"
 	"strings"
+
+	"github.com/uptrace/bun"
 )
 
 type recallEvidenceValidationError struct {
@@ -552,7 +554,7 @@ type recallEvidenceGroup struct {
 // transcript mutation rolls back atomically.
 func reconcileRecallEvidenceForSessionTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	sessionID string,
 	pending *recallEvidenceRevocationEvents,
 ) error {
@@ -724,7 +726,7 @@ func reconcileRecallEvidenceForSessionTx(
 
 func loadTrustedRecallEvidenceGroupsTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	sessionID string,
 ) ([]recallEvidenceGroup, error) {
 	rows, err := tx.QueryContext(ctx, `
@@ -789,7 +791,7 @@ func loadTrustedRecallEvidenceGroupsTx(
 
 func uniqueRecallEvidenceOrdinalTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	sessionID string,
 	sourceUUID string,
 ) (int, error) {
@@ -813,7 +815,7 @@ func uniqueRecallEvidenceOrdinalTx(
 
 func revokeRecallEvidenceEntryTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	entryID string,
 	sessionID string,
 	reason recallEvidenceRevocationReason,
@@ -853,7 +855,7 @@ func revokeRecallEvidenceEntryTx(
 
 func reconcileAllRecallEvidenceTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	pending *recallEvidenceRevocationEvents,
 ) error {
 	rows, err := tx.QueryContext(ctx, `

@@ -54,7 +54,7 @@ func TestReportingJointProjectIdentityRequiresEverySession(t *testing.T) {
 				require.NotNil(t, identity.Identity)
 				assert.Equal(t, "example.com/team/api", identity.Identity.NormalizedRemote)
 				opts.afterSnapshot = func() {
-					_, err := d.getWriter().Exec(`DELETE FROM session_project_identity_snapshots WHERE session_id = 'session-b'`)
+					_, err := d.getWriter().Exec(`DELETE FROM source_session_project_identity_snapshots WHERE source_session_id = 'session-b'`)
 					require.NoError(t, err)
 				}
 				during, err := d.ExportReportingDay(t.Context(), opts)

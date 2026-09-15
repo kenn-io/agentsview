@@ -261,3 +261,37 @@ func TestApplyUsage_DedupBySourceUUIDFallback(t *testing.T) {
 	assert.Equal(t, 500, r.Buckets[120].OutputTokens)
 	assert.Equal(t, money.MustParseDollars("5.0"), r.Buckets[120].Cost)
 }
+
+// Token completeness, earliest attribution and maximum billed searches can all
+// come from different snapshots. Arrival order must not change these results.
+func TestClaudeSnapshotSelectionArrivalOrder(t *testing.T) {
+	rows := []UsageRow{
+		{SessionID: "session-a", Timestamp: "2026-01-01T00:00:00Z", OutputTokens: 1},
+		{SessionID: "session-b", Timestamp: "2026-01-02T00:00:00Z", OutputTokens: 9},
+		{SessionID: "session-c", Timestamp: "2026-01-03T00:00:00Z", OutputTokens: 2, WebSearchRequests: 7},
+		{SessionID: "session-d", Timestamp: "2026-01-04T00:00:00Z", OutputTokens: 9},
+	}
+	for first := range rows {
+		for second := range rows {
+			if first == second {
+				continue
+			}
+			for third := range rows {
+				if third == first || third == second {
+					continue
+				}
+				fourth := 6 - first - second - third
+				var selection ClaudeSnapshotSelection
+				winner := -1
+				for _, i := range []int{first, second, third, fourth} {
+					if selection.Consider(rows[i]) {
+						winner = i
+					}
+				}
+				assert.Equal(t, 3, winner)
+				assert.Equal(t, "session-a", selection.AttributionSessionID())
+				assert.Equal(t, 7, selection.WebSearchRequests())
+			}
+		}
+	}
+}

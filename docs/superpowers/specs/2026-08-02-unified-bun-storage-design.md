@@ -334,14 +334,14 @@ aggregates may use parameterized Bun raw fragments, but query composition,
 literal formatting, execution, transactions, and model scanning remain under
 Bun.
 
-Those fragments use only the portable SQL subset exercised by all three
-backends. UTC parsing, calendar bucketing, percentiles, regex normalization, and
-JSON interpretation move to shared Go reducers whenever the engines do not share
-semantics. The one non-search rendering exception is chronological filtering of
-SQLite's shipped text timestamps: the SQLite adapter supplies `julianday`
-expressions while PostgreSQL and DuckDB compare native timestamps. The shared
-method still owns the query and result contract and does not branch on backend
-identity. Any further non-search expression difference requires a design update.
+Shared builders own filtering, grouping, ordering, and reduction. The analytics
+adapter supplies six scalar operations: local timestamp conversion, date
+extraction, calendar bucketing, hour extraction, ISO weekday, and elapsed
+seconds. Keeping these expressions in SQL lets each engine aggregate before
+materializing results. Timestamp ordering is also adapter-owned. Shared methods
+never branch on backend identity; new scalar seams require a design update.
+Percentiles, regex normalization, and JSON interpretation use shared reducers
+where portable SQL cannot preserve their semantics.
 
 Parser ingestion writes canonical rows through the SQLite adapter. PostgreSQL
 push and DuckDB mirror population consume the same row models and common batch

@@ -7,6 +7,7 @@ import "strings"
 // backend capabilities.
 type BunSearchDialect struct {
 	caseFoldContentSearch bool
+	contentTimestampNull  string
 	portableContentFTS    bool
 	unicodeRecentEdits    bool
 	systemPrefixSQL       func(string, string) string
@@ -25,9 +26,17 @@ func SQLiteBunSearchDialect() BunSearchDialect {
 func PostgresBunSearchDialect() BunSearchDialect {
 	return BunSearchDialect{
 		caseFoldContentSearch: true,
+		contentTimestampNull:  "CAST(NULL AS TIMESTAMPTZ)",
 		portableContentFTS:    true,
 		systemPrefixSQL:       PostgresSystemPrefixSQL,
 	}
+}
+
+func (d BunSearchDialect) contentTimestampNullExpr() string {
+	if d.contentTimestampNull != "" {
+		return d.contentTimestampNull
+	}
+	return "NULL"
 }
 
 // DuckDBBunSearchDialect configures common search SQL for DuckDB.

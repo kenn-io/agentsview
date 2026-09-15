@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
@@ -168,7 +170,7 @@ func TestSyncEngineAntigravityCLI_StaleDataVersionRenormalizesProject(t *testing
 	// path stored as the project, stamped with data version 91 -- the last
 	// version whose parser stored workspace paths unnormalized. The current
 	// version must stay above 91 for these rows to reparse.
-	require.NoError(t, env.db.Update(func(tx *sql.Tx) error {
+	require.NoError(t, env.db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET project = ?, data_version = 91 WHERE id = ?",
 			"/home/user/my-cli-project", sessionID,

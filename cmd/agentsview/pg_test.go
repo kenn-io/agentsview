@@ -45,6 +45,9 @@ func clearConfiguredAgentEnvVars(t *testing.T) {
 				t.Setenv(name, "")
 			}
 		}
+		if def.DefaultRootEnvVar != "" {
+			t.Setenv(def.DefaultRootEnvVar, "")
+		}
 	}
 }
 
@@ -54,8 +57,39 @@ func isolateDefaultAgentDirs(t *testing.T, root string) {
 	t.Setenv("USERPROFILE", root)
 	t.Setenv("APPDATA", root)
 	t.Setenv("LOCALAPPDATA", root)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, ".local", "state"))
 	t.Setenv("HOMEDRIVE", filepath.VolumeName(root))
 	t.Setenv("HOMEPATH", `\`)
+}
+
+func TestPGTestIsolationIgnoresInheritedAgentHomes(t *testing.T) {
+	inherited := t.TempDir()
+	for _, def := range parser.Registry {
+		if def.DefaultRootEnvVar != "" {
+			t.Setenv(def.DefaultRootEnvVar, inherited)
+		}
+	}
+	t.Setenv("XDG_STATE_HOME", inherited)
+	root := t.TempDir()
+	clearConfiguredAgentEnvVars(t)
+	isolateDefaultAgentDirs(t, root)
+	cfg, err := config.Default()
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		filepath.Join(root, ".codex", "sessions"),
+		filepath.Join(root, ".codex", "archived_sessions"),
+	}, cfg.AgentDirs[parser.AgentCodex])
+	require.Equal(t, []string{filepath.Join(root, ".local", "state", "evener")}, cfg.AgentDirs[parser.AgentEvener])
+	for _, def := range parser.Registry {
+		if def.DefaultRootEnvVar == "" {
+			continue
+		}
+		for _, dir := range cfg.AgentDirs[def.Type] {
+			relative, err := filepath.Rel(root, dir)
+			require.NoError(t, err)
+			require.True(t, filepath.IsLocal(relative), "%s root escaped test home", def.Type)
+		}
+	}
 }
 
 func TestLoadPGServeConfigDoesNotInheritServeProxySettings(t *testing.T) {

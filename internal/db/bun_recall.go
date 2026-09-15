@@ -156,6 +156,9 @@ func (s *BunStore) QueryRecallEntries(
 // InsertRecallEntry writes one entry and its evidence through the guarded Bun
 // transaction.
 func (s *BunStore) InsertRecallEntry(entry RecallEntry) (string, error) {
+	if err := s.requireDerivedTextStorage("recall entries"); err != nil {
+		return "", err
+	}
 	ctx := context.Background()
 	var id string
 	err := s.update(ctx, WriteRecall, func(store bun.IDB) error {
@@ -184,6 +187,9 @@ func (s *BunStore) InsertRecallEntry(entry RecallEntry) (string, error) {
 func (s *BunStore) RecordRecallQueryEvent(
 	ctx context.Context, event RecallQueryEvent,
 ) (string, error) {
+	if err := s.requireDerivedTextStorage("recall query events"); err != nil {
+		return "", err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

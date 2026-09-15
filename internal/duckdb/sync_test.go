@@ -8,10 +8,12 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
+	"github.com/uptrace/bun"
 	"log"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -113,7 +115,7 @@ func TestMirroredSessionMachine(t *testing.T) {
 func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 3)
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(func(tx bun.Tx) error {
 		if _, err := tx.Exec(
 			`UPDATE sessions SET machine = ? WHERE id = ?`,
 			"source-machine", "sess-2",
@@ -248,7 +250,7 @@ func TestPushFutureMarkerSessionStillReceivesLaterChanges(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 1)
 	futureMtime := time.Now().Add(90 * 24 * time.Hour).UnixNano()
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			`UPDATE sessions SET file_mtime = ? WHERE id = ?`,
 			futureMtime, "sess-1",
@@ -409,7 +411,7 @@ func TestPushRebuildTriggers(t *testing.T) {
 func TestPushRebuildsV6MirrorToRestoreSourceMachine(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 1)
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			`UPDATE sessions SET machine = ? WHERE id = ?`,
 			"source-machine", "sess-1",
@@ -890,6 +892,61 @@ func TestPushRebuildsOverOldSchemaVersionMirror(t *testing.T) {
 	assertMirrorMessageCount(t, path, "sess-1", 2)
 }
 
+func TestPushRebuildsVersion11MirrorForPricingTimestampPrecision(t *testing.T) {
+	ctx := context.Background()
+	local, path := newPushFixture(t, 1)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "pricing-precision-model",
+		InputPerMTok: money.MustParseDollars("1"),
+		UpdatedAt:    "2026-08-09T04:09:57.836404600Z",
+	}}))
+	prices, err := local.ListModelPricing(ctx)
+	require.NoError(t, err)
+	require.Len(t, prices, 1)
+	assert.Equal(t, "2026-08-09T04:09:57.836405Z", prices[0].UpdatedAt,
+		"archive revision before mirror rebuild")
+	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+
+	conn, err := Open(path)
+	require.NoError(t, err)
+	// Preserve an old WAL, as can happen after an interrupted writer.
+	// Replacement must not replay these transactions onto the new mirror.
+	_, err = conn.ExecContext(ctx, "PRAGMA disable_checkpoint_on_shutdown")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `
+		UPDATE model_pricing SET updated_at = TIMESTAMP '2026-08-09 04:09:57.836404'
+		WHERE model_pattern = 'pricing-precision-model'`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "UPDATE sync_metadata SET value = '11' WHERE key = ?", schemaVersionMetadataKey)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	_, err = os.Stat(path + ".wal")
+	require.NoError(t, err)
+
+	result, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, result.Diagnostics.Full)
+	assert.Contains(t, result.Diagnostics.RebuildReason, "schema version")
+
+	conn, err = Open(path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var storedVersion string
+	require.NoError(t, conn.QueryRowContext(ctx,
+		"SELECT value FROM sync_metadata WHERE key = ?", schemaVersionMetadataKey,
+	).Scan(&storedVersion))
+	assert.Equal(t, strconv.Itoa(SchemaVersion), storedVersion,
+		"the reopened file must be the rebuilt mirror")
+	var updatedAtMicros int64
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		SELECT epoch_us(updated_at) FROM model_pricing
+		WHERE model_pattern = 'pricing-precision-model'`).Scan(&updatedAtMicros))
+	assert.Equal(t, int64(1_786_248_597_836_405), updatedAtMicros,
+		"stored pricing timestamp microseconds",
+	)
+}
+
 // TestPushRebuildReasonReportsFullFlag verifies an explicitly requested
 // --full push records that as its RebuildReason even though the existing
 // mirror would otherwise be valid for an incremental push.
@@ -1093,47 +1150,31 @@ func TestPushRebuildsWhenMachineNameChanges(t *testing.T) {
 	assertDuckDBCountWhere(t, conn, "sessions", "machine = ?", "machine-a", 0)
 }
 
-// TestPushDoesNotAdvanceStateOnError injects a session that fails to push
-// and verifies the mirror's cutoff/last-push-at metadata are left exactly
-// as they were: a partially failed incremental push must not let the
-// failed session silently fall out of the next window.
-func TestPushDoesNotAdvanceStateOnError(t *testing.T) {
+func TestPushRepairsMalformedProviderMessageTimestamp(t *testing.T) {
 	ctx := context.Background()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
-	before, err := ProbeMirror(ctx, path)
-	require.NoError(t, err)
-	require.NotEmpty(t, before.LastPushCutoff)
-
 	badID := "sess-bad"
-	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session: syncSession(badID, "alpha", "bad first", "2026-02-02T00:00:00.000Z", 1),
 		Messages: []db.Message{
-			syncMessage(badID, 0, "user", "bad first", "2026-02-02T00:00:00.000Z"),
+			syncMessage(badID, 0, "user", "bad first", "not-a-timestamp"),
 		},
 		DataVersion:     1,
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
-		_, updateErr := tx.Exec(
-			`UPDATE messages SET timestamp = ? WHERE session_id = ?`,
-			"not-a-timestamp", badID,
-		)
-		return updateErr
-	}), "seed a legacy unsupported timestamp")
 
 	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
-	assert.Equal(t, 1, res.Errors)
+	assert.Zero(t, res.Errors)
 
-	after, err := ProbeMirror(ctx, path)
+	conn, err := Open(path)
 	require.NoError(t, err)
-	assert.Equal(t, before.LastPushCutoff, after.LastPushCutoff)
-	assert.Equal(t, before.LastPushAt, after.LastPushAt)
-	assert.Equal(t, before.DeletionRevision, after.DeletionRevision)
-	assertMirrorSessionAbsent(t, path, badID)
+	defer conn.Close()
+	assertDuckDBCountWhere(t, conn, "sessions", "id = ?", badID, 1)
+	assertDuckDBCountWhere(
+		t, conn, "messages", "session_id = ? AND timestamp IS NULL", badID, 1,
+	)
 }
 
 func TestSyncFullPushCreatesExpectedRows(t *testing.T) {
@@ -1220,7 +1261,7 @@ func TestPushSessionBatchLogsAbandonedSessionsAfterContextCancel(
 	}
 	_, err := local.WriteSessionBatchAtomic(writes)
 	require.NoError(t, err)
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(func(tx bun.Tx) error {
 		_, updateErr := tx.Exec(
 			`UPDATE messages SET timestamp = ? WHERE session_id LIKE ?`,
 			"not-a-timestamp", "duck-cancel-fallback-%",
@@ -1430,7 +1471,7 @@ func TestDuckSessionFingerprintCoversEveryMirroredColumn(t *testing.T) {
 		canonicalTime := "2026-03-11T12:00:01.123456Z"
 		for _, field := range []**string{
 			&s.StartedAt, &s.EndedAt, &s.SignalsPendingSince,
-			&s.DeletedAt, &s.LocalModifiedAt,
+			&s.DeletedAt, &s.SourceMissingAt, &s.LocalModifiedAt,
 		} {
 			if *field != nil {
 				*field = &canonicalTime
@@ -1481,7 +1522,7 @@ func encodeDuckSessionFingerprint(t *testing.T, session db.Session) string {
 	canonicalTime := "2026-03-11T12:00:01.123456Z"
 	for _, field := range []**string{
 		&session.StartedAt, &session.EndedAt, &session.SignalsPendingSince,
-		&session.DeletedAt, &session.LocalModifiedAt,
+		&session.DeletedAt, &session.SourceMissingAt, &session.LocalModifiedAt,
 	} {
 		if *field != nil {
 			*field = &canonicalTime
@@ -1720,10 +1761,10 @@ func TestSyncModelPricingRetiresOpenRouterRows(t *testing.T) {
 	assert.Equal(t, int64(2_000_000), input, "replacement row mirrored")
 	var meta string
 	require.NoError(t, syncer.DB().QueryRowContext(ctx,
-		`SELECT updated_at FROM model_pricing WHERE model_pattern = ?`,
+		`SELECT value FROM sync_metadata WHERE key = ?`,
 		pricing.OpenRouterModelsMetaKey,
 	).Scan(&meta))
-	assert.Equal(t, `[]`, meta, "ownership sentinel mirrored by value")
+	assert.Equal(t, `[]`, meta, "ownership metadata mirrored by value")
 }
 
 func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {
@@ -2460,7 +2501,7 @@ func appendMessage(t *testing.T, local *db.DB, sessionID string) {
 // exactly as it was: the fingerprint changes without the marker moving.
 func mutateSessionContent(t *testing.T, local *db.DB, sessionID string) {
 	t.Helper()
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			`UPDATE messages SET content = 'mutated content'
 			 WHERE session_id = ? AND ordinal = 0`,
@@ -2475,7 +2516,7 @@ func mutateSessionContent(t *testing.T, local *db.DB, sessionID string) {
 // so a test can pin it exactly at a mirror's stored cutoff.
 func setSessionSignalsTo(t *testing.T, local *db.DB, sessionID, marker string) {
 	t.Helper()
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			`UPDATE sessions SET sync_marker = ? WHERE id = ?`, marker, sessionID,
 		)

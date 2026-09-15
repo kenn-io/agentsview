@@ -13,6 +13,9 @@ import (
 // InsertInsight stores a dashboard insight through the operation-scoped common
 // writer and returns the engine-generated canonical ID.
 func (s *BunStore) InsertInsight(insight Insight) (int64, error) {
+	if err := s.requireDerivedTextStorage("insights"); err != nil {
+		return 0, err
+	}
 	ctx := context.Background()
 	row := insightToBunRow(insight)
 	var id int64
@@ -31,6 +34,11 @@ func (s *BunStore) InsertInsight(insight Insight) (int64, error) {
 		return 0, err
 	}
 	return id, nil
+}
+
+// InsightGenerationAvailable reports whether generated insights can be stored.
+func (s *BunStore) InsightGenerationAvailable() bool {
+	return !s.ReadOnly() && !s.usageOnlyStorage()
 }
 
 // DeleteInsight removes a dashboard insight by canonical ID.

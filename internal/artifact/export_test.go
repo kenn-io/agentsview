@@ -2,7 +2,6 @@ package artifact
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -15,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/uptrace/bun"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,7 +61,7 @@ func seedBareExportSessions(
 ) {
 	t.Helper()
 	ctx := t.Context()
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		stmt, err := tx.PrepareContext(ctx, `INSERT INTO sessions
 			(id, project, machine, agent, created_at)
 			VALUES (?, 'project', ?, 'claude', '2026-06-14T01:02:03Z')`)

@@ -149,13 +149,14 @@ func TestSanitizeMessage(t *testing.T) {
 			wantStats: validationStats{TimestampsBlanked: 1},
 		},
 		{
-			name: "unparseable timestamp left as-is",
+			name: "unparseable timestamp blanked",
 			in: db.Message{
 				Role:      "assistant",
 				Timestamp: "not-a-timestamp",
 			},
-			wantRole: "assistant",
-			wantTS:   "not-a-timestamp",
+			wantRole:  "assistant",
+			wantTS:    "",
+			wantStats: validationStats{TimestampsBlanked: 1},
 		},
 		{
 			name: "empty timestamp untouched",

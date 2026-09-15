@@ -61,9 +61,11 @@ func (*duckBunBackend) ReadOnly() bool { return true }
 
 func (*duckBunBackend) Capabilities() db.BackendCapabilities {
 	return db.BackendCapabilities{
-		FullText:      duckFullTextCapability{},
-		SessionSearch: duckFullTextCapability{},
-		SearchDialect: db.DuckDBBunSearchDialect(),
+		MachineMetadataTable: "sync_metadata",
+		AnalyticsDialect:     db.DuckDBBunAnalyticsDialect(),
+		FullText:             duckFullTextCapability{},
+		SessionSearch:        duckFullTextCapability{},
+		SearchDialect:        db.DuckDBBunSearchDialect(),
 		Semantic: db.NewVectorSemanticCapability(
 			func() db.VectorSearcher { return nil },
 			func() error {
@@ -75,7 +77,9 @@ func (*duckBunBackend) Capabilities() db.BackendCapabilities {
 	}
 }
 
-func (*duckBunBackend) TimestampOrderExpr(column string) string { return column }
+func (*duckBunBackend) TimestampOrderExpr(column string) string {
+	return "CAST(" + column + " AS TIMESTAMP)"
+}
 
 func (*duckBunBackend) SessionVersion(
 	ctx context.Context, store bun.IDB, id string,
@@ -400,17 +404,19 @@ func (duckFullTextCapability) Search(
 		args = append(args, f.Project)
 		nameProject = "AND s.project = ?"
 	}
-	dateBuilder := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
-	for _, pred := range dateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s." + col }) {
-		project += " AND " + pred
-		nameProject += " AND " + pred
+	datePredicate := db.BunSessionDateRangePredicate(f.DateFrom, f.DateTo, "", "s", nil)
+	if f.DateFrom != "" || f.DateTo != "" {
+		project += " AND (?)"
+		nameProject += " AND (?)"
+		args = append(args, datePredicate)
 	}
-	args = append(args, dateBuilder.Args()...)
 	args = append(args, namePattern, namePattern, namePattern, namePattern)
 	if f.Project != "" {
 		args = append(args, f.Project)
 	}
-	args = append(args, dateBuilder.Args()...)
+	if f.DateFrom != "" || f.DateTo != "" {
+		args = append(args, datePredicate)
+	}
 	orderBy := "match_priority ASC, match_pos ASC, session_ended_at DESC, session_id ASC"
 	if f.Sort == "recency" {
 		orderBy = "session_ended_at DESC, session_id ASC"

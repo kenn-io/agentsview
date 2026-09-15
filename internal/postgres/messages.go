@@ -130,13 +130,15 @@ func (postgresFullTextCapability) Search(
 		argIdx++
 	}
 
-	dateBuilder := db.NewQueryBuilder(db.PostgresQueryDialect(), argIdx-1)
-	for _, pred := range dateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s." + col }) {
-		msgProjectClause += " AND " + pred
-		nameProjectClause += " AND " + pred
+	if f.DateFrom != "" || f.DateTo != "" {
+		dateClause := fmt.Sprintf(" AND (?%d)", argIdx-1)
+		msgProjectClause += dateClause
+		nameProjectClause += dateClause
+		args = append(args, db.BunSessionDateRangePredicate(
+			f.DateFrom, f.DateTo, "", "s", nil,
+		))
+		argIdx++
 	}
-	args = append(args, dateBuilder.Args()...)
-	argIdx += len(dateBuilder.Args())
 
 	query := fmt.Sprintf(`
 		WITH msg_matches AS (

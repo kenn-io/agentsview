@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/uptrace/bun/schema"
 )
 
 const (
@@ -71,6 +73,66 @@ func sessionDateBoundary(date, timezone string, nextDay bool) string {
 		boundary = boundary.AddDate(0, 0, 1)
 	}
 	return boundary.UTC().Format(time.RFC3339)
+}
+
+// BunSessionDateRangePredicate shares session-overlap filtering with full-text
+// search capabilities. Its arguments remain nested so callers can use either
+// positional or indexed Bun placeholders without renumbering date boundaries.
+func BunSessionDateRangePredicate(
+	dateFrom, dateTo, timezone, alias string,
+	timestampOrderExpr func(string) string,
+) schema.QueryWithArgs {
+	builder := newBunFilterArgs(timestampOrderExpr)
+	predicates := bunSessionDatePredicates(SessionFilter{
+		DateFrom: dateFrom, DateTo: dateTo, Timezone: timezone,
+	}, builder, func(column string) string { return alias + "." + column })
+	return schema.SafeQuery(strings.Join(predicates, " AND "), builder.values())
+}
+
+func bunSessionDatePredicates(
+	filter SessionFilter, builder *bunFilterArgs, qualify func(string) string,
+) []string {
+	var predicates []string
+	dateStart := func() string {
+		return builder.timestamp("COALESCE(" +
+			bunNullableTimestamp(qualify("started_at")) + ", " + qualify("created_at") + ")")
+	}
+	dateEnd := func() string {
+		outerID := qualify("id")
+		if outerID == "id" {
+			outerID = "session.id"
+		}
+		latestMessage := `(SELECT m.timestamp FROM messages AS m
+			WHERE m.session_id = ` + outerID + `
+			  AND ` + bunNullableTimestamp("m.timestamp") + ` IS NOT NULL
+			ORDER BY ` + builder.timestamp(bunNullableTimestamp("m.timestamp")) +
+			` DESC, m.timestamp DESC LIMIT 1)`
+		return builder.timestamp("COALESCE(" +
+			bunNullableTimestamp(qualify("ended_at")) + ", " + latestMessage + ", " +
+			bunNullableTimestamp(qualify("started_at")) + ", " + qualify("created_at") + ")")
+	}
+	boundaryParam := func(value string) string {
+		return builder.timestamp(builder.bind(value))
+	}
+	if filter.Date != "" {
+		predicates = append(predicates, "("+dateEnd()+" >= "+boundaryParam(
+			sessionDateBoundary(filter.Date, filter.Timezone, false))+" AND "+
+			dateStart()+" < "+boundaryParam(
+			sessionDateBoundary(filter.Date, filter.Timezone, true))+")")
+	}
+	if filter.DateFrom != "" {
+		predicates = append(predicates, dateEnd()+" >= "+boundaryParam(
+			sessionDateBoundary(filter.DateFrom, filter.Timezone, false)))
+	}
+	if filter.DateTo != "" {
+		predicates = append(predicates, dateStart()+" < "+boundaryParam(
+			sessionDateBoundary(filter.DateTo, filter.Timezone, true)))
+	}
+	if filter.ActiveSince != "" {
+		predicates = append(predicates,
+			dateEnd()+" >= "+boundaryParam(filter.ActiveSince))
+	}
+	return predicates
 }
 
 func EscapeLikePattern(value string) string {
@@ -225,45 +287,7 @@ func bunSessionFilterPredicates(
 		predicates = append(predicates,
 			bunInPredicate(qualify("agent"), splitCSV(filter.Agent), builder))
 	}
-	dateStart := func() string {
-		return builder.timestamp("COALESCE(" +
-			bunNullableTimestamp(qualify("started_at")) + ", " + qualify("created_at") + ")")
-	}
-	dateEnd := func() string {
-		outerID := qualify("id")
-		if outerID == "id" {
-			outerID = "session.id"
-		}
-		latestMessage := `(SELECT m.timestamp FROM messages AS m
-			WHERE m.session_id = ` + outerID + `
-			  AND ` + bunNullableTimestamp("m.timestamp") + ` IS NOT NULL
-			ORDER BY ` + builder.timestamp(bunNullableTimestamp("m.timestamp")) +
-			` DESC, m.timestamp DESC LIMIT 1)`
-		return builder.timestamp("COALESCE(" +
-			bunNullableTimestamp(qualify("ended_at")) + ", " + latestMessage + ", " +
-			bunNullableTimestamp(qualify("started_at")) + ", " + qualify("created_at") + ")")
-	}
-	boundaryParam := func(value string) string {
-		return builder.timestamp(builder.bind(value))
-	}
-	if filter.Date != "" {
-		predicates = append(predicates, "("+dateEnd()+" >= "+boundaryParam(
-			sessionDateBoundary(filter.Date, filter.Timezone, false))+" AND "+
-			dateStart()+" < "+boundaryParam(
-			sessionDateBoundary(filter.Date, filter.Timezone, true))+")")
-	}
-	if filter.DateFrom != "" {
-		predicates = append(predicates, dateEnd()+" >= "+boundaryParam(
-			sessionDateBoundary(filter.DateFrom, filter.Timezone, false)))
-	}
-	if filter.DateTo != "" {
-		predicates = append(predicates, dateStart()+" < "+boundaryParam(
-			sessionDateBoundary(filter.DateTo, filter.Timezone, true)))
-	}
-	if filter.ActiveSince != "" {
-		predicates = append(predicates,
-			dateEnd()+" >= "+boundaryParam(filter.ActiveSince))
-	}
+	predicates = append(predicates, bunSessionDatePredicates(filter, builder, qualify)...)
 	if filter.MinMessages > 0 {
 		predicates = append(predicates,
 			qualify("message_count")+" >= "+builder.bind(filter.MinMessages))

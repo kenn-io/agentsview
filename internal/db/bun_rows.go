@@ -289,10 +289,21 @@ func sessionFromBunRow(row bunmodel.Session) Session {
 }
 
 func messageToBunRow(message Message) (bunmodel.Message, error) {
-	var id *int64
-	if message.ID != 0 {
-		id = &message.ID
+	row, err := messageToBunRowWithoutID(message)
+	if err != nil {
+		return bunmodel.Message{}, err
 	}
+	if message.ID != 0 {
+		id := message.ID
+		row.ID = &id
+	}
+	return row, nil
+}
+
+// messageToBunRowWithoutID converts the target-assigned canonical message
+// shape without taking the address of the source Message. Keeping the ID path
+// separate prevents every ID-less parser message from escaping to the heap.
+func messageToBunRowWithoutID(message Message) (bunmodel.Message, error) {
 	timestamp, err := timestampToBunRow(message.Timestamp)
 	if err != nil {
 		return bunmodel.Message{}, fmt.Errorf(
@@ -301,7 +312,6 @@ func messageToBunRow(message Message) (bunmodel.Message, error) {
 		)
 	}
 	return bunmodel.Message{
-		ID:                id,
 		SessionID:         message.SessionID,
 		Ordinal:           message.Ordinal,
 		Role:              message.Role,
@@ -313,6 +323,7 @@ func messageToBunRow(message Message) (bunmodel.Message, error) {
 		ContentLength:     message.ContentLength,
 		IsSystem:          message.IsSystem,
 		Model:             message.Model,
+		ReasoningEffort:   message.ReasoningEffort,
 		TokenUsage:        append(json.RawMessage(nil), message.TokenUsage...),
 		ContextTokens:     message.ContextTokens,
 		OutputTokens:      message.OutputTokens,
@@ -349,6 +360,7 @@ func messageFromBunRow(row bunmodel.Message) Message {
 		ContentLength:     row.ContentLength,
 		IsSystem:          row.IsSystem,
 		Model:             row.Model,
+		ReasoningEffort:   row.ReasoningEffort,
 		TokenUsage:        DecodeStoredTokenUsage(string(row.TokenUsage)),
 		ContextTokens:     row.ContextTokens,
 		OutputTokens:      row.OutputTokens,

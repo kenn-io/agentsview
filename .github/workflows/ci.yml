@@ -272,8 +272,13 @@ jobs:
         include:
           - name: Capture, Database, Parser
             package: ./internal/capture ./internal/db ./internal/parser
-          - name: Sync
+          # Complementary filters keep every sync test in exactly one job.
+          - name: Sync A-Q
             package: ./internal/sync
+            run: '^Test[A-Q]'
+          - name: Sync remaining
+            package: ./internal/sync
+            skip: '^Test[A-Q]'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -329,7 +334,7 @@ jobs:
       - name: Run ${{ matrix.name }} tests
         shell: pwsh
         run: |
-          go test -json -tags "fts5" ${{ matrix.package }} -count=1 -timeout=20m 2>&1 |
+          go test -json -tags "fts5" ${{ matrix.package }} -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m 2>&1 |
             Tee-Object -FilePath go-test-events.jsonl
           exit $LASTEXITCODE
         env:

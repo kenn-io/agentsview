@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/uptrace/bun"
 )
 
 // ErrArtifactImportConflict reports two identities claiming the same durable
@@ -946,7 +948,7 @@ func (db *DB) RecordArtifactImportedSession(
 
 func recordArtifactImportedSessionTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	imported ArtifactImportedSession,
 ) error {
 	_, err := tx.ExecContext(ctx, `
@@ -971,7 +973,7 @@ func recordArtifactImportedSessionTx(
 
 func artifactLandingMapEqualTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	origin string,
 	want map[string]string,
 ) (bool, error) {

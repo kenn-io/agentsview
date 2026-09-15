@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/assets"
 	"go.kenn.io/agentsview/internal/config"
 )
@@ -372,7 +372,7 @@ func TestMigrateWritesBeforeCommit(t *testing.T) {
 	// Trigger that fires after bumpTranscriptRevisionTx updates transcript_revision,
 	// aborting the transaction. At that point content UPDATEs have run but the
 	// file has already been written to disk (projection runs before UPDATEs).
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			CREATE TRIGGER fail_after_revision_bump
 			AFTER UPDATE OF transcript_revision ON sessions

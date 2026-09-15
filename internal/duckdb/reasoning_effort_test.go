@@ -40,7 +40,10 @@ func TestReasoningEffortDuckDBInsertMessagePath(t *testing.T) {
 		Model:           "model-test",
 		ReasoningEffort: "high",
 	}
-	require.NoError(t, insertMessages(ctx, store.duck, []db.Message{message}))
+	rows, _, _, err := db.CanonicalMessageRows([]db.Message{message})
+	require.NoError(t, err)
+	rows[0].ID = new(message.ID)
+	require.NoError(t, db.AppendMessageRows(ctx, store.bun, fixture.alphaID, rows))
 
 	messages, err := store.GetAllMessages(ctx, fixture.alphaID)
 	require.NoError(t, err)

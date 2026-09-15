@@ -2,12 +2,13 @@ package sync
 
 import (
 	"context"
-	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/uptrace/bun"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -506,7 +507,7 @@ func TestReconcileTombstonesAfterSourceLabelChange(t *testing.T) {
 	// Model an archive admitted before deletion-proof baselines existed. The
 	// relabeled reconciliation must recreate proof under the stored machine,
 	// not only visit the configured candidate machine.
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"DELETE FROM local_session_source_baselines WHERE session_id = ?",
 			"archive-session",
@@ -563,7 +564,7 @@ func TestReconcileTombstonesLegacyEmptyMachineSession(t *testing.T) {
 	// Model a session admitted before machine attribution and deletion-proof
 	// baselines existed. Refreshing it must retain the empty attribution while
 	// recreating deletion proof for that exact stored ownership key.
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		if _, err := tx.Exec(
 			"UPDATE sessions SET machine = '' WHERE id = ?",
 			"legacy-empty-machine",

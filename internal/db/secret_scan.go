@@ -2,8 +2,8 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
+	"github.com/uptrace/bun"
 
 	"go.kenn.io/agentsview/internal/secrets"
 )
@@ -11,7 +11,7 @@ import (
 // scanStoredSecretFindingsTx scans canonical stored content using its original
 // coordinates, including result events without a surviving tool call.
 func scanStoredSecretFindingsTx(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, tx bun.Tx, sessionID string,
 ) ([]SecretFinding, int, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT 'message', ordinal, NULL, NULL, content

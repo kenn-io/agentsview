@@ -64,6 +64,11 @@ func TestReadSessionReplicationSnapshotIncludesCanonicalDependents(t *testing.T)
 	repeat, err := CanonicalSessionReplicationFingerprint(snapshot, "owner")
 	require.NoError(t, err)
 	assert.Equal(t, fingerprint, repeat)
+	PrepareToolResultEvent(&snapshot.Messages[0].ToolCalls[0].ResultEvents[0])
+	withLocalMetadata, err := CanonicalSessionReplicationFingerprint(snapshot, "owner")
+	require.NoError(t, err)
+	assert.Equal(t, fingerprint, withLocalMetadata, "SQLite import identity does not change mirror content")
+
 	snapshot.Messages[0].Content = "changed snapshot message"
 	changed, err := CanonicalSessionReplicationFingerprint(snapshot, "owner")
 	require.NoError(t, err)

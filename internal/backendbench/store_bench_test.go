@@ -37,8 +37,9 @@ type benchmarkStore struct {
 }
 
 type benchmarkFixture struct {
-	sessionCount       int
-	messagesPerSession int
+	sessionCount        int
+	messagesPerSession  int
+	snapshotRepetitions int
 }
 
 func BenchmarkStoreBackends(b *testing.B) {
@@ -177,6 +178,7 @@ func benchmarkFixtureFromEnv(b *testing.B) benchmarkFixture {
 	b.Helper()
 
 	return benchmarkFixture{
+		snapshotRepetitions: positiveIntFromEnv(b, "AGENTSVIEW_BENCH_SNAPSHOT_REPETITIONS", 1),
 		sessionCount: positiveIntFromEnv(
 			b,
 			"AGENTSVIEW_BENCH_SESSIONS",
@@ -463,8 +465,8 @@ func seedBenchmarkFixture(b *testing.B, store *db.DB, fixture benchmarkFixture) 
 				OutputTokens:     outputTokens,
 				HasContextTokens: true,
 				HasOutputTokens:  true,
-				ClaudeMessageID:  fmt.Sprintf("%s-%02d", id, ordinal),
-				ClaudeRequestID:  fmt.Sprintf("request-%03d-%02d", i, ordinal),
+				ClaudeMessageID:  fmt.Sprintf("%s-%02d", id, ordinal/max(1, fixture.snapshotRepetitions)),
+				ClaudeRequestID:  fmt.Sprintf("request-%03d-%02d", i, ordinal/max(1, fixture.snapshotRepetitions)),
 			})
 		}
 		if err := store.InsertMessages(messages); err != nil {

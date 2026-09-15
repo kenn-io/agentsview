@@ -3,10 +3,13 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/dlclark/regexp2/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
@@ -110,7 +113,7 @@ func (*alternatingUsageBackend) Name() string { return "alternating-usage" }
 func (*alternatingUsageBackend) ReadOnly() bool { return true }
 
 func (*alternatingUsageBackend) Capabilities() BackendCapabilities {
-	return BackendCapabilities{}
+	return BackendCapabilities{AnalyticsDialect: SQLiteBunAnalyticsDialect()}
 }
 
 func (*alternatingUsageBackend) TimestampOrderExpr(column string) string {
@@ -184,6 +187,63 @@ func TestGetDailyUsageKeepsPricingRowsAndIdentityInOneView(t *testing.T) {
 	assert.Equal(t, int64(10_000), result.Totals.TotalCost.Microdollars)
 	assert.Equal(t, 1, backend.views)
 	assert.Equal(t, 2, backend.attempts)
+}
+
+func TestBunUsageStreamFiltersOrdinarySourcesBeforeScan(t *testing.T) {
+	database := testDB(t)
+	hook := new(countingQueryHook)
+	store := database.bunReader.WithQueryHook(hook)
+	common := NewBunStore(&sessionContractBackend{store: store})
+	filter := UsageFilter{Timezone: "UTC", Model: "wanted-model"}
+
+	err := common.streamBunNormalizedDailyUsageRows(
+		t.Context(), store, filter, false, func(dailyUsageScanRow) error { return nil },
+	)
+	require.NoError(t, err)
+	require.Len(t, hook.queries, 3)
+	assert.Contains(t, hook.queries[0], "m.model IN ('wanted-model')")
+	assert.Contains(t, hook.queries[0], "m.claude_message_id = ''")
+	assert.Contains(t, hook.queries[1], "ue.model IN ('wanted-model')")
+	assert.NotContains(t, hook.queries[2], "m.model IN ('wanted-model')")
+	assert.Contains(t, hook.queries[2], "m.claude_message_id != ''")
+}
+
+func TestBunDailyUsageResultsOutliveSubsequentReads(t *testing.T) {
+	database := testDB(t)
+	started := "2026-08-04T12:00:00Z"
+	for _, id := range []string{"project-a", "project-b"} {
+		require.NoError(t, database.UpsertSession(Session{
+			ID: id, Project: id, Agent: "claude", Machine: "local",
+			StartedAt: &started, CreatedAt: started,
+		}))
+	}
+	require.NoError(t, database.InsertMessages([]Message{
+		{SessionID: "project-a", Ordinal: 0, Role: "assistant", Model: "model-a",
+			Timestamp: started, ClaudeMessageID: "message-a", ClaudeRequestID: "request-a",
+			TokenUsage: []byte(`{"output_tokens":5}`)},
+		{SessionID: "project-a", Ordinal: 1, Role: "assistant", Model: "model-a",
+			Timestamp: "2026-08-04T12:00:01Z", ClaudeMessageID: "message-a", ClaudeRequestID: "request-a",
+			TokenUsage: []byte(`{"output_tokens":9}`)},
+		{SessionID: "project-b", Ordinal: 0, Role: "assistant", Model: "model-b",
+			Timestamp: started, ClaudeMessageID: "message-b", ClaudeRequestID: "request-b",
+			TokenUsage: []byte(`{"output_tokens":4}`)},
+	}))
+	common := NewBunStore(&sessionContractBackend{store: database.bunReader})
+	first, err := common.GetDailyUsage(t.Context(), UsageFilter{
+		Timezone: "UTC", Project: "project-a",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 9, first.Totals.OutputTokens)
+	for range 3 {
+		second, err := common.GetDailyUsage(t.Context(), UsageFilter{
+			Timezone: "UTC", Project: "project-b",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 4, second.Totals.OutputTokens)
+		assert.Equal(t, 9, first.Totals.OutputTokens)
+		require.Len(t, first.Daily, 1)
+		assert.Equal(t, "2026-08-04", first.Daily[0].Date)
+	}
 }
 
 // A missing ID predicate would admit ignored-session rows, adapter-specific
@@ -327,7 +387,32 @@ func TestAppendBunUsageTerminationFilterUsesProvidedReference(t *testing.T) {
 	assert.Equal(t, []string{"active", "stale", "unclean"}, ids)
 }
 
-func TestAppendBunUsageTerminationFilterKeepsExactCutoffSemantics(t *testing.T) {
+func TestBunDailyUsageQueriesUseProvidedReference(t *testing.T) {
+	database := testDB(t)
+	reference := time.Date(2030, 1, 2, 12, 0, 0, 0, time.UTC)
+	ended := reference.Add(-5 * time.Minute).Format(time.RFC3339Nano)
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "active-at-reference", Project: "clock", Machine: "host", Agent: "codex",
+		CreatedAt: ended, StartedAt: &ended, EndedAt: &ended,
+		MessageCount: 1,
+	}))
+	insertMessages(t, database, Message{
+		SessionID: "active-at-reference", Ordinal: 0, Role: "assistant",
+		Timestamp: ended, Model: "usage-model",
+		TokenUsage: []byte(`{"input_tokens":1}`),
+	})
+
+	messageQuery, _ := NewBunStore(&sqliteBunBackend{store: database}).
+		bunDailyUsageQueries(
+			database.bunReader, UsageFilter{Termination: "active"}, false, reference,
+		)
+	var rows []bunDailyUsageProjection
+	require.NoError(t, messageQuery.Scan(t.Context(), &rows))
+	require.Len(t, rows, 1)
+	assert.Equal(t, "active-at-reference", rows[0].SessionID)
+}
+
+func TestAppendBunUsageTerminationFilterKeepsBoundaryCandidates(t *testing.T) {
 	database := testDB(t)
 	reference := time.Date(2026, time.August, 4, 12, 0, 0, 0, time.UTC)
 	flagged := "tool_call_pending"
@@ -359,8 +444,8 @@ func TestAppendBunUsageTerminationFilterKeepsExactCutoffSemantics(t *testing.T) 
 		return ids
 	}
 
-	assert.Equal(t, []string{"active-after"}, queryIDs("active"))
-	assert.Equal(t, []string{"active-cutoff", "stale-after"}, queryIDs("stale"))
+	assert.Equal(t, []string{"active-after", "active-cutoff"}, queryIDs("active"))
+	assert.Equal(t, []string{"active-cutoff", "stale-after", "stale-cutoff"}, queryIDs("stale"))
 	assert.Equal(t, []string{"stale-cutoff"}, queryIDs("unclean"))
 }
 
@@ -468,6 +553,30 @@ func TestCanonicalModelPricingRowsPreserveBandsAndMoney(t *testing.T) {
 	assert.Equal(t, int64(200_000), bands[0].AboveInputTokens)
 	assert.Equal(t, int64(55), bands[0].InputMicrodollarsPerMTok)
 	assert.Equal(t, prices[0].UpdatedAt, bands[0].UpdatedAt)
+}
+
+func TestCanonicalModelPricingRowsRoundTimestampsToPostgresPrecision(
+	t *testing.T,
+) {
+	prices, bands, err := CanonicalModelPricingRows([]ModelPricing{{
+		ModelPattern: "base-model",
+		UpdatedAt:    "2026-08-09T04:09:57.836404600Z",
+		Bands: []PricingBand{{
+			AboveInputTokens: 100,
+			UpdatedAt:        "2026-08-09T04:09:57.310283500Z",
+		}},
+	}})
+	require.NoError(t, err)
+	require.Len(t, prices, 1)
+	require.Len(t, bands, 1)
+	assert.Equal(t,
+		time.Date(2026, 8, 9, 4, 9, 57, 836_405_000, time.UTC),
+		prices[0].UpdatedAt.Time,
+	)
+	assert.Equal(t,
+		time.Date(2026, 8, 9, 4, 9, 57, 310_284_000, time.UTC),
+		bands[0].UpdatedAt.Time,
+	)
 }
 
 func TestCanonicalModelPricingRowsRejectInvalidTimestamp(t *testing.T) {
@@ -592,4 +701,196 @@ func TestCanonicalCursorUsageEventRowsValidatesPersistedValues(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.Empty(t, rows[0].Model, "legacy empty models remain replicable")
 	assert.NotEmpty(t, rows[0].DedupKey, "sanitized empty keys are regenerated")
+}
+
+// Repeated streaming updates must emit only the fullest snapshot for a request.
+func TestBunDailyUsageStreamEmitsOnlySnapshotWinner(t *testing.T) {
+	for _, count := range []int{16, 4096} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			database := testDB(t)
+			started := "2026-08-04T12:00:00Z"
+			require.NoError(t, database.UpsertSession(Session{
+				ID: "session", Project: "project", Agent: "claude", Machine: "local",
+				StartedAt: &started, CreatedAt: started,
+			}))
+			messages := make([]Message, count)
+			for i := range messages {
+				messages[i] = Message{SessionID: "session", Ordinal: i, Role: "assistant",
+					Timestamp: started, Model: "model", ClaudeMessageID: "message", ClaudeRequestID: "request",
+					TokenUsage: fmt.Appendf(nil, `{"output_tokens":%d}`, i+1)}
+			}
+			require.NoError(t, database.InsertMessages(messages))
+			common := NewBunStore(&sessionContractBackend{store: database.bunReader})
+			filter := UsageFilter{Timezone: "UTC"}
+			var rows []dailyUsageScanRow
+			err := common.streamBunNormalizedDailyUsageRows(t.Context(), database.bunReader, filter, false, func(row dailyUsageScanRow) error {
+				rows = append(rows, row)
+				return nil
+			})
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			_, output, _, _, _ := dailyUsageRowTokens(rows[0])
+			assert.Equal(t, count, output)
+		})
+	}
+}
+
+func TestBunDailyUsageGroupedSnapshotsPreserveCollidingKeyWinner(t *testing.T) {
+	database := testDB(t)
+	started := "2026-08-04T11:00:00Z"
+	for _, id := range []string{"a", "b", "c"} {
+		require.NoError(t, database.UpsertSession(Session{
+			ID: id, Project: "project", Agent: "claude", Machine: "local",
+			StartedAt: &started, CreatedAt: started,
+		}))
+	}
+	// Different identity pairs share the public colon-joined duplicate key.
+	// Identity order opposes source order; attribution makes both winners tie
+	// on session and ordinal. Source b must still supply the billed winner.
+	for _, tc := range []struct {
+		session, identity, request, model, timestamp string
+		ordinal, tokens                              int
+	}{
+		{"a", "x:y", "z", "model-b", started, 1, 1},
+		{"a", "x", "y:z", "model-c", started, 2, 1},
+		{"b", "x:y", "z", "model-b", "2026-08-04T12:00:00Z", 0, 2},
+		{"c", "x", "y:z", "model-c", "2026-08-04T12:00:00Z", 0, 2},
+	} {
+		require.NoError(t, database.InsertMessages([]Message{{
+			SessionID: tc.session, Ordinal: tc.ordinal, Role: "assistant",
+			Timestamp: tc.timestamp, Model: tc.model,
+			ClaudeMessageID: tc.identity, ClaudeRequestID: tc.request,
+			TokenUsage: fmt.Appendf(nil, `{"output_tokens":%d}`, tc.tokens),
+		}}))
+	}
+	common := NewBunStore(&sessionContractBackend{store: database.bunReader})
+	filter := UsageFilter{Timezone: "UTC"}
+	var rows []dailyUsageScanRow
+	err := common.streamBunNormalizedDailyUsageRows(t.Context(), database.bunReader, filter, false, func(row dailyUsageScanRow) error {
+		rows = append(rows, row)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "a", rows[0].sessionID)
+	assert.Equal(t, "model-b", rows[0].model)
+}
+
+func TestBunUsageStreamStopsOnConsumerError(t *testing.T) {
+	database := testDB(t)
+	started := "2026-08-05T12:00:00Z"
+	require.NoError(t, database.UpsertSession(Session{ID: "stream", Project: "project", Agent: "codex", Machine: "host", CreatedAt: started}))
+	require.NoError(t, database.InsertMessages([]Message{
+		{SessionID: "stream", Ordinal: 0, Role: "assistant", Timestamp: started, Model: "model", TokenUsage: []byte(`{"input_tokens":1}`)},
+		{SessionID: "stream", Ordinal: 1, Role: "assistant", Timestamp: started, Model: "model", TokenUsage: []byte(`{"input_tokens":2}`)},
+	}))
+	hook := new(countingQueryHook)
+	reader := database.bunReader.WithQueryHook(hook)
+	store := NewBunStore(&sessionContractBackend{store: reader})
+	stopped := errors.New("consumer stopped")
+	calls := 0
+	err := store.streamBunNormalizedDailyUsageRows(t.Context(), reader, UsageFilter{Timezone: "UTC"}, false, func(dailyUsageScanRow) error {
+		calls++
+		return stopped
+	})
+	require.ErrorIs(t, err, stopped)
+	assert.Equal(t, 1, calls)
+	assert.Len(t, hook.queries, 1, "a rejected first row must stop before querying later sources")
+	result, err := store.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.Totals.InputTokens, "a subsequent read must work after the interrupted stream closes")
+}
+
+func TestBunUsageCountsDiscardReplayedView(t *testing.T) {
+	first, second := testDB(t), testDB(t)
+	started := "2026-08-05T12:00:00Z"
+	require.NoError(t, first.UpsertSession(Session{ID: "discarded", Project: "project", Agent: "claude", Machine: "host", CreatedAt: started}))
+	require.NoError(t, first.InsertMessages([]Message{{SessionID: "discarded", Ordinal: 0, Role: "assistant", Timestamp: started, Model: "model",
+		TokenUsage: []byte(`{"input_tokens":9}`), ClaudeMessageID: "message", ClaudeRequestID: "request"}}))
+	store := NewBunStore(&alternatingUsageBackend{first: first.bunReader, second: second.bunReader})
+	counts, err := store.GetUsageSessionCounts(t.Context(), UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	assert.Zero(t, counts.Total)
+	assert.Empty(t, counts.ByProject)
+	matching, err := store.GetUsageMatchingSessionCount(t.Context(), UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	assert.Zero(t, matching)
+}
+
+func TestBunDailyUsageActiveSincePreservesMicrosecondsBeforeDedup(t *testing.T) {
+	database := testDB(t)
+	for _, row := range []struct {
+		id, ended string
+		tokens    int
+	}{
+		{"a-outside", "2026-08-05T12:00:00.000001Z", 99},
+		{"b-inside", "2026-08-05T12:00:00.000002Z", 7},
+	} {
+		require.NoError(t, database.UpsertSession(Session{
+			ID: row.id, Project: row.id, Agent: "codex",
+			StartedAt: &row.ended, EndedAt: &row.ended, CreatedAt: row.ended,
+			MessageCount: 1, UserMessageCount: 1,
+		}))
+		insertMessages(t, database, Message{
+			SessionID: row.id, Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-08-05T11:00:00Z", Model: "usage-model",
+			SourceUUID: "shared-source",
+			TokenUsage: fmt.Appendf(nil, `{"input_tokens":%d}`, row.tokens),
+		})
+	}
+	store := NewBunStore(&sessionContractBackend{store: database.bunReader})
+	filter := UsageFilter{
+		From: "2026-08-05", To: "2026-08-05", Timezone: "UTC",
+		ActiveSince: "2026-08-05T12:00:00.000002Z",
+	}
+	result, err := store.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 7, result.Totals.InputTokens)
+	counts, err := store.GetUsageSessionCounts(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int{"b-inside": 1}, counts.ByProject)
+}
+
+func TestBunUsageTerminationPreservesMicrosecondCandidates(t *testing.T) {
+	for _, tc := range []struct{ status, cutoff, inside string }{
+		{"active", "2026-08-05T11:50:00Z", "2026-08-05T11:50:00.000001Z"},
+		{"stale", "2026-08-05T11:00:00Z", "2026-08-05T11:00:00.000001Z"},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			database := testDB(t)
+			for _, row := range []struct {
+				id, ended string
+				tokens    int
+			}{
+				{"a-outside", tc.cutoff, 99}, {"b-inside", tc.inside, 7},
+			} {
+				require.NoError(t, database.UpsertSession(Session{
+					ID: row.id, Project: row.id, Agent: "codex",
+					StartedAt: &row.ended, EndedAt: &row.ended, CreatedAt: row.ended,
+					TerminationStatus: Ptr("tool_call_pending"), MessageCount: 1, UserMessageCount: 1,
+				}))
+				insertMessages(t, database, Message{
+					SessionID: row.id, Ordinal: 0, Role: "assistant", Timestamp: "2026-08-05T10:00:00Z",
+					Model: "usage-model", SourceUUID: "shared-source",
+					TokenUsage: fmt.Appendf(nil, `{"input_tokens":%d}`, row.tokens),
+				})
+			}
+			store := NewBunStore(&sessionContractBackend{store: database.bunReader})
+			// Freeze the reference clock while real SQLite queries run.
+			synctest.Test(t, func(t *testing.T) {
+				t.Cleanup(regexp2.StopTimeoutClock)
+				time.Sleep(time.Until(time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)))
+				filter := UsageFilter{Termination: tc.status, Timezone: "UTC"}
+				daily, err := store.GetDailyUsage(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, 7, daily.Totals.InputTokens)
+				counts, err := store.GetUsageSessionCounts(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, map[string]int{"b-inside": 1}, counts.ByProject)
+				matching, err := store.GetUsageMatchingSessionCount(t.Context(), filter)
+				require.NoError(t, err)
+				assert.Equal(t, 1, matching)
+			})
+		})
+	}
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+
+	"github.com/uptrace/bun"
 )
 
 const signalsBackfillMarker = "session_quality_signals_v1"
@@ -49,7 +51,7 @@ func usageOnlySignalUpdate() SessionSignalUpdate {
 }
 
 func settleUsageOnlySignalsTx(
-	tx transactionQueries, sessionID string,
+	tx bun.Tx, sessionID string,
 ) error {
 	if err := updateSessionSignalsTx(
 		tx, sessionID, usageOnlySignalUpdate(),
@@ -59,7 +61,7 @@ func settleUsageOnlySignalsTx(
 	if _, err := tx.Exec(`DELETE FROM session_signal_state WHERE session_id = ?`, sessionID); err != nil {
 		return fmt.Errorf("clearing usage-only signal state: %w", err)
 	}
-	return replaceSecretFindingsTx(tx, sessionID, nil, 0, "")
+	return replaceSessionSecretFindingsBunTx(context.Background(), tx, sessionID, nil, 0, "")
 }
 
 // SettleUsageOnlySignals atomically clears transcript-derived signal state and
@@ -118,10 +120,10 @@ func (db *DB) UpdateSessionSignals(
 // updateSessionSignalsTx writes signal columns within an existing transaction.
 // Caller owns the lock and transaction lifecycle. It deliberately does NOT
 // write secret_leak_count/secrets_rules_version: those are owned solely by the
-// secret-finding replacement path (replaceSecretFindingsTx), so a signals-only
-// recompute cannot reset them while findings still exist. The two secret fields
-// on SessionSignalUpdate are carried here only so callers can forward them to
-// replaceSecretFindingsTx alongside the findings.
+// secret-finding replacement path (replaceSessionSecretFindingsBunTx), so a
+// signals-only recompute cannot reset them while findings still exist. The two
+// secret fields on SessionSignalUpdate are carried here only so callers can
+// forward them to replaceSessionSecretFindingsBunTx alongside the findings.
 func updateSessionSignalsTx(
 	tx transactionQueries, sessionID string, u SessionSignalUpdate,
 ) error {

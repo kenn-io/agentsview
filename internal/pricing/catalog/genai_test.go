@@ -205,3 +205,31 @@ func TestGenAIPricesRegexMatchingPreservesUpstreamCaseSensitivity(t *testing.T) 
 	_, ok = prices.Resolve("", "model-abc", time.Time{})
 	assert.False(t, ok)
 }
+
+func TestGenAIPricesMixedScalarAndRegexCaseRules(t *testing.T) {
+	prices, err := ParseGenAIPrices([]byte(`[
+  {"id":"example", "model_match":{"starts_with":"öPEN-"}, "models":[
+   {"id":"model", "match":{"and":[
+    {"contains":"MoDeL"}, {"ends_with":"eNd"},
+    {"or":[{"regex":"^ÖPEN-"},{"equals":"öpen-special-model-end"}]}
+   ]}, "prices":{"input_mtok":1}}
+  ]}
+ ]`))
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		model   string
+		matches bool
+	}{
+		{"ÖPEN-MODEL-END", true},
+		{"ÖPEN-model-end", true},
+		{"öpen-special-MODEL-END", true},
+		{"öpen-model-end", false},
+		{"ÖPEN-other-end", false},
+		{"ÖPEN-model-other", false},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			_, matched := prices.Resolve("", tc.model, time.Time{})
+			assert.Equal(t, tc.matches, matched)
+		})
+	}
+}

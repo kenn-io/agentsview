@@ -1,8 +1,8 @@
 # Bun Storage Stack Landing Cleanup Implementation Plan
 
-**Goal:** Close the confirmed correctness and ownership gaps in PRs #1343–#1347
-without expanding the landing stack into the separately tracked incremental
-archive-writer refactor.
+**Goal:** Close the confirmed correctness and ownership gaps in PRs #1343–#1347,
+then complete the remaining archive-writer consolidation in a sixth stacked pull
+request before landing.
 
 **Approved spec/design:**
 `docs/superpowers/specs/2026-08-02-unified-bun-storage-design.md`, supplemented
@@ -22,7 +22,10 @@ restacked after every lower branch is complete.
 
 ## Global Constraints
 
-- SQLite remains the persistent archive and must never be rebuilt or truncated.
+- SQLite remains the persistent archive. Schema convergence must never drop,
+  truncate, or recreate it. Parser resync may build a temporary replacement,
+  preserve orphaned sessions and user-managed metadata, validate it, and swap
+  it atomically through the workflow in `docs/agents/storage.md`.
 - DuckDB remains a disposable mirror and Quack remains read-only.
 - New or changed tests must assert observable behavior and must fail before the
   corresponding production change.
@@ -31,8 +34,9 @@ restacked after every lower branch is complete.
 - The existing shipped migrations are immutable.
 - RoboRev hooks stay snoozed while branch commits and restacks are in progress;
   unsnooze every affected branch after final verification.
-- Kata parent `h26h` tracks landing work. Follow-up `h381` owns the remaining
-  incremental archive-writer migration and does not block this stack.
+- Kata parent `h26h` tracks the original landing work. Kata `h381` owns the
+  required sixth tip layer that completes archive-writer consolidation before
+  the stack lands.
 
 ______________________________________________________________________
 
@@ -247,8 +251,10 @@ ______________________________________________________________________
   and resolve duplicate patches by preserving the lower introducing fix.
 
 - [x] Run focused tests after each rebase, then `go fmt ./...`, `go vet ./...`,
-  `make test-short`, relevant DuckDB-tagged tests, and PostgreSQL integration
-  if the dedicated test container is available.
+  `make test-short`, and relevant DuckDB-tagged tests. Changes to PostgreSQL
+  paths require their integration suites against a dedicated test database. If
+  that database is unavailable, leave PostgreSQL verification incomplete and
+  do not declare the affected path ready to publish.
 
 - [x] Treat the unrelated macOS FSEvents baseline timeouts separately; do not
   weaken them as part of storage cleanup.
@@ -260,10 +266,62 @@ ______________________________________________________________________
 - [x] Push only after verification, close completed Kata children with commit
   evidence, and unsnooze RoboRev on every affected branch.
 
+### Task 7: Complete Bun execution at the stack tip (`h381`)
+
+**Interfaces:**
+
+- Consumes: the canonical Bun schema, write primitives, and five reviewed stack
+  layers.
+
+- Produces: a sixth tip PR where ordinary/full sync, incremental and parse-diff
+  message repair, accounting/findings, and orphan recovery share guarded Bun
+  transactions.
+
+- [x] Route every archive message writer through canonical Bun row helpers.
+
+- [x] Converge ordinary and explicit full sync on the atomic session-batch core.
+
+- [x] Consolidate accounting and secret-finding writes on canonical helpers.
+
+- [x] Derive compatible attached orphan-copy projections from the Bun model
+  registry while retaining SQLite-only relationship, pin, provenance, and FTS
+  transforms.
+
+- [x] Verify and publish the sixth stacked PR, then close Kata `h381` and resume
+  RoboRev reminders.
+
+#### Acceptance boundaries within Task 7
+
+The combined tip is the delivery gate. Review these areas separately in the
+order below; their acceptance checks do not require every intermediate PR to
+pass CI or rewriting the published stack into new branches.
+
+1. **Archive writes and recovery:** establish the guarded transaction and
+   connection facade first, then route batches, recall, artifact accounting,
+   and attached metadata recovery through it. Acceptance: archive hook and
+   rollback tests, reopened-pool barrier tests including metadata copying,
+   orphan recovery, and compaction tests in `internal/db`.
+1. **Usage-cache execution:** build on the archive handles and retain cache
+   transaction ownership. Acceptance: usage-cache and rollup tests, concurrent
+   access checks, and the internal NUL-key round trip in `internal/db`.
+1. **PostgreSQL raw custody:** convert device authorization, raw ingestion, and
+   resumable uploads to Bun placeholders. Acceptance: the PostgreSQL `pgtest`
+   integration cases for those APIs against a dedicated database.
+1. **PostgreSQL vectors:** convert vector push, search, administration, and
+   startup metadata probes after raw custody. Acceptance: vector schema and
+   vector integration cases with pgvector installed, including
+   `TestVectorChunkTableExists` for both missing and present chunk tables.
+1. **Upgrade and architecture documentation:** describe the final execution
+   boundaries after the preceding areas are verified. Acceptance: the archive
+   resync constraints agree with `docs/agents/storage.md`, and the linked
+   upgrade procedure covers quiesced backup, restoration, completion checks,
+   and replacement-archive disk space.
+
 ## Self-review
 
-- Spec coverage: landing correctness findings are assigned to their introducing
-  layers; the incremental writer migration is explicitly owned by Kata `h381`.
+- Spec coverage: landing correctness findings remain in their introducing
+  layers; the archive-writer migration is implemented in the sixth layer owned
+  by Kata `h381` rather than deferred beyond landing.
 - Scope exclusions: Store interface splitting, generated converters, registry-
   driven relationship walks, package splitting, and context retrofits are not
   landing cleanup.

@@ -2,11 +2,12 @@ package sync
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"os"
 	"runtime"
 	"testing"
+
+	"github.com/uptrace/bun"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -342,7 +343,7 @@ func TestCollectAndBatchFailureRevokesOnlyRejectedMissingMemberBaseline(
 			{ID: rejectedID, Machine: "local", Agent: "claude", FilePath: path},
 		},
 	))
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			CREATE TRIGGER fail_first_source_missing_mark
 			BEFORE UPDATE OF source_missing_at ON sessions
@@ -408,7 +409,7 @@ func seedPartialSourceMissingFailure(
 			{ID: failingID, Machine: "local", Agent: "claude", FilePath: path},
 		},
 	))
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			CREATE TRIGGER fail_second_source_missing_mark
 			BEFORE UPDATE OF source_missing_at ON sessions
@@ -520,7 +521,7 @@ func TestSyncSingleSessionRevokesRejectedBaselineOnLaterMemberFailure(
 	rejectedID, failingID := seedPartialSourceMissingFailure(
 		t, fx.db, fx.sessionIDFor(t, path), path,
 	)
-	require.NoError(t, fx.db.Update(func(tx *sql.Tx) error {
+	require.NoError(t, fx.db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			UPDATE sessions
 			SET cwd = CASE id
@@ -582,7 +583,7 @@ func TestReconcileWatchRootsRevokesRejectedBaselineOnPageFailure(
 	rejectedID, failingID := seedPartialSourceMissingFailure(
 		t, fx.db, primaryID, path,
 	)
-	require.NoError(t, fx.db.Update(func(tx *sql.Tx) error {
+	require.NoError(t, fx.db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			UPDATE sessions
 			SET cwd = CASE id
@@ -595,7 +596,7 @@ func TestReconcileWatchRootsRevokesRejectedBaselineOnPageFailure(
 		)
 		return err
 	}))
-	require.NoError(t, fx.db.Update(func(tx *sql.Tx) error {
+	require.NoError(t, fx.db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET cwd = '/outside/project' WHERE id = ?",
 			filteredID,
@@ -649,7 +650,7 @@ func TestReconcileWatchRootsRevokesRejectedBaselineOnPageFailure(
 	assert.NotNil(t, rejected,
 		"the CWD-rejected stale fork must remain active")
 
-	require.NoError(t, fx.db.Update(func(tx *sql.Tx) error {
+	require.NoError(t, fx.db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec("DROP TRIGGER fail_second_source_missing_mark")
 		return err
 	}))
@@ -670,7 +671,7 @@ func TestReconcileWatchRootsRevokesSourceWideRejectedBaselineOnFinalizationFailu
 	path := fx.writeClaudeSession(t, "project", "finalize-filtered.jsonl", "first")
 	require.Equal(t, 1, fx.engine.SyncAll(t.Context(), nil).Synced)
 	primaryID := fx.sessionIDFor(t, path)
-	require.NoError(t, fx.db.Update(func(tx *sql.Tx) error {
+	require.NoError(t, fx.db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			UPDATE sessions
 			SET cwd = '/outside/project', machine = 'legacy-machine'
@@ -823,7 +824,7 @@ func TestReconcileWatchRootsRevokesSourceWideRejectedBaselineOnSpoolFailure(
 			)
 			require.Equal(t, 1, fx.engine.SyncAll(t.Context(), nil).Synced)
 			sessionID := fx.sessionIDFor(t, path)
-			require.NoError(t, fx.db.Update(func(tx *sql.Tx) error {
+			require.NoError(t, fx.db.Update(func(tx bun.Tx) error {
 				_, err := tx.Exec(
 					"UPDATE sessions SET cwd = '/outside/project' WHERE id = ?",
 					sessionID,

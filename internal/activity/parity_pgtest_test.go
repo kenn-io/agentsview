@@ -42,6 +42,8 @@ import (
 // microsecond-different as_of/effective_end values across the three reports.
 const parityDate = "2026-06-14"
 
+const parityPricingUpdatedAt = "2026-08-09T04:09:57.836404600Z"
+
 // paritySchema is dedicated to this test so it never collides with the shared
 // "agentsview" schema that internal/postgres pgtests create and drop. Go runs
 // package tests concurrently, so a shared-schema DROP here could wipe another
@@ -174,7 +176,7 @@ func parityFixture() []parityFixtureSession {
 			events: []parityEvent{
 				{role: "user", ts: parityDate + "T15:00:00Z"},
 				{role: "assistant", ts: parityDate + "T15:01:00Z",
-					toolCompletedAt: parityDate + "T15:02:00Z"},
+					toolCompletedAt: parityDate + "T15:06:00Z"},
 			},
 		},
 		{
@@ -196,6 +198,15 @@ func parityFixture() []parityFixtureSession {
 			events: []parityEvent{
 				{role: "assistant", ts: parityDate + "T23:59:00Z",
 					toolCompletedAt: "2026-06-15T00:01:00Z"},
+			},
+		},
+		{
+			// Upper-bound padding admits this completion to the query, but its
+			// message is too old for the completion to create timed activity.
+			id: "parity-tool-stale-padding", project: "tools", model: "model-x",
+			events: []parityEvent{
+				{role: "assistant", ts: parityDate + "T10:00:00Z",
+					toolCompletedAt: "2026-06-15T00:04:00Z"},
 			},
 		},
 		{
@@ -261,9 +272,11 @@ func seedParitySQLite(t *testing.T) *db.DB {
 	// token amounts identically (the syncs copy model_pricing to PG/DuckDB).
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{
 		{ModelPattern: "model-x", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
-			CacheCreationPerMTok: money.MustParseDollars("3.75"), CacheReadPerMTok: money.MustParseDollars("0.3")},
+			CacheCreationPerMTok: money.MustParseDollars("3.75"), CacheReadPerMTok: money.MustParseDollars("0.3"),
+			UpdatedAt: parityPricingUpdatedAt},
 		{ModelPattern: "model-y", InputPerMTok: money.MustParseDollars("1"), OutputPerMTok: money.MustParseDollars("5"),
-			CacheCreationPerMTok: money.MustParseDollars("1.25"), CacheReadPerMTok: money.MustParseDollars("0.1")},
+			CacheCreationPerMTok: money.MustParseDollars("1.25"), CacheReadPerMTok: money.MustParseDollars("0.1"),
+			UpdatedAt: parityPricingUpdatedAt},
 	}), "seeding pricing")
 
 	var writes []db.SessionBatchWrite
@@ -600,7 +613,7 @@ func assertCandidateParity(
 		StartOrdinal: 1,
 		EndOrdinal:   1,
 		Start:        time.Date(2026, 6, 14, 15, 1, 0, 0, time.UTC),
-		End:          time.Date(2026, 6, 14, 15, 2, 0, 0, time.UTC),
+		End:          time.Date(2026, 6, 14, 15, 6, 0, 0, time.UTC),
 		ClosingRole:  "tool",
 		PriorModel:   "model-x",
 	}, activity.IntervalCandidate{
@@ -677,7 +690,7 @@ func assertParityForCase(
 }
 
 // assertDayMinuteFixtureSanity checks the day-minute report actually exercises
-// the fixture: a full day with peak concurrency 2, thirteen sessions, non-zero
+// the fixture: a full day with peak concurrency 2, fourteen sessions, non-zero
 // cost, and exactly 22550 output tokens. The token total proves the
 // synthetic-model usage row (9999 tokens) is excluded, the dedup pair
 // keeps its complete 9000-token snapshot with earlier attribution, the
@@ -689,7 +702,7 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	t.Helper()
 	require.False(t, r.Partial, "fixture day must be a full day")
 	require.Equal(t, 2, r.Peak.Agents, "fixture must reach peak concurrency 2")
-	require.Equal(t, 13, r.Totals.Sessions, "fixture session count")
+	require.Equal(t, 14, r.Totals.Sessions, "fixture session count")
 	require.Positive(t, r.Totals.Cost.Microdollars, "fixture must exercise cost")
 	// 2400 (parity-a) + 1600 (parity-b) + 300 (parity-c; synthetic 9999 row
 	// excluded) + 9000 (parity-d receives parity-e's complete snapshot) +
@@ -722,10 +735,16 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 		"the later fractional duplicate is dropped")
 	require.Equal(t, "model-x", bySession["parity-f"].PrimaryModel,
 		"zero-cost usage still reports its known model as primary")
+	require.NotNil(t, bySession["parity-tool"].AgentMinutes)
+	require.InDelta(t, 6.0, *bySession["parity-tool"].AgentMinutes, 1e-9,
+		"an exact gap-cap completion remains active across every backend")
 	require.NotNil(t, bySession["parity-tool-inline"].AgentMinutes)
 	require.InDelta(t, 7.0, *bySession["parity-tool-inline"].AgentMinutes, 1e-9,
 		"inline completion resets the gap cap before the final message")
 	require.NotNil(t, bySession["parity-tool-boundary"].AgentMinutes)
 	require.InDelta(t, 1.0, *bySession["parity-tool-boundary"].AgentMinutes, 1e-9,
 		"post-range completion closes the final in-range message")
+	require.Contains(t, bySession, "parity-tool-stale-padding")
+	require.Nil(t, bySession["parity-tool-stale-padding"].AgentMinutes,
+		"a stale completion inside upper padding cannot time an old message")
 }

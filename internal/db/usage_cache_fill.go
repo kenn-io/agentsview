@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
@@ -350,7 +352,7 @@ func isUsageCacheBusy(err error) bool {
 }
 
 type usageFactSpool struct {
-	db   *sql.DB
+	db   *bun.DB
 	path string
 }
 
@@ -407,7 +409,7 @@ func newUsageFactSpool() (*usageFactSpool, error) {
 		_ = removeUsageCacheFiles(path)
 		return nil, fmt.Errorf("initializing usage fact spool: %w", err)
 	}
-	return &usageFactSpool{db: database, path: path}, nil
+	return &usageFactSpool{db: bun.NewDB(database, NewSQLiteArchiveDialect()), path: path}, nil
 }
 
 func (s *usageFactSpool) Close() error {
@@ -468,22 +470,14 @@ func (c *usageFillCoordinator) extractSessions(
 	); err != nil {
 		return nil, nil, fmt.Errorf("creating usage fill session set: %w", err)
 	}
-	insert, err := tx.PrepareContext(ctx,
-		`INSERT INTO usage_fill_sessions(session_id) VALUES (?)`)
-	if err != nil {
-		return nil, nil, err
-	}
+	insert := `INSERT INTO usage_fill_sessions(session_id) VALUES (?)`
 	for _, id := range ids {
 		if _, ok := extracted[id]; !ok {
 			continue
 		}
-		if _, err := insert.ExecContext(ctx, id); err != nil {
-			_ = insert.Close()
+		if _, err := tx.ExecContext(ctx, insert, id); err != nil {
 			return nil, nil, err
 		}
-	}
-	if err := insert.Close(); err != nil {
-		return nil, nil, err
 	}
 
 	spoolTx, err := spool.db.BeginTx(ctx, nil)
@@ -516,7 +510,7 @@ func (c *usageFillCoordinator) extractSessions(
 }
 
 func extractUsageMessageFacts(
-	ctx context.Context, archive *sql.Tx, spool *usageFactSpoolWriter,
+	ctx context.Context, archive bun.Tx, spool *usageFactSpoolWriter,
 	indexes map[string]int,
 ) error {
 	rows, err := archive.QueryContext(ctx, usageFillMessageFactsSQL)
@@ -546,7 +540,7 @@ func extractUsageMessageFacts(
 }
 
 func extractUsageActivityFacts(
-	ctx context.Context, archive *sql.Tx, spool *usageFactSpoolWriter,
+	ctx context.Context, archive bun.Tx, spool *usageFactSpoolWriter,
 	indexes map[string]int,
 ) error {
 	rows, err := archive.QueryContext(ctx, usageFillActivityFactsSQL)
@@ -575,7 +569,7 @@ func extractUsageActivityFacts(
 }
 
 func extractUsageEventFacts(
-	ctx context.Context, archive *sql.Tx, spool *usageFactSpoolWriter,
+	ctx context.Context, archive bun.Tx, spool *usageFactSpoolWriter,
 	indexes map[string]int,
 ) error {
 	rows, err := archive.QueryContext(ctx, usageFillEventFactsSQL)
@@ -630,7 +624,7 @@ type usageFactSpoolRow struct {
 
 type usageFactSpoolWriter struct {
 	ctx  context.Context
-	tx   *sql.Tx
+	tx   bun.Tx
 	rows []usageFactSpoolRow
 }
 
@@ -858,7 +852,7 @@ func (c *usageFillCoordinator) installSpoolBatch(
 }
 
 func fillInstallExpectationMatches(
-	ctx context.Context, conn *sql.Conn, sessionID string,
+	ctx context.Context, conn bun.Conn, sessionID string,
 	expected usageFillInstallExpectation,
 ) (bool, error) {
 	var revision int64
@@ -878,7 +872,7 @@ func fillInstallExpectationMatches(
 // every other session sharing a changed identity, so their groups reclassify
 // against the new membership.
 func (c *usageFillCoordinator) invalidateChangedIdentitySharers(
-	ctx context.Context, conn *sql.Conn, oldIdentities usageDedupIdentitySet,
+	ctx context.Context, conn bun.Conn, oldIdentities usageDedupIdentitySet,
 	stable []usageSourceVersion, affected []string,
 ) error {
 	if len(affected) == 0 {
@@ -958,7 +952,7 @@ func (c *usageFillCoordinator) recheckSourceVersions(
 // session inside the caller's archive read transaction. Sessions absent from
 // the result are deleted as of that transaction's snapshot.
 func loadUsageSourceVersions(
-	ctx context.Context, tx *sql.Tx, ids []string,
+	ctx context.Context, tx bun.Tx, ids []string,
 ) (map[string]usageSourceVersion, error) {
 	current := make(map[string]usageSourceVersion, len(ids))
 	if err := queryChunked(ids, func(chunk []string) error {
@@ -1002,7 +996,7 @@ func loadUsageSourceVersions(
 }
 
 func installSpoolSessions(
-	ctx context.Context, cacheConn *sql.Conn, versions []usageSourceVersion,
+	ctx context.Context, cacheConn bun.Conn, versions []usageSourceVersion,
 ) (map[string]usageFillResult, error) {
 	results := make(map[string]usageFillResult, len(versions))
 	if len(versions) == 0 {

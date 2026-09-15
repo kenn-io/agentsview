@@ -6,7 +6,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -15,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/uptrace/bun"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -959,7 +960,7 @@ func TestDoParseDiff_FailOnChangeDirections(t *testing.T) {
 	})
 	stats := engine.SyncAll(context.Background(), nil)
 	require.Equal(t, 1, stats.Synced, "one session synced")
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET first_message = ? WHERE id = ?",
 			"drifted first message", "real-session",
@@ -1033,7 +1034,7 @@ func TestDoParseDiff_RacedSessionDoesNotFail(t *testing.T) {
 
 	// Drift the stored row so a fresh parse reports a real change, then
 	// push the source mtime past the recorded snapshot file_mtime.
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, uerr := tx.Exec(
 			"UPDATE sessions SET first_message = ? WHERE id = ?",
 			"drifted first message", sessionID,
@@ -1098,7 +1099,7 @@ func TestDoParseDiff_UntouchedDriftStillFails(t *testing.T) {
 	require.Len(t, rows, 1)
 	sessionID := rows[0].ID
 
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, uerr := tx.Exec(
 			"UPDATE sessions SET first_message = ? WHERE id = ?",
 			"drifted first message", sessionID,

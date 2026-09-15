@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 )
 
 func TestContainsCJK(t *testing.T) {
@@ -160,12 +161,6 @@ func TestCJKFTSChineseSearch(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, phrase.Matches, 1)
 	assert.Equal(t, "chinese", phrase.Matches[0].SessionID)
-
-	expression, err := d.prepareMessageFTSQuery(
-		context.Background(), `"中文" OR "国法"`,
-	)
-	require.NoError(t, err)
-	assert.Equal(t, `"中文" OR "国法"`, expression.match)
 
 	orQuery, err := d.SearchContent(context.Background(), ContentSearchFilter{
 		Pattern: `"中文" OR "国法"`,
@@ -421,7 +416,7 @@ func TestCJKFTSForeignFingerprintDefersMaintenance(t *testing.T) {
 	assert.False(t, d.HasCJKFTS())
 	assert.Equal(t, 1, strings.Count(output.String(), "CJK FTS unavailable or stale"))
 
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		if _, err := tx.Exec(
 			"UPDATE messages SET content = ? WHERE session_id = ?",
 			"跨版本写入的新中文内容。", "foreign-runtime",
@@ -513,8 +508,8 @@ func TestCJKFTSJiebaConfigurationSerializesWithQueries(t *testing.T) {
 					}
 					continue
 				}
-				if _, err := d.prepareMessageFTSQuery(
-					context.Background(), "并发中文搜索",
+				if _, err := d.Search(
+					context.Background(), SearchFilter{Query: "并发中文搜索", Limit: 10},
 				); err != nil {
 					errs <- err
 				}

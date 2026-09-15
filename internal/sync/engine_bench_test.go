@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,7 @@ import (
 //
 // Fixture sizes scale via AGENTSVIEW_BENCH_SYNC_SESSIONS and
 // AGENTSVIEW_BENCH_SYNC_MESSAGES for larger local runs.
+// AGENTSVIEW_BENCH_SYNC_REPLY_BYTES adds long replies to the usage fixture.
 
 const (
 	defaultBenchSyncSessions = 40
@@ -122,6 +124,7 @@ func writeBenchClaudeUsageArchive(
 	if err := os.MkdirAll(proj, 0o755); err != nil {
 		b.Fatalf("MkdirAll: %v", err)
 	}
+	padding := strings.Repeat("x", benchIntFromEnv("AGENTSVIEW_BENCH_SYNC_REPLY_BYTES", 0))
 	for s := range sessions {
 		builder := testjsonl.NewSessionBuilder()
 		for m := 0; m < perSession; m += 2 {
@@ -133,7 +136,7 @@ func writeBenchClaudeUsageArchive(
 			))
 			builder.AddClaudeAssistantUsage(ts, fmt.Sprintf(
 				"assistant reply %d in session %d", m, s,
-			), testjsonl.ClaudeAssistantUsage{
+			)+padding, testjsonl.ClaudeAssistantUsage{
 				MessageID:    fmt.Sprintf("msg_bench_%04d_%04d", s, m),
 				RequestID:    fmt.Sprintf("req_bench_%04d_%04d", s, m),
 				Model:        "claude-sonnet-4-20250514",

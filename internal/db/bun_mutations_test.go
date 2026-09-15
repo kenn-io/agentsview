@@ -1,9 +1,10 @@
 package db
 
 import (
-	"database/sql"
 	"fmt"
 	"testing"
+
+	"github.com/uptrace/bun"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,7 +17,7 @@ func TestSoftDeleteSessionsReturnsZeroWhenTransactionRollsBack(t *testing.T) {
 		ids[index] = fmt.Sprintf("rollback-soft-delete-%03d", index)
 		insertSession(t, database, ids[index], "rollback")
 	}
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			CREATE TRIGGER fail_second_soft_delete_batch
 			BEFORE UPDATE OF deleted_at ON sessions
@@ -41,7 +42,7 @@ func TestRestoreSessionReturnsZeroWhenTransactionRollsBack(t *testing.T) {
 	database := testDB(t)
 	insertSession(t, database, "rollback-restore", "rollback")
 	require.NoError(t, database.SoftDeleteSession("rollback-restore"))
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		if _, err := tx.Exec(`
 			INSERT INTO local_session_source_baselines
 				(session_id, machine, agent, file_path)
@@ -110,7 +111,7 @@ func TestDeleteSessionIfTrashedPreDeletesSQLiteFTSContent(t *testing.T) {
 	insertSession(t, database, "fts-delete", "rollback")
 	insertMessages(t, database, asstMsg("fts-delete", 0, "large searchable transcript"))
 	require.NoError(t, database.SoftDeleteSession("fts-delete"))
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			CREATE TRIGGER require_bulk_fts_delete
 			BEFORE DELETE ON messages
@@ -135,7 +136,7 @@ func TestDeleteSessionIfTrashedPreDeletesSQLiteFTSContent(t *testing.T) {
 
 func installDeferredSessionDeleteFailure(t *testing.T, database *DB) {
 	t.Helper()
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		for _, statement := range []string{
 			`CREATE TABLE mutation_commit_parent (id INTEGER PRIMARY KEY)`,
 			`CREATE TABLE mutation_commit_child (

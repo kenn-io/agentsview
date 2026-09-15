@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/mattn/go-sqlite3"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/parser"
@@ -693,7 +695,7 @@ type worktreeMappingSessionUpdate struct {
 
 func loadActiveWorktreeMappingsTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	machine string,
 ) ([]WorktreeProjectMapping, error) {
 	rows, err := tx.QueryContext(ctx, `
@@ -714,7 +716,7 @@ func loadActiveWorktreeMappingsTx(
 
 func loadActiveWorktreeMappingsByMachineTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	machines map[string]bool,
 ) (map[string][]WorktreeProjectMapping, error) {
 	rows, err := tx.QueryContext(ctx, `
@@ -845,7 +847,7 @@ func applyWorktreeMappingMatchCwdFromSiblings(
 
 func updateSessionProjectTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	update worktreeMappingSessionUpdate,
 	bumpLocalModifiedAt bool,
 ) (int, error) {
@@ -910,14 +912,13 @@ func (db *DB) applyWorktreeProjectMappings(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	bunTx, err := db.beginBunWriteTx(ctx)
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return ApplyWorktreeProjectMappingsResult{}, fmt.Errorf(
 			"beginning worktree mapping apply: %w", err,
 		)
 	}
-	defer func() { _ = bunTx.Rollback() }()
-	tx := bunTx.Tx
+	defer func() { _ = tx.Rollback() }()
 
 	mappings, err := loadActiveWorktreeMappingsTx(ctx, tx, machine)
 	if err != nil {
@@ -945,14 +946,14 @@ func (db *DB) applyWorktreeProjectMappings(
 		result.UpdatedSessions += changed
 		if changed > 0 {
 			if err := reconcileSessionProjectIdentityAggregatesTx(
-				ctx, bunTx, update.id,
+				ctx, tx, update.id,
 				[]string{update.currentProject, update.nextProject},
 			); err != nil {
 				return result, err
 			}
 		}
 	}
-	if err := bunTx.Commit(); err != nil {
+	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("committing worktree mapping apply: %w", err)
 	}
 	return result, nil
@@ -1002,14 +1003,13 @@ func (db *DB) applyWorktreeProjectMappingToSession(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	bunTx, err := db.beginBunWriteTx(ctx)
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return false, fmt.Errorf(
 			"beginning worktree mapping session apply: %w", err,
 		)
 	}
-	defer func() { _ = bunTx.Rollback() }()
-	tx := bunTx.Tx
+	defer func() { _ = tx.Rollback() }()
 
 	mappings, err := loadActiveWorktreeMappingsTx(ctx, tx, machine)
 	if err != nil {
@@ -1038,14 +1038,14 @@ func (db *DB) applyWorktreeProjectMappingToSession(
 	}
 	if changed > 0 {
 		update := evaluation.updates[0]
-		if err := reconcileSessionProjectIdentityAggregatesTx(ctx, bunTx, sessionID, []string{
+		if err := reconcileSessionProjectIdentityAggregatesTx(ctx, tx, sessionID, []string{
 			update.currentProject,
 			update.nextProject,
 		}); err != nil {
 			return false, err
 		}
 	}
-	if err := bunTx.Commit(); err != nil {
+	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf(
 			"committing worktree mapping session apply: %w", err,
 		)
@@ -1086,14 +1086,13 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	bunTx, err := db.beginBunWriteTx(ctx)
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return ApplyWorktreeProjectMappingsResult{}, fmt.Errorf(
 			"beginning worktree mapping path apply: %w", err,
 		)
 	}
-	defer func() { _ = bunTx.Rollback() }()
-	tx := bunTx.Tx
+	defer func() { _ = tx.Rollback() }()
 
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, machine, project, cwd, file_path
@@ -1182,14 +1181,14 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 		result.UpdatedSessions += changed
 		if changed > 0 {
 			if err := reconcileSessionProjectIdentityAggregatesTx(
-				ctx, bunTx, update.id,
+				ctx, tx, update.id,
 				[]string{update.currentProject, update.nextProject},
 			); err != nil {
 				return result, err
 			}
 		}
 	}
-	if err := bunTx.Commit(); err != nil {
+	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf(
 			"committing worktree mapping path apply: %w", err,
 		)

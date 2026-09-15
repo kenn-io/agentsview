@@ -25,7 +25,7 @@ func TestPushMachineMetadataWithoutSessionChanges(t *testing.T) {
 	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 
-	store := &Store{pg: syncer.pg}
+	store := newStore(syncer.pg)
 	labels, err := store.GetMachineLabels(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"installation-a": "Laptop"}, labels)

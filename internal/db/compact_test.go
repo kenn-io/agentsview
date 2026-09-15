@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/uptrace/bun"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,7 +24,7 @@ func TestCompactStagedReplacementReclaimsFreePages(t *testing.T) {
 	const payload = "0123456789abcdef0123456789abcdef"
 	const rows = 256
 	const repeats = 4096
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		if _, err := tx.Exec(`CREATE TABLE compact_test_payload (value TEXT NOT NULL)`); err != nil {
 			return err
 		}
@@ -40,7 +41,7 @@ func TestCompactStagedReplacementReclaimsFreePages(t *testing.T) {
 		}
 		return nil
 	}))
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`DELETE FROM compact_test_payload`)
 		return err
 	}))
@@ -104,7 +105,7 @@ func TestCompactSpaceRequirementsIncludeInstallingCopy(t *testing.T) {
 
 func TestCompactCloseFailureReopensUnchangedArchive(t *testing.T) {
 	database := testDB(t)
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			CREATE TABLE compact_close_failure (value INTEGER NOT NULL);
 			INSERT INTO compact_close_failure(value) VALUES (1), (2), (3);
@@ -136,7 +137,7 @@ func TestCompactCloseFailureReopensUnchangedArchive(t *testing.T) {
 	).Scan(&count))
 	require.Equal(t, 3, count)
 	// Service is fully restored: the write barrier is down again.
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`INSERT INTO compact_close_failure(value) VALUES (4)`)
 		return err
 	}))
@@ -149,7 +150,7 @@ func TestCompactCloseFailureReopensUnchangedArchive(t *testing.T) {
 
 func TestCompactKeepsBarrierWhenAbortLeavesManifest(t *testing.T) {
 	database := testDB(t)
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			CREATE TABLE compact_manifest_probe (value INTEGER NOT NULL);
 			INSERT INTO compact_manifest_probe(value) VALUES (1);
@@ -184,7 +185,7 @@ func TestCompactKeepsBarrierWhenAbortLeavesManifest(t *testing.T) {
 	require.ErrorContains(t, err, "writes stay barred")
 	require.FileExists(t, compactManifestPath(database.Path()))
 
-	writeErr := database.Update(func(tx *sql.Tx) error {
+	writeErr := database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`INSERT INTO compact_manifest_probe(value) VALUES (2)`)
 		return err
 	})
@@ -221,7 +222,7 @@ func TestCompactBarsWritesDuringBuildAndRestoresThem(t *testing.T) {
 	ctx := context.Background()
 	var duringErr, rawErr error
 	compactTestHookDuringBuild = func() {
-		duringErr = database.Update(func(tx *sql.Tx) error {
+		duringErr = database.Update(func(tx bun.Tx) error {
 			_, err := tx.Exec(`CREATE TABLE compact_barrier_probe (x INTEGER)`)
 			return err
 		})
@@ -238,7 +239,7 @@ func TestCompactBarsWritesDuringBuildAndRestoresThem(t *testing.T) {
 		"a write during the staged build must fail fast, not park or succeed")
 	require.ErrorIs(t, rawErr, ErrWriterClosed,
 		"raw writer paths without db.mu must honor the compact barrier")
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`CREATE TABLE compact_barrier_probe (x INTEGER)`)
 		return err
 	}), "writes must flow again after the compaction commits")
@@ -327,7 +328,7 @@ func TestCompactConcurrentAttemptReturnsBusy(t *testing.T) {
 
 func TestCompactSurvivesCallerCancelAfterInstall(t *testing.T) {
 	database := testDB(t)
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			CREATE TABLE compact_cancel_probe (value INTEGER NOT NULL);
 			INSERT INTO compact_cancel_probe(value) VALUES (7);
@@ -447,7 +448,7 @@ func TestRecoverCompactCommittedManifestPreservesLaterWrites(t *testing.T) {
 
 	// A write that landed after the commit record but before cleanup
 	// finished. Recovery must never take it away.
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			CREATE TABLE compact_committed_probe (value INTEGER NOT NULL);
 			INSERT INTO compact_committed_probe(value) VALUES (42);

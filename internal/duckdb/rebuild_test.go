@@ -40,7 +40,7 @@ func seedRebuildFixture(t *testing.T, local *db.DB) []string {
 	return ids
 }
 
-func TestRebuildMirrorCreatesCanonicalSchemaVersion12(t *testing.T) {
+func TestRebuildMirrorCreatesCanonicalSchemaVersion(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	ids := seedRebuildFixture(t, local)

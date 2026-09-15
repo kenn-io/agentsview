@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/uptrace/bun"
 )
 
 const archiveMachineKeysSQL = `SELECT machine FROM sessions
-	UNION SELECT machine FROM worktree_project_mappings
-	UNION SELECT machine FROM project_identity_observations
-	UNION SELECT machine FROM session_project_identity_snapshots
+	UNION SELECT machine FROM source_worktree_project_mappings
+	UNION SELECT machine FROM source_project_identity_observations
+	UNION SELECT machine FROM source_session_project_identity_snapshots
 	UNION SELECT machine FROM local_session_source_baselines`
 
 type MachineIdentityCandidate struct {
@@ -26,7 +28,7 @@ type MachineIdentityCandidate struct {
 func (db *DB) ListMachineIdentityCandidates(ctx context.Context) ([]MachineIdentityCandidate, error) {
 	rows, err := db.getReader().QueryContext(ctx, `SELECT machines.machine,
 		(SELECT count(*) FROM sessions WHERE machine = machines.machine),
-		(SELECT count(*) FROM worktree_project_mappings WHERE machine = machines.machine)
+		(SELECT count(*) FROM source_worktree_project_mappings WHERE machine = machines.machine)
 		FROM (`+archiveMachineKeysSQL+`) machines ORDER BY machines.machine`)
 	if err != nil {
 		return nil, err
@@ -66,7 +68,7 @@ func (db *DB) adoptMachineIdentity(
 	if strings.TrimSpace(identity) == "" || identity == "local" {
 		return errors.New("installation identity is required")
 	}
-	return db.Update(func(tx *sql.Tx) error {
+	return db.Update(func(tx bun.Tx) error {
 		if err := lockArtifactPublicationTx(ctx, tx); err != nil {
 			return err
 		}
@@ -135,7 +137,7 @@ func (db *DB) adoptMachineIdentity(
 }
 
 // unownedMachineKeysTx lists named machines that no recorded owner explains.
-func unownedMachineKeysTx(ctx context.Context, tx *sql.Tx, identity string) ([]string, error) {
+func unownedMachineKeysTx(ctx context.Context, tx bun.Tx, identity string) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT machine FROM (`+archiveMachineKeysSQL+`)
 		WHERE machine NOT IN ('', 'local', ?) ORDER BY machine`, identity)
 	if err != nil {
@@ -153,11 +155,12 @@ func unownedMachineKeysTx(ctx context.Context, tx *sql.Tx, identity string) ([]s
 	return keys, rows.Err()
 }
 
-func adoptMachineRowsTx(ctx context.Context, tx *sql.Tx, machine, identity string) error {
+func adoptMachineRowsTx(ctx context.Context, tx bun.Tx, machine, identity string) error {
 	var conflict string
 	err := tx.QueryRowContext(ctx, `
-		SELECT old.path_prefix FROM worktree_project_mappings old
-		JOIN worktree_project_mappings target ON target.machine = ? AND target.path_prefix = old.path_prefix
+		SELECT old.path_prefix FROM source_worktree_project_mappings old
+		JOIN source_worktree_project_mappings target ON target.source_archive_id = old.source_archive_id
+			AND target.machine = ? AND target.path_prefix = old.path_prefix
 		WHERE old.machine = ? AND (old.project != target.project OR old.layout != target.layout
 			OR old.enabled != target.enabled OR old.original_project != target.original_project)
 		LIMIT 1`, identity, machine).Scan(&conflict)
@@ -167,19 +170,22 @@ func adoptMachineRowsTx(ctx context.Context, tx *sql.Tx, machine, identity strin
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM worktree_project_mappings
-		WHERE machine = ? AND path_prefix IN (SELECT path_prefix FROM worktree_project_mappings WHERE machine = ?)`, machine, identity); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM source_worktree_project_mappings
+		WHERE machine = ? AND (source_archive_id, path_prefix) IN (
+			SELECT source_archive_id, path_prefix FROM source_worktree_project_mappings WHERE machine = ?)`, machine, identity); err != nil {
 		return err
 	}
 	// Aggregates retain the newest observation of a root. Individual session
 	// snapshots remain intact, including when two former names shared a root.
-	// Observations are UTC RFC3339Nano. Remove Z before sorting so a whole
-	// second sorts before its fractional timestamps without losing precision.
+	// Canonical observations use UTC microsecond timestamps. Compare within
+	// each source archive so distinct archives retain their own observations.
+	// Strip Z so whole seconds sort before fractional timestamps.
 	for _, pair := range [][2]string{{machine, identity}, {identity, machine}} {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM project_identity_observations AS old
+		if _, err := tx.ExecContext(ctx, `DELETE FROM source_project_identity_observations AS old
 			WHERE old.machine = ? AND EXISTS (
-				SELECT 1 FROM project_identity_observations target
-				WHERE target.machine = ? AND target.project = old.project
+				SELECT 1 FROM source_project_identity_observations target
+				WHERE target.source_archive_id = old.source_archive_id
+					AND target.machine = ? AND target.project = old.project
 					AND target.root_path = old.root_path AND target.git_remote = old.git_remote
 					AND rtrim(target.observed_at, 'Z') >= rtrim(old.observed_at, 'Z')
 			)`, pair[0], pair[1]); err != nil {
@@ -187,8 +193,8 @@ func adoptMachineRowsTx(ctx context.Context, tx *sql.Tx, machine, identity strin
 		}
 	}
 	for _, table := range []string{
-		"worktree_project_mappings", "project_identity_observations",
-		"session_project_identity_snapshots", "local_session_source_baselines",
+		"source_worktree_project_mappings", "source_project_identity_observations",
+		"source_session_project_identity_snapshots", "local_session_source_baselines",
 	} {
 		if _, err := tx.ExecContext(ctx, "UPDATE "+table+" SET machine = ? WHERE machine = ?", identity, machine); err != nil {
 			return fmt.Errorf("adopting %s: %w", table, err)

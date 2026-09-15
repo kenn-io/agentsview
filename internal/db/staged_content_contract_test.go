@@ -2,12 +2,12 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"testing"
 
 	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 )
 
 func TestStagedPublishWithinSQLiteVariableLimit(t *testing.T) {
@@ -58,7 +58,7 @@ func (s *cancellingStagedResults) ResolveSummary(
 }
 
 func (s *cancellingStagedResults) InsertEventsTx(
-	ctx context.Context, tx *sql.Tx, id string,
+	ctx context.Context, tx bun.Tx, id string,
 	positions map[string]StagedToolCallPosition,
 ) error {
 	if s.phase == "events" {

@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -193,17 +193,17 @@ func seedWatchBatchUnrelatedSessions(
 ) {
 	t.Helper()
 	root := t.TempDir()
+	archiveID, err := database.GetArchiveID(t.Context())
+	require.NoError(t, err)
+	generation, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
 	// These rows supply archive cardinality while changed-source ingestion stays real.
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		stmt, err := tx.Prepare(`INSERT INTO sessions (id, agent, project, machine, file_path, message_count, user_message_count) VALUES (?, 'claude', 'cold', 'local', ?, 1, 1)`)
-		if err != nil {
-			return err
-		}
-		defer stmt.Close()
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
+		const insert = `INSERT INTO sessions (id, agent, project, machine, file_path, message_count, user_message_count, source_archive_id, source_database_generation) VALUES (?, 'claude', 'cold', 'local', ?, 1, 1, ?, ?)`
 		for i := range count {
 			id := fmt.Sprintf("%s%05d", prefix, i)
 			path := filepath.Join(root, fmt.Sprintf("%05d.jsonl", i))
-			if _, err := stmt.Exec(id, path); err != nil {
+			if _, err := tx.ExecContext(t.Context(), insert, id, path, archiveID, generation); err != nil {
 				return err
 			}
 		}

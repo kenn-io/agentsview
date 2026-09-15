@@ -2,11 +2,9 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/db/bunmodel"
@@ -21,13 +19,14 @@ type bunContentSession struct {
 }
 
 type bunContentMessage struct {
-	SessionID   string              `bun:"session_id"`
-	Ordinal     int                 `bun:"ordinal"`
-	Role        string              `bun:"role"`
-	Content     string              `bun:"content"`
-	Timestamp   *bunmodel.Timestamp `bun:"timestamp"`
-	IsSystem    bool                `bun:"is_system"`
-	IsSidechain bool                `bun:"is_sidechain"`
+	SessionID    string              `bun:"session_id"`
+	Ordinal      int                 `bun:"ordinal"`
+	Role         string              `bun:"role"`
+	Content      string              `bun:"content"`
+	RawTimestamp any                 `bun:"timestamp"`
+	Timestamp    *bunmodel.Timestamp `bun:"-"`
+	IsSystem     bool                `bun:"is_system"`
+	IsSidechain  bool                `bun:"is_sidechain"`
 }
 
 type bunContentMessageKey struct {
@@ -45,14 +44,14 @@ type bunHybridAnchor struct {
 }
 
 type bunContentCandidate struct {
-	SessionID  string  `bun:"session_id"`
-	Ordinal    int     `bun:"ordinal"`
-	Location   string  `bun:"location"`
-	ToolName   string  `bun:"tool_name"`
-	Body       string  `bun:"body"`
-	Timestamp  *string `bun:"source_timestamp"`
-	CallIndex  int     `bun:"call_index"`
-	EventIndex int     `bun:"event_index"`
+	SessionID  string              `bun:"session_id"`
+	Ordinal    int                 `bun:"ordinal"`
+	Location   string              `bun:"location"`
+	ToolName   string              `bun:"tool_name"`
+	Body       string              `bun:"body"`
+	Timestamp  *bunmodel.Timestamp `bun:"source_timestamp"`
+	CallIndex  int                 `bun:"call_index"`
+	EventIndex int                 `bun:"event_index"`
 }
 
 // SearchContent resolves dialect-specific lexical hits through canonical Bun
@@ -253,7 +252,7 @@ func (s *BunStore) searchContentHybrid(
 			return err
 		}
 		eligibleSemanticHits, err = filterContentHitsByLiveAnchor(
-			ctx, store, eligibleSemanticHits,
+			ctx, store, eligibleSemanticHits, s.backend,
 		)
 		if err != nil {
 			return err
@@ -262,7 +261,7 @@ func (s *BunStore) searchContentHybrid(
 			eligibleSemanticHits, filter.Scope, candidateLimit,
 		)
 		liveLexicalLeg, err := filterContentHybridLegByLiveAnchor(
-			ctx, store, lexicalLeg,
+			ctx, store, lexicalLeg, s.backend,
 		)
 		if err != nil {
 			return err
@@ -289,8 +288,11 @@ func (s *BunStore) searchContentHybrid(
 
 func filterContentHitsByLiveAnchor(
 	ctx context.Context, store bun.IDB, hits []ContentSearchHit,
+	backend BunBackend,
 ) ([]ContentSearchHit, error) {
-	messages, err := bunContentMessagesForHits(ctx, store, hits)
+	messages, err := bunContentMessagesForHits(
+		ctx, store, hits, backend,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -305,6 +307,7 @@ func filterContentHitsByLiveAnchor(
 
 func filterContentHybridLegByLiveAnchor(
 	ctx context.Context, store bun.IDB, leg contentHybridLeg,
+	backend BunBackend,
 ) (contentHybridLeg, error) {
 	hits := make([]ContentSearchHit, 0, len(leg.ranked))
 	for _, ranked := range leg.ranked {
@@ -312,7 +315,9 @@ func filterContentHybridLegByLiveAnchor(
 			hits = append(hits, hit)
 		}
 	}
-	liveHits, err := filterContentHitsByLiveAnchor(ctx, store, hits)
+	liveHits, err := filterContentHitsByLiveAnchor(
+		ctx, store, hits, backend,
+	)
 	if err != nil {
 		return contentHybridLeg{}, err
 	}
@@ -432,6 +437,7 @@ func (s *BunStore) filterContentHitsBySessionScope(
 	where, args := buildBunSessionBaseFilter(
 		semanticContentSessionFilter(filter), s.backend.TimestampOrderExpr,
 	)
+	where, args = AppendExcludeSessionIDs(where, args, "session.id", filter.ExcludeSessionIDs)
 	allowed := make(map[string]struct{}, len(ids))
 	if err := queryChunked(ids, func(chunk []string) error {
 		var rows []struct {
@@ -612,6 +618,7 @@ func (s *BunStore) hydrateContentSearchHits(
 			contentSessionFilter(filter), s.backend.TimestampOrderExpr,
 		)
 	}
+	where, args = AppendExcludeSessionIDs(where, args, "session.id", filter.ExcludeSessionIDs)
 	var sessions []bunContentSession
 	query := store.NewSelect().TableExpr("sessions AS session").
 		ColumnExpr("session.id AS id").ColumnExpr("session.project AS project").
@@ -628,7 +635,9 @@ func (s *BunStore) hydrateContentSearchHits(
 		bySession[session.ID] = session
 	}
 
-	messages, err := bunContentMessagesForHits(ctx, store, hits)
+	messages, err := bunContentMessagesForHits(
+		ctx, store, hits, s.backend,
+	)
 	if err != nil {
 		return ContentSearchPage{}, err
 	}
@@ -748,17 +757,20 @@ func (s *BunStore) bunContentUnicodeSubstringHits(
 	hits := make([]ContentSearchHit, 0, filter.Limit)
 	for rows.Next() && len(hits) < filter.Limit {
 		var row bunContentCandidate
-		var timestamp sql.NullString
+		var rawTimestamp any
 		if err := rows.Scan(
 			&row.SessionID, &row.Ordinal, &row.Location, &row.ToolName,
-			&row.Body, &timestamp, &row.CallIndex, &row.EventIndex,
+			&row.Body, &rawTimestamp, &row.CallIndex, &row.EventIndex,
 		); err != nil {
 			return nil, fmt.Errorf("scanning Bun Unicode substring candidate: %w", err)
 		}
-		if timestamp.Valid {
-			row.Timestamp = &timestamp.String
+		row.Timestamp, err = bunAvailableTimestamp(rawTimestamp)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"scanning Bun Unicode substring timestamp: %w", err,
+			)
 		}
-		if CaseInsensitiveIndex(row.Body, filter.Pattern) < 0 {
+		if _, _, found := CaseInsensitiveSpan(row.Body, filter.Pattern); !found {
 			continue
 		}
 		if confirmed < filter.Cursor {
@@ -797,15 +809,16 @@ func (s *BunStore) bunContentRegexHits(
 	hits := make([]ContentSearchHit, 0, filter.Limit)
 	for rows.Next() && len(hits) < filter.Limit {
 		var row bunContentCandidate
-		var timestamp sql.NullString
+		var rawTimestamp any
 		if err := rows.Scan(
 			&row.SessionID, &row.Ordinal, &row.Location, &row.ToolName,
-			&row.Body, &timestamp, &row.CallIndex, &row.EventIndex,
+			&row.Body, &rawTimestamp, &row.CallIndex, &row.EventIndex,
 		); err != nil {
 			return nil, fmt.Errorf("scanning Bun regex candidate: %w", err)
 		}
-		if timestamp.Valid {
-			row.Timestamp = &timestamp.String
+		row.Timestamp, err = bunAvailableTimestamp(rawTimestamp)
+		if err != nil {
+			return nil, fmt.Errorf("scanning Bun regex timestamp: %w", err)
 		}
 		span := re.FindStringIndex(row.Body)
 		if span == nil {
@@ -835,6 +848,7 @@ func (s *BunStore) bunContentPortableFTSHits(
 	where, scopeArgs := buildBunSessionFilter(
 		contentSessionFilter(filter), s.backend.TimestampOrderExpr,
 	)
+	where, scopeArgs = AppendExcludeSessionIDs(where, scopeArgs, "session.id", filter.ExcludeSessionIDs)
 	predicates := make([]string, len(terms))
 	args := make([]any, 0, len(terms)+len(scopeArgs)+2)
 	for i, term := range terms {
@@ -866,7 +880,7 @@ func (s *BunStore) bunContentPortableFTSHits(
 	}
 	hits := make([]ContentSearchHit, len(rows))
 	for i, row := range rows {
-		hits[i] = bunContentHitFromCandidate(row, filter.ftsSnippet(row.Body))
+		hits[i] = bunContentHitFromCandidate(row, filter.ftsSnippet(row.Body, ""))
 	}
 	return hits, nil
 }
@@ -892,11 +906,13 @@ func (s *BunStore) bunContentCandidateQuery(
 	where, scopeArgs := buildBunSessionFilter(
 		contentSessionFilter(filter), s.backend.TimestampOrderExpr,
 	)
+	where, scopeArgs = AppendExcludeSessionIDs(where, scopeArgs, "session.id", filter.ExcludeSessionIDs)
 	scope := func(column string) string {
 		return column + " IN (SELECT id FROM sessions AS session WHERE " + where + ")"
 	}
 	searchDialect := s.backend.Capabilities().SearchDialect
 	pattern := searchDialect.contentSearchPattern(literal)
+	timestampNull := searchDialect.contentTimestampNullExpr()
 	var branches []string
 	var args []any
 	addArgs := func() {
@@ -920,7 +936,7 @@ func (s *BunStore) bunContentCandidateQuery(
 		branches = append(branches, fmt.Sprintf(`
 			SELECT message.session_id, message.ordinal, 'message' AS location,
 				'' AS tool_name, message.content AS body,
-				CAST(message.timestamp AS VARCHAR) AS source_timestamp,
+				message.timestamp AS source_timestamp,
 				-1 AS call_index, -1 AS event_index,
 				COALESCE(session.ended_at, session.started_at, session.created_at) AS sort_ts,
 				0 AS source_order, COALESCE(message.id, 0) AS row_order
@@ -935,13 +951,13 @@ func (s *BunStore) bunContentCandidateQuery(
 			SELECT call.session_id, call.message_ordinal AS ordinal,
 				'tool_input' AS location, call.tool_name,
 				COALESCE(call.input_json, '') AS body,
-				CAST(NULL AS VARCHAR) AS source_timestamp,
+				%s AS source_timestamp,
 				call.call_index, -1 AS event_index,
 				COALESCE(session.ended_at, session.started_at, session.created_at) AS sort_ts,
 				1 AS source_order, COALESCE(call.id, 0) AS row_order
 			FROM tool_calls AS call
 			JOIN sessions AS session ON session.id = call.session_id
-			WHERE %s AND %s`, predicate("call.input_json"),
+			WHERE %s AND %s`, timestampNull, predicate("call.input_json"),
 			scope("call.session_id")))
 		addArgs()
 	}
@@ -950,7 +966,7 @@ func (s *BunStore) bunContentCandidateQuery(
 			SELECT call.session_id, call.message_ordinal AS ordinal,
 				'tool_result' AS location, call.tool_name,
 				COALESCE(call.result_content, '') AS body,
-				CAST(NULL AS VARCHAR) AS source_timestamp,
+				%s AS source_timestamp,
 				call.call_index, -1 AS event_index,
 				COALESCE(session.ended_at, session.started_at, session.created_at) AS sort_ts,
 				2 AS source_order, COALESCE(call.id, 0) AS row_order
@@ -964,14 +980,15 @@ func (s *BunStore) bunContentCandidateQuery(
 						AND event.call_index = call.call_index
 						AND call.tool_use_id <> ''
 				)
-				AND %s`, predicate("call.result_content"), scope("call.session_id")))
+				AND %s`, timestampNull, predicate("call.result_content"),
+			scope("call.session_id")))
 		addArgs()
 		branches = append(branches, fmt.Sprintf(`
 			SELECT event.session_id,
 				event.tool_call_message_ordinal AS ordinal,
 				'tool_result' AS location, COALESCE(call.tool_name, '') AS tool_name,
 				event.content AS body,
-				CAST(event.timestamp AS VARCHAR) AS source_timestamp,
+				event.timestamp AS source_timestamp,
 				event.call_index, event.event_index,
 				COALESCE(session.ended_at, session.started_at, session.created_at) AS sort_ts,
 				3 AS source_order, COALESCE(event.id, 0) AS row_order
@@ -1023,22 +1040,11 @@ func bunContentHitFromCandidate(
 	return hit
 }
 
-func normalizeBunContentTimestamp(value *string) string {
-	if value == nil || *value == "" {
+func normalizeBunContentTimestamp(value *bunmodel.Timestamp) string {
+	if value == nil || value.IsZero() {
 		return ""
 	}
-	if parsed, err := bunmodel.ParseTimestamp(*value); err == nil {
-		return parsed.UTC().Format(time.RFC3339Nano)
-	}
-	for _, layout := range []string{
-		"2006-01-02 15:04:05.999999999Z07",
-		"2006-01-02 15:04:05Z07",
-	} {
-		if parsed, err := time.Parse(layout, *value); err == nil {
-			return parsed.UTC().Format(time.RFC3339Nano)
-		}
-	}
-	return *value
+	return requiredTimestampFromBunRow(*value)
 }
 
 func (s *BunStore) bunContentSystemPrefixSQL(content, role string) string {
@@ -1047,6 +1053,7 @@ func (s *BunStore) bunContentSystemPrefixSQL(content, role string) string {
 
 func bunContentMessagesForHits(
 	ctx context.Context, store bun.IDB, hits []ContentSearchHit,
+	backend BunBackend,
 ) (map[bunContentMessageKey]bunContentMessage, error) {
 	out := make(map[bunContentMessageKey]bunContentMessage, len(hits))
 	const chunkSize = 400
@@ -1059,10 +1066,11 @@ func bunContentMessagesForHits(
 			args = append(args, hit.SessionID, hit.Ordinal)
 		}
 		var rows []bunContentMessage
+		timestampColumn := "message.timestamp"
 		query := `WITH refs(session_id, ordinal) AS (VALUES ` +
 			strings.Join(values, ", ") + `)
 			SELECT message.session_id, message.ordinal, message.role,
-				message.content, message.timestamp, message.is_system,
+				message.content, ` + timestampColumn + ` AS timestamp, message.is_system,
 				message.is_sidechain
 			FROM refs
 			JOIN messages AS message
@@ -1071,7 +1079,15 @@ func bunContentMessagesForHits(
 		if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
 			return nil, fmt.Errorf("hydrating content search messages: %w", err)
 		}
-		for _, row := range rows {
+		for index := range rows {
+			timestamp, err := bunAvailableTimestamp(rows[index].RawTimestamp)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"scanning content search message timestamp: %w", err,
+				)
+			}
+			rows[index].Timestamp = timestamp
+			row := rows[index]
 			out[bunContentMessageKey{row.SessionID, row.Ordinal}] = row
 		}
 	}

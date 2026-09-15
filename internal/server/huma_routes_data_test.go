@@ -2,7 +2,6 @@ package server_test
 
 import (
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -406,7 +406,7 @@ func TestDataStripImagesNotifiesAfterPartialCommit(t *testing.T) {
 	originalContent := readToolCallContent(t, te, "img-b")
 	// The cleanup visits sessions by ID within the project. Fail the
 	// second session's write after the first session has committed.
-	require.NoError(t, te.db.Update(func(tx *sql.Tx) error {
+	require.NoError(t, te.db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			CREATE TRIGGER fail_second_image_cleanup
 			BEFORE UPDATE OF result_content ON tool_calls

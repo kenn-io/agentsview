@@ -16,21 +16,28 @@ const bunMutationBatchSize = 400
 // RenameSession sets or clears the user-owned display name of an active
 // session.
 func (s *BunStore) RenameSession(id string, displayName *string) error {
+	if s.usageOnlyStorage() {
+		displayName = nil
+	}
 	ctx := context.Background()
-	err := s.update(ctx, WriteSessionManagement, func(store bun.IDB) error {
-		query := store.NewUpdate().Model((*bunmodel.Session)(nil)).
-			Set("display_name = ?", displayName).
-			Where("id = ?", id).
-			Where("deleted_at IS NULL")
-		s.backend.Capabilities().SessionMutations.ApplyTouch(
-			query, bunmodel.NewTimestamp(time.Now().UTC()),
-		)
-		if _, err := query.Exec(ctx); err != nil {
-			return fmt.Errorf("renaming session %s: %w", id, err)
-		}
-		return nil
+	return s.update(ctx, WriteSessionManagement, func(store bun.IDB) error {
+		return store.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+			query := tx.NewUpdate().Model((*bunmodel.Session)(nil)).
+				Set("display_name = ?", displayName).
+				Where("id = ?", id).
+				Where("deleted_at IS NULL")
+			s.backend.Capabilities().SessionMutations.ApplyTouch(
+				query, bunmodel.NewTimestamp(time.Now().UTC()),
+			)
+			if _, err := query.Exec(ctx); err != nil {
+				return fmt.Errorf("renaming session %s: %w", id, err)
+			}
+			if s.usageOnlyStorage() {
+				return s.backend.(bunArchiveContentPolicy).ClearUsageOnlyText(ctx, tx, id)
+			}
+			return nil
+		})
 	})
-	return err
 }
 
 // SoftDeleteSession moves an active session to user trash. Source availability

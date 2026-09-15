@@ -392,12 +392,11 @@ func (db *DB) importAcceptedRecallEntry(
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	bunTx, err := db.beginBunWriteTx(ctx)
+	tx, err := db.beginBunWriteTx(ctx)
 	if err != nil {
 		return false, fmt.Errorf("begin recall import: %w", err)
 	}
-	defer func() { _ = bunTx.Rollback() }()
-	tx := bunTx.Tx
+	defer func() { _ = tx.Rollback() }()
 
 	duplicate, err := recallImportEntryExistsWithQueryer(ctx, tx, recall.ID)
 	if err != nil {
@@ -436,7 +435,7 @@ func (db *DB) importAcceptedRecallEntry(
 
 	if !opts.RequireExistingSessions {
 		recall.ProvenanceOK = false
-		if err := ensureRecallImportSessionTx(ctx, bunTx, item, identity); err != nil {
+		if err := ensureRecallImportSessionTx(ctx, tx, item, identity); err != nil {
 			return false, fmt.Errorf("preparing source session: %w", err)
 		}
 	}
@@ -457,7 +456,7 @@ func (db *DB) importAcceptedRecallEntry(
 		return false, err
 	}
 
-	if err := bunTx.Commit(); err != nil {
+	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit recall import: %w", err)
 	}
 	return true, nil

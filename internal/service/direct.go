@@ -649,7 +649,7 @@ func (b *directBackend) Watch(
 
 // Search runs a full-text session search, mirroring the logic in
 // internal/server.humaSearch so both transports return identical
-// results: the raw query is normalized via db.PrepareFTSQuery, the
+// results: the store's search adapter prepares the raw query, the
 // limit is clamped to [1, db.MaxSearchLimit] (defaulting to
 // db.DefaultSearchLimit), and a store without an FTS index yields
 // ErrSearchUnavailable rather than an opaque failure.

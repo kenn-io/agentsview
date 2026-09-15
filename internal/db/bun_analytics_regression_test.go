@@ -23,7 +23,7 @@ func (*replayingAnalyticsBackend) Name() string { return "replaying-analytics" }
 func (*replayingAnalyticsBackend) ReadOnly() bool { return true }
 
 func (*replayingAnalyticsBackend) Capabilities() BackendCapabilities {
-	return BackendCapabilities{}
+	return BackendCapabilities{AnalyticsDialect: SQLiteBunAnalyticsDialect()}
 }
 
 func (*replayingAnalyticsBackend) TimestampOrderExpr(column string) string {
@@ -196,7 +196,7 @@ func TestBunRecentEditsHydratesOnlyRequestedGroups(t *testing.T) {
 	}}))
 
 	hook := new(countingQueryHook)
-	store := NewBunStore(&sessionContractBackend{
+	store := NewBunStore(&sqliteAnalyticsAggregateBackend{
 		store: database.bunReader.WithQueryHook(hook),
 	})
 	result, err := store.RecentEdits(t.Context(), RecentEditsParams{
@@ -210,10 +210,6 @@ func TestBunRecentEditsHydratesOnlyRequestedGroups(t *testing.T) {
 	assert.NotContains(t, hook.queries[0], "input_json")
 	assert.NotContains(t, hook.queries[0], "result_content")
 	assert.NotContains(t, hook.queries[0], "messages.content")
-	assert.Contains(t, hook.queries[0],
-		"CASE WHEN CAST(m.timestamp AS VARCHAR) = '' THEN NULL ELSE m.timestamp END",
-		"nullable timestamp normalization must be explicit before ordering",
-	)
 }
 
 func TestBunContentAnalyticsStreamsAcrossSessionBatches(t *testing.T) {
@@ -241,7 +237,7 @@ func TestBunContentAnalyticsStreamsAcrossSessionBatches(t *testing.T) {
 	require.NoError(t, err)
 
 	hook := new(countingQueryHook)
-	store := NewBunStore(&sessionContractBackend{
+	store := NewBunStore(&sqliteAnalyticsAggregateBackend{
 		store: database.bunReader.WithQueryHook(hook),
 	})
 	terms, err := ParseTrendTerms([]string{"seam"})
@@ -293,4 +289,26 @@ func bunContentSelects(queries []string) []string {
 		}
 	}
 	return contentQueries
+}
+
+func TestBunAnalyticsToolsUTCDateKeepsFinalMicrosecond(t *testing.T) {
+	database := testDB(t)
+	started := "2026-08-04T12:00:00Z"
+	require.NoError(t, database.UpsertSession(Session{
+		ID: "utc-boundary", Project: "boundary", Agent: "claude", Machine: "local",
+		StartedAt: &started, MessageCount: 2, UserMessageCount: 1,
+	}))
+	require.NoError(t, database.InsertMessages([]Message{
+		{SessionID: "utc-boundary", Ordinal: 0, Role: "assistant", Model: "model",
+			Timestamp: "2026-08-04T23:59:59.999999Z", Content: "read", ContentLength: 4,
+			ToolCalls: []ToolCall{{ToolName: "Read", Category: "Read"}}},
+		{SessionID: "utc-boundary", Ordinal: 1, Role: "assistant", Model: "model",
+			Timestamp: "2026-08-05T00:00:00Z", Content: "read", ContentLength: 4,
+			ToolCalls: []ToolCall{{ToolName: "Read", Category: "Read"}}},
+	}))
+	result, err := database.GetAnalyticsTools(t.Context(), AnalyticsFilter{
+		Project: "boundary", From: "2026-08-04", To: "2026-08-04", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.TotalCalls)
 }

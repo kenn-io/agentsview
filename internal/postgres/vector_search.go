@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
+
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/vector"
 )
@@ -24,7 +27,7 @@ type QueryEncodeFunc func(ctx context.Context, text string) ([]float32, error)
 // the shared vector_documents mirror. It mirrors internal/vector's Index
 // searcher semantics (Search + hydrateHits + resolveHit) for the PG backend.
 type vectorSearcher struct {
-	pg            *sql.DB
+	pg            *bun.DB
 	genID         int64
 	dimension     int
 	maxInputChars int
@@ -48,7 +51,7 @@ func NewVectorSearcher(
 	pg *sql.DB, genID int64, dimension, maxInputChars int, encode QueryEncodeFunc,
 ) db.VectorSearcher {
 	return &vectorSearcher{
-		pg:            pg,
+		pg:            bun.NewDB(pg, pgdialect.New()),
 		genID:         genID,
 		dimension:     dimension,
 		maxInputChars: maxInputChars,
@@ -66,7 +69,7 @@ func (v *vectorSearcher) resolveExtSchema(ctx context.Context) (string, error) {
 	if v.extSchema != "" {
 		return v.extSchema, nil
 	}
-	schema, err := vectorExtensionSchema(ctx, v.pg)
+	schema, err := vectorExtensionSchema(ctx, v.pg.DB)
 	if err != nil {
 		return "", fmt.Errorf("resolving pgvector schema: %w", err)
 	}
@@ -144,12 +147,12 @@ func (v *vectorSearcher) knnChunks(
 	if err != nil {
 		return nil, fmt.Errorf("query embedding: %w", err)
 	}
-	dist := fmt.Sprintf("embedding OPERATOR(%s.<=>) $1::%s.halfvec", extSchema, extSchema)
+	dist := fmt.Sprintf("embedding OPERATOR(%s.<=>) ?0::%s.halfvec", extSchema, extSchema)
 	q := fmt.Sprintf(`
 SELECT doc_key, chunk_index, 1 - (%s) AS score
   FROM %s
  ORDER BY %s
- LIMIT $2`, dist, v.chunkTable, dist)
+ LIMIT ?1`, dist, v.chunkTable, dist)
 
 	tx, err := v.pg.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -207,7 +210,7 @@ func hnswEfSearch(k int) int {
 	return min(max(k, 40), 1000)
 }
 
-func tuneHNSWRecall(ctx context.Context, tx *sql.Tx, k int) error {
+func tuneHNSWRecall(ctx context.Context, tx bun.Tx, k int) error {
 	efSearch := hnswEfSearch(k)
 	if _, err := tx.ExecContext(ctx,
 		fmt.Sprintf("SET LOCAL hnsw.ef_search = %d", efSearch)); err != nil {
@@ -320,7 +323,7 @@ func (v *vectorSearcher) lookupDocs(
 	rows, err := v.pg.QueryContext(ctx, `
 SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content
   FROM vector_documents
- WHERE ordinal >= 0 AND doc_key = ANY($1)`, docKeys)
+ WHERE ordinal >= 0 AND doc_key = ANY(?0)`, pgdialect.Array(docKeys))
 	if err != nil {
 		return nil, fmt.Errorf("looking up search hit documents: %w", err)
 	}
@@ -349,7 +352,7 @@ SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content
 // message lies outside the embeddable universe, or in a gap between units)
 // yields a zero db.UnitRef. Each ref is a point lookup — greatest unit ordinal
 // <= ref ordinal, then a containment check against ordinal_end — via one
-// prepared statement, so a batch of any size never approaches PG's bind limit.
+// Bun query per ref, so a batch of any size never approaches PG's bind limit.
 // The `ordinal >= 0` guard skips tombstone rows parked at a negative sentinel,
 // so a ref can never resolve into mid-refresh state (parity with
 // internal/vector's ResolveMessageUnits).
@@ -360,19 +363,15 @@ func (v *vectorSearcher) ResolveMessageUnits(
 	if len(refs) == 0 {
 		return out, nil
 	}
-	stmt, err := v.pg.PrepareContext(ctx, `
+	const query = `
 SELECT doc_key, ordinal, ordinal_end, subordinate
   FROM vector_documents
- WHERE session_id = $1 AND ordinal >= 0 AND ordinal <= $2
- ORDER BY ordinal DESC LIMIT 1`)
-	if err != nil {
-		return nil, fmt.Errorf("resolve message units: %w", err)
-	}
-	defer func() { _ = stmt.Close() }()
+ WHERE session_id = ?0 AND ordinal >= 0 AND ordinal <= ?1
+ ORDER BY ordinal DESC LIMIT 1`
 
 	for i, ref := range refs {
 		var unit db.UnitRef
-		err := stmt.QueryRowContext(ctx, ref.SessionID, ref.Ordinal).Scan(
+		err := v.pg.QueryRowContext(ctx, query, ref.SessionID, ref.Ordinal).Scan(
 			&unit.DocKey, &unit.OrdinalStart, &unit.OrdinalEnd, &unit.Subordinate)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue

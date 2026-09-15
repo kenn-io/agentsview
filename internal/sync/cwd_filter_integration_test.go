@@ -3,7 +3,6 @@ package sync_test
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/json/v2"
 	"fmt"
 	"os"
@@ -12,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/uptrace/bun"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -441,7 +442,7 @@ func TestSyncEngineCursorCwdDataVersionRefresh(t *testing.T) {
 	})
 
 	oldCwd := filepath.Join(t.TempDir(), "old")
-	require.NoError(t, env.db.Update(func(tx *sql.Tx) error {
+	require.NoError(t, env.db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec("UPDATE sessions SET cwd = ? WHERE id = ?", oldCwd, fullID)
 		return err
 	}))
@@ -1329,7 +1330,7 @@ func TestSyncEngineCursorCwdFilterRelaxationRefreshesStaleRows(t *testing.T) {
 	assertSessionState(t, d, fullID, func(sess *db.Session) {
 		assert.Equal(t, workspace, sess.Cwd)
 	})
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET cwd = '' WHERE id = ?", fullID,
 		)

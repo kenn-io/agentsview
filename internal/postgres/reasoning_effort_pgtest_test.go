@@ -26,7 +26,9 @@ func TestReasoningEffortPostgresSchemaAndRead(t *testing.T) {
 		VALUES ('effort-session', 0, 'assistant', 'answer', 'model-test', 'high')`)
 	require.NoError(t, err)
 
-	store := &Store{pg: pg}
+	store, err := NewStore(testPGURL(t), schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	messages, err := store.GetAllMessages(ctx, "effort-session")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)

@@ -19,6 +19,8 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -240,36 +242,44 @@ func TestEmbedSchedulerBuildsHoldIdleWorkLease(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mgr := &blockingEmbedManager{
-				started: make(chan struct{}),
-				release: make(chan struct{}),
-			}
-			idled := make(chan struct{})
-			tracker := server.NewIdleTracker(50*time.Millisecond, func() { close(idled) })
-			s := newEmbedScheduler(
-				mgr, tt.debounce, tt.backstop, false, tracker,
-			)
-			ctx := t.Context()
-			go tracker.Run(ctx)
-			go s.Run(ctx)
-			defer s.Stop()
-			defer mgr.releaseOnce()
+			// Keep host scheduling delays from letting idle shutdown beat the
+			// first build. Both timers advance only when the goroutines block.
+			synctest.Test(t, func(t *testing.T) {
+				mgr := &blockingEmbedManager{
+					started: make(chan struct{}),
+					release: make(chan struct{}),
+				}
+				idled := make(chan struct{})
+				tracker := server.NewIdleTracker(50*time.Millisecond, func() { close(idled) })
+				s := newEmbedScheduler(
+					mgr, tt.debounce, tt.backstop, false, tracker,
+				)
+				ctx := t.Context()
+				go tracker.Run(ctx)
+				go s.Run(ctx)
+				defer s.Stop()
+				defer mgr.releaseOnce()
 
-			if tt.notify {
-				s.Notify()
-			}
-			<-mgr.started
-			select {
-			case <-idled:
-				require.Fail(t, "daemon idled while an embedding build was in flight")
-			case <-time.After(200 * time.Millisecond):
-			}
-			mgr.releaseOnce()
-			select {
-			case <-idled:
-			case <-time.After(2 * time.Second):
-				require.Fail(t, "daemon never idled after the embedding build completed")
-			}
+				if tt.notify {
+					s.Notify()
+				}
+				select {
+				case <-mgr.started:
+				case <-time.After(time.Second):
+					require.FailNow(t, "embedding build never started")
+				}
+				select {
+				case <-idled:
+					require.Fail(t, "daemon idled while an embedding build was in flight")
+				case <-time.After(200 * time.Millisecond):
+				}
+				mgr.releaseOnce()
+				select {
+				case <-idled:
+				case <-time.After(2 * time.Second):
+					require.Fail(t, "daemon never idled after the embedding build completed")
+				}
+			})
 		})
 	}
 }
@@ -933,7 +943,7 @@ func TestRecallSchedulerBackstopRemovesArchivedEntryVectors(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	dbtest.SeedSession(t, database, "s1", "agentsview")
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			INSERT INTO recall_extract_generations
 				(fingerprint, state, model, segmenter, params_json)
@@ -977,7 +987,7 @@ func TestRecallSchedulerBackstopRemovesArchivedEntryVectors(t *testing.T) {
 	waitForSchedulerCondition(t, func() bool { return embeddedCount() == 1 },
 		"recall backstop never embedded the accepted entry")
 
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE recall_entries SET status = 'archived' WHERE id = 'recall-entry'",
 		)
@@ -1029,7 +1039,7 @@ func TestRecallSchedulerSyncRemovesDeletedEntryWithoutExtraction(t *testing.T) {
 	waitForSchedulerCondition(t, func() bool { return embeddedCount() == 1 },
 		"startup reconciliation did not embed the accepted entry")
 
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, deleteErr := tx.Exec("DELETE FROM recall_entries WHERE id = 'recall-entry'")
 		return deleteErr
 	}))
@@ -1248,7 +1258,7 @@ func TestRecallSearchRejectsCorpusMutationUntilRefresh(t *testing.T) {
 	searcher.enc = func(
 		ctx context.Context, texts []string,
 	) ([][]float32, error) {
-		if updateErr := database.Update(func(tx *sql.Tx) error {
+		if updateErr := database.Update(func(tx bun.Tx) error {
 			_, execErr := tx.Exec(`
 				UPDATE recall_entries
 				SET title = 'Connection policy',
@@ -1352,7 +1362,7 @@ func TestRecallSchedulerRequiresExplicitOptInForAutomaticBuilds(t *testing.T) {
 func TestRecallImportSchedulesEmbeddingRefresh(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`
 			INSERT INTO recall_extract_generations
 				(fingerprint, state, model, segmenter, params_json)

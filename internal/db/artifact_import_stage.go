@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/uptrace/bun"
 )
 
 const maxArtifactImportSessionPageSize = 128
@@ -546,7 +548,7 @@ func (db *DB) RecordArtifactCheckpointLandingFromStage(
 
 func recordStagedArtifactCheckpointLandingTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	landing ArtifactCheckpointLanding,
 ) error {
 	var head ArtifactPeerCheckpointHead
@@ -618,7 +620,7 @@ func recordStagedArtifactCheckpointLandingTx(
 
 func requireArtifactCheckpointStageIdentityTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	landing ArtifactCheckpointLanding,
 	create bool,
 ) error {

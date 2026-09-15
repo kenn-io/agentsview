@@ -145,6 +145,9 @@ func (s *BunStore) BulkStarSessions(sessionIDs []string) error {
 func (s *BunStore) PinMessage(
 	sessionID string, messageID int64, note *string,
 ) (int64, error) {
+	if s.usageOnlyStorage() {
+		note = nil
+	}
 	ctx := context.Background()
 	createdAt := bunmodel.NewTimestamp(time.Now())
 	var pinID int64

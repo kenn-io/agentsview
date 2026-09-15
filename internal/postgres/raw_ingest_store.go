@@ -13,6 +13,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
+
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
@@ -20,7 +23,7 @@ const rawIngestBatchRows = 256
 
 // RawIngestStore implements raw custody metadata over PostgreSQL.
 type RawIngestStore struct {
-	db         *sql.DB
+	db         *bun.DB
 	newReceipt func() (string, error)
 }
 
@@ -29,7 +32,7 @@ func NewRawIngestStore(db *sql.DB) (*RawIngestStore, error) {
 	if db == nil {
 		return nil, fmt.Errorf("%w: PostgreSQL connection is required", rawsync.ErrInvalid)
 	}
-	return &RawIngestStore{db: db, newReceipt: generateRawIngestReceipt}, nil
+	return &RawIngestStore{db: bun.NewDB(db, pgdialect.New()), newReceipt: generateRawIngestReceipt}, nil
 }
 
 // RecordVerifiedObject records an object only after physical verification.
@@ -63,8 +66,8 @@ func (s *RawIngestStore) RecordVerifiedObjects(
 			if i > 0 {
 				query.WriteByte(',')
 			}
-			argument := i*3 + 1
-			fmt.Fprintf(&query, "($%d,$%d,$%d)", argument, argument+1, argument+2)
+			argument := i * 3
+			fmt.Fprintf(&query, "(?%d,?%d,?%d)", argument, argument+1, argument+2)
 			args = append(args, identity.TenantID, object.SHA256, object.Length)
 		}
 		query.WriteString(` ON CONFLICT (tenant_id, sha256) DO UPDATE
@@ -193,7 +196,7 @@ func (s *RawIngestStore) CommitManifest(
 			tenant_id, manifest_id, device_id, provider, configured_root_id,
 			source_key, source_key_sha256, capture_id, parent_receipt, receipt,
 			generation, kind, captured_at, canonical_json
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+		) VALUES (?0, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
 		manifest.Identity.TenantID,
 		manifest.ManifestID,
 		manifest.Identity.DeviceID,
@@ -220,16 +223,16 @@ func (s *RawIngestStore) CommitManifest(
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO raw_ingest_jobs (
 			tenant_id, manifest_id, stage, processing_version, state
-		) VALUES ($1, $2, 'parse', $3, 'ready')`,
+		) VALUES (?0, ?1, 'parse', ?2, 'ready')`,
 		manifest.Identity.TenantID, manifest.ManifestID, processingVersion,
 	); err != nil {
 		return rawsync.CommitResult{}, fmt.Errorf("enqueuing raw parse job: %w", err)
 	}
 	updated, err := tx.ExecContext(ctx, `
 		UPDATE raw_source_heads
-		SET manifest_id = $6, receipt = $7, generation = $8, updated_at = now()
-		WHERE tenant_id = $1 AND device_id = $2 AND provider = $3
-			AND configured_root_id = $4 AND source_key_sha256 = $5 AND generation = $9`,
+		SET manifest_id = ?5, receipt = ?6, generation = ?7, updated_at = now()
+		WHERE tenant_id = ?0 AND device_id = ?1 AND provider = ?2
+			AND configured_root_id = ?3 AND source_key_sha256 = ?4 AND generation = ?8`,
 		manifest.Identity.TenantID,
 		manifest.Identity.DeviceID,
 		string(manifest.Manifest.Provider),
@@ -265,7 +268,7 @@ func (s *RawIngestStore) CommitManifest(
 			WITH candidate AS (
 				SELECT job.id
 				FROM raw_ingest_jobs AS job
-				WHERE job.tenant_id = $1 AND job.manifest_id = $2
+				WHERE job.tenant_id = ?0 AND job.manifest_id = ?1
 					AND job.stage = 'parse'
 					AND job.state IN ('ready', 'retrying', 'leased')
 				ORDER BY job.id
@@ -302,15 +305,15 @@ type rawIngestHead struct {
 
 func lookupRawIngestCapture(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	manifest rawsync.CanonicalManifest,
 ) (rawsync.CommitResult, bool, error) {
 	var stored rawsync.CommitResult
 	err := tx.QueryRowContext(ctx, `
 		SELECT manifest_id, receipt, generation
 		FROM raw_manifests
-		WHERE tenant_id = $1 AND device_id = $2 AND provider = $3
-			AND configured_root_id = $4 AND source_key_sha256 = $5 AND capture_id = $6`,
+		WHERE tenant_id = ?0 AND device_id = ?1 AND provider = ?2
+			AND configured_root_id = ?3 AND source_key_sha256 = ?4 AND capture_id = ?5`,
 		manifest.Identity.TenantID,
 		manifest.Identity.DeviceID,
 		string(manifest.Manifest.Provider),
@@ -335,14 +338,14 @@ func lookupRawIngestCapture(
 
 func ensureRawIngestHead(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	manifest rawsync.CanonicalManifest,
 ) error {
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO raw_source_heads (
 			tenant_id, device_id, provider, configured_root_id, source_key,
 			source_key_sha256
-		) VALUES ($1, $2, $3, $4, $5, $6)
+		) VALUES (?0, ?1, ?2, ?3, ?4, ?5)
 		ON CONFLICT (
 			tenant_id, device_id, provider, configured_root_id, source_key_sha256
 		) DO NOTHING`,
@@ -361,15 +364,15 @@ func ensureRawIngestHead(
 
 func lockRawIngestHead(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	manifest rawsync.CanonicalManifest,
 ) (rawIngestHead, error) {
 	var head rawIngestHead
 	err := tx.QueryRowContext(ctx, `
 		SELECT COALESCE(manifest_id, ''), COALESCE(receipt, ''), generation
 		FROM raw_source_heads
-		WHERE tenant_id = $1 AND device_id = $2 AND provider = $3
-			AND configured_root_id = $4 AND source_key_sha256 = $5
+		WHERE tenant_id = ?0 AND device_id = ?1 AND provider = ?2
+			AND configured_root_id = ?3 AND source_key_sha256 = ?4
 		FOR UPDATE`,
 		manifest.Identity.TenantID,
 		manifest.Identity.DeviceID,
@@ -397,15 +400,15 @@ func loadPresentRawObjects(
 	for start := 0; start < len(objects); start += rawIngestBatchRows {
 		end := min(start+rawIngestBatchRows, len(objects))
 		var query strings.Builder
-		query.WriteString(`SELECT sha256, size_bytes FROM raw_objects WHERE tenant_id = $1 AND (sha256, size_bytes) IN (`)
+		query.WriteString(`SELECT sha256, size_bytes FROM raw_objects WHERE tenant_id = ?0 AND (sha256, size_bytes) IN (`)
 		args := make([]any, 1, 1+2*(end-start))
 		args[0] = tenantID
 		for i, object := range objects[start:end] {
 			if i > 0 {
 				query.WriteByte(',')
 			}
-			argument := 2 + i*2
-			fmt.Fprintf(&query, "($%d,$%d)", argument, argument+1)
+			argument := 1 + i*2
+			fmt.Fprintf(&query, "(?%d,?%d)", argument, argument+1)
 			args = append(args, object.SHA256, object.Length)
 		}
 		query.WriteByte(')')
@@ -434,7 +437,7 @@ func loadPresentRawObjects(
 
 func insertRawManifestEntries(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	manifest rawsync.CanonicalManifest,
 ) error {
 	entries := manifest.Manifest.Entries
@@ -447,8 +450,8 @@ func insertRawManifestEntries(
 			if i > 0 {
 				query.WriteByte(',')
 			}
-			argument := i*7 + 1
-			fmt.Fprintf(&query, "($%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+			argument := i * 7
+			fmt.Fprintf(&query, "(?%d,?%d,?%d,?%d,?%d,?%d,?%d)",
 				argument, argument+1, argument+2, argument+3, argument+4, argument+5,
 				argument+6,
 			)
@@ -472,7 +475,7 @@ type rawManifestObjectRow struct {
 
 func insertRawManifestObjects(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	manifest rawsync.CanonicalManifest,
 ) error {
 	rows := make([]rawManifestObjectRow, 0, len(manifest.Objects))
@@ -492,8 +495,8 @@ func insertRawManifestObjects(
 			if i > 0 {
 				query.WriteByte(',')
 			}
-			argument := i*6 + 1
-			fmt.Fprintf(&query, "($%d,$%d,$%d,$%d,$%d,$%d)",
+			argument := i * 6
+			fmt.Fprintf(&query, "(?%d,?%d,?%d,?%d,?%d,?%d)",
 				argument, argument+1, argument+2, argument+3, argument+4, argument+5,
 			)
 			args = append(args,

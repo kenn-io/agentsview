@@ -2,7 +2,8 @@ package db
 
 import (
 	"context"
-	"database/sql"
+
+	"github.com/uptrace/bun"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
@@ -10,7 +11,7 @@ import (
 
 // Resolve once per export snapshot, in bounded queries, not once per hour.
 // Aggregate label catalogs are not evidence for individual contributions.
-func (db *DB) reportingSessionReferences(ctx context.Context, tx *sql.Tx, sessions []activity.SessionMeta) (map[string]export.ProjectReference, error) {
+func (db *DB) reportingSessionReferences(ctx context.Context, tx bun.IDB, sessions []activity.SessionMeta) (map[string]export.ProjectReference, error) {
 	archiveID, err := sessionExportMetadataValue(ctx, tx, archiveMetadataArchiveIDKey, ErrArchiveIDMissing, "archive id")
 	if err != nil {
 		return nil, err

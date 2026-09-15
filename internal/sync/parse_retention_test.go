@@ -274,14 +274,16 @@ func TestBulkParseRetentionBudgetScavengesOncePerParseBearingPass(t *testing.T) 
 		"one parse-bearing pass needs exactly one end-of-pass scavenge")
 }
 
-func TestBulkParseRetentionBudgetCountsUnknownSourceAtPendingLimit(t *testing.T) {
+func TestBulkParseRetentionBudgetChargesUnknownSourceConservatively(t *testing.T) {
 	budget := newBulkParseRetentionBudget(defaultBulkParseRetentionBytes)
 	lease, err := budget.acquire(t.Context(), 0)
 	require.NoError(t, err)
 	t.Cleanup(lease.Release)
 
-	assert.Equal(t, defaultBulkPendingRetentionBytes, lease.retainedBytes,
-		"an unknown source must not undercount the pending parsed payload")
+	assert.Equal(t, budget.capacity, lease.weight,
+		"an unknown source must reserve all active parse capacity")
+	assert.GreaterOrEqual(t, lease.retainedBytes, budget.pendingCapacity,
+		"an unknown source must trigger a standalone pending write")
 }
 
 func TestCollectAndBatchFlushesOnByteCap(t *testing.T) {
@@ -985,7 +987,7 @@ func TestStartWorkersKeepsBulkBatchingIndependentOfParseAdmission(t *testing.T) 
 					path := filepath.Join(t.TempDir(), fmt.Sprintf("large-%d.jsonl", i))
 					file, err := os.Create(path)
 					require.NoError(t, err)
-					require.NoError(t, file.Truncate(20<<20))
+					require.NoError(t, file.Truncate(12<<20))
 					require.NoError(t, file.Close())
 					source := parser.SourceRef{
 						Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path,
@@ -1469,9 +1471,9 @@ func TestParseRetentionBudgetAdmissionWeights(t *testing.T) {
 		{"bulk_six_mib", bulk, 6291456, 25231360, 25231360},
 		{"bulk_below_clamp", bulk, 67092479, 268435452, 268435452},
 		{"bulk_at_clamp", bulk, 67092480, 268435456, 268435456},
-		{"bulk_saturated", bulk, 134217728, 268435456, 536870912},
-		{"bulk_unknown", bulk, 0, 268435456, 536870912},
-		{"bulk_negative", bulk, -1, 268435456, 536870912},
+		{"bulk_saturated", bulk, 134217728, 268435456, 268435456},
+		{"bulk_unknown", bulk, 0, 268435456, 268435456},
+		{"bulk_negative", bulk, -1, 268435456, 268435456},
 		{"daemon_sixty_four_mib", daemon, 67108864, 67108864, 67108864},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

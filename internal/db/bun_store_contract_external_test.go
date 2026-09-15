@@ -1,9 +1,10 @@
 package db_test
 
 import (
-	"database/sql"
 	"path/filepath"
 	"testing"
+
+	"github.com/uptrace/bun"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,7 +23,7 @@ func TestBunStoreCoreContract(t *testing.T) {
 			require.NoError(t, err)
 			generation, err := database.GetDatabaseID(t.Context())
 			require.NoError(t, err)
-			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+			require.NoError(t, database.Update(func(tx bun.Tx) error {
 				return storetest.InsertSQLiteCoreFixture(
 					t.Context(), tx, archiveID, generation,
 				)
@@ -47,7 +48,7 @@ func TestBunStoreIdentityContract(t *testing.T) {
 			archiveSalt, err := database.GetArchiveSalt(t.Context())
 			require.NoError(t, err)
 			var fixture storetest.IdentityFixture
-			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+			require.NoError(t, database.Update(func(tx bun.Tx) error {
 				var insertErr error
 				fixture, insertErr = storetest.InsertSQLiteIdentityFixture(
 					t.Context(), tx, archiveID, archiveSalt,
@@ -80,7 +81,7 @@ func TestBunStoreDataContract(t *testing.T) {
 			archiveSalt, err := database.GetArchiveSalt(t.Context())
 			require.NoError(t, err)
 			var fixture storetest.IdentityFixture
-			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+			require.NoError(t, database.Update(func(tx bun.Tx) error {
 				var insertErr error
 				fixture, insertErr = storetest.InsertSQLiteIdentityFixture(
 					t.Context(), tx, archiveID, archiveSalt,
@@ -104,7 +105,7 @@ func TestBunStoreCurationContract(t *testing.T) {
 			generation, err := database.GetDatabaseID(t.Context())
 			require.NoError(t, err)
 			var fixture storetest.CurationFixture
-			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+			require.NoError(t, database.Update(func(tx bun.Tx) error {
 				var insertErr error
 				fixture, insertErr = storetest.InsertSQLiteCurationFixture(
 					t.Context(), tx, archiveID, generation,
@@ -124,7 +125,7 @@ func TestBunStoreInsightContract(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, database.Close()) })
 			var fixture storetest.InsightFixture
-			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+			require.NoError(t, database.Update(func(tx bun.Tx) error {
 				var insertErr error
 				fixture, insertErr = storetest.InsertSQLiteInsightFixture(t.Context(), tx)
 				return insertErr
@@ -146,7 +147,7 @@ func TestBunStoreMutationContract(t *testing.T) {
 			generation, err := database.GetDatabaseID(t.Context())
 			require.NoError(t, err)
 			var fixture storetest.MutationFixture
-			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+			require.NoError(t, database.Update(func(tx bun.Tx) error {
 				var insertErr error
 				fixture, insertErr = storetest.InsertSQLiteMutationFixture(
 					t.Context(), tx, archiveID, generation, extraTrashRows,
@@ -229,7 +230,7 @@ func TestBunStoreUsageContract(t *testing.T) {
 			require.NoError(t, err)
 			generation, err := database.GetDatabaseID(t.Context())
 			require.NoError(t, err)
-			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+			require.NoError(t, database.Update(func(tx bun.Tx) error {
 				return storetest.InsertSQLiteUsageFixture(
 					t.Context(), tx, archiveID, generation,
 				)
@@ -247,7 +248,7 @@ func TestBunStoreReadOnlyUsageAllowsMissingOptionalTables(t *testing.T) {
 	require.NoError(t, err)
 	generation, err := database.GetDatabaseID(t.Context())
 	require.NoError(t, err)
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		if err := storetest.InsertSQLiteUsageFixture(
 			t.Context(), tx, archiveID, generation,
 		); err != nil {

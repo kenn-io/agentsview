@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/uptrace/bun"
 )
 
 // MachineLabelKeyPrefix identifies display labels in archive and mirror metadata.
@@ -13,32 +15,32 @@ const MachineLabelKeyPrefix = "machine_label:"
 const MachineAliasKeyPrefix = "machine_alias:"
 
 // GetMachineLabels returns explicitly recorded labels, keyed by machine identity.
-func (db *DB) GetMachineLabels(ctx context.Context) (map[string]string, error) {
-	return db.getMachineMetadata(ctx, MachineLabelKeyPrefix)
+func (s *BunStore) GetMachineLabels(ctx context.Context) (map[string]string, error) {
+	return s.getMachineMetadata(ctx, MachineLabelKeyPrefix)
 }
 
 // GetMachineAliases returns former machine keys and their canonical identities.
-func (db *DB) GetMachineAliases(ctx context.Context) (map[string]string, error) {
-	return db.getMachineMetadata(ctx, MachineAliasKeyPrefix)
+func (s *BunStore) GetMachineAliases(ctx context.Context) (map[string]string, error) {
+	return s.getMachineMetadata(ctx, MachineAliasKeyPrefix)
 }
 
-func (db *DB) getMachineMetadata(ctx context.Context, prefix string) (map[string]string, error) {
-	rows, err := db.getReader().QueryContext(ctx, `
-		SELECT key, value FROM pg_sync_state
-		WHERE key LIKE ? ESCAPE '\'`, strings.ReplaceAll(prefix, "_", "\\_")+"%")
+func (s *BunStore) getMachineMetadata(ctx context.Context, prefix string) (map[string]string, error) {
+	var rows []struct {
+		Key   string `bun:"key"`
+		Value string `bun:"value"`
+	}
+	err := s.view(ctx, func(store bun.IDB) error {
+		return store.NewSelect().Table(s.backend.Capabilities().MachineMetadataTable).
+			Column("key", "value").Where("key LIKE ? ESCAPE '\\'", strings.ReplaceAll(prefix, "_", "\\_")+"%").Scan(ctx, &rows)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("reading machine metadata: %w", err)
 	}
-	defer rows.Close()
-	metadata := make(map[string]string)
-	for rows.Next() {
-		var key, value string
-		if err := rows.Scan(&key, &value); err != nil {
-			return nil, err
-		}
-		metadata[strings.TrimPrefix(key, prefix)] = value
+	metadata := make(map[string]string, len(rows))
+	for _, row := range rows {
+		metadata[strings.TrimPrefix(row.Key, prefix)] = row.Value
 	}
-	return metadata, rows.Err()
+	return metadata, nil
 }
 
 // CanonicalMachineFilter resolves recorded aliases in a comma-separated filter.

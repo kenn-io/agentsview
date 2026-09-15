@@ -331,7 +331,8 @@ func convergeSQLitePricingMetadata(ctx context.Context, db bun.IDB) error {
 		WHERE model_pattern IN (
 			'_fallback_version',
 			'_litellm_last_attempt',
-			'_pricing_storage_version'
+			'_pricing_storage_version',
+			'_openrouter_models'
 		)
 		ON CONFLICT(key) DO UPDATE SET
 			value = excluded.value,
@@ -340,7 +341,8 @@ func convergeSQLitePricingMetadata(ctx context.Context, db bun.IDB) error {
 		WHERE model_pattern IN (
 			'_fallback_version',
 			'_litellm_last_attempt',
-			'_pricing_storage_version'
+			'_pricing_storage_version',
+			'_openrouter_models'
 		);
 	`); err != nil {
 		return fmt.Errorf("converging SQLite pricing metadata: %w", err)

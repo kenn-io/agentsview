@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/uptrace/bun"
 )
@@ -20,7 +21,9 @@ func (s *BunStore) Search(
 	if filter.Limit <= 0 || filter.Limit > MaxSearchLimit {
 		filter.Limit = DefaultSearchLimit
 	}
-	filter.Query = PrepareFTSQuery(filter.Query)
+	// Preserve explicit quoting so the adapter can distinguish phrases from
+	// text that needs language-specific tokenization.
+	filter.Query = strings.TrimSpace(filter.Query)
 	if filter.Query == "" {
 		return SearchPage{}, nil
 	}

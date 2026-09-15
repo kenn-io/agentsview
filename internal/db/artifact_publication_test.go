@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/uptrace/bun"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -53,7 +55,7 @@ func TestArtifactPublicationChangesRejectMismatchedPersistedOrigin(t *testing.T)
 			require.NoError(t, err)
 			require.Len(t, claims, 1)
 			if tc.removeOrigin {
-				require.NoError(t, database.Update(func(tx *sql.Tx) error {
+				require.NoError(t, database.Update(func(tx bun.Tx) error {
 					_, err := tx.Exec(
 						`DELETE FROM pg_sync_state WHERE key = 'artifact_origin_id'`,
 					)
@@ -106,7 +108,7 @@ func TestArtifactPublicationOriginValidationFollowsWriterReservation(t *testing.
 	originalPopulate := populateArtifactOriginQueueTx
 	adoptionStarted := make(chan struct{})
 	releaseAdoption := make(chan struct{})
-	populateArtifactOriginQueueTx = func(tx *sql.Tx, origin string, requeue bool) error {
+	populateArtifactOriginQueueTx = func(tx bun.Tx, origin string, requeue bool) error {
 		close(adoptionStarted)
 		<-releaseAdoption
 		return originalPopulate(tx, origin, requeue)
@@ -739,7 +741,7 @@ func TestArtifactQueueUsesAdoptedInstallationOwnership(t *testing.T) {
 		}},
 	} {
 		t.Run(operation.name, func(t *testing.T) {
-			require.NoError(t, database.Update(func(tx *sql.Tx) error {
+			require.NoError(t, database.Update(func(tx bun.Tx) error {
 				_, err := tx.Exec(`DELETE FROM artifact_export_queue`)
 				return err
 			}))
@@ -758,7 +760,7 @@ func TestEnsureArtifactOriginPublishesOriginWithBootstrapQueue(t *testing.T) {
 	originalPopulate := populateArtifactOriginQueueTx
 	started := make(chan struct{})
 	release := make(chan struct{})
-	populateArtifactOriginQueueTx = func(tx *sql.Tx, origin string, requeue bool) error {
+	populateArtifactOriginQueueTx = func(tx bun.Tx, origin string, requeue bool) error {
 		close(started)
 		<-release
 		return originalPopulate(tx, origin, requeue)
@@ -803,7 +805,7 @@ func TestEnsureArtifactOriginRequeuesExistingLedgerWhenOriginStateIsEmpty(t *tes
 			name: "missing row",
 			clearOrigin: func(t *testing.T, database *DB) {
 				t.Helper()
-				require.NoError(t, database.Update(func(tx *sql.Tx) error {
+				require.NoError(t, database.Update(func(tx bun.Tx) error {
 					_, err := tx.Exec(
 						`DELETE FROM pg_sync_state WHERE key = 'artifact_origin_id'`,
 					)
@@ -892,7 +894,7 @@ func TestArtifactOriginTransactionRollsBackQueuePopulationFailure(t *testing.T) 
 
 	injected := errors.New("queue population failed")
 	originalPopulate := populateArtifactOriginQueueTx
-	populateArtifactOriginQueueTx = func(*sql.Tx, string, bool) error { return injected }
+	populateArtifactOriginQueueTx = func(bun.Tx, string, bool) error { return injected }
 	t.Cleanup(func() { populateArtifactOriginQueueTx = originalPopulate })
 
 	err = database.AdoptArtifactOrigin("after-d4e5f6")
@@ -914,7 +916,7 @@ func TestEnsureArtifactOriginRollsBackQueuePopulationFailure(t *testing.T) {
 
 	injected := errors.New("queue population failed")
 	originalPopulate := populateArtifactOriginQueueTx
-	populateArtifactOriginQueueTx = func(*sql.Tx, string, bool) error { return injected }
+	populateArtifactOriginQueueTx = func(bun.Tx, string, bool) error { return injected }
 	t.Cleanup(func() { populateArtifactOriginQueueTx = originalPopulate })
 
 	origin, err := database.EnsureArtifactOrigin("desk-a1b2c3")
@@ -2014,7 +2016,8 @@ func TestArtifactPublicationQueueIgnoresSessionBookkeepingUpdates(t *testing.T) 
 		UPDATE sessions SET
 			file_path = '/tmp/local', file_size = 42, file_mtime = 43,
 			next_ordinal = 9, last_entry_uuid = 'uuid', file_inode = 44,
-			file_device = 45, file_hash = 'hash', local_modified_at = 'now',
+			file_device = 45, file_hash = 'hash',
+			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
 			last_write_incremental = 1, secrets_rules_version = 'rules',
 			secret_leak_count = 2, sync_marker = 'marker'
 		WHERE id = 'session'`)

@@ -181,17 +181,11 @@ func (db *DB) ReplaceRemoteSkippedFiles(
 		)
 	}
 
-	stmt, err := tx.Prepare(
-		"INSERT INTO remote_skipped_files" +
-			" (host, path, file_mtime) VALUES (?, ?, ?)",
-	)
-	if err != nil {
-		return fmt.Errorf("prepare: %w", err)
-	}
-	defer stmt.Close()
+	stmt := "INSERT INTO remote_skipped_files" +
+		" (host, path, file_mtime) VALUES (?, ?, ?)"
 
 	for path, mtime := range entries {
-		if _, err := stmt.Exec(host, path, mtime); err != nil {
+		if _, err := tx.Exec(stmt, host, path, mtime); err != nil {
 			return fmt.Errorf(
 				"inserting remote skipped file %s: %w",
 				path, err,
@@ -224,35 +218,23 @@ func (db *DB) ApplyRemoteSkippedFileChanges(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	deleteStmt, err := tx.Prepare(
-		"DELETE FROM remote_skipped_files WHERE host = ? AND path = ?",
-	)
-	if err != nil {
-		return fmt.Errorf("prepare remote skip cache delete: %w", err)
-	}
-	defer deleteStmt.Close()
+	deleteStmt := "DELETE FROM remote_skipped_files WHERE host = ? AND path = ?"
 	for _, path := range deletes {
-		if _, err := deleteStmt.Exec(host, path); err != nil {
+		if _, err := tx.Exec(deleteStmt, host, path); err != nil {
 			return fmt.Errorf("deleting remote skipped file %s: %w", path, err)
 		}
 	}
 
-	upsertStmt, err := tx.Prepare(
-		`INSERT INTO remote_skipped_files (host, path, file_mtime)
+	upsertStmt := `INSERT INTO remote_skipped_files (host, path, file_mtime)
 		 VALUES (?, ?, ?)
-		 ON CONFLICT(host, path) DO UPDATE SET file_mtime = excluded.file_mtime`,
-	)
-	if err != nil {
-		return fmt.Errorf("prepare remote skip cache upsert: %w", err)
-	}
-	defer upsertStmt.Close()
+		 ON CONFLICT(host, path) DO UPDATE SET file_mtime = excluded.file_mtime`
 	paths := make([]string, 0, len(upserts))
 	for path := range upserts {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
 	for _, path := range paths {
-		if _, err := upsertStmt.Exec(host, path, upserts[path]); err != nil {
+		if _, err := tx.Exec(upsertStmt, host, path, upserts[path]); err != nil {
 			return fmt.Errorf("upserting remote skipped file %s: %w", path, err)
 		}
 	}

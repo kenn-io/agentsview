@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math"
 	"sort"
+
+	"github.com/uptrace/bun"
 )
 
 // ErrArtifactExportLimit identifies a deterministic session-shape violation
@@ -87,7 +89,7 @@ func (db *DB) LoadArtifactExportData(
 		return ArtifactExportData{}, err
 	}
 	db.connMu.RLock()
-	reader := db.reader.Load()
+	reader := db.bunReader
 	if reader == nil {
 		db.connMu.RUnlock()
 		return ArtifactExportData{}, errors.New("database is closed")
@@ -150,7 +152,7 @@ func (db *DB) LoadArtifactExportData(
 
 func attachArtifactNestedCollectionsTx(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx bun.Tx,
 	sessionID string,
 	messages []Message,
 	limits ArtifactExportLoadLimits,
@@ -353,7 +355,7 @@ func validateArtifactExportLoadLimits(limits ArtifactExportLoadLimits) error {
 }
 
 func preflightArtifactExportTx(
-	ctx context.Context, tx *sql.Tx, sessionID string, limits ArtifactExportLoadLimits,
+	ctx context.Context, tx bun.Tx, sessionID string, limits ArtifactExportLoadLimits,
 ) error {
 	messageBytes, err := preflightArtifactMessagesTx(ctx, tx, sessionID, limits)
 	if err != nil {
@@ -387,7 +389,7 @@ func preflightArtifactExportTx(
 }
 
 func preflightArtifactMessagesTx(
-	ctx context.Context, tx *sql.Tx, sessionID string, limits ArtifactExportLoadLimits,
+	ctx context.Context, tx bun.Tx, sessionID string, limits ArtifactExportLoadLimits,
 ) (int64, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, ordinal, `+artifactMessageRawBytesSQL+`
@@ -435,7 +437,7 @@ func preflightArtifactMessagesTx(
 }
 
 func preflightArtifactToolCallsTx(
-	ctx context.Context, tx *sql.Tx, sessionID string, limits ArtifactExportLoadLimits,
+	ctx context.Context, tx bun.Tx, sessionID string, limits ArtifactExportLoadLimits,
 ) (int64, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT message_id, `+artifactToolCallRawBytesSQL+`
@@ -491,7 +493,7 @@ func preflightArtifactToolCallsTx(
 }
 
 func preflightArtifactResultEventsTx(
-	ctx context.Context, tx *sql.Tx, sessionID string, limits ArtifactExportLoadLimits,
+	ctx context.Context, tx bun.Tx, sessionID string, limits ArtifactExportLoadLimits,
 ) (int64, error) {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT tool_call_message_ordinal, call_index,
@@ -552,7 +554,7 @@ func preflightArtifactResultEventsTx(
 }
 
 func preflightArtifactUsageTx(
-	ctx context.Context, tx *sql.Tx, sessionID string, limits ArtifactExportLoadLimits,
+	ctx context.Context, tx bun.Tx, sessionID string, limits ArtifactExportLoadLimits,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT `+artifactUsageRawBytesSQL+`

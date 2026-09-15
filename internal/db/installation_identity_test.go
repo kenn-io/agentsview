@@ -1,13 +1,13 @@
 package db
 
 import (
-	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -32,7 +32,7 @@ func TestInstallationAdoptionMovesOwnedArchiveState(t *testing.T) {
 	starred, err := database.StarSession(owner)
 	require.NoError(t, err)
 	require.True(t, starred)
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(`INSERT INTO local_session_source_baselines VALUES (?, ?, 'claude', ?)`, owner, owner, path)
 		return err
 	}))
@@ -160,7 +160,7 @@ func TestInstallationAdoptionKeepsNewestRootObservation(t *testing.T) {
 			for _, machine := range []string{"oldhost.example", identity} {
 				observed := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 				if machine == newestMachine {
-					observed = observed.Add(time.Nanosecond)
+					observed = observed.Add(time.Microsecond)
 				}
 				require.NoError(t, database.UpsertSessionWithProjectIdentity(Session{
 					ID: machine, Machine: machine, Project: "project", Agent: "claude",
@@ -176,4 +176,56 @@ func TestInstallationAdoptionKeepsNewestRootObservation(t *testing.T) {
 			assert.Equal(t, newestMachine, observations[0].GitBranch)
 		})
 	}
+}
+
+func TestInstallationAdoptionKeepsSourceArchiveBoundaries(t *testing.T) {
+	database := testDB(t)
+	const identity = "0123456789abcdef0123456789abcdef"
+	const former = "oldhost.example"
+	require.NoError(t, database.Update(func(tx bun.Tx) error {
+		for _, archive := range []string{"archive-a", "archive-b"} {
+			if _, err := tx.Exec(`INSERT INTO source_archives (source_archive_id, source_archive_salt) VALUES (?, ?)`, archive, archive+"-salt"); err != nil {
+				return err
+			}
+		}
+		for _, row := range []struct {
+			archive, machine, project, branch, observed string
+		}{
+			{"archive-a", former, "project-a", "a-new", "2026-07-01T00:00:02Z"},
+			{"archive-a", identity, "project-a", "a-old", "2026-07-01T00:00:01Z"},
+			{"archive-b", former, "project-b", "b-old", "2026-07-01T00:00:00Z"},
+		} {
+			if _, err := tx.Exec(`INSERT INTO source_worktree_project_mappings
+				(source_archive_id, machine, path_prefix, project) VALUES (?, ?, '/workspace/shared', ?)`,
+				row.archive, row.machine, row.project); err != nil {
+				return err
+			}
+			// Observations share all identity keys except archive and machine.
+			// The older archive-b row must survive archive-a's newer evidence.
+			if _, err := tx.Exec(`INSERT INTO source_project_identity_observations
+				(source_archive_id, machine, project, root_path, git_remote, git_branch, observed_at)
+				VALUES (?, ?, 'shared', '/workspace/shared', '', ?, ?)`,
+				row.archive, row.machine, row.branch, row.observed); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+	require.NoError(t, database.AdoptMachineIdentity(t.Context(), identity, []string{former}))
+	type retainedRow struct {
+		Archive string `bun:"source_archive_id"`
+		Machine string
+		Value   string
+	}
+	var rules, observations []retainedRow
+	require.NoError(t, database.view(t.Context(), func(store bun.IDB) error {
+		return store.NewRaw(`SELECT source_archive_id, machine, project AS value
+			FROM source_worktree_project_mappings ORDER BY source_archive_id`).Scan(t.Context(), &rules)
+	}))
+	require.NoError(t, database.view(t.Context(), func(store bun.IDB) error {
+		return store.NewRaw(`SELECT source_archive_id, machine, git_branch AS value
+			FROM source_project_identity_observations ORDER BY source_archive_id`).Scan(t.Context(), &observations)
+	}))
+	assert.Equal(t, []retainedRow{{"archive-a", identity, "project-a"}, {"archive-b", identity, "project-b"}}, rules)
+	assert.Equal(t, []retainedRow{{"archive-a", identity, "a-new"}, {"archive-b", identity, "b-old"}}, observations)
 }

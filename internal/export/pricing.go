@@ -11,6 +11,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 type PricingRowSource string
@@ -423,12 +424,13 @@ func (r *PricingResolver) resolveGenAI(
 		model    string
 		priced   string
 	}
-	models := []modelAlias{{lookup: reportedModel, priced: reportedModel}}
+	var aliases [4]modelAlias
+	models := append(aliases[:0], modelAlias{lookup: reportedModel, priced: reportedModel})
 	if canonicalModel != "" && canonicalModel != reportedModel {
-		models = []modelAlias{
-			{lookup: canonicalModel, priced: canonicalModel},
-			{lookup: reportedModel, priced: reportedModel},
-		}
+		models = append(models[:0],
+			modelAlias{lookup: canonicalModel, priced: canonicalModel},
+			modelAlias{lookup: reportedModel, priced: reportedModel},
+		)
 	}
 	pricedModel := canonicalModel
 	if pricedModel == "" {
@@ -451,7 +453,8 @@ func (r *PricingResolver) resolveGenAI(
 	}
 	for _, model := range models {
 		provider, unqualified := genAIProviderAndModel(model.lookup)
-		candidates := []modelCandidate{{provider, unqualified, model.priced}}
+		var candidateStorage [2]modelCandidate
+		candidates := append(candidateStorage[:0], modelCandidate{provider, unqualified, model.priced})
 		if provider != "" || unqualified != model.lookup {
 			candidates = append(candidates, modelCandidate{
 				model:  model.lookup,
@@ -1029,7 +1032,7 @@ func latestPricingRowUpdate(rows []EffectivePricingRow) *time.Time {
 			}
 		}
 		if row.Rates.UpdatedAt != nil {
-			t := row.Rates.UpdatedAt.UTC()
+			t := timeutil.NormalizePostgresTimestampPrecision(*row.Rates.UpdatedAt)
 			if latest == nil || t.After(*latest) {
 				latest = &t
 			}
@@ -1038,7 +1041,7 @@ func latestPricingRowUpdate(rows []EffectivePricingRow) *time.Time {
 			if band.UpdatedAt == nil {
 				continue
 			}
-			t := band.UpdatedAt.UTC()
+			t := timeutil.NormalizePostgresTimestampPrecision(*band.UpdatedAt)
 			if latest == nil || t.After(*latest) {
 				latest = &t
 			}

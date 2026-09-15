@@ -6,6 +6,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/uptrace/bun"
 )
 
 type messageFTSQuery struct {
@@ -16,7 +18,7 @@ type messageFTSQuery struct {
 }
 
 func (db *DB) prepareMessageFTSQuery(
-	ctx context.Context, raw string,
+	ctx context.Context, store bun.IDB, raw string,
 ) (messageFTSQuery, error) {
 	trimmed := strings.TrimSpace(raw)
 	prepared := PrepareFTSQuery(trimmed)
@@ -25,7 +27,7 @@ func (db *DB) prepareMessageFTSQuery(
 		match: prepared,
 		plain: StripFTSQuotes(prepared),
 	}
-	if prepared == "" || !containsCJK(trimmed) || !db.HasCJKFTS() {
+	if prepared == "" || !containsCJK(trimmed) || !db.hasCJKFTS(ctx, store) {
 		return query, nil
 	}
 
@@ -46,16 +48,8 @@ func (db *DB) prepareMessageFTSQuery(
 		return query, nil
 	}
 
-	conn, err := db.getReader().Conn(ctx)
-	if err != nil {
-		return messageFTSQuery{}, fmt.Errorf(
-			"acquiring CJK FTS query connection: %w", err,
-		)
-	}
-	defer conn.Close()
-
 	simpleFTSJiebaMu.Lock()
-	err = conn.QueryRowContext(
+	err := store.QueryRowContext(
 		ctx, "SELECT jieba_query(?, 0)", trimmed,
 	).Scan(&query.match)
 	simpleFTSJiebaMu.Unlock()

@@ -98,6 +98,50 @@ func TestReportingExportSplitsActivityAndAssignsFirstSeenOnce(t *testing.T) {
 	assert.InDelta(t, existing.Totals.AgentMinutes, hourlyAgentMinutes, 0.0001)
 }
 
+func TestReportingExportPreservesPriorModelsAcrossHourWindows(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "carry", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-07-27T23:58:00Z")
+		s.EndedAt = new("2026-07-28T00:02:00Z")
+	})
+	seedMessage(t, d, "carry", 1, "user", "2026-07-27T23:58:00Z", "")
+	seedMessage(t, d, "carry", 2, "assistant", "2026-07-27T23:59:00Z", "prior-model")
+	seedMessage(t, d, "carry", 3, "user", "2026-07-28T00:01:00Z", "")
+	seedMessage(t, d, "carry", 4, "assistant", "2026-07-28T00:02:00Z", "")
+
+	insertSession(t, d, "unordered", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-07-28T10:58:00Z")
+		s.EndedAt = new("2026-07-28T11:02:00Z")
+	})
+	seedMessage(t, d, "unordered", 1, "user", "2026-07-28T10:58:00Z", "")
+	seedMessage(t, d, "unordered", 2, "assistant", "2026-07-28T11:01:00Z", "model-a")
+	// This backwards timestamp must not replace the inherited model.
+	seedMessage(t, d, "unordered", 3, "assistant", "2026-07-28T10:59:00Z", "backwards-model")
+	seedMessage(t, d, "unordered", 4, "user", "2026-07-28T11:02:00Z", "")
+
+	day, err := d.ExportReportingDay(context.Background(), ReportingExportOptions{
+		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.Len(t, day.Hours, 24)
+	for _, tt := range []struct {
+		hour  int
+		model string
+	}{
+		{0, "prior-model"},
+		{10, "model-a"},
+		{11, "model-a"},
+	} {
+		hour := day.Hours[tt.hour]
+		assert.InDelta(t, 2, hour.Activity.Totals.AgentMinutes, 0.0001, "hour %d", tt.hour)
+		require.Len(t, hour.Activity.ByModel, 1, "hour %d", tt.hour)
+		assert.Equal(t, tt.model, hour.Activity.ByModel[0].Key, "hour %d", tt.hour)
+	}
+}
+
 func TestReportingExportCurrentDayOmitsOpenHour(t *testing.T) {
 	d := testDB(t)
 

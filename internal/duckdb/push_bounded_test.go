@@ -4,7 +4,6 @@ package duckdb
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -12,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/uptrace/bun"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -293,7 +294,7 @@ func TestProjectTransitionThenHardDeleteAppliesTombstone(t *testing.T) {
 func moveSessionToProject(t *testing.T, local *db.DB, sessionID, project string) {
 	t.Helper()
 	modifiedAt := time.Now().UTC().Format(localSyncTimestampLayout)
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			`UPDATE sessions SET project = ?, local_modified_at = ? WHERE id = ?`,
 			project, modifiedAt, sessionID,

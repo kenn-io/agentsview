@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/uptrace/bun"
+
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
@@ -321,7 +323,7 @@ func (c *usageRollupCoordinator) ensureNow(
 // ensureAttempt performs one read-build-install cycle. It reports done when
 // every in-scope install matches the facts and metadata it must reflect.
 func (c *usageRollupCoordinator) ensureAttempt(
-	ctx context.Context, conn *sql.Conn, identity usageTimezoneIdentity,
+	ctx context.Context, conn bun.Conn, identity usageTimezoneIdentity,
 	snapshot usageQuerySnapshot, fills map[string]usageFillResult,
 	resolver *export.PricingResolver, pricingHash string,
 ) (map[string]usageRollupInstall, bool, usageRollupMetrics, error) {
@@ -414,7 +416,7 @@ func (c *usageRollupCoordinator) ensureAttempt(
 }
 
 func readCurrentUsageFillResults(
-	ctx context.Context, conn *sql.Conn, versions []usageSourceVersion,
+	ctx context.Context, conn bun.Conn, versions []usageSourceVersion,
 ) (map[string]usageFillResult, error) {
 	results := make(map[string]usageFillResult, len(versions))
 	for _, version := range versions {
@@ -438,7 +440,7 @@ func readCurrentUsageFillResults(
 }
 
 func readUsageRollupInstalls(
-	ctx context.Context, conn *sql.Conn, identity usageTimezoneIdentity,
+	ctx context.Context, conn bun.Conn, identity usageTimezoneIdentity,
 	snapshot usageQuerySnapshot, fills map[string]usageFillResult,
 	pricingHash string,
 ) (map[string]usageRollupInstall, map[string]bool, error) {
@@ -519,7 +521,7 @@ func readUsageRollupInstalls(
 }
 
 func installUsageRollupBuilds(
-	ctx context.Context, conn *sql.Conn, identity usageTimezoneIdentity,
+	ctx context.Context, conn bun.Conn, identity usageTimezoneIdentity,
 	location *time.Location, builds []usageRollupBuild,
 	buildCross usageDedupIdentitySet,
 ) error {
@@ -668,7 +670,7 @@ func installUsageRollupBuilds(
 }
 
 func installUsageRollupRows(
-	ctx context.Context, conn *sql.Conn, installID int64,
+	ctx context.Context, conn bun.Conn, installID int64,
 	build usageRollupBuild, dates map[string]bool,
 ) error {
 	for _, row := range build.Daily {
@@ -724,7 +726,7 @@ func installUsageRollupRows(
 }
 
 func installUsageRollupDays(
-	ctx context.Context, conn *sql.Conn, timezoneID int64,
+	ctx context.Context, conn bun.Conn, timezoneID int64,
 	location *time.Location, dates map[string]bool,
 ) error {
 	if location == nil {

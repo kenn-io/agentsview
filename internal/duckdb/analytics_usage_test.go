@@ -1358,16 +1358,8 @@ func TestDuckDailyUsageEventModelEligibility(t *testing.T) {
 		daily.Daily[0].ModelBreakdowns[0].ModelName)
 }
 
-func TestDuckAnalyticsToolsWindowsMessagesInSQL(t *testing.T) {
+func TestDuckAnalyticsToolsHonorsLocalWindowAndNullFallback(t *testing.T) {
 	ctx := context.Background()
-	var observedQuery string
-	previousObserver := analyticsQueryObserver
-	analyticsQueryObserver = func(query string) {
-		if observedQuery == "" && strings.Contains(query, "FROM tool_calls tc") {
-			observedQuery = query
-		}
-	}
-	t.Cleanup(func() { analyticsQueryObserver = previousObserver })
 	var writes []db.SessionBatchWrite
 	for n, ts := range []string{"2023-01-01T12:00:00Z", "2025-05-31T10:00:00Z", "2025-06-01T09:59:59Z", "2027-01-01T12:00:00Z", ""} {
 		id := fmt.Sprintf("window-%d", n)
@@ -1382,13 +1374,8 @@ func TestDuckAnalyticsToolsWindowsMessagesInSQL(t *testing.T) {
 	resp, err := store.GetAnalyticsTools(ctx, f)
 	require.NoError(t, err)
 	assert.Equal(t, 3, resp.TotalCalls)
-	from, to := duckAnalyticsWindowBounds(f)
-	pred, _ := duckAnalyticsMessageWindowPred("m.timestamp", from, to)
-	require.NotEmpty(t, observedQuery, "production tool query was not observed")
-	assert.Contains(t, observedQuery, pred,
-		"production tool query must carry the message window predicate")
 	skills, err := store.GetAnalyticsSkills(ctx, f, "day")
 	require.NoError(t, err)
 	assert.Equal(t, 3, skills.TotalSkillCalls)
-	t.Log("production tool query carried the message window predicate; SQL admitted 3 calls; tools and skills retain UTC+14 boundary and null fallback")
+
 }

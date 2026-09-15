@@ -812,6 +812,10 @@ func TestToolResultMetadataMigrationPreservesArchivedEvents(t *testing.T) {
  status TEXT NOT NULL, content TEXT NOT NULL, content_length INTEGER NOT NULL DEFAULT 0,
  timestamp TEXT, event_index INTEGER NOT NULL DEFAULT 0);
  INSERT INTO sessions(id,project) VALUES ('s1','project-a');
+ INSERT INTO messages(id,session_id,ordinal,role,content)
+ VALUES (1,'s1',0,'assistant','');
+ INSERT INTO tool_calls(id,message_id,session_id,tool_name,category)
+ VALUES (1,1,'s1','exec_command','Bash');
  INSERT INTO tool_result_events(session_id,tool_call_message_ordinal,source,status,content,content_length)
  VALUES ('s1',0,'function_call_output','','archived',8);`)
 	require.NoError(t, err)

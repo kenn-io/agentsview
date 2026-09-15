@@ -11,6 +11,8 @@ import (
 	stdsync "sync"
 	"testing"
 
+	"github.com/uptrace/bun"
+
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	_ "github.com/mattn/go-sqlite3"
@@ -86,7 +88,7 @@ func (e *testEnv) assertResyncRoundTrip(
 	t.Helper()
 
 	// Clear mtime to force resync on next check.
-	err := e.db.Update(func(tx *sql.Tx) error {
+	err := e.db.Update(func(tx bun.Tx) error {
 		_, err := tx.Exec(
 			"UPDATE sessions SET file_mtime = NULL"+
 				" WHERE id = ?",

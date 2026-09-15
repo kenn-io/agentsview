@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/uptrace/bun"
 )
 
 const simpleFTSDirEnv = "AGENTSVIEW_SIMPLE_DIR"
@@ -244,7 +246,7 @@ func requireRegularFile(path string) error {
 }
 
 type cjkFTSTransactor interface {
-	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+	BeginTx(context.Context, *sql.TxOptions) (bun.Tx, error)
 }
 
 // ensureCJKFTS atomically reconciles the derived CJK index with the
@@ -383,5 +385,5 @@ func ensureCJKFTS(
 }
 
 func installCJKFTSTriggers(conn *sql.DB) error {
-	return ensureCJKFTS(context.Background(), conn, false)
+	return ensureCJKFTS(context.Background(), bun.NewDB(conn, NewSQLiteArchiveDialect()), false)
 }
