@@ -36,6 +36,7 @@
 
   let rules: DbAgentRemapRule[] = $state([]);
   let loading = $state(true);
+  let unavailable = $state(false);
   let saving = $state(false);
   let applying = $state(false);
   let error = $state("");
@@ -87,6 +88,16 @@
     const signal = rulesRead.begin();
     loading = true;
     error = "";
+    // Listing is a local-only settings endpoint: it answers 501 in remote
+    // or read-only mode, so skip the doomed request and show the
+    // unavailable state instead of surfacing a raw API error.
+    if (readOnly) {
+      rulesRead.finish(signal);
+      loading = false;
+      unavailable = true;
+      return;
+    }
+    unavailable = false;
     try {
       const res = await callGenerated(
         (options) => SettingsService.getApiV1SettingsAgentRemapRules(options),
@@ -275,7 +286,9 @@
     <p class="description">{m.agent_remap_description()}</p>
   </div>
 
-  {#if loading}
+  {#if unavailable}
+    <div class="muted" role="note">{m.agent_remap_read_only()}</div>
+  {:else if loading}
     <div class="muted">{m.agent_remap_loading()}</div>
   {:else if error && rules.length === 0}
     <div class="error-text">{error}</div>
@@ -337,9 +350,7 @@
       {/if}
     </div>
 
-    {#if readOnly}
-      <p class="warning" role="note">{m.agent_remap_read_only()}</p>
-    {:else}
+    {#if !readOnly}
       <div class="form-grid">
         <label class="field">
           <span>{m.agent_remap_source()}</span>
@@ -618,12 +629,6 @@
   .arrow {
     color: var(--text-muted);
     padding: 0 4px;
-  }
-
-  .warning {
-    margin: 0;
-    color: var(--accent-orange);
-    font-size: 12px;
   }
 
   .error-text,

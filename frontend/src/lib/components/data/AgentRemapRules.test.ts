@@ -45,6 +45,16 @@ const metadataService = MetadataService as unknown as {
   getApiV1Agents: ReturnType<typeof vi.fn>;
 };
 
+const en = (await import("../../../../messages/en.json")).default as Record<
+  string,
+  unknown
+>;
+
+function textOf(key: string): string {
+  const value = en[key];
+  return typeof value === "string" ? value : key;
+}
+
 function rule(overrides: Record<string, unknown> = {}) {
   return {
     id: 1,
@@ -319,5 +329,25 @@ describe("AgentRemapRules", () => {
     // typeaheads must not offer arbitrary custom values that would 400.
     const options = listbox().queryAllByRole("option");
     expect(options).toHaveLength(0);
+  });
+
+  it("read-only mode shows the local-only state without calling the API", async () => {
+    settingsService.getApiV1SettingsAgentRemapRules.mockResolvedValue([rule()]);
+
+    component = mountRules({ readOnly: true });
+    await flush();
+
+    // The listing endpoint is local-only; in read-only mode the load must
+    // be skipped entirely instead of surfacing a 501 error.
+    expect(
+      settingsService.getApiV1SettingsAgentRemapRules,
+    ).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain(
+      textOf("agent_remap_read_only"),
+    );
+    // No form, no rows, no error banner.
+    expect(document.querySelector("table")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add rule" })).toBeNull();
+    expect(document.querySelector(".error-text")).toBeNull();
   });
 });

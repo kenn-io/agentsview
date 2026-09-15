@@ -2352,6 +2352,7 @@
   "duplicate_review_recheck": "중복 다시 확인",
   "duplicate_review_rebuilding": "중복 그룹 재구성 중…",
   "duplicate_review_empty": "감지된 중복 세션이 없습니다.",
+  "duplicate_review_local_only": "중복 세션 검토는 로컬 아카이브에서만 사용할 수 있습니다.",
   "duplicate_review_group_heading": "사본 {count}개",
   "duplicate_review_role_canonical": "정본",
   "duplicate_review_role_duplicate": "중복",

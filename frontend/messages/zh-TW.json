@@ -2352,6 +2352,7 @@
   "duplicate_review_recheck": "重新檢查重複項",
   "duplicate_review_rebuilding": "正在重建重複群組…",
   "duplicate_review_empty": "未偵測到重複工作階段。",
+  "duplicate_review_local_only": "重複工作階段審查僅在本機封存上可用。",
   "duplicate_review_group_heading": "{count} 個副本",
   "duplicate_review_role_canonical": "標準",
   "duplicate_review_role_duplicate": "重複",

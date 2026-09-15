@@ -105,3 +105,36 @@ func TestWriteBatchBulkAppliesAgentRemapRules(t *testing.T) {
 	assert.Equal(t, "augure-desktop", stored.Agent,
 		"a bulk-path session matching a rule must land remapped")
 }
+
+// TestWriteBatchStagedOnlyBulkAppliesAgentRemapRules covers the staged-only
+// bulk batch: a staged write never creates a db.SessionBatchWrite row, so the
+// batch has zero entries and the function returned before the post-batch
+// remap ran. The staged session must still land remapped.
+func TestWriteBatchStagedOnlyBulkAppliesAgentRemapRules(t *testing.T) {
+	database := remapRuleHarness(t)
+	engine := NewEngine(database, EngineConfig{
+		// The staged write runs signal recomputation through a closure that
+		// needs the full engine; skipping it keeps the fixture to the write
+		// path under test.
+		DisableSignalRecomputation: true,
+	})
+	t.Cleanup(engine.Close)
+
+	staged, err := newCodexStagingSink("", nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = staged.Close() })
+
+	write := gooseWrite("goose:staged", "ossington-5")
+	write.staged = staged
+
+	outcome := engine.writeBatchBulkWithOutcome(
+		[]pendingWrite{write}, true,
+	)
+	require.Equal(t, 1, outcome.writtenSessions)
+
+	stored, err := database.GetSession(t.Context(), "goose:staged")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "augure-desktop", stored.Agent,
+		"a staged-only bulk batch must apply remap rules before returning")
+}

@@ -2399,6 +2399,7 @@
   "duplicate_review_recheck": "Recheck duplicates",
   "duplicate_review_rebuilding": "Rebuilding duplicate groups…",
   "duplicate_review_empty": "No duplicate sessions detected.",
+  "duplicate_review_local_only": "Duplicate session review is available on the local archive only.",
   "duplicate_review_group_heading": "{count} copies",
   "duplicate_review_role_canonical": "canonical",
   "duplicate_review_role_duplicate": "duplicate",

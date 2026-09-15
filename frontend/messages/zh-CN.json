@@ -2352,6 +2352,7 @@
   "duplicate_review_recheck": "重新检查重复项",
   "duplicate_review_rebuilding": "正在重建重复组…",
   "duplicate_review_empty": "未检测到重复会话。",
+  "duplicate_review_local_only": "重复会话审查仅在本地归档上可用。",
   "duplicate_review_group_heading": "{count} 个副本",
   "duplicate_review_role_canonical": "规范",
   "duplicate_review_role_duplicate": "重复",

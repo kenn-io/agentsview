@@ -19,6 +19,7 @@
   let rebuilding = $state(false);
   let loadError = $state("");
   let loaded = $state(false);
+  let unavailable = $state(false);
 
   const totalMembers = $derived(
     groups.reduce((sum, g) => sum + g.members.length, 0),
@@ -32,6 +33,14 @@
   }
 
   async function load() {
+    // Listing is a local-only settings endpoint: it answers 501 in remote
+    // or read-only mode, so skip the doomed request and show the
+    // unavailable state instead of surfacing a raw API error.
+    if (readOnly) {
+      unavailable = true;
+      return;
+    }
+    unavailable = false;
     loading = true;
     loadError = "";
     try {
@@ -82,7 +91,9 @@
   </header>
 
   {#if readOnly}
-    <div class="review-readonly">{m.data_view_rules()}</div>
+    <div class="review-readonly" role="note">
+      {m.duplicate_review_local_only()}
+    </div>
   {:else}
     <div class="review-actions">
       <button class="rebuild-btn" onclick={rebuild} disabled={rebuilding}>
@@ -97,7 +108,9 @@
     <div class="review-error" role="alert">{loadError}</div>
   {/if}
 
-  {#if loading && !loaded}
+  {#if unavailable}
+    <div class="review-status">{m.duplicate_review_local_only()}</div>
+  {:else if loading && !loaded}
     <div class="review-status">{m.data_loading()}</div>
   {:else if groups.length === 0}
     <div class="review-status">{m.duplicate_review_empty()}</div>
