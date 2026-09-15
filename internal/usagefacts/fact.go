@@ -3,7 +3,8 @@
 package usagefacts
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"strconv"
 	"strings"
 	"time"
@@ -417,7 +418,7 @@ func parseJSONString(input string, i int) (string, int, bool) {
 				return input[i+1 : j], j + 1, true
 			}
 			var value string
-			if err := json.Unmarshal([]byte(input[i:j+1]), &value); err != nil {
+			if err := json.Unmarshal([]byte(input[i:j+1]), &value, jsontext.AllowInvalidUTF8(true)); err != nil {
 				return "", j + 1, false
 			}
 			return value, j + 1, true

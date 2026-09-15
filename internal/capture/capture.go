@@ -3,7 +3,8 @@ package capture
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -1104,7 +1105,7 @@ func failureResult(m manifest, reason ReasonCode, agentsViewVersion string) Resu
 }
 
 func encodeResult(result Result, maxBytes int) ([]byte, error) {
-	data, err := json.MarshalIndent(result, "", "  ")
+	data, err := json.Marshal(result, jsontext.WithIndent("  "))
 	if err != nil {
 		return nil, err
 	}

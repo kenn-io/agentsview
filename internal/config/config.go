@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/base64"
-	jsonv1 "encoding/json"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -1419,13 +1418,22 @@ func (c *Config) loadLegacyJSONReadOnly() error {
 
 func legacyJSONToTOML(data []byte) (string, error) {
 	var m map[string]any
-	decoder := jsonv1.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := decoder.Decode(&m); err != nil {
+	decoder := jsontext.NewDecoder(bytes.NewReader(data))
+	// Keep integer literals exact until TOML conversion, including values
+	// beyond float64's integer precision.
+	numbers := json.UnmarshalFromFunc(func(dec *jsontext.Decoder, value *any) error {
+		if dec.PeekKind() != '0' {
+			return errors.ErrUnsupported
+		}
+		raw, err := dec.ReadValue()
+		*value = raw.Clone()
+		return err
+	})
+	if err := json.UnmarshalDecode(decoder, &m, json.WithUnmarshalers(numbers)); err != nil {
 		return "", fmt.Errorf("parsing config.json: %w", err)
 	}
 	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+	if err := json.UnmarshalDecode(decoder, &trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
 			err = errors.New("multiple JSON values")
 		}
@@ -1446,11 +1454,11 @@ func legacyJSONToTOML(data []byte) (string, error) {
 
 func normalizeLegacyJSONNumbers(value any) (any, error) {
 	switch typed := value.(type) {
-	case jsonv1.Number:
+	case jsontext.Value:
 		if strings.ContainsAny(typed.String(), ".eE") {
-			return typed.Float64()
+			return strconv.ParseFloat(string(typed), 64)
 		}
-		return typed.Int64()
+		return strconv.ParseInt(string(typed), 10, 64)
 	case map[string]any:
 		for key, child := range typed {
 			normalized, err := normalizeLegacyJSONNumbers(child)

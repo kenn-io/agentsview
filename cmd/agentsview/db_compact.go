@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -105,7 +105,7 @@ func runDBCompactDryRun(
 		return err
 	}
 	if jsonOutput {
-		return json.NewEncoder(out).Encode(estimate)
+		return json.MarshalWrite(out, estimate)
 	}
 	fmt.Fprintln(out, "Archive compaction estimate.")
 	fmt.Fprintf(out, "  Database: %s\n", formatBytes(estimate.DatabaseBytes))
@@ -225,14 +225,14 @@ func requestDBCompact(
 		var api struct {
 			Error string `json:"error"`
 		}
-		_ = json.NewDecoder(resp.Body).Decode(&api)
+		_ = json.UnmarshalRead(resp.Body, &api)
 		if api.Error == "" {
 			api.Error = resp.Status
 		}
 		return db.CompactResult{}, fmt.Errorf("archive compaction: %s", api.Error)
 	}
 	var result db.CompactResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &result); err != nil {
 		return db.CompactResult{}, fmt.Errorf("decode archive compaction result: %w", err)
 	}
 	return result, nil
@@ -240,7 +240,7 @@ func requestDBCompact(
 
 func writeDBCompactResult(out io.Writer, result db.CompactResult, jsonOutput bool) error {
 	if jsonOutput {
-		return json.NewEncoder(out).Encode(result)
+		return json.MarshalWrite(out, result)
 	}
 	fmt.Fprintln(out, "Archive compaction completed.")
 	fmt.Fprintln(out, "Before:")
