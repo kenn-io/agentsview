@@ -61,7 +61,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 		Name:    "agentsview",
 		Title:   "agentsview session history",
 		Version: version,
-	}, nil)
+	}, &mcp.ServerOptions{Instructions: "Use returned web_url values when linking to recorded sessions."})
 
 	t := &toolset{svc: opts.Service, now: opts.Now}
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true}

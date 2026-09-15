@@ -301,6 +301,8 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 
 // Session represents a row in the sessions table.
 type Session struct {
+	// WebURL is a client-derived browser link, never persisted.
+	WebURL                string  `json:"web_url,omitempty"`
 	ID                    string  `json:"id"`
 	Project               string  `json:"project"`
 	Machine               string  `json:"machine"`

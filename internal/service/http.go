@@ -160,6 +160,7 @@ func (b *httpBackend) Get(
 	if err != nil {
 		return nil, err
 	}
+	out.WebURL = b.sessionWebURL(out.ID)
 	return &out, nil
 }
 
@@ -187,6 +188,9 @@ func (b *httpBackend) List(
 	var out SessionList
 	if err := b.getJSON(ctx, "/api/v1/sessions?"+q.Encode(), &out); err != nil {
 		return nil, err
+	}
+	for i := range out.Sessions {
+		out.Sessions[i].WebURL = b.sessionWebURL(out.Sessions[i].ID)
 	}
 	return &out, nil
 }
@@ -482,6 +486,9 @@ func (b *httpBackend) Search(
 		}
 		return nil, err
 	}
+	for i := range out.Results {
+		out.Results[i].WebURL = b.sessionWebURL(out.Results[i].SessionID)
+	}
 	results := out.Results
 	if results == nil {
 		results = []db.SearchResult{}
@@ -558,6 +565,9 @@ func (b *httpBackend) SearchContent(
 			return nil, wrapSemanticUnavailable(notImpl.message)
 		}
 		return nil, err
+	}
+	for i := range out.Matches {
+		out.Matches[i].WebURL = b.sessionWebURL(out.Matches[i].SessionID)
 	}
 	return &out, nil
 }
@@ -1207,4 +1217,18 @@ func (b *httpBackend) postRaw(
 		)
 	}
 	return json.UnmarshalRead(resp.Body, out)
+}
+
+// sessionWebURL mirrors the browser router: agent prefix and opaque session ID
+// are separate path segments. The selected HTTP backend owns these IDs.
+func (b *httpBackend) sessionWebURL(id string) string {
+	if id == "" {
+		return ""
+	}
+	prefix, rest, found := strings.Cut(id, ":")
+	path := url.PathEscape(prefix)
+	if found {
+		path += "/" + url.PathEscape(rest)
+	}
+	return strings.TrimRight(b.baseURL, "/") + "/sessions/" + path
 }

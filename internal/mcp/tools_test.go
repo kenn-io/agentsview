@@ -3,6 +3,9 @@ package mcp
 import (
 	"context"
 	"encoding/json/v2"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -1441,4 +1444,17 @@ func TestSearchSessions_RejectsInvalidDateRange(t *testing.T) {
 			assert.Contains(t, inputErr.Error(), tc.message)
 		})
 	}
+}
+
+func TestListSessionsIncludesBrowserLink(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/sessions", r.URL.Path)
+		fmt.Fprint(w, `{"sessions":[{"id":"codex:session-42"}]}`)
+	}))
+	defer server.Close()
+	tools := &toolset{svc: service.NewHTTPBackend(server.URL, "", false)}
+	_, out, err := tools.listSessions(t.Context(), nil, listSessionsIn{})
+	require.NoError(t, err)
+	require.Len(t, out.Sessions, 1)
+	assert.Equal(t, server.URL+"/sessions/codex/session-42", out.Sessions[0].WebURL)
 }

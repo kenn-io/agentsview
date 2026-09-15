@@ -91,6 +91,7 @@ type searchSessionsIn struct {
 }
 
 type sessionHit struct {
+	WebURL       string `json:"web_url,omitempty" jsonschema:"Browser URL for this session; use this URL when linking to it."`
 	SessionID    string `json:"session_id"`
 	Project      string `json:"project,omitempty"`
 	Agent        string `json:"agent"`
@@ -143,6 +144,7 @@ func (t *toolset) searchSessions(
 		name, _ := truncate(r.Name, nameMaxChars)
 		out.Results = append(out.Results, sessionHit{
 			SessionID:    r.SessionID,
+			WebURL:       r.WebURL,
 			Project:      r.Project,
 			Agent:        r.Agent,
 			Name:         name,
@@ -216,6 +218,7 @@ type listSessionsIn struct {
 }
 
 type sessionRow struct {
+	WebURL           string `json:"web_url,omitempty" jsonschema:"Browser URL for this session; use this URL when linking to it."`
 	SessionID        string `json:"session_id"`
 	Project          string `json:"project,omitempty"`
 	Machine          string `json:"machine,omitempty"`
@@ -273,6 +276,7 @@ func toSessionRow(s db.Session) sessionRow {
 	name, _ = truncate(name, nameMaxChars)
 	return sessionRow{
 		SessionID:        s.ID,
+		WebURL:           s.WebURL,
 		Project:          s.Project,
 		Machine:          s.Machine,
 		Agent:            s.Agent,
@@ -556,6 +560,7 @@ func toContextMessages(msgs []db.Message) []contextMessage {
 }
 
 type contentMatch struct {
+	WebURL          string   `json:"web_url,omitempty" jsonschema:"Browser URL for this session; use this URL when linking to it."`
 	SessionID       string   `json:"session_id"`
 	Project         string   `json:"project,omitempty"`
 	Agent           string   `json:"agent"`
@@ -631,7 +636,7 @@ func (t *toolset) searchContent(
 			}
 		}
 		out.Matches = append(out.Matches, contentMatch{
-			SessionID: m.SessionID, Project: m.Project, Agent: m.Agent,
+			WebURL: m.WebURL, SessionID: m.SessionID, Project: m.Project, Agent: m.Agent,
 			Location: m.Location, Role: m.Role, Ordinal: m.Ordinal,
 			Timestamp: m.Timestamp, Snippet: m.Snippet, Score: m.Score,
 			OrdinalRange: m.OrdinalRange, Subordinate: m.Subordinate,

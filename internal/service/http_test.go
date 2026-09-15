@@ -1193,3 +1193,38 @@ func TestHTTPBackend_AuthToken(t *testing.T) {
 		assert.Contains(t, err.Error(), "401")
 	})
 }
+
+func TestHTTPBackendSessionBrowserLinks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/base/api/v1/sessions":
+			fmt.Fprint(w, `{"sessions":[{"id":"codex:session:42"}]}`)
+		case "/base/api/v1/sessions/codex:session:42":
+			fmt.Fprint(w, `{"id":"codex:session:42"}`)
+		case "/base/api/v1/search":
+			fmt.Fprint(w, `{"results":[{"session_id":"codex:session:42"}]}`)
+		case "/base/api/v1/search/content":
+			fmt.Fprint(w, `{"matches":[{"session_id":"codex:session:42"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	svc := service.NewHTTPBackend(server.URL+"/base", "", false)
+	want := server.URL + "/base/sessions/codex/session:42"
+	detail, err := svc.Get(t.Context(), "codex:session:42")
+	require.NoError(t, err)
+	assert.Equal(t, want, detail.WebURL)
+	list, err := svc.List(t.Context(), service.ListFilter{})
+	require.NoError(t, err)
+	require.Len(t, list.Sessions, 1)
+	assert.Equal(t, want, list.Sessions[0].WebURL)
+	hits, err := svc.Search(t.Context(), service.SearchRequest{Query: "example"})
+	require.NoError(t, err)
+	require.Len(t, hits.Results, 1)
+	assert.Equal(t, want, hits.Results[0].WebURL)
+	content, err := svc.SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "example"})
+	require.NoError(t, err)
+	require.Len(t, content.Matches, 1)
+	assert.Equal(t, want, content.Matches[0].WebURL)
+}
