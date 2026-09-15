@@ -520,6 +520,7 @@ func TestFindSessionIDsByRawSuffixPG(t *testing.T) {
 	for i := range 1000 {
 		insert("remote~U-E"+strconv.Itoa(i), "2025-01-01T00:00:00Z", false)
 	}
+	insert("host~P-E", "2024-01-02T00:00:00Z", false)
 	insert("codex:colon", "2024-01-02T00:00:00Z", false)
 	insert("host~wild_%_literal", "2024-01-03T00:00:00Z", false)
 	insert("host~trashed", "2024-01-04T00:00:00Z", true)
@@ -546,8 +547,13 @@ func TestFindSessionIDsByRawSuffixPG(t *testing.T) {
 	assert.Empty(t, got)
 	trashedIDs := append([]string(nil), got...)
 
+	got, err = store.FindSessionIDsByRawSuffix(ctx, "E", 2)
+	require.NoError(t, err, "fork entry lookup")
+	assert.Empty(t, got)
+	entryIDs := append([]string(nil), got...)
+
 	got, err = store.FindSessionIDsByRawSuffix(ctx, "plain-id", 2)
 	require.NoError(t, err, "exact lookup")
 	assert.Equal(t, []string{"plain-id"}, got)
-	t.Logf("head: postgres_root=%v colon=%v wildcard=%v trashed=%v exact=%v", rootIDs, colonIDs, wildcardIDs, trashedIDs, got)
+	t.Logf("head: postgres_root=%v colon=%v wildcard=%v trashed=%v entry=%v exact=%v", rootIDs, colonIDs, wildcardIDs, trashedIDs, entryIDs, got)
 }

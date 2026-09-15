@@ -309,7 +309,7 @@ func TestDuckDBFindSessionIDsByRawSuffix(t *testing.T) {
 	local := newLocalDB(t)
 	for _, id := range []string{
 		"plain-id", "codex:uuid", "host~uuid", "host~uuid-fork",
-		"host~wild_%_literal", "host~trashed",
+		"host~P-E", "host~wild_%_literal", "host~trashed",
 	} {
 		require.NoError(t, local.UpsertSession(db.Session{
 			ID: id, Project: "proj", Machine: "test",
@@ -342,7 +342,12 @@ func TestDuckDBFindSessionIDsByRawSuffix(t *testing.T) {
 	got, err = store.FindSessionIDsByRawSuffix(ctx, "trashed", 2)
 	require.NoError(t, err)
 	assert.Empty(t, got)
-	t.Logf("head: duckdb_uuid=%v exact=%v wildcard=%v trashed=%v", uuidIDs, exactIDs, wildcardIDs, got)
+	trashedIDs := append([]string(nil), got...)
+
+	got, err = store.FindSessionIDsByRawSuffix(ctx, "E", 2)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	t.Logf("head: duckdb_uuid=%v exact=%v wildcard=%v trashed=%v entry=%v", uuidIDs, exactIDs, wildcardIDs, trashedIDs, got)
 }
 
 func duckContractSessionsCursorsAndMetadata(

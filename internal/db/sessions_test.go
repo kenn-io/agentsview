@@ -93,6 +93,7 @@ func TestFindSessionIDsByRawSuffix(t *testing.T) {
 	insertSession(t, d, "codex:uuid", "agent")
 	insertSession(t, d, "host~uuid", "host")
 	insertSession(t, d, "host~uuid-fork", "fork")
+	insertSession(t, d, "host~P-E", "entry")
 	insertSession(t, d, "host~wild_%_literal", "wild")
 	insertSession(t, d, "host~trashed", "trash")
 	require.NoError(t, d.SoftDeleteSession("host~trashed"))
@@ -116,7 +117,12 @@ func TestFindSessionIDsByRawSuffix(t *testing.T) {
 	got, err = d.FindSessionIDsByRawSuffix(ctx, "trashed", 2)
 	require.NoError(t, err)
 	assert.Empty(t, got)
-	t.Logf("head: sqlite_uuid=%v exact=%v wildcard=%v trashed=%v", uuidIDs, exactIDs, wildcardIDs, got)
+	trashedIDs := append([]string(nil), got...)
+
+	got, err = d.FindSessionIDsByRawSuffix(ctx, "E", 2)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	t.Logf("head: sqlite_uuid=%v exact=%v wildcard=%v trashed=%v entry=%v", uuidIDs, exactIDs, wildcardIDs, trashedIDs, got)
 }
 
 func TestListSessions_OutcomeFilter(t *testing.T) {

@@ -97,6 +97,7 @@ func TestSearchSessions_SessionIDLookup(t *testing.T) {
 	dbtest.SeedSession(t, d, "host~host-uuid-fork", "fork-project", func(s *db.Session) {
 		s.EndedAt = new("2024-06-12T10:00:00Z")
 	})
+	dbtest.SeedSession(t, d, "host~P-E", "entry-project")
 	dbtest.SeedSession(t, d, "host~wild_%_literal", "wild-project", func(s *db.Session) {
 		s.EndedAt = new("2024-06-11T10:00:00Z")
 	})
@@ -186,7 +187,12 @@ func TestSearchSessions_SessionIDLookup(t *testing.T) {
 		SessionID: "missing",
 	})
 	require.ErrorContains(t, missingErr, "session not found")
-	t.Logf("head: ambiguity_error=%q trashed_error=%q missing_error=%q", ambiguityErr, trashedErr, missingErr)
+
+	_, _, entryErr := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+		SessionID: "E",
+	})
+	require.ErrorContains(t, entryErr, "session not found")
+	t.Logf("head: ambiguity_error=%q trashed_error=%q missing_error=%q entry_error=%q", ambiguityErr, trashedErr, missingErr, entryErr)
 
 }
 
