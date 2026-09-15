@@ -2130,5 +2130,17 @@
     }
   ],
   "settings_image_cleanup_compact_note": "ペイロードの削除は保存済み行を書き換えます。agentsview db compact を実行するまでアーカイブファイルのサイズは変わりません。",
-  "appearance_render_unknown_xml_blocks": "不明なXMLブロックを整形済みテキストとして表示"
+  "appearance_render_unknown_xml_blocks": "不明なXMLブロックを整形済みテキストとして表示",
+  "go_to_session_title": "セッションへ移動",
+  "go_to_session_input_label": "セッションIDまたはUUID",
+  "go_to_session_placeholder": "セッションIDまたはUUIDを貼り付け",
+  "go_to_session_submit": "セッションを開く",
+  "go_to_session_close": "セッションへの移動を閉じる",
+  "go_to_session_empty": "セッションIDまたはUUIDを入力してください。",
+  "go_to_session_invalid": "セッションIDまたはUUIDを入力してください。",
+  "go_to_session_not_found": "一致するセッションIDまたはUUIDがありません。",
+  "go_to_session_ambiguous": "複数のセッションIDまたはUUIDが一致します。既存のリンクから目的のセッションを開いてください。",
+  "go_to_session_capped": "一致するセッションIDまたはUUIDが多すぎます。既存のリンクから目的のセッションを開いてください。",
+  "go_to_session_failed": "セッションを検索できませんでした。もう一度お試しください。",
+  "shortcuts_go_to_session": "検索を閉じてセッションへ移動"
 }
