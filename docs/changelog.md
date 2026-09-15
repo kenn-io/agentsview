@@ -4,12 +4,11 @@ description: Release history for AgentsView
 ---
 
 The latest published release is
-[0.42.0](https://github.com/kenn-io/agentsview/releases/tag/v0.42.0). The 0.43.0
-notes below describe the release being prepared from `main`.
+[0.43.0](https://github.com/kenn-io/agentsview/releases/tag/v0.43.0).
 
 ## 0.43.0
 
-<small>In preparation</small>
+<small>2026-09-14</small>
 
 **New features**
 

@@ -859,6 +859,7 @@ test.describe('Message viewer', () => {
   test('remote session resume command', async ({ page }) => {
     const response = await page.request.get('/api/v1/sessions?agent=claude&limit=1');
     const source = (await response.json()).sessions[0];
+    expect(source, 'remote resume screenshot requires a Claude session in the source archive').toBeDefined();
     const remote = { ...source, id: `work-desktop~${source.id.split('~').pop()}`, machine: 'work-desktop' };
     const remotePath = `/api/v1/sessions/${encodeURIComponent(remote.id)}`;
     await page.route(`**${remotePath}**`, async (route) => {

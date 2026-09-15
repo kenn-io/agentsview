@@ -14,8 +14,8 @@ New here? The [product overview](/) explains what AgentsView is for, and the
 [five-minute guide](/guide/) walks the whole loop with screenshots. The pages
 here explain how to use and maintain each feature.
 
-These guides follow `main`, including changes being prepared for 0.43.0. Check
-the [changelog](/docs/changelog/) for what each published release includes.
+These guides follow `main` and may include changes newer than the latest
+release. Check the [changelog](/docs/changelog/) for what each release includes.
 
 <p class="hero-actions">
   <a class="md-button md-button--primary" href="/docs/quickstart/">Quick Start</a>
