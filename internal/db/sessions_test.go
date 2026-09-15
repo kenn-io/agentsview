@@ -591,6 +591,34 @@ func TestGetSessionFullPopulatesSessionName(t *testing.T) {
 	assert.Equal(t, "Agent Title", *s.SessionName, "SessionName unchanged after rename")
 }
 
+func TestGetSessionFullDecoratesDuplicateFields(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	seedDuplicateTwinPair(t, d, "goose:old", "augure-desktop:new",
+		"I need you to research and create a comprehensive plan.", 5, 4)
+	_, err := d.RebuildDuplicateGroups(ctx)
+	require.NoError(t, err)
+
+	s, err := d.GetSessionFull(ctx, "augure-desktop:new")
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, s, "session not found")
+	// Regression: the decoration ran against a throwaway copy, so the
+	// returned pointer never carried the duplicate fields.
+	assert.Equal(t, DuplicateRoleDuplicate, s.DuplicateRole,
+		"GetSessionFull returns the duplicate role")
+	assert.Equal(t, "goose:old", s.DuplicateCanonicalID,
+		"GetSessionFull returns the canonical ID")
+	assert.Equal(t, 2, s.DuplicateMemberCount,
+		"GetSessionFull returns the member count")
+
+	canonical, err := d.GetSessionFull(ctx, "goose:old")
+	require.NoError(t, err, "GetSessionFull canonical")
+	require.NotNil(t, canonical)
+	assert.Equal(t, DuplicateRoleCanonical, canonical.DuplicateRole)
+	assert.Equal(t, 2, canonical.DuplicateMemberCount)
+}
+
 func TestSessionIdentity(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

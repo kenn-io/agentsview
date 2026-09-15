@@ -3383,6 +3383,11 @@ func duckUsageDuplicateSuppression(sessCol string) string {
 					WHERE probe.session_id = ` + sessCol + `
 						AND probe.role = 'duplicate'
 						AND probe.canonical_id != ''
+						AND EXISTS (
+							SELECT 1 FROM sessions cs
+							WHERE cs.id = probe.canonical_id
+								AND cs.deleted_at IS NULL
+						)
 						AND (
 							EXISTS (
 								SELECT 1 FROM messages cv
@@ -3397,7 +3402,7 @@ func duckUsageDuplicateSuppression(sessCol string) string {
 									AND cu.model != ''
 							)
 						)
-					)
+				)
 			)`
 }
 

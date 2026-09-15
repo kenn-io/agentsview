@@ -118,3 +118,44 @@ func TestDuckAggregateUsageSuppressesDuplicateLikeSQLite(t *testing.T) {
 	assert.Equal(t, 2, matching,
 		"matching-session counts stay unsuppressed")
 }
+
+func TestDuckDuplicateSuppressionRequiresLiveCanonical(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	_, err := local.WriteSessionBatchAtomic(duplicateSuppressionWrites())
+	require.NoError(t, err)
+
+	// Group the twins and push: the mirror now carries membership rows
+	// pointing at goose:old plus both sessions' usage.
+	result, err := local.RebuildDuplicateGroups(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Groups)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+
+	// Simulate a mirror that has the canonical's soft delete but still
+	// holds the pre-delete membership rows (a lagging push window): the
+	// aggregate predicate must itself require a live canonical, or the
+	// duplicate's usage is suppressed against a canonical whose own usage
+	// no longer appears, under-counting the pair.
+	_, err = syncer.DB().ExecContext(ctx,
+		`UPDATE sessions SET deleted_at = now()
+		 WHERE id = 'goose:old'`)
+	require.NoError(t, err)
+	duck := NewStoreFromDB(syncer.DB())
+
+	filter := db.UsageFilter{}
+	top, err := duck.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err, "GetTopSessionsByCost")
+	require.NotEmpty(t, top)
+	found := map[string]int{}
+	for _, row := range top {
+		found[row.SessionID] = row.OutputTokens
+	}
+	assert.Equal(t, 9, found["augure-desktop:new"],
+		"a duplicate whose canonical is deleted stays counted")
+	assert.NotContains(t, found, "goose:old",
+		"the deleted canonical has no visible usage")
+}
