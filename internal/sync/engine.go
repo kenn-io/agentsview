@@ -3723,15 +3723,6 @@ func (e *Engine) resyncBuildLocked(
 		return stats, fmt.Errorf("applying agent remap rules: %w", applyErr)
 	}
 
-	// Re-derive duplicate-group membership for the rebuilt archive. The
-	// membership table is derived state and is deliberately not copied by
-	// orphaned.go, so the fresh replacement needs a full detection pass.
-	if _, dgErr := ops.rebuildDuplicateGroups(ctx, newDB); dgErr != nil {
-		log.Printf("resync: rebuild duplicate groups: %v", dgErr)
-		stats.Warnings = append(stats.Warnings,
-			"duplicate group rebuild failed: "+dgErr.Error())
-	}
-
 	// Metadata restoration deliberately copies user-owned deletion state from
 	// the original archive. Reconcile archive-only Claude members afterwards so
 	// an available legacy fork cannot overwrite the source-missing state that
@@ -3787,6 +3778,32 @@ func (e *Engine) resyncBuildLocked(
 			e.mu.Unlock()
 			return stats, err
 		}
+	}
+
+	// Re-derive duplicate-group membership for the rebuilt archive. The
+	// membership table is derived state and is deliberately not copied by
+	// orphaned.go, so the fresh replacement needs a full detection pass. This
+	// runs after the copied source-missing reconciliation above so tombstones
+	// it writes are reflected; the replacement carries the old archive's
+	// bootstrap marker (archive_metadata is copied wholesale), so a failure
+	// here must abort the swap — startup would otherwise trust the marker and
+	// never retry, leaving stale or empty membership permanently.
+	if _, dgErr := ops.rebuildDuplicateGroups(ctx, newDB); dgErr != nil {
+		log.Printf("resync: rebuild duplicate groups: %v", dgErr)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"duplicate group rebuild failed, aborting swap: "+dgErr.Error(),
+		)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		if rerr := origDB.Reopen(); rerr != nil {
+			log.Printf("resync: recovery reopen: %v", rerr)
+		}
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, dgErr
 	}
 
 	if ftsDropped {
@@ -5086,6 +5103,7 @@ func (e *Engine) reconcileScopedWatchRoots(
 	// critical section or deadlock by re-entering sync code (see SyncAll).
 	if stats.hasSessionChanges() || tombstoned > 0 {
 		e.emit("sessions")
+		e.scheduleDuplicateGroupRebuild()
 	}
 	return stats, tombstoned, err
 }
