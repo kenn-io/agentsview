@@ -101,8 +101,14 @@
   "header_actions_keyboard_shortcuts_shortcut": "鍵盤快捷鍵 (?)",
   "status_bar_sessions": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel} 個對話"
       }
@@ -110,8 +116,14 @@
   ],
   "status_bar_messages": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel} 則訊息"
       }
@@ -119,8 +131,14 @@
   ],
   "status_bar_projects": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel} 個專案"
       }
@@ -192,8 +210,14 @@
   "session_breadcrumb_total_cost": "總計",
   "session_breadcrumb_total_cost_title": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "包含 {countLabel} 個子代理的總成本",
         "countPlural=other": "包含 {countLabel} 個子代理的總成本"
@@ -204,8 +228,14 @@
   "session_breadcrumb_usage_breakdown_loading": "正在載入用量資料...",
   "session_breadcrumb_usage_breakdown_steps": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel} 個步驟"
       }
@@ -232,8 +262,13 @@
   "session_breadcrumb_summary_mode_tooltip": "此 transcript 缺少工具結果、思考內容和程式碼差異。需要 agy-reader sidecar 才能獲得完整保真度 — 請安裝它，若已安裝，請等待其同步完成。點擊了解如何操作。",
   "session_breadcrumb_malformed_lines": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{count} 行格式錯誤"
       }
@@ -241,8 +276,13 @@
   ],
   "session_breadcrumb_malformed_lines_tooltip": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "來源檔案中有 {count} 行無法解析"
       }
@@ -292,8 +332,14 @@
   "message_content_running_duration": "執行中 {duration}+",
   "message_content_turn_summary": [
     {
-      "declarations": ["input count", "input duration", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input duration",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "turn {duration} · {count} 次調用"
       }
@@ -301,8 +347,14 @@
   ],
   "message_content_running_turn_summary": [
     {
-      "declarations": ["input count", "input duration", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input duration",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "執行中 {duration}+ · {count} 次使用"
       }
@@ -310,8 +362,13 @@
   ],
   "tool_call_group_call_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{count} 次 tool call"
       }
@@ -324,8 +381,13 @@
   "parallel_group_label": "並行",
   "parallel_group_call_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{count} 次使用"
       }
@@ -336,8 +398,13 @@
   "subagent_inline_label": "Subagent 對話",
   "subagent_inline_message_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{count} 則訊息"
       }
@@ -364,8 +431,13 @@
   "tool_block_show_less": "收起",
   "tool_block_show_all_lines": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "顯示全部 {count} 行"
       }
@@ -377,8 +449,14 @@
   "compact_boundary_show_full_summary": "顯示完整摘要",
   "sidebar_session_count": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel} 個對話"
       }
@@ -439,6 +517,8 @@
   "sidebar_row_unstar_session": "取消釘選對話",
   "sidebar_row_rename": "重新命名",
   "sidebar_row_open_in_new_tab": "在新分頁開啟",
+  "sidebar_row_duplicate_title": "屬於重複群組：另一個儲存區中存在此互動的副本。用量在整個群組內只計一次。",
+  "sidebar_row_duplicate_canonical_title": "包含 {count} 個副本的重複群組；用量只計一次。",
   "sidebar_row_delete": "刪除",
   "sidebar_row_change_project": "變更專案…",
   "shared_all_projects": "所有專案",
@@ -489,8 +569,13 @@
   "shared_range_custom_range": "自定義範圍",
   "shared_range_last_days": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "最近 {count} 天"
       }
@@ -551,8 +636,14 @@
   "analytics_tool_usage_title": "工具使用",
   "analytics_tool_usage_call_count": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel} 次使用"
       }
@@ -564,8 +655,14 @@
   "analytics_tool_usage_top_tools": "熱門工具",
   "analytics_tool_usage_sessions": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel} 個對話"
       }
@@ -586,8 +683,14 @@
   "analytics_projects_title": "專案",
   "analytics_project_messages": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel} 則訊息"
       }
@@ -595,8 +698,14 @@
   ],
   "analytics_project_sessions": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel} 個對話"
       }
@@ -625,7 +734,9 @@
         "input countLabel",
         "local countPlural = count: plural"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{day} {hour}:00 - {countLabel} 則訊息"
       }
@@ -636,8 +747,14 @@
   "analytics_session_shape_autonomy": "自主度",
   "analytics_session_shape_session_count": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel} 個對話"
       }
@@ -680,7 +797,9 @@
         "input pct",
         "local countPlural = count: plural"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{skill}：{countLabel} 次使用 ({pct}%)"
       }
@@ -696,7 +815,10 @@
         "local callsPlural = calls: plural",
         "local skillsPlural = skills: plural"
       ],
-      "selectors": ["callsPlural", "skillsPlural"],
+      "selectors": [
+        "callsPlural",
+        "skillsPlural"
+      ],
       "match": {
         "callsPlural=other, skillsPlural=other": "{callsLabel} 次使用 · {skillsLabel} 個 skill"
       }
@@ -750,8 +872,14 @@
   "usage_filter_deselect_all": "取消全選",
   "usage_filter_all_items": [
     {
-      "declarations": ["input label", "input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input label",
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "所有 {label}"
       }
@@ -828,8 +956,12 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 個專案" }
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{countNumber} 個專案"
+      }
     }
   ],
   "data_summary_sessions": [
@@ -839,8 +971,12 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 個會話" }
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{countNumber} 個會話"
+      }
     }
   ],
   "data_summary_machines": [
@@ -872,8 +1008,12 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 個會話受規則管理" }
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{countNumber} 個會話受規則管理"
+      }
     }
   ],
   "data_selection_hint": "點選一個專案，然後按住 Shift 點選以選取一個範圍。",
@@ -950,8 +1090,12 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 條已啟用的規則以此專案為目標" }
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{countNumber} 條已啟用的規則以此專案為目標"
+      }
     }
   ],
   "data_recorded_original": "已記錄為規則的原始標籤",
@@ -981,8 +1125,12 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 個工作階段" }
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{countNumber} 個工作階段"
+      }
     }
   ],
   "data_reclassify_cwd_unavailable": "此資料夾無法安全對應，因為它無法使用或代表檔案系統根目錄。",
@@ -1000,8 +1148,12 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
-      "match": { "countPlural=other": "符合 {countNumber} 個工作階段" }
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "符合 {countNumber} 個工作階段"
+      }
     }
   ],
   "data_reclassify_sessions_changing": [
@@ -1011,8 +1163,12 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
-      "match": { "countPlural=other": "將變更 {countNumber} 個工作階段" }
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "將變更 {countNumber} 個工作階段"
+      }
     }
   ],
   "data_reclassify_projects_affected": [
@@ -1022,8 +1178,12 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 個項目" }
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{countNumber} 個項目"
+      }
     }
   ],
   "data_reclassify_normalized_target": "將儲存為 {project}",
@@ -1035,8 +1195,12 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 個工作階段" }
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{countNumber} 個工作階段"
+      }
     }
   ],
   "data_reclassify_session_preview_count": [
@@ -1155,8 +1319,14 @@
   "activity_no_sessions_selected_range": "所選時間範圍內沒有活躍對話。",
   "activity_output_tokens_value": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel} 輸出 token"
       }
@@ -1195,7 +1365,9 @@
         "input automated",
         "local subagentPlural = subagents: plural"
       ],
-      "selectors": ["subagentPlural"],
+      "selectors": [
+        "subagentPlural"
+      ],
       "match": {
         "subagentPlural=one": "{interactive} 交互式 / {subagentsLabel} 子代理 / {automated} 自動化",
         "subagentPlural=other": "{interactive} 交互式 / {subagentsLabel} 子代理 / {automated} 自動化"
@@ -1333,8 +1505,14 @@
   "call_group_parallel_label": "並行",
   "call_group_parallel_call_count": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel} 次調用"
       }
@@ -1350,7 +1528,10 @@
         "input running",
         "local countPlural = count: plural"
       ],
-      "selectors": ["countPlural", "running"],
+      "selectors": [
+        "countPlural",
+        "running"
+      ],
       "match": {
         "countPlural=other,running=true": "{countLabel} 次調用 · 執行中 {duration}+",
         "countPlural=other,running=false": "{countLabel} 次使用 · {duration}"
@@ -1360,8 +1541,14 @@
   "activity_lane_activity": "活動",
   "activity_lane_message_count": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel} 則訊息"
       }
@@ -1486,7 +1673,10 @@
         "local countPlural = count: plural",
         "local runningPlural = runningCount: plural"
       ],
-      "selectors": ["countPlural", "runningPlural"],
+      "selectors": [
+        "countPlural",
+        "runningPlural"
+      ],
       "match": {
         "countPlural=other,runningPlural=one": "{countLabel} 次調用 · {runningCount} 個執行中",
         "countPlural=other,runningPlural=other": "{countLabel} 次調用"
@@ -1622,8 +1812,14 @@
   "insights_page_pct_affected": "{pct}% 受影響",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": ["input affected", "input total", "local totalPlural = total: plural"],
-      "selectors": ["totalPlural"],
+      "declarations": [
+        "input affected",
+        "input total",
+        "local totalPlural = total: plural"
+      ],
+      "selectors": [
+        "totalPlural"
+      ],
       "match": {
         "totalPlural=other": "{total} 個對話中有 {affected} 個觸發此確定性模式。"
       }
@@ -1681,7 +1877,9 @@
         "input failureSignals",
         "local countPlural = count: plural"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{count} 個對話，{completedRate}% 已完成，平均 {failureSignals} 個失敗信號"
       }
@@ -1689,8 +1887,14 @@
   ],
   "insights_page_driver_sessions": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel} 個對話"
       }
@@ -1916,7 +2120,9 @@
         "input totalLabel",
         "local countPlural = count: plural"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{doneLabel} / {totalLabel} 個區塊"
       }
@@ -1924,8 +2130,14 @@
   ],
   "settings_embeddings_rate": [
     {
-      "declarations": ["input count", "input rateLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input rateLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{rateLabel} 區塊/秒"
       }
@@ -2042,8 +2254,14 @@
   "trash_empty_trash": "清空垃圾桶",
   "trash_msgs": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=other": "{countLabel} 則訊息"
       }
@@ -2182,8 +2400,14 @@
   "settings_image_cleanup_empty": "此選取範圍中沒有儲存的工具結果包含內嵌圖像有效載荷。",
   "settings_image_cleanup_sessions": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "已選取 {countLabel} 個工作階段",
         "countPlural=other": "已選取 {countLabel} 個工作階段"
@@ -2192,8 +2416,14 @@
   ],
   "settings_image_cleanup_payloads": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} 個圖像有效載荷",
         "countPlural=other": "{countLabel} 個圖像有效載荷"
@@ -2219,8 +2449,14 @@
   "settings_image_cleanup_applied": "圖像刪除已完成。",
   "settings_image_cleanup_changed": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "已變更 {countLabel} 個工作階段",
         "countPlural=other": "已變更 {countLabel} 個工作階段"
@@ -2228,5 +2464,67 @@
     }
   ],
   "settings_image_cleanup_compact_note": "刪除有效載荷會改寫儲存的資料列。在執行 agentsview db compact 之前，封存檔大小保持不變。",
-  "appearance_render_unknown_xml_blocks": "將未知 XML 區塊以預格式化文字呈現"
+  "appearance_render_unknown_xml_blocks": "將未知 XML 區塊以預格式化文字呈現",
+  "agent_remap_title": "代理重新對映規則",
+  "agent_remap_description": "當模式符合時，將已封存的工作階段從一個代理重新分類到另一個代理（例如 Goose 儲存中的 Augure 模型）。解析器不受影響；工作階段 ID 保留其原始前置詞。",
+  "agent_remap_loading": "正在載入代理重新對映規則…",
+  "agent_remap_no_rules": "尚未定義代理重新對映規則。",
+  "agent_remap_col_source": "來源代理",
+  "agent_remap_col_pattern": "模型模式",
+  "agent_remap_col_prefix": "ID 前置詞",
+  "agent_remap_col_target": "目標代理",
+  "agent_remap_col_enabled": "已啟用",
+  "agent_remap_col_actions": "動作",
+  "agent_remap_on": "開",
+  "agent_remap_off": "關",
+  "agent_remap_edit": "編輯",
+  "agent_remap_delete": "刪除",
+  "agent_remap_source": "來源代理",
+  "agent_remap_source_hint": "工作階段目前的代理。",
+  "agent_remap_model_glob": "模型模式",
+  "agent_remap_model_glob_hint": "選用的訊息模型 GLOB 模式，| 分隔多個選項。留空符合所有工作階段。",
+  "agent_remap_id_prefix": "ID 前置詞",
+  "agent_remap_id_prefix_hint": "選用的工作階段 ID 前置詞。留空符合所有 ID。",
+  "agent_remap_target": "目標代理",
+  "agent_remap_select_agent": "選擇 Agent",
+  "agent_remap_no_matching_agent": "沒有符合的已知 Agent。",
+  "agent_remap_filter_prefix": "篩選前綴",
+  "agent_remap_any_prefix": "任意 ID（無前綴）",
+  "agent_remap_no_matching_prefix": "沒有符合的已知前綴。",
+  "agent_remap_use_custom_prefix": "使用前綴「{query}」",
+  "agent_remap_enabled": "已啟用",
+  "agent_remap_read_only": "代理重新對映規則僅在本機封存上可用。",
+  "agent_remap_preview_matched": "將重新對映 {matched} 個工作階段。",
+  "agent_remap_preview_cancel": "取消",
+  "agent_remap_apply_confirm": "套用重新對映",
+  "agent_remap_applying": "處理中…",
+  "agent_remap_preview": "預覽重新對映",
+  "agent_remap_apply_result": "已重新對映 {matched} 個工作階段。",
+  "agent_remap_saving": "儲存中…",
+  "agent_remap_add_rule": "新增規則",
+  "agent_remap_save_rule": "儲存規則",
+  "agent_remap_cancel": "取消",
+  "agent_remap_delete_confirm_title": "刪除代理重新對映規則？",
+  "agent_remap_delete_confirm_action": "刪除規則",
+  "agent_remap_confirmation_close": "關閉",
+  "agent_remap_change_warning": "已重新對映的工作階段會保留新代理。要將其對映回原始代理，請交換規則的來源與目標代理後再次套用。刪除規則不會復原已套用的重新對映。",
+  "agent_remap_failed_load": "載入代理重新對映規則失敗。",
+  "agent_remap_failed_save": "儲存代理重新對映規則失敗。",
+  "agent_remap_failed_delete": "刪除代理重新對映規則失敗。",
+  "agent_remap_failed_apply": "套用代理重新對映規則失敗。符合集可能已變更，請重新預覽。",
+  "duplicate_banner_canonical": "此工作階段是重複群組的標準副本（另有 {count} 個副本）。",
+  "duplicate_banner_duplicate": "此工作階段是另一個工作階段的重複副本；其用量可能在標準副本上計費。",
+  "duplicate_banner_open_canonical": "開啟標準副本",
+  "duplicate_review_title": "重複工作階段",
+  "duplicate_review_description": "出現在多個 Agent 儲存區、開始時間與首條提示相同的會話會被歸為一組。每組用量只計一次。",
+  "duplicate_review_recheck": "重新檢查重複項",
+  "duplicate_review_rebuilding": "正在重建重複群組…",
+  "duplicate_review_empty": "未偵測到重複工作階段。",
+  "duplicate_review_local_only": "重複工作階段審查僅在本機封存上可用。",
+  "duplicate_review_group_heading": "{count} 個副本",
+  "duplicate_review_role_canonical": "標準",
+  "duplicate_review_role_duplicate": "重複",
+  "duplicate_review_agent": "Agent",
+  "duplicate_review_started": "開始時間",
+  "duplicate_review_messages": "訊息數"
 }

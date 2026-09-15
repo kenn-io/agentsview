@@ -164,16 +164,31 @@ func newSessionExportCommand() *cobra.Command {
 					return err
 				}
 			}
-			if session.Agent == string(parser.AgentHermes) &&
+			// Hermes and Augure Desktop both back sessions with a shared
+			// state.db; export the selected session's JSONL instead of
+			// streaming the SQLite file. Augure Desktop stores state.db#<id>
+			// virtual paths but keeps the raw (unprefixed) ID in
+			// SourceSessionID, so the same writer serves both agents.
+			if (session.Agent == string(parser.AgentHermes) ||
+				session.Agent == string(parser.AgentAugureDesktop)) &&
 				filepath.Base(parser.ResolveSourceFilePath(storedPath)) == "state.db" {
 				rawSessionID := session.SourceSessionID
 				if rawSessionID == "" {
-					rawSessionID, _ = rawHermesSessionID(id)
+					rawSessionID, _ = rawPrefixedSessionID(
+						id, parser.AgentType(session.Agent),
+					)
+				}
+				agent := parser.AgentType(session.Agent)
+				roots := cfg.AgentDirs[agent]
+				if len(roots) == 0 {
+					// The fork reuses the Hermes provider, so its
+					// transcript fallback searches the same layout.
+					roots = cfg.AgentDirs[parser.AgentHermes]
 				}
 				err := parser.WriteHermesSessionJSONL(
 					cmd.OutOrStdout(),
 					storedPath,
-					cfg.AgentDirs[parser.AgentHermes],
+					roots,
 					rawSessionID,
 				)
 				if errors.Is(err, os.ErrNotExist) {
@@ -210,9 +225,13 @@ func rawAiderSessionID(sessionID string) (string, bool) {
 	return rawID, rawID != ""
 }
 
-func rawHermesSessionID(sessionID string) (string, bool) {
+// rawPrefixedSessionID strips an agent's ID prefix (and any host
+// qualifier) from a full session ID, leaving the raw source-side ID.
+func rawPrefixedSessionID(
+	sessionID string, agent parser.AgentType,
+) (string, bool) {
 	def, ok := parser.AgentByPrefix(sessionID)
-	if !ok || def.Type != parser.AgentHermes {
+	if !ok || def.Type != agent {
 		return "", false
 	}
 	_, rawID := parser.StripHostPrefix(sessionID)

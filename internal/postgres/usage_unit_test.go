@@ -589,10 +589,17 @@ func TestPGTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 	assert.Contains(t, normalized, "ue.occurred_at is null")
 	assert.Contains(t, normalized, "m.timestamp >= $1::timestamptz")
 	assert.Contains(t, normalized, "ue.occurred_at >= $1::timestamptz")
+	// The duplicate-suppression EXISTS clauses sit between the fallback
+	// eligibility predicates and the started_at bounds, so assert the
+	// pieces separately rather than raw adjacency.
 	assert.Contains(t, normalized,
-		"m.timestamp is null\n\tand s.started_at >= $1::timestamptz")
+		"m.timestamp is null\n\tand not (\n\t\ts.id in (")
 	assert.Contains(t, normalized,
-		"ue.occurred_at is null\n\tand s.started_at >= $1::timestamptz")
+		"ue.occurred_at is null\n\tand not (\n\t\ts.id in (")
+	assert.Contains(t, normalized,
+		"and s.started_at >= $1::timestamptz")
+	assert.Contains(t, normalized, "from duplicate_group_members")
+	assert.Contains(t, normalized, "dgm.role = 'duplicate'")
 	assert.Contains(t, normalized, "m.timestamp <= $2::timestamptz")
 	assert.Contains(t, normalized, "ue.occurred_at <= $2::timestamptz")
 	assert.Contains(t, normalized, "u.ts >= $3::timestamptz")

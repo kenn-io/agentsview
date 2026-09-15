@@ -28,7 +28,7 @@ func TestUsageCacheGenerationCreatesIdentifiedSchema(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, cache.temporary)
 	assert.Equal(t, filepath.Join(filepath.Dir(archivePath),
-		"usage-cache-v12-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
+		"usage-cache-v13-980e32c89da32cb0d3588c0c06864b4e.db"), cache.path)
 
 	info, err := os.Stat(cache.path)
 	require.NoError(t, err)

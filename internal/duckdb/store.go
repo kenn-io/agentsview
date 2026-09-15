@@ -534,6 +534,7 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 		return db.SessionPage{}, err
 	}
 	page := db.SessionPage{Sessions: sessions, Total: total}
+	s.decorateSessionsWithDuplicateRoles(ctx, page.Sessions)
 	if len(sessions) > f.Limit {
 		page.Sessions = sessions[:f.Limit]
 		last := page.Sessions[f.Limit-1]
@@ -649,6 +650,7 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 		return db.SidebarSessionIndex{},
 			fmt.Errorf("iterating duckdb sidebar session index: %w", err)
 	}
+	s.decorateSidebarIndexWithDuplicateRoles(ctx, index.Sessions)
 	return index, nil
 }
 
@@ -664,7 +666,9 @@ func (s *Store) GetSession(ctx context.Context, id string) (*db.Session, error) 
 	if err != nil {
 		return nil, fmt.Errorf("getting duckdb session: %w", err)
 	}
-	return &sess, nil
+	decorated := []db.Session{sess}
+	s.decorateSessionsWithDuplicateRoles(ctx, decorated)
+	return &decorated[0], nil
 }
 
 func (s *Store) GetSessionFull(ctx context.Context, id string) (*db.Session, error) {
@@ -679,7 +683,9 @@ func (s *Store) GetSessionFull(ctx context.Context, id string) (*db.Session, err
 	if err != nil {
 		return nil, fmt.Errorf("getting duckdb full session: %w", err)
 	}
-	return &sess, nil
+	decorated := []db.Session{sess}
+	s.decorateSessionsWithDuplicateRoles(ctx, decorated)
+	return &decorated[0], nil
 }
 
 func (s *Store) ListTrashedSessions(ctx context.Context) ([]db.Session, error) {
@@ -692,7 +698,12 @@ func (s *Store) ListTrashedSessions(ctx context.Context) ([]db.Session, error) {
 		return nil, fmt.Errorf("listing duckdb trash: %w", err)
 	}
 	defer rows.Close()
-	return scanSessionRows(rows)
+	sessions, err := scanSessionRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	s.decorateSessionsWithDuplicateRoles(ctx, sessions)
+	return sessions, nil
 }
 
 func (s *Store) GetChildSessions(ctx context.Context, parentID string) ([]db.Session, error) {
@@ -706,7 +717,12 @@ func (s *Store) GetChildSessions(ctx context.Context, parentID string) ([]db.Ses
 		return nil, fmt.Errorf("querying duckdb child sessions: %w", err)
 	}
 	defer rows.Close()
-	return scanSessionRows(rows)
+	sessions, err := scanSessionRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	s.decorateSessionsWithDuplicateRoles(ctx, sessions)
+	return sessions, nil
 }
 
 func (s *Store) GetSessionVersion(id string) (int, int64, bool) {

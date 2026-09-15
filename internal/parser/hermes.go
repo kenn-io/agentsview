@@ -23,6 +23,8 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
+const hermesIDPrefix = string(AgentHermes) + ":"
+
 type hermesStateSession struct {
 	id               string
 	source           string

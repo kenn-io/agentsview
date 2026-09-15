@@ -508,6 +508,7 @@ func (s *Store) ListSessions(
 	page := db.SessionPage{
 		Sessions: sessions, Total: total,
 	}
+	s.decorateSessionsWithDuplicateRoles(ctx, page.Sessions)
 	if len(sessions) > f.Limit {
 		page.Sessions = sessions[:f.Limit]
 		last := page.Sessions[f.Limit-1]
@@ -593,6 +594,7 @@ func (s *Store) GetSidebarSessionIndex(
 		Sessions: sessions,
 		Total:    total,
 	}
+	s.decorateSidebarIndexWithDuplicateRoles(ctx, index.Sessions)
 
 	return index, nil
 }
@@ -831,6 +833,7 @@ func (s *Store) getSidebarSessionIndexPage(
 	if err != nil {
 		return db.SidebarSessionIndex{}, err
 	}
+	s.decorateSidebarIndexWithDuplicateRoles(ctx, index.Sessions)
 	return index, nil
 }
 
@@ -908,7 +911,9 @@ func (s *Store) GetSession(
 			"getting session %s: %w", id, err,
 		)
 	}
-	return &sess, nil
+	decorated := []db.Session{sess}
+	s.decorateSessionsWithDuplicateRoles(ctx, decorated)
+	return &decorated[0], nil
 }
 
 // FindSessionIDsByRawSuffix returns up to limit session IDs whose
@@ -979,7 +984,9 @@ func (s *Store) GetSessionFull(
 			"getting session full %s: %w", id, err,
 		)
 	}
-	return &sess, nil
+	decorated := []db.Session{sess}
+	s.decorateSessionsWithDuplicateRoles(ctx, decorated)
+	return &decorated[0], nil
 }
 
 // GetChildSessions returns sessions whose
@@ -1001,7 +1008,12 @@ func (s *Store) GetChildSessions(
 	}
 	defer rows.Close()
 
-	return scanPGSessionRows(rows)
+	sessions, err := scanPGSessionRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	s.decorateSessionsWithDuplicateRoles(ctx, sessions)
+	return sessions, nil
 }
 
 // GetStats returns database statistics, counting only root

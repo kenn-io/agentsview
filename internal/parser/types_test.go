@@ -277,6 +277,18 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"augure prefix",
+			"augure:some-uuid",
+			AgentAugure,
+			true,
+		},
+		{
+			"augure-desktop prefix",
+			"augure-desktop:some-id",
+			AgentAugureDesktop,
+			true,
+		},
+		{
 			"copilot prefix",
 			"copilot:sess-id",
 			AgentCopilot,
@@ -442,6 +454,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentCowork,
 		AgentCodex,
 		AgentTraeX,
+		AgentAugure,
 		AgentCopilot,
 		AgentGemini,
 		AgentGeminiApps,
@@ -476,6 +489,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentKiroIDE,
 		AgentCortex,
 		AgentHermes,
+		AgentAugureDesktop,
 		AgentGrok,
 		AgentGoose,
 		AgentForge,
@@ -731,6 +745,7 @@ func TestPeriodicReconcileCapability(t *testing.T) {
 	// so scheduled reconciliation would rescan the whole session tree.
 	assert.False(t, optedIn[AgentCodex])
 	assert.False(t, optedIn[AgentHermes])
+	assert.False(t, optedIn[AgentAugureDesktop])
 	assert.False(t, optedIn[AgentClaude])
 	assert.False(t, optedIn[AgentGemini])
 }

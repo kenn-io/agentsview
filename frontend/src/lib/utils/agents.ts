@@ -1,3 +1,5 @@
+import type { TypeaheadOption } from "@kenn-io/kit-ui";
+
 export interface AgentMeta {
   name: string;
   color: string;
@@ -9,6 +11,12 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
   { name: "cowork", color: "var(--accent-sky)", label: "Claude Cowork" },
   { name: "codex", color: "var(--accent-green)" },
   { name: "traex", color: "var(--accent-coral)", label: "TraeX" },
+  { name: "augure", color: "var(--accent-lime)", label: "Augure CLI" },
+  {
+    name: "augure-desktop",
+    color: "var(--accent-violet)",
+    label: "Augure Desktop",
+  },
   { name: "copilot", color: "var(--accent-amber)" },
   { name: "devin", color: "var(--accent-red)", label: "Devin" },
   { name: "evener", color: "var(--accent-teal)", label: "Evener" },
@@ -155,4 +163,42 @@ export function entrypointBadge(entrypoint?: string | null): string | null {
   const value = entrypoint?.trim();
   if (!value || value === DEFAULT_ENTRYPOINT) return null;
   return value;
+}
+
+/** Agents present in the archive, as returned by GET /api/v1/agents. */
+export interface ArchivedAgent {
+  name: string;
+  session_count?: number;
+}
+
+/**
+ * Merge the built-in agent catalog with agents seen in the archive into
+ * searchable Typeahead options. Archived agents come first (most sessions
+ * first), then catalog-only agents alphabetically; duplicates by name are
+ * dropped in favor of the archived entry (it carries a session count).
+ */
+export function agentTypeaheadOptions(
+  archived: readonly ArchivedAgent[] = [],
+): TypeaheadOption[] {
+  const byName = new Map<string, ArchivedAgent>();
+  for (const agent of archived) {
+    if (agent.name !== "") byName.set(agent.name, agent);
+  }
+  for (const known of KNOWN_AGENTS) {
+    if (!byName.has(known.name)) {
+      byName.set(known.name, { name: known.name });
+    }
+  }
+  return [...byName.values()]
+    .map((agent) => ({
+      name: agent.name,
+      label: agentLabel(agent.name),
+      displayLabel: agentLabel(agent.name),
+      count: agent.session_count ?? 0,
+    }))
+    .sort((a, b) =>
+      (b.count ?? 0) !== (a.count ?? 0)
+        ? (b.count ?? 0) - (a.count ?? 0)
+        : a.label.localeCompare(b.label),
+    );
 }

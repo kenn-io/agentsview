@@ -101,8 +101,14 @@
   "header_actions_keyboard_shortcuts_shortcut": "キーボードショートカット(?)",
   "status_bar_sessions": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} セッション",
         "countPlural=other": "{countLabel} セッション"
@@ -111,8 +117,14 @@
   ],
   "status_bar_messages": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} メッセージ",
         "countPlural=other": "{countLabel} 個のメッセージ"
@@ -121,8 +133,14 @@
   ],
   "status_bar_projects": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} プロジェクト",
         "countPlural=other": "{countLabel} プロジェクト"
@@ -195,8 +213,14 @@
   "session_breadcrumb_total_cost": "合計",
   "session_breadcrumb_total_cost_title": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} サブエージェントを含む合計コスト",
         "countPlural=other": "{countLabel} サブエージェントを含む総コスト"
@@ -207,8 +231,14 @@
   "session_breadcrumb_usage_breakdown_loading": "使用量の内訳を読み込み中...",
   "session_breadcrumb_usage_breakdown_steps": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} ステップ",
         "countPlural=other": "{countLabel} ステップ"
@@ -236,8 +266,13 @@
   "session_breadcrumb_summary_mode_tooltip": "このトランスクリプトには、ツールの結果、考え方、差分が含まれていません。完全な忠実度を実現するには、agy-reader サイドカーが必要です。インストールするか、インストールされている場合は追いつきます。クリックして方法を確認してください。",
   "session_breadcrumb_malformed_lines": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{count} 行が不正です",
         "countPlural=other": "{count} 行の不正な行"
@@ -246,8 +281,13 @@
   ],
   "session_breadcrumb_malformed_lines_tooltip": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "ソースファイルの {count} 行を解析できませんでした",
         "countPlural=other": "ソース ファイル内の {count} 行を解析できませんでした"
@@ -298,8 +338,14 @@
   "message_content_running_duration": "実行中 {duration}+",
   "message_content_turn_summary": [
     {
-      "declarations": ["input count", "input duration", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input duration",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{duration} · {count} 回の呼び出しを行う",
         "countPlural=other": "{duration} · {count} 回の呼び出しを開始します"
@@ -308,8 +354,14 @@
   ],
   "message_content_running_turn_summary": [
     {
-      "declarations": ["input count", "input duration", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input duration",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{duration}+ · {count} 件の呼び出しを実行中",
         "countPlural=other": "{duration}+ · {count} 回の呼び出しを実行中"
@@ -318,8 +370,13 @@
   ],
   "tool_call_group_call_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{count} 個のツール呼び出し",
         "countPlural=other": "{count} 個のツール呼び出し"
@@ -333,8 +390,13 @@
   "parallel_group_label": "平行",
   "parallel_group_call_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{count} 回の呼び出し",
         "countPlural=other": "{count} 回の呼び出し"
@@ -346,8 +408,13 @@
   "subagent_inline_label": "サブエージェントセッション",
   "subagent_inline_message_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{count} 個のメッセージ",
         "countPlural=other": "{count} 件のメッセージ"
@@ -375,8 +442,13 @@
   "tool_block_show_less": "あまり見せない",
   "tool_block_show_all_lines": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "すべての {count} 行を表示",
         "countPlural=other": "すべての {count} 行を表示"
@@ -389,8 +461,14 @@
   "compact_boundary_show_full_summary": "完全な概要を表示",
   "sidebar_session_count": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} セッション",
         "countPlural=other": "{countLabel} セッション"
@@ -452,6 +530,8 @@
   "sidebar_row_unstar_session": "セッションのスターを外す",
   "sidebar_row_rename": "名前の変更",
   "sidebar_row_open_in_new_tab": "新しいタブで開く",
+  "sidebar_row_duplicate_title": "重複グループの一部です：別のストアにこのやり取りのコピーがあります。使用量はグループ全体で一度だけ集計されます。",
+  "sidebar_row_duplicate_canonical_title": "{count} 件のコピーからなる重複グループです。使用量は一度だけ集計されます。",
   "sidebar_row_delete": "消去",
   "sidebar_row_change_project": "プロジェクトを変更…",
   "shared_all_projects": "すべてのプロジェクト",
@@ -502,8 +582,13 @@
   "shared_range_custom_range": "カスタム範囲",
   "shared_range_last_days": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "過去 {count} 日",
         "countPlural=other": "過去 {count} 日間"
@@ -565,8 +650,14 @@
   "analytics_tool_usage_title": "ツール使用状況",
   "analytics_tool_usage_call_count": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} 呼び出し",
         "countPlural=other": "{countLabel} の呼び出し"
@@ -579,8 +670,14 @@
   "analytics_tool_usage_top_tools": "トップツール",
   "analytics_tool_usage_sessions": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} セッション",
         "countPlural=other": "{countLabel} セッション"
@@ -602,8 +699,14 @@
   "analytics_projects_title": "プロジェクト",
   "analytics_project_messages": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} メッセージ",
         "countPlural=other": "{countLabel} 個のメッセージ"
@@ -612,8 +715,14 @@
   ],
   "analytics_project_sessions": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} セッション",
         "countPlural=other": "{countLabel} セッション"
@@ -643,7 +752,9 @@
         "input countLabel",
         "local countPlural = count: plural"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{day} {hour}:00 - {countLabel} メッセージ",
         "countPlural=other": "{day} {hour}:00 - {countLabel} 件のメッセージ"
@@ -655,8 +766,14 @@
   "analytics_session_shape_autonomy": "自律性",
   "analytics_session_shape_session_count": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} セッション",
         "countPlural=other": "{countLabel} セッション"
@@ -700,7 +817,9 @@
         "input pct",
         "local countPlural = count: plural"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{skill}: {countLabel} 呼び出し ({pct}%)",
         "countPlural=other": "{skill}: {countLabel} コール ({pct}%)"
@@ -717,7 +836,10 @@
         "local callsPlural = calls: plural",
         "local skillsPlural = skills: plural"
       ],
-      "selectors": ["callsPlural", "skillsPlural"],
+      "selectors": [
+        "callsPlural",
+        "skillsPlural"
+      ],
       "match": {
         "callsPlural=one, skillsPlural=one": "{callsLabel} コール · {skillsLabel} スキル",
         "callsPlural=one, skillsPlural=other": "{callsLabel} コール · {skillsLabel} スキル",
@@ -776,8 +898,14 @@
   "usage_filter_deselect_all": "すべての選択を解除します",
   "usage_filter_all_items": [
     {
-      "declarations": ["input label", "input count", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input label",
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "すべての {label}",
         "countPlural=other": "すべての {label}"
@@ -855,7 +983,9 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countNumber} プロジェクト",
         "countPlural=other": "{countNumber} 件のプロジェクト"
@@ -869,7 +999,9 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countNumber} セッション",
         "countPlural=other": "{countNumber} セッション"
@@ -911,7 +1043,9 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countNumber} セッションはルールによって管理されます",
         "countPlural=other": "ルールによって管理される {countNumber} セッション"
@@ -992,7 +1126,9 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countNumber} 件の有効なルールがこのプロジェクトに適用されています",
         "countPlural=other": "{countNumber} 個の有効なルールがこのプロジェクトをターゲットにしています"
@@ -1026,7 +1162,9 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countNumber} セッション",
         "countPlural=other": "{countNumber} セッション"
@@ -1048,7 +1186,9 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countNumber} セッションが一致しました",
         "countPlural=other": "{countNumber} 個のセッションが一致しました"
@@ -1062,7 +1202,9 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countNumber} セッションが変更されます",
         "countPlural=other": "{countNumber} セッションが変更されます"
@@ -1076,7 +1218,9 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countNumber} プロジェクト",
         "countPlural=other": "{countNumber} 件のプロジェクト"
@@ -1092,7 +1236,9 @@
         "local countPlural = count: plural",
         "local countNumber = count: number"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countNumber} セッション",
         "countPlural=other": "{countNumber} セッション"
@@ -1215,8 +1361,14 @@
   "activity_no_sessions_selected_range": "選択した時間範囲にはアクティブなセッションがありません。",
   "activity_output_tokens_value": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} 出力トークン",
         "countPlural=other": "{countLabel} 個の出力トークン"
@@ -1256,7 +1408,9 @@
         "input automated",
         "local subagentPlural = subagents: plural"
       ],
-      "selectors": ["subagentPlural"],
+      "selectors": [
+        "subagentPlural"
+      ],
       "match": {
         "subagentPlural=one": "{interactive} インタラクティブ / {subagentsLabel} サブエージェント / {automated} 自動化",
         "subagentPlural=other": "{interactive} インタラクティブ / {subagentsLabel} サブエージェント / {automated} 自動化"
@@ -1394,8 +1548,14 @@
   "call_group_parallel_label": "平行",
   "call_group_parallel_call_count": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} 呼び出し",
         "countPlural=other": "{countLabel} の呼び出し"
@@ -1412,7 +1572,10 @@
         "input running",
         "local countPlural = count: plural"
       ],
-      "selectors": ["countPlural", "running"],
+      "selectors": [
+        "countPlural",
+        "running"
+      ],
       "match": {
         "countPlural=one,running=true": "{countLabel} の呼び出し · {duration}+ 実行中",
         "countPlural=other,running=true": "{countLabel} の呼び出し · {duration}+ の実行中",
@@ -1424,8 +1587,14 @@
   "activity_lane_activity": "活動",
   "activity_lane_message_count": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} メッセージ",
         "countPlural=other": "{countLabel} 個のメッセージ"
@@ -1551,7 +1720,10 @@
         "local countPlural = count: plural",
         "local runningPlural = runningCount: plural"
       ],
-      "selectors": ["countPlural", "runningPlural"],
+      "selectors": [
+        "countPlural",
+        "runningPlural"
+      ],
       "match": {
         "countPlural=one,runningPlural=one": "{countLabel} 呼び出し · {runningCount} 実行中",
         "countPlural=other,runningPlural=one": "{countLabel} 呼び出し · {runningCount} 実行中",
@@ -1689,8 +1861,14 @@
   "insights_page_pct_affected": "{pct}% が影響を受けました",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": ["input affected", "input total", "local totalPlural = total: plural"],
-      "selectors": ["totalPlural"],
+      "declarations": [
+        "input affected",
+        "input total",
+        "local totalPlural = total: plural"
+      ],
+      "selectors": [
+        "totalPlural"
+      ],
       "match": {
         "totalPlural=one": "{total} セッションの {affected} には、この決定的なパターンがあります。",
         "totalPlural=other": "{total} セッション中 {affected} にこの決定的なパターンがあります。"
@@ -1749,7 +1927,9 @@
         "input failureSignals",
         "local countPlural = count: plural"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{count} セッション、{completedRate}% 完了、平均失敗数 {failureSignals}",
         "countPlural=other": "{count} セッション、{completedRate}% 完了、平均失敗数 {failureSignals}"
@@ -1758,8 +1938,14 @@
   ],
   "insights_page_driver_sessions": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} セッション",
         "countPlural=other": "{countLabel} セッション"
@@ -1986,7 +2172,9 @@
         "input totalLabel",
         "local countPlural = count: plural"
       ],
-      "selectors": ["countPlural"],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{doneLabel} / {totalLabel} チャンク",
         "countPlural=other": "{doneLabel} / {totalLabel} チャンク"
@@ -1995,8 +2183,14 @@
   ],
   "settings_embeddings_rate": [
     {
-      "declarations": ["input count", "input rateLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input rateLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{rateLabel} チャンク/秒",
         "countPlural=other": "{rateLabel} チャンク/秒"
@@ -2114,8 +2308,14 @@
   "trash_empty_trash": "ゴミ箱を空にする",
   "trash_msgs": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} メッセージ",
         "countPlural=other": "{countLabel} メッセージ"
@@ -2253,8 +2453,14 @@
   "settings_image_cleanup_empty": "この選択内の保存済みツール結果にはインライン画像ペイロードが含まれていません。",
   "settings_image_cleanup_sessions": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} セッション選択済み",
         "countPlural=other": "{countLabel} セッション選択済み"
@@ -2263,8 +2469,14 @@
   ],
   "settings_image_cleanup_payloads": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "画像ペイロード {countLabel} 件",
         "countPlural=other": "画像ペイロード {countLabel} 件"
@@ -2290,8 +2502,14 @@
   "settings_image_cleanup_applied": "画像の削除が完了しました。",
   "settings_image_cleanup_changed": [
     {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
       "match": {
         "countPlural=one": "{countLabel} セッションが変更されました",
         "countPlural=other": "{countLabel} セッションが変更されました"
@@ -2299,5 +2517,67 @@
     }
   ],
   "settings_image_cleanup_compact_note": "ペイロードの削除は保存済み行を書き換えます。agentsview db compact を実行するまでアーカイブファイルのサイズは変わりません。",
-  "appearance_render_unknown_xml_blocks": "不明なXMLブロックを整形済みテキストとして表示"
+  "appearance_render_unknown_xml_blocks": "不明なXMLブロックを整形済みテキストとして表示",
+  "agent_remap_title": "エージェント再マッピングルール",
+  "agent_remap_description": "パターンが一致したときに、アーカイブされたセッションをあるエージェントから別のエージェントへ再分類します（例：Goose ストア内の Augure モデル）。パーサーには影響しません。セッション ID は元のプレフィックスを保持します。",
+  "agent_remap_loading": "エージェント再マッピングルールを読み込み中…",
+  "agent_remap_no_rules": "定義されたエージェント再マッピングルールはありません。",
+  "agent_remap_col_source": "ソースエージェント",
+  "agent_remap_col_pattern": "モデルパターン",
+  "agent_remap_col_prefix": "ID プレフィックス",
+  "agent_remap_col_target": "ターゲットエージェント",
+  "agent_remap_col_enabled": "有効",
+  "agent_remap_col_actions": "操作",
+  "agent_remap_on": "オン",
+  "agent_remap_off": "オフ",
+  "agent_remap_edit": "編集",
+  "agent_remap_delete": "削除",
+  "agent_remap_source": "ソースエージェント",
+  "agent_remap_source_hint": "セッションが現在持つエージェント。",
+  "agent_remap_model_glob": "モデルパターン",
+  "agent_remap_model_glob_hint": "メッセージモデルの任意 GLOB パターン。| で選択肢を区切ります。空欄はすべてのセッションに一致。",
+  "agent_remap_id_prefix": "ID プレフィックス",
+  "agent_remap_id_prefix_hint": "任意のセッション ID プレフィックス。空欄はすべての ID に一致。",
+  "agent_remap_target": "ターゲットエージェント",
+  "agent_remap_select_agent": "エージェントを選択",
+  "agent_remap_no_matching_agent": "一致する既知のエージェントがありません。",
+  "agent_remap_filter_prefix": "プレフィックスを絞り込み",
+  "agent_remap_any_prefix": "すべての ID（プレフィックスなし）",
+  "agent_remap_no_matching_prefix": "一致する既知のプレフィックスがありません。",
+  "agent_remap_use_custom_prefix": "プレフィックス「{query}」を使用",
+  "agent_remap_enabled": "有効",
+  "agent_remap_read_only": "エージェント再マッピングルールはローカルアーカイブでのみ利用できます。",
+  "agent_remap_preview_matched": "{matched} 件のセッションが再マッピングされます。",
+  "agent_remap_preview_cancel": "キャンセル",
+  "agent_remap_apply_confirm": "再マッピングを適用",
+  "agent_remap_applying": "処理中…",
+  "agent_remap_preview": "再マッピングをプレビュー",
+  "agent_remap_apply_result": "{matched} 件のセッションを再マッピングしました。",
+  "agent_remap_saving": "保存中…",
+  "agent_remap_add_rule": "ルールを追加",
+  "agent_remap_save_rule": "ルールを保存",
+  "agent_remap_cancel": "キャンセル",
+  "agent_remap_delete_confirm_title": "エージェント再マッピングルールを削除しますか？",
+  "agent_remap_delete_confirm_action": "ルールを削除",
+  "agent_remap_confirmation_close": "閉じる",
+  "agent_remap_change_warning": "すでに再マッピングされたセッションは新しいエージェントを保持します。元のエージェントに戻すには、ルールのソースとターゲットのエージェントを入れ替えて再度適用してください。ルールを削除しても過去の適用は元に戻りません。",
+  "agent_remap_failed_load": "エージェント再マッピングルールの読み込みに失敗しました。",
+  "agent_remap_failed_save": "エージェント再マッピングルールの保存に失敗しました。",
+  "agent_remap_failed_delete": "エージェント再マッピングルールの削除に失敗しました。",
+  "agent_remap_failed_apply": "エージェント再マッピングルールの適用に失敗しました。一致セットが変更された可能性があります。再度プレビューしてください。",
+  "duplicate_banner_canonical": "このセッションは重複グループの正本コピーです（他に {count} 件のコピー）。",
+  "duplicate_banner_duplicate": "このセッションは別のセッションの重複コピーです。使用量は正本コピー側で集計されている場合があります。",
+  "duplicate_banner_open_canonical": "正本コピーを開く",
+  "duplicate_review_title": "重複セッション",
+  "duplicate_review_description": "同じ開始時刻と最初のプロンプトで複数のエージェントストアに存在するセッションをグループ化します。使用量はグループごとに一度だけ集計されます。",
+  "duplicate_review_recheck": "重複を再チェック",
+  "duplicate_review_rebuilding": "重複グループを再構築中…",
+  "duplicate_review_empty": "重複セッションは検出されませんでした。",
+  "duplicate_review_local_only": "重複セッションのレビューはローカルアーカイブでのみ利用できます。",
+  "duplicate_review_group_heading": "{count} 件のコピー",
+  "duplicate_review_role_canonical": "正本",
+  "duplicate_review_role_duplicate": "重複",
+  "duplicate_review_agent": "エージェント",
+  "duplicate_review_started": "開始",
+  "duplicate_review_messages": "メッセージ"
 }

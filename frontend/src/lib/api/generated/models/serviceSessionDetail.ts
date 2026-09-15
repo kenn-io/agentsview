@@ -15,6 +15,9 @@ export interface ServiceSessionDetail {
   decode_confidence?: string;
   deleted_at?: string;
   display_name?: string;
+  duplicate_canonical_id?: string;
+  duplicate_member_count?: number;
+  duplicate_role?: string;
   edit_churn_count: number;
   /** @nullable */
   ended_at: string | null;

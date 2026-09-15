@@ -168,6 +168,22 @@ fees, deduplication, rollup semantics, or query-time model canonicalization
 change. Catalog and user-pricing changes are covered separately by the pricing
 content digest; do not add a write-only extractor-version metadata key.
 
+### Duplicate-session suppression
+
+Sessions that appear in multiple agent stores with the same start second and
+normalized opening prompt are grouped into `duplicate_group_members` (a derived
+table rebuilt from scratch by `RebuildDuplicateGroups`; it never deletes
+sessions or usage rows). Each member is a `canonical` (most messages) or
+`duplicate` (points at the canonical) role. Aggregate token/cost totals count a
+group once: at usage-cache fill time a duplicate-role session's facts lose
+token eligibility when its canonical copy carries usage, and PostgreSQL's live
+aggregation applies the identical rule as an EXISTS clause over the mirrored
+table. Matching-session counts and per-session usage stay unsuppressed on both
+backends, and a canonical without usage leaves its duplicate's usage counted so
+migrations that copied transcripts but not usage lose nothing. Membership rides
+the session push fingerprint into PG and DuckDB mirrors; membership changes
+bump `local_modified_at` so incremental pushes re-select the row.
+
 Deduplication groups are classified per group at rollup build time. A group is
 finalized into daily rows only when its resolution provably cannot vary with the
 query window or live filters: every member shares one source session and one

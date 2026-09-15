@@ -753,6 +753,17 @@ type DB struct {
 	usageBackfillDone    chan struct{}
 	usageBackfillErr     error
 	usageBackfillStarted func()
+	// duplicateMembers caches the duplicate_group_members membership map
+	// for read-path decoration (session list/detail/sidebar rows). The
+	// hot paths pay no query; the snapshot swaps atomically and is
+	// repopulated lazily if a reader finds it missing.
+	duplicateMembers   atomic.Pointer[map[string]DuplicateGroupMember]
+	duplicateMembersMu sync.Mutex
+	// duplicateMembersGen counts snapshot publications and invalidations.
+	// The lazy loader pins the generation before its query and publishes
+	// only if unchanged, so a concurrent rebuild or reopen cannot have its
+	// fresh snapshot overwritten by an older read.
+	duplicateMembersGen atomic.Uint64
 	// usageBackfillEnabled records that this process explicitly started
 	// background backfill (the daemon lifecycle). Reopen restarts a pass
 	// only then, so CLI resyncs never trigger an unrequested archive scan.
@@ -1785,6 +1796,8 @@ var readOnlyRequiredTables = []string{
 	"pinned_messages",
 	"starred_sessions",
 	"excluded_sessions",
+	"agent_remap_rules",
+	"duplicate_group_members",
 	"worktree_project_mappings",
 	"session_project_assignments",
 	"archive_metadata",
@@ -2997,6 +3010,43 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	); err != nil {
 		return fmt.Errorf(
 			"creating post-migration tables and indexes: %w", err,
+		)
+	}
+
+	if _, err := w.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS duplicate_group_members (
+			session_id   TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+			group_key    TEXT NOT NULL,
+			role         TEXT NOT NULL CHECK (role IN ('canonical','duplicate')),
+			canonical_id TEXT NOT NULL DEFAULT '',
+			member_count INTEGER NOT NULL DEFAULT 0,
+			computed_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		);
+		CREATE INDEX IF NOT EXISTS idx_duplicate_group_members_group
+			ON duplicate_group_members(group_key);
+	`); err != nil {
+		return fmt.Errorf(
+			"creating duplicate_group_members: %w", err,
+		)
+	}
+
+	if _, err := w.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS agent_remap_rules (
+			id           INTEGER PRIMARY KEY,
+			source_agent TEXT NOT NULL,
+			model_glob   TEXT NOT NULL DEFAULT '',
+			id_prefix    TEXT NOT NULL DEFAULT '',
+			target_agent TEXT NOT NULL,
+			enabled      INTEGER NOT NULL DEFAULT 1,
+			created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			UNIQUE(source_agent, model_glob, id_prefix)
+		);
+		CREATE INDEX IF NOT EXISTS idx_agent_remap_rules_match
+			ON agent_remap_rules(enabled, source_agent);
+	`); err != nil {
+		return fmt.Errorf(
+			"creating agent_remap_rules: %w", err,
 		)
 	}
 
@@ -5151,6 +5201,13 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	retired := append([]*sql.DB(nil), db.retired...)
 	oldWriter := db.writer.Swap(writer)
 	oldReader := db.reader.Swap(reader)
+	// The archive contents changed underneath us (resync swap or compaction),
+	// so drop the cached duplicate-membership snapshot; the lazy loader
+	// repopulates it from the reopened database on the next read. Bumping
+	// the generation also discards any in-flight lazy load against the old
+	// database so its stale result is never published.
+	db.duplicateMembersGen.Add(1)
+	db.duplicateMembers.Store(nil)
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set unless the caller keeps it. Without the clear a
 	// resync swap that ran behind the worker write barrier would reopen the

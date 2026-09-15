@@ -637,6 +637,15 @@ type Engine struct {
 	startupReconciledErr    error
 	startupCallbackOnce     gosync.Once
 	onStartupReconciled     func(SyncStats, error)
+	// duplicateRebuildMu guards the single-flight state for background
+	// duplicate-group membership rebuilds scheduled after sync passes.
+	duplicateRebuildMu      gosync.Mutex
+	duplicateRebuildRunning bool
+	duplicateRebuildPending bool
+	// duplicateRebuildDone is closed when the single-flight background
+	// rebuild goroutine fully drains (no pending re-run). Tests use it to
+	// keep scheduled rebuild work out of measured regions.
+	duplicateRebuildDone chan struct{}
 	// writeBatchOverride is a test seam for exercising reconciliation archive
 	// write failures after discovery and parse have succeeded.
 	writeBatchOverride func([]pendingWrite, syncWriteMode, bool) (int, int, int, int)
@@ -1155,7 +1164,12 @@ func pathWithinRoot(path, root string) bool {
 // the scheduler. Call once when the engine's owner shuts down;
 // safe to call repeatedly.
 func (e *Engine) Close() {
-
+	// Drain any in-flight or pending duplicate-group rebuild before the
+	// caller closes the database: the worker runs on context.Background()
+	// inside its own transaction, so shutdown must not race an active
+	// pass. The worker coalesces concurrent schedule requests into the
+	// same run loop, so one wait covers every request made so far.
+	e.WaitDuplicateGroupRebuildDrained()
 	e.signalSched.stop()
 }
 
@@ -1868,6 +1882,7 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 	}()
 	if stats.hasSessionChanges() || tombstoned > 0 {
 		e.emit("sessions")
+		e.scheduleDuplicateGroupRebuild()
 	}
 	return err
 }
@@ -3694,6 +3709,26 @@ func (e *Engine) resyncBuildLocked(
 		}
 	}
 
+	// Re-apply agent remap rules to the rebuilt archive so sessions the
+	// rules govern keep their relabeled agent. Rebuilt databases are fresh
+	// copies of parsed sources, so without this step every remap would be
+	// lost on each full resync.
+	if _, applyErr := ops.applyAgentRemapRules(ctx, newDB); applyErr != nil {
+		warning := fmt.Sprintf(
+			"agent remap apply failed, aborting swap: %v", applyErr,
+		)
+		log.Printf("resync: %s", warning)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings, warning)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, fmt.Errorf("applying agent remap rules: %w", applyErr)
+	}
+
 	// Metadata restoration deliberately copies user-owned deletion state from
 	// the original archive. Reconcile archive-only Claude members afterwards so
 	// an available legacy fork cannot overwrite the source-missing state that
@@ -3749,6 +3784,32 @@ func (e *Engine) resyncBuildLocked(
 			e.mu.Unlock()
 			return stats, err
 		}
+	}
+
+	// Re-derive duplicate-group membership for the rebuilt archive. The
+	// membership table is derived state and is deliberately not copied by
+	// orphaned.go, so the fresh replacement needs a full detection pass. This
+	// runs after the copied source-missing reconciliation above so tombstones
+	// it writes are reflected; the replacement carries the old archive's
+	// bootstrap marker (archive_metadata is copied wholesale), so a failure
+	// here must abort the swap — startup would otherwise trust the marker and
+	// never retry, leaving stale or empty membership permanently.
+	if _, dgErr := ops.rebuildDuplicateGroups(ctx, newDB); dgErr != nil {
+		log.Printf("resync: rebuild duplicate groups: %v", dgErr)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"duplicate group rebuild failed, aborting swap: "+dgErr.Error(),
+		)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		if rerr := origDB.Reopen(); rerr != nil {
+			log.Printf("resync: recovery reopen: %v", rerr)
+		}
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats, dgErr
 	}
 
 	if ftsDropped {
@@ -4675,6 +4736,133 @@ func (e *Engine) ApplyWorktreeReclassification(
 	return mapping, preview, err
 }
 
+// ApplyAgentRemapRules rewrites sessions.agent for every session the
+// enabled remap rules match, after verifying the caller reviewed the preview
+// identified by acceptedToken. Serialized with sync writes via RunExclusive;
+// emits a sessions change when any session was rewritten.
+func (e *Engine) ApplyAgentRemapRules(
+	ctx context.Context, acceptedToken string,
+) (db.AgentRemapPreview, error) {
+	var preview db.AgentRemapPreview
+	err := e.RunExclusive(func() error {
+		var err error
+		preview, err = e.db.ApplyAgentRemapRules(ctx, acceptedToken)
+		return err
+	})
+	if err == nil && preview.MatchedSessions > 0 {
+		e.emit("sessions")
+	}
+	return preview, err
+}
+
+// RebuildDuplicateGroups recomputes duplicate-session group membership,
+// serialized with sync writes via RunExclusive; emits a sessions change
+// when any membership changed so list rows refresh their indicators.
+func (e *Engine) RebuildDuplicateGroups(
+	ctx context.Context,
+) (db.DuplicateGroupsResult, error) {
+	var result db.DuplicateGroupsResult
+	err := e.RunExclusive(func() error {
+		var err error
+		result, err = e.db.RebuildDuplicateGroups(ctx)
+		return err
+	})
+	if err == nil && result.NotifiedIDs > 0 {
+		e.emit("sessions")
+	}
+	return result, err
+}
+
+// EnsureDuplicateGroupsBootstrapped backfills duplicate-group membership
+// on an archive that has never had a rebuild (see
+// db.EnsureDuplicateGroupsBootstrapped). The daemon runs it once per
+// archive during startup maintenance so migrated archives that see no
+// sync activity still get badges and usage suppression. Emits "sessions"
+// when the bootstrap populated membership for the first time.
+func (e *Engine) EnsureDuplicateGroupsBootstrapped(
+	ctx context.Context,
+) (bool, error) {
+	ran := false
+	err := e.RunExclusive(func() error {
+		var err error
+		ran, err = e.db.EnsureDuplicateGroupsBootstrapped(ctx)
+		return err
+	})
+	if err == nil && ran {
+		e.emit("sessions")
+	}
+	return ran, err
+}
+
+// scheduleDuplicateGroupRebuild queues one background duplicate-group
+// membership rebuild after a sync pass changed sessions. Concurrent callers
+// coalesce: a running rebuild leaves a pending marker and re-runs itself so
+// a change missed by the in-flight pass is not lost. When a rebuild actually
+// changes membership it emits "sessions" so UI and mirror consumers see the
+// refreshed indicators; emission happens outside syncMu (the goroutine never
+// takes it) so Emitter implementations cannot widen a sync critical section.
+func (e *Engine) scheduleDuplicateGroupRebuild() {
+	e.duplicateRebuildMu.Lock()
+	if e.duplicateRebuildRunning {
+		e.duplicateRebuildPending = true
+		e.duplicateRebuildMu.Unlock()
+		return
+	}
+	e.duplicateRebuildRunning = true
+	done := make(chan struct{})
+	e.duplicateRebuildDone = done
+	e.duplicateRebuildMu.Unlock()
+	go func() {
+		for {
+			result, err := e.db.RebuildDuplicateGroups(context.Background())
+			if err != nil {
+				log.Printf("warning: duplicate group rebuild: %v", err)
+			} else if result.NotifiedIDs > 0 {
+				e.emit("sessions")
+			}
+			e.duplicateRebuildMu.Lock()
+			if !e.duplicateRebuildPending {
+				e.duplicateRebuildRunning = false
+				e.duplicateRebuildMu.Unlock()
+				// Close the snapshot taken at schedule time, not the struct
+				// field: a caller that scheduled a rebuild while this worker
+				// was finishing may have already swapped in a fresh channel,
+				// and closing that under their feet would race the write.
+				close(done)
+				return
+			}
+			e.duplicateRebuildPending = false
+			e.duplicateRebuildMu.Unlock()
+		}
+	}()
+}
+
+// ScheduleDuplicateGroupRebuild requests one background duplicate-group
+// membership rebuild, coalescing with any in-flight or pending rebuild. It
+// is the exported, non-blocking entry point for out-of-band session
+// mutations (trash, restore, permanent delete) that change which sessions
+// may form groups; when the rebuild changes membership it emits "sessions"
+// itself. Safe to call from request paths; never blocks.
+func (e *Engine) ScheduleDuplicateGroupRebuild() {
+	e.scheduleDuplicateGroupRebuild()
+}
+
+// WaitDuplicateGroupRebuildDrained blocks until every duplicate-group
+// rebuild scheduled so far has completed, including pending re-runs queued
+// while a rebuild was in flight. Test-only seam: allocation-measuring tests
+// call it after seeding so scheduled rebuild work cannot land inside a
+// measured region. Without a scheduled rebuild it returns immediately.
+func (e *Engine) WaitDuplicateGroupRebuildDrained() {
+	e.duplicateRebuildMu.Lock()
+	ch := e.duplicateRebuildDone
+	running := e.duplicateRebuildRunning
+	e.duplicateRebuildMu.Unlock()
+	if ch == nil || !running {
+		return
+	}
+	<-ch
+}
+
 // ApplyWorktreeProjectMappings serializes historical session rewrites and
 // identity publication with watcher and sync writes.
 func (e *Engine) ApplyWorktreeProjectMappings(
@@ -4790,6 +4978,9 @@ func (e *Engine) syncAll(
 		ctx, onProgress, time.Time{}, nil, syncWriteDefault, true,
 		forceFullParse && !allowCachedFailures,
 	)
+	if stats.hasSessionChanges() {
+		e.scheduleDuplicateGroupRebuild()
+	}
 	return
 }
 
@@ -4934,6 +5125,7 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 	}()
 	if changed {
 		e.emit("sessions")
+		e.scheduleDuplicateGroupRebuild()
 	}
 	return errors.Join(errs...)
 }
@@ -4954,6 +5146,7 @@ func (e *Engine) reconcileScopedWatchRoots(
 	// critical section or deadlock by re-entering sync code (see SyncAll).
 	if stats.hasSessionChanges() || tombstoned > 0 {
 		e.emit("sessions")
+		e.scheduleDuplicateGroupRebuild()
 	}
 	return stats, tombstoned, err
 }
@@ -6298,7 +6491,7 @@ func isOpenCodeFormatAgent(agent parser.AgentType) bool {
 // no index file and has no S3 path convention.
 func isCodexFormatAgent(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentCodex, parser.AgentTraeX:
+	case parser.AgentCodex, parser.AgentTraeX, parser.AgentAugure:
 		return true
 	default:
 		return false
@@ -6682,7 +6875,7 @@ func reconciliationReplacementIdentity(
 		return ""
 	}
 	switch agent {
-	case parser.AgentCodex, parser.AgentTraeX:
+	case parser.AgentCodex, parser.AgentTraeX, parser.AgentAugure:
 		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(storedPath))
 		if uuid == "" {
 			return ""
@@ -7477,6 +7670,7 @@ func (e *Engine) SyncAllSince(
 	defer func() {
 		if stats.hasSessionChanges() {
 			e.emit("sessions")
+			e.scheduleDuplicateGroupRebuild()
 		}
 	}()
 	defer e.syncMu.Unlock()
@@ -7501,6 +7695,7 @@ func (e *Engine) SyncRootsSince(
 	defer func() {
 		if stats.hasSessionChanges() {
 			e.emit("sessions")
+			e.scheduleDuplicateGroupRebuild()
 		}
 	}()
 	defer e.syncMu.Unlock()
@@ -14221,7 +14416,7 @@ func (e *Engine) providerFingerprintHashMatchesDB(
 // members instead of the whole archive. Providers whose fingerprint stat is
 // per-source stay stat-gated: a stat mismatch there means real change.
 func providerFingerprintHashEstablishesFreshness(agent parser.AgentType) bool {
-	return agent == parser.AgentHermes
+	return agent == parser.AgentHermes || agent == parser.AgentAugureDesktop
 }
 
 // providerSourceHashFreshDespiteStat is the stat-mismatch arm of
@@ -16811,6 +17006,20 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		written:  make([]bool, len(batch)),
 		resolved: make([]bool, len(batch)),
 	}
+	// Sessions written by the loop below bypass the incremental path's
+	// per-session remap and the bulk batch's post-commit remap, so their IDs
+	// are collected here and rules are applied once after the loop. The
+	// defer covers every return path — the len(writes)==0 staged-only
+	// return, the batch-error return, and the ctx-cancel returns mid-loop
+	// all leave successfully written sessions committed, and those must not
+	// keep the parser agent until a later write. WithoutCancel lets the
+	// apply finish after a cancelled batch.
+	var remapIDs []string
+	defer func() {
+		e.applyAgentRemapRulesToWritten(
+			context.WithoutCancel(ctx), remapIDs,
+		)
+	}()
 	if ctx.Err() != nil {
 		return outcome
 	}
@@ -17066,8 +17275,28 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		outcome.writtenMessages += len(msgs)
 		outcome.written[i] = true
 		outcome.resolved[i] = true
+		remapIDs = append(remapIDs, s.ID)
 	}
 	return outcome
+}
+
+// applyAgentRemapRulesToWritten centralizes the post-write remap step shared
+// by the full-parse write paths: a freshly written session must land with the
+// enabled rules applied, or it keeps the parser agent until a manual apply.// Errors are logged, not fatal — the session content is already committed and
+// a later write or manual apply still matches it.
+func (e *Engine) applyAgentRemapRulesToWritten(
+	ctx context.Context, sessionIDs []string,
+) {
+	if len(sessionIDs) == 0 {
+		return
+	}
+	if _, err := e.db.ApplyAgentRemapRulesToSessions(
+		ctx, sessionIDs,
+	); err != nil {
+		log.Printf(
+			"apply agent remap rules to written sessions: %v", err,
+		)
+	}
 }
 
 // sessionWriteVerdict says whether prepareSessionWrite produced a
@@ -18095,6 +18324,18 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		written:  make([]bool, len(batch)),
 		resolved: make([]bool, len(batch)),
 	}
+	// Staged writes and post-commit batch writes both collect their IDs for
+	// the shared post-batch remap. The deferred apply covers every return
+	// path: the len(writes)==0 staged-only return, the batch-error return
+	// (which drops collected staged IDs if not merged), and ctx-cancel
+	// returns mid-loop. WithoutCancel lets the apply finish after a
+	// cancelled batch.
+	var remapIDs []string
+	defer func() {
+		e.applyAgentRemapRulesToWritten(
+			context.WithoutCancel(ctx), remapIDs,
+		)
+	}()
 	writes := make([]db.SessionBatchWrite, 0, len(batch))
 	pendingIndexes := make([]int, 0, len(batch))
 	sources := make(map[string]batchSourceFile, len(batch))
@@ -18185,6 +18426,10 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 				outcome.failedSessions++
 				continue
 			}
+			// Remap rules run via the shared post-batch apply below; the
+			// staged branch bypasses the post-commit bulk remap, so the ID
+			// must be collected here like the ordinary loop does.
+			remapIDs = append(remapIDs, s.ID)
 			outcome.written[pendingIndex] = true
 			outcome.writtenSessions++
 			outcome.writtenMessages += len(msgs)
@@ -18270,6 +18515,20 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 	tWrite := time.Now()
 	result, err := e.db.WriteSessionBatchContext(ctx, writes)
 	e.phaseStats.WriteNanos.Add(int64(time.Since(tWrite)))
+	if err == nil && len(result.WrittenIndexes) > 0 {
+		// The batch path bypasses writeIncremental, so remap rules must be
+		// applied here too or fully parsed sessions keep their parser agent
+		// until a manual apply. Runs after the batch commit; written IDs only.
+		writtenIDs := make([]string, 0, len(result.WrittenIndexes))
+		for _, writtenIndex := range result.WrittenIndexes {
+			if writtenIndex >= 0 && writtenIndex < len(writes) {
+				writtenIDs = append(writtenIDs, writes[writtenIndex].Session.ID)
+			}
+		}
+		// Merge into the deferred post-batch remap so a single apply covers
+		// both bulk-written and staged-written sessions.
+		remapIDs = append(remapIDs, writtenIDs...)
+	}
 	e.phaseStats.Batches.Add(1)
 	e.phaseStats.WriteBatchSize.Add(int64(len(writes)))
 	e.phaseStats.BatchedWrites.Add(int64(result.WrittenSessions))
@@ -19025,6 +19284,15 @@ func (e *Engine) writeIncremental(
 	if err != nil {
 		return err
 	}
+	// Agent remap rules run after the worktree mapping so a rule's target
+	// agent is the final stored value for freshly written sessions.
+	if _, err := e.db.ApplyAgentRemapRulesToSession(
+		context.Background(), inc.sessionID,
+	); err != nil {
+		return fmt.Errorf(
+			"apply agent remap rules to session %s: %w", inc.sessionID, err,
+		)
+	}
 	identitySession := db.Session{
 		ID:      inc.sessionID,
 		Project: finalProject,
@@ -19236,6 +19504,17 @@ func (e *Engine) writeSessionFullWithResolver(
 	if err := e.db.ClearSessionSourceMissing(s.ID); err != nil {
 		log.Printf("clear source-missing state for session %s: %v", s.ID, err)
 		return err
+	}
+	// Staged and bulk-rebuild writes get a wholesale rule apply after their
+	// batches; this per-session path must apply rules itself or every
+	// freshly discovered or fully reparsed session keeps its parser agent.
+	if _, remapErr := e.db.ApplyAgentRemapRulesToSession(
+		context.Background(), s.ID,
+	); remapErr != nil {
+		log.Printf(
+			"apply agent remap rules to %s: %v", s.ID, remapErr,
+		)
+		return remapErr
 	}
 	return nil
 }
@@ -20532,7 +20811,8 @@ func applyProviderFingerprintFileInfo(
 	fingerprint parser.SourceFingerprint,
 	results []parser.ParseResultOutcome,
 ) {
-	if agent != parser.AgentDevin && agent != parser.AgentHermes {
+	if agent != parser.AgentDevin && agent != parser.AgentHermes &&
+		agent != parser.AgentAugureDesktop {
 		return
 	}
 	for i := range results {

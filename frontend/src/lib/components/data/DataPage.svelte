@@ -9,6 +9,8 @@
   import ProjectBatchWorkspace from "./ProjectBatchWorkspace.svelte";
   import ProjectWorkspace from "./ProjectWorkspace.svelte";
   import WorktreeMappingRules from "./WorktreeMappingRules.svelte";
+  import AgentRemapRules from "./AgentRemapRules.svelte";
+  import DuplicateSessionReview from "./DuplicateSessionReview.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
   import type { RangeSelection } from "../shared/rangeSelection.js";
   import {
@@ -202,6 +204,11 @@
           : undefined}
       />
     {/key}
+    <AgentRemapRules
+      readOnly={dataReadOnly}
+      onMutated={() => void data.load({ background: true })}
+    />
+    <DuplicateSessionReview readOnly={dataReadOnly} />
   {:else if data.inventory}
     <!-- Inventory-first ordering: once inventory has loaded once it keeps
          rendering through background reloads; loading/error below only

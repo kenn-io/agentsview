@@ -4,6 +4,7 @@ import {
   agentColor,
   agentForeground,
   agentLabel,
+  agentTypeaheadOptions,
   entrypointBadge,
 } from "./agents.js";
 
@@ -15,6 +16,8 @@ describe("KNOWN_AGENTS", () => {
       "cowork",
       "codex",
       "traex",
+      "augure",
+      "augure-desktop",
       "copilot",
       "devin",
       "evener",
@@ -76,6 +79,8 @@ describe("agentColor", () => {
     expect(agentColor("claude")).toBe("var(--accent-blue)");
     expect(agentColor("codex")).toBe("var(--accent-green)");
     expect(agentColor("traex")).toBe("var(--accent-coral)");
+    expect(agentColor("augure")).toBe("var(--accent-lime)");
+    expect(agentColor("augure-desktop")).toBe("var(--accent-violet)");
     expect(agentColor("copilot")).toBe("var(--accent-amber)");
     expect(agentColor("devin")).toBe("var(--accent-red)");
     expect(agentColor("evener")).toBe("var(--accent-teal)");
@@ -171,11 +176,60 @@ describe("agentLabel", () => {
     expect(agentLabel("roocode")).toBe("RooCode");
     expect(agentLabel("omnigent")).toBe("Omnigent");
     expect(agentLabel("traex")).toBe("TraeX");
+    expect(agentLabel("augure")).toBe("Augure CLI");
+    expect(agentLabel("augure-desktop")).toBe("Augure Desktop");
     expect(agentLabel("opencodereview")).toBe("Open Code Review");
   });
 
   it("capitalizes simple agent names", () => {
     expect(agentLabel("claude")).toBe("Claude");
     expect(agentLabel("gemini")).toBe("Gemini");
+  });
+});
+
+describe("agentTypeaheadOptions", () => {
+  it("merges catalog and archive without duplicates", () => {
+    const options = agentTypeaheadOptions([
+      { name: "claude", session_count: 5 },
+      { name: "goose", session_count: 113 },
+    ]);
+    const claude = options.filter((option) => option.name === "claude");
+    expect(claude).toHaveLength(1);
+    expect(claude[0]?.count).toBe(5);
+    expect(options.some((option) => option.name === "goose")).toBe(true);
+  });
+
+  it("sorts archived agents by session count descending, catalog-only agents after", () => {
+    const options = agentTypeaheadOptions([
+      { name: "claude", session_count: 5 },
+      { name: "goose", session_count: 113 },
+    ]);
+    const gooseIndex = options.findIndex((option) => option.name === "goose");
+    const claudeIndex = options.findIndex((option) => option.name === "claude");
+    expect(gooseIndex).toBe(0);
+    expect(claudeIndex).toBe(1);
+    for (let i = 2; i < options.length; i += 1) {
+      expect(options[i]?.count ?? 0).toBe(0);
+    }
+  });
+
+  it("labels catalog-only agents via agentLabel", () => {
+    const options = agentTypeaheadOptions([]);
+    const augureDesktop = options.find((o) => o.name === "augure-desktop");
+    expect(augureDesktop?.label).toBe("Augure Desktop");
+  });
+
+  it("drops the empty name", () => {
+    const options = agentTypeaheadOptions([{ name: "", session_count: 3 }]);
+    expect(options.some((option) => option.name === "")).toBe(false);
+  });
+
+  it("returns the full catalog for empty input", () => {
+    const options = agentTypeaheadOptions([]);
+    expect(options.length).toBe(KNOWN_AGENTS.length);
+    for (const option of options) {
+      expect(option.name).not.toBe("");
+      expect(option.label).not.toBe("");
+    }
   });
 });

@@ -3365,13 +3365,62 @@ const duckUsageEventSourceEligibility = `
 const duckUsageEventEligibility = duckUsageEventSourceEligibility + `
 			AND s.deleted_at IS NULL`
 
+// duckUsageDuplicateSuppression is the EXISTS clause that drops usage rows
+// of duplicate-group members whose canonical copy carries token-bearing
+// usage. Mirrors the SQLite usage-cache fill rule and the PostgreSQL
+// aggregate suppression: only the token-eligible aggregate path suppresses,
+// never matching counts or per-session usage. sessCol is the column carrying
+// the row's session ID.
+func duckUsageDuplicateSuppression(sessCol string) string {
+	return `
+			AND NOT (
+				` + sessCol + ` IN (
+					SELECT dgm.session_id FROM duplicate_group_members dgm
+					WHERE dgm.role = 'duplicate' AND dgm.canonical_id != ''
+				)
+				AND EXISTS (
+					SELECT 1 FROM duplicate_group_members probe
+					WHERE probe.session_id = ` + sessCol + `
+						AND probe.role = 'duplicate'
+						AND probe.canonical_id != ''
+						AND EXISTS (
+							SELECT 1 FROM sessions cs
+							WHERE cs.id = probe.canonical_id
+								AND cs.deleted_at IS NULL
+						)
+						AND (
+							EXISTS (
+								SELECT 1 FROM messages cv
+								WHERE cv.session_id = probe.canonical_id
+									AND cv.token_usage != ''
+									AND cv.model != ''
+									AND cv.model != '<synthetic>'
+							)
+							OR EXISTS (
+								SELECT 1 FROM usage_events cu
+								WHERE cu.session_id = probe.canonical_id
+									AND cu.model != ''
+							)
+						)
+				)
+			)`
+}
+
 // duckUsageSourceWheres builds the message/event WHERE clauses shared by
 // duckUsageRawSQL and duckMatchingUsageRawSQL; the two callers differ only
-// in the message eligibility predicate.
+// in the message eligibility predicate. suppressDuplicates adds the
+// duplicate-suppression EXISTS to both sources (the aggregate path only).
 func duckUsageSourceWheres(
 	f db.UsageFilter, sessionID, messageEligibility string, b duckUsageBounds,
+	suppressDuplicates bool,
 ) (string, []any, string, []any) {
-	messageWhere := messageEligibility
+	duplicateMessageSuppression := ""
+	duplicateEventSuppression := ""
+	if suppressDuplicates {
+		duplicateMessageSuppression = duckUsageDuplicateSuppression("m.session_id")
+		duplicateEventSuppression = duckUsageDuplicateSuppression("ue.session_id")
+	}
+	messageWhere := messageEligibility + duplicateMessageSuppression
 	var messageArgs []any
 	messageWhere, messageArgs = appendDuckUsageSourceFilterClauses(
 		messageWhere, messageArgs, "m.model", f)
@@ -3380,7 +3429,7 @@ func duckUsageSourceWheres(
 	messageWhere, messageArgs = appendDuckUsageColumnBounds(
 		messageWhere, "COALESCE(m.timestamp, s.started_at)", b, messageArgs)
 
-	eventWhere := duckUsageEventEligibility
+	eventWhere := duckUsageEventEligibility + duplicateEventSuppression
 	var eventArgs []any
 	eventWhere, eventArgs = appendDuckUsageSourceFilterClauses(
 		eventWhere, eventArgs, "ue.model", f)
@@ -3392,9 +3441,17 @@ func duckUsageSourceWheres(
 	return messageWhere, messageArgs, eventWhere, eventArgs
 }
 
-func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
+// The suppressDuplicates flag is true only for the token-billing aggregate
+// paths (daily usage, top sessions, usage session counts), mirroring SQLite's
+// usage-cache fill and PostgreSQL's aggregate suppression: duplicate copies
+// whose canonical sibling carries token-bearing usage are dropped from
+// billing totals. Matching-session counting (duckMatchingUsageRawSQL) and
+// per-session usage (sessionID != "") never suppress, so the detail view of
+// a duplicate keeps its own numbers while aggregates stay de-duplicated.
+func duckUsageRawSQL(f db.UsageFilter, sessionID string, suppressDuplicates bool) (string, []any) {
 	messageWhere, messageArgs, eventWhere, eventArgs := duckUsageSourceWheres(
-		f, sessionID, duckUsageMessageEligibility, duckUsageBoundsForFilter(f))
+		f, sessionID, duckUsageMessageEligibility, duckUsageBoundsForFilter(f),
+		suppressDuplicates)
 
 	query := fmt.Sprintf(`
 		SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
@@ -3459,7 +3516,8 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 // duckUsageRawSQL.
 func duckMatchingUsageRawSQL(f db.UsageFilter) (string, []any) {
 	messageWhere, messageArgs, eventWhere, eventArgs := duckUsageSourceWheres(
-		f, "", duckUsageMatchingMessageEligibility, duckUsageBoundsForFilter(f))
+		f, "", duckUsageMatchingMessageEligibility, duckUsageBoundsForFilter(f),
+		false)
 
 	query := fmt.Sprintf(`
 		SELECT m.session_id AS session_id,
@@ -3531,7 +3589,7 @@ func duckCursorUsageRowsSQLForBounds(
 func duckDailyUsageRawSQL(f db.UsageFilter) (string, []any) {
 	bounds := duckUsageBoundsForFilter(f)
 	sessionRowsSQL, sessionArgs := duckUsageRawSQL(
-		duckUsageSnapshotInputFilter(f), "")
+		duckUsageSnapshotInputFilter(f), "", true)
 	cursorRowsSQL, cursorArgs, ok := duckCursorUsageRowsSQLForBounds(f, bounds)
 	if !ok {
 		return sessionRowsSQL, sessionArgs
@@ -3559,7 +3617,7 @@ func duckUsageLocalDateSQL(f db.UsageFilter) (string, any) {
 
 func duckUsageCTE(f db.UsageFilter, sessionID string) (string, []any) {
 	rawSQL, args := duckUsageRawSQL(
-		duckUsageSnapshotInputFilter(f), sessionID)
+		duckUsageSnapshotInputFilter(f), sessionID, sessionID == "")
 	return duckUsageCTEFromRaw(f, rawSQL, args, true)
 }
 

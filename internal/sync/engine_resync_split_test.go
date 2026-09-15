@@ -298,6 +298,42 @@ func TestResyncAbortsWhenReplacementCloseFails(t *testing.T) {
 	require.NoError(t, pinned.Close())
 }
 
+// TestResyncAbortsWhenDuplicateGroupRebuildFails pins the membership-rebuild
+// failure posture. The replacement carries the old archive's bootstrap marker
+// (archive_metadata is copied wholesale), so if the rebuild failed only as a
+// logged warning, the installed archive would be trusted as bootstrapped and
+// stale or empty duplicate membership would never be retried. The rebuild
+// failure must therefore abort the swap and preserve the original archive.
+func TestResyncAbortsWhenDuplicateGroupRebuildFails(t *testing.T) {
+	e, database, _ := newResyncSplitEngine(t)
+	sentinel := errors.New("duplicate group rebuild failed")
+
+	stats, err := e.resyncAllWithOptionsAndOperations(
+		context.Background(), nil, RebuildOptions{}, rebuildOperations{
+			rebuildDuplicateGroups: func(
+				_ context.Context, _ *db.DB,
+			) (db.DuplicateGroupsResult, error) {
+				return db.DuplicateGroupsResult{}, sentinel
+			},
+		},
+	)
+	require.ErrorIs(t, err, sentinel)
+	assert.True(t, stats.Aborted)
+	require.NotEmpty(t, stats.Warnings)
+	assert.Contains(t, stats.Warnings[len(stats.Warnings)-1],
+		"aborting swap")
+
+	// The original archive was not swapped and still serves reads and writes.
+	page, listErr := database.ListSessions(context.Background(), db.SessionFilter{})
+	require.NoError(t, listErr)
+	assert.Len(t, page.Sessions, 3, "original archive must be untouched")
+	ok, starErr := database.StarSession("keep0")
+	require.NoError(t, starErr,
+		"writes must recover after the aborted resync without a restart")
+	assert.True(t, ok)
+	assert.NoFileExists(t, e.ResyncTempPath())
+}
+
 // newResyncSwapFailureEngine builds an engine over a Claude root with two
 // synced sessions plus an empty Kimi root. The Kimi root lets failed-swap
 // tests stage a source whose skip-cache identity is purely path+mtime (Kimi

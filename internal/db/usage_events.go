@@ -99,7 +99,9 @@ func (db *DB) ReplaceSessionUsageEvents(
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	db.notifyUsageSessions([]string{sessionID})
+	// A canonical gaining or losing usage flips the suppression verdict of
+	// its duplicate siblings, so they must refill too.
+	db.notifyUsageSessionsWithDuplicates([]string{sessionID})
 	return nil
 }
 

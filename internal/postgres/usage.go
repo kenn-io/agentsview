@@ -23,6 +23,48 @@ const pgUsageMessageEligibility = `
 	AND m.model != '<synthetic>'
 	AND s.deleted_at IS NULL`
 
+// pgUsageDuplicateSuppression excludes rows from duplicate-role sessions
+// whose canonical copy carries usage, mirroring the SQLite usage-cache
+// suppression (internal/db usage fill TokenEligible override) so both
+// backends report identical aggregate token/cost totals. sessionCol is the
+// row's session column expression ("m.session_id", "ue.session_id", or
+// "s.id") so the clause works in every branch of the daily/top/count row
+// sources. The activity (matching-session) paths intentionally stay
+// unsuppressed on both sides.
+func pgUsageDuplicateSuppression(sessionCol string) string {
+	return `
+	AND NOT (
+		` + sessionCol + ` IN (
+			SELECT dgm.session_id FROM duplicate_group_members dgm
+			WHERE dgm.role = 'duplicate' AND dgm.canonical_id <> ''
+		)
+		AND EXISTS (
+			SELECT 1 FROM duplicate_group_members probe
+			WHERE probe.session_id = ` + sessionCol + `
+				AND probe.role = 'duplicate' AND probe.canonical_id <> ''
+				AND EXISTS (
+					SELECT 1 FROM sessions cs
+					WHERE cs.id = probe.canonical_id
+						AND cs.deleted_at IS NULL
+				)
+				AND (
+					EXISTS (
+						SELECT 1 FROM messages cv
+						WHERE cv.session_id = probe.canonical_id
+							AND cv.token_usage != ''
+							AND cv.model != ''
+							AND cv.model != '<synthetic>'
+					)
+					OR EXISTS (
+						SELECT 1 FROM usage_events cu
+						WHERE cu.session_id = probe.canonical_id
+							AND cu.model != ''
+					)
+				)
+		)
+	)`
+}
+
 const pgUsageMessageSourceEligibility = `
 	m.token_usage != ''
 	AND m.model != ''
@@ -730,33 +772,47 @@ func pgDailyUsageRowsSQLForBounds(
 ) string {
 	if !b.bounded() {
 		messageWhere := appendPGUsageBranchFilterClauses(
-			pgUsageMessageEligibility, pb, f, "m.model")
+			pgUsageMessageEligibility, pb, f, "m.model") +
+			pgUsageDuplicateSuppression("m.session_id")
 		eventWhere := appendPGUsageBranchFilterClauses(
-			pgUsageEventEligibility, pb, f, "ue.model")
+			pgUsageEventEligibility, pb, f, "ue.model") +
+			pgUsageDuplicateSuppression("ue.session_id")
 		return pgDailyUsageRowsSQLWithWhere(messageWhere, eventWhere)
 	}
 
 	return pgBoundedDailyUsageRowsSQL(
-		pb, f, b, pgUsageMessageSourceEligibility, pgUsageMessageEligibility)
+		pb, f, b, pgUsageMessageSourceEligibility, pgUsageMessageEligibility,
+		true)
 }
 
 // pgBoundedDailyUsageRowsSQL builds the bounded-branch CTE row source
 // shared by pgDailyUsageRowsSQLForBounds (token-eligible rows) and
-// pgMatchingUsageRowsSQLForBounds (relaxed matching rows). The two
-// callers differ only in the message eligibility predicates.
+// pgMatchingUsageRowsSQLForBounds (relaxed matching rows). The two callers
+// differ in the message eligibility predicates and in duplicate suppression:
+// only the token-eligible path suppresses, mirroring the SQLite usage-cache
+// fill that only flips token eligibility.
 func pgBoundedDailyUsageRowsSQL(
 	pb *paramBuilder, f db.UsageFilter, b pgUsageBounds,
 	messageSourceEligibility, messageEligibility string,
+	suppressDuplicates bool,
 ) string {
+	duplicateMessageSuppression := ""
+	duplicateEventSuppression := ""
+	duplicateFallbackSuppression := ""
+	if suppressDuplicates {
+		duplicateMessageSuppression = pgUsageDuplicateSuppression("m.session_id")
+		duplicateEventSuppression = pgUsageDuplicateSuppression("ue.session_id")
+		duplicateFallbackSuppression = pgUsageDuplicateSuppression("s.id")
+	}
 	messageTimestampSourceWhere := messageSourceEligibility +
-		"\n\tAND m.timestamp IS NOT NULL"
+		"\n\tAND m.timestamp IS NOT NULL" + duplicateMessageSuppression
 	messageTimestampSourceWhere = appendPGUsageSourceFilterClauses(
 		messageTimestampSourceWhere, pb, f, "m.model")
 	messageTimestampSourceWhere = appendPGUsageColumnBounds(
 		messageTimestampSourceWhere, "m.timestamp", b)
 
 	eventTimestampSourceWhere := pgUsageEventSourceEligibility +
-		"\n\tAND ue.occurred_at IS NOT NULL"
+		"\n\tAND ue.occurred_at IS NOT NULL" + duplicateEventSuppression
 	eventTimestampSourceWhere = appendPGUsageSourceFilterClauses(
 		eventTimestampSourceWhere, pb, f, "ue.model")
 	eventTimestampSourceWhere = appendPGUsageColumnBounds(
@@ -768,13 +824,13 @@ func pgBoundedDailyUsageRowsSQL(
 		pgUsageSessionEligibility, pb, f)
 
 	messageFallbackWhere := messageEligibility +
-		"\n\tAND m.timestamp IS NULL"
+		"\n\tAND m.timestamp IS NULL" + duplicateFallbackSuppression
 	messageFallbackWhere = appendPGUsageBranchFilterClauses(
 		messageFallbackWhere, pb, f, "m.model")
 	messageFallbackWhere = appendPGUsageColumnBounds(
 		messageFallbackWhere, "s.started_at", b)
 	eventFallbackWhere := pgUsageEventEligibility +
-		"\n\tAND ue.occurred_at IS NULL"
+		"\n\tAND ue.occurred_at IS NULL" + duplicateFallbackSuppression
 	eventFallbackWhere = appendPGUsageBranchFilterClauses(
 		eventFallbackWhere, pb, f, "ue.model")
 	eventFallbackWhere = appendPGUsageColumnBounds(
@@ -800,7 +856,9 @@ func pgMatchingUsageRowsSQLForBounds(
 ) string {
 	return pgBoundedDailyUsageRowsSQL(
 		pb, f, b,
-		pgUsageMatchingMessageSourceEligibility, pgUsageMatchingMessageEligibility)
+		pgUsageMatchingMessageSourceEligibility,
+		pgUsageMatchingMessageEligibility,
+		false)
 }
 
 func pgUsageRowQuery(pb *paramBuilder, f db.UsageFilter) string {

@@ -7,6 +7,8 @@ export interface DbSidebarSessionIndexRow {
   agent_label?: string;
   created_at: string;
   display_name?: string;
+  duplicate_member_count?: number;
+  duplicate_role?: string;
   /** @nullable */
   ended_at: string | null;
   entrypoint?: string;
