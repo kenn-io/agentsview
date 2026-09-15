@@ -75,7 +75,7 @@ func TestApplyConfigTOMLMirrorParity(t *testing.T) {
 // adding one without a reason defeats the purpose of this guard.
 var configKeysAllowedOutsideMirror = map[string]string{
 	"data_dir":             "owned by the AGENTSVIEW_DATA_DIR environment variable; never set from config.toml",
-	"no_browser":           "env/CLI-owned; the tag exists but applyConfigTOML never reads it from the file (pre-existing gap, tracked in OPEN_ISSUE.md)",
+	"no_browser":           "env/CLI-owned; the tag exists but applyConfigTOML never reads it from the file (pre-existing gap, not addressed by this change)",
 	"custom_model_pricing": "decoded separately by decodeCustomModelPricing rather than through the mirror struct",
 }
 
