@@ -1287,3 +1287,26 @@ func TestHTTPBackendBrowserLinksOmitCredentials(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, server.URL+"/sessions/codex/session:42", detail.WebURL)
 }
+
+func TestHTTPWatchGeneratedClientPreservesTransport(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/prefix/api/v1/sessions/session%2Fone/watch", r.URL.EscapedPath())
+		assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
+		assert.Equal(t, "text/event-stream", r.Header.Get("Accept"))
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: messages\ndata: session/one\n\n")
+	}))
+	defer srv.Close()
+	backend := service.NewHTTPBackend(srv.URL+"/prefix", "test-token", false, "")
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	events, err := backend.Watch(ctx, "session/one")
+	require.NoError(t, err)
+	select {
+	case event, ok := <-events:
+		require.True(t, ok)
+		assert.Equal(t, service.Event{Event: "messages", Data: "session/one"}, event)
+	case <-ctx.Done():
+		t.Fatal("watch did not deliver its event")
+	}
+}
