@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -368,49 +370,52 @@ func (b *httpBackend) Sync(
 	return &detail, nil
 }
 
+// watchHTTPClient adapts net/http to the generated runtime's context argument.
+type watchHTTPClient struct {
+	*http.Client
+}
+
+func (c watchHTTPClient) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
+	return c.Client.Do(req.WithContext(ctx))
+}
+
 func (b *httpBackend) Watch(
 	ctx context.Context, id string,
 ) (<-chan Event, error) {
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodGet,
-		b.baseURL+"/api/v1/sessions/"+url.PathEscape(id)+"/watch",
-		nil,
-	)
+	client, err := apiclient.NewDefaultClient(b.baseURL, runtime.WithHTTPClient(watchHTTPClient{b.longRunningClient}))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "text/event-stream")
-	b.addAuth(req)
-	// Use a separate no-timeout client so long-lived streams do not
-	// hit the 30s default on b.client.
-	resp, err := b.longRunningClient.Do(req)
+	stream, err := client.GetAPIV1SessionsIDWatchStream(ctx,
+		&apiclient.GetAPIV1SessionsIDWatchRequestOptions{
+			PathParams: &apiclient.GetAPIV1SessionsIDWatchPath{ID: url.PathEscape(id)},
+		}, func(_ context.Context, req *http.Request) error {
+			b.addAuth(req)
+			return nil
+		})
 	if err != nil {
+		if apiErr, ok := errors.AsType[*runtime.ClientAPIError](err); ok {
+			if apiErr.StatusCode() == http.StatusNotFound {
+				return nil, fmt.Errorf("watch: session not found: %s", id)
+			}
+			return nil, fmt.Errorf("watch: HTTP %d", apiErr.StatusCode())
+		}
 		return nil, err
-	}
-	if resp.StatusCode == http.StatusNotFound {
-		resp.Body.Close()
-		return nil, fmt.Errorf("watch: session not found: %s", id)
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("watch: HTTP %d", resp.StatusCode)
 	}
 
 	out := make(chan Event)
 	go func() {
 		defer close(out)
-		defer resp.Body.Close()
-		// A dropped live-watch stream is signalled to the consumer by
-		// closing out; there is no error channel, so a read error here
-		// is not actionable.
-		_ = parseSSE(resp.Body, func(ev Event) bool {
+		defer stream.Close()
+		// Closing out signals a dropped watch stream to the consumer.
+		for stream.Next() {
+			frame := stream.Event()
 			select {
-			case out <- ev:
-				return true
+			case out <- Event{Event: frame.Type, Data: string(frame.Data)}:
 			case <-ctx.Done():
-				return false
+				return
 			}
-		})
+		}
 	}()
 	return out, nil
 }

@@ -8,8 +8,10 @@ require (
 	github.com/danielgtaylor/huma/v2 v2.39.1
 	github.com/dlclark/regexp2/v2 v2.7.2
 	github.com/dmarkham/enumer v1.6.3
+	github.com/doordash-oss/oapi-codegen-dd/v3 v3.75.15
 	github.com/duckdb/duckdb-go/v2 v2.10505.0
 	github.com/fsnotify/fsnotify v1.10.1
+	github.com/go-playground/validator/v10 v10.30.3
 	github.com/gofrs/flock v0.13.1
 	github.com/google/go-cmp v0.7.0
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
@@ -30,6 +32,7 @@ require (
 	github.com/tidwall/gjson v1.19.0
 	go.kenn.io/docbank v0.14.0
 	go.kenn.io/kit v0.24.2-0.20260908151812-b9d6bb63077d
+	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/mod v0.41.0
 	golang.org/x/net v0.58.0
 	golang.org/x/perf v0.0.0-20260615155930-9e4b9ddef5b6
@@ -87,9 +90,12 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.10.2 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
+	github.com/go-playground/locales v0.14.1 // indirect
+	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
@@ -103,6 +109,7 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect
+	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
@@ -175,7 +182,7 @@ require (
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
-	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	go.yaml.in/yaml/v4 v4.0.0-rc.6 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/exp v0.0.0-20260603202125-055de637280b // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect

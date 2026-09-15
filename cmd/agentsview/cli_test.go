@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.yaml.in/yaml/v3"
 )
 
 func executeCommand(root *cobra.Command, args ...string) (string, error) {
@@ -169,6 +170,19 @@ func TestOpenAPICommandEmitsSpec(t *testing.T) {
 	assert.Contains(t, spec.Paths["/api/v1/sessions"], "get")
 	require.Contains(t, spec.Paths, "/api/v1/sessions/{id}/rename")
 	assert.Contains(t, spec.Paths["/api/v1/sessions/{id}/rename"], "patch")
+}
+
+func TestOpenAPICommandEmitsYAML(t *testing.T) {
+	out, err := executeCommand(newRootCommand(), "openapi", "--yaml")
+	require.NoError(t, err)
+	var spec struct {
+		OpenAPI string                    `yaml:"openapi"`
+		Paths   map[string]map[string]any `yaml:"paths"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(out), &spec))
+	assert.Equal(t, "3.1.0", spec.OpenAPI)
+	require.Contains(t, spec.Paths, "/api/v1/sessions")
+	assert.Contains(t, spec.Paths["/api/v1/sessions"], "get")
 }
 
 func TestServeCheckDataVersionRejectsNewerDatabase(t *testing.T) {

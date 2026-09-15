@@ -28,6 +28,21 @@ When changing route registration or generated client contracts:
 - Keep generated frontend code under `frontend/src/lib/api/generated/`; it is
   marked as generated in `.gitattributes` and should not be hand-edited.
 
+## Generated contract and clients
+
+Run `npm run generate:api` in `frontend/` to regenerate the committed
+[`openapi.yaml`](../../openapi.yaml), the Orval TypeScript client, and the
+DoorDash Go client in `internal/apiclient`. The Go client currently covers the
+session-watch stream. `npm run check:api` checks all three outputs for drift.
+The standalone `agentsview openapi --yaml` command prints the same schema
+without opening an archive or starting a server.
+
+Prek and CI run the shared `huma-check` linter pinned to the merge of kit PR
+#84. The `client` rule is temporarily disabled under kata task 58fz because that
+version mistakes the GitHub gist and user endpoints for local route-group paths.
+Remove the exclusion after the upstream matcher is fixed. A full audit can be
+run by omitting `-disable client` from the hook command.
+
 ## Collection nullability
 
 AgentsView uses `encoding/json/v2`, which encodes a nil Go slice as an empty

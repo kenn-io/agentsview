@@ -18,7 +18,7 @@ package signals
 // maintainer), or when the persisted state is missing/stale.
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"maps"
 	"slices"

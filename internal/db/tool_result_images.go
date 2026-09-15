@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"log"
@@ -23,8 +24,8 @@ type ToolImageStats struct {
 }
 
 type toolImageBlock struct {
-	Type     string          `json:"type"`
-	ImageURL json.RawMessage `json:"image_url"`
+	Type     string         `json:"type"`
+	ImageURL jsontext.Value `json:"image_url"`
 }
 
 // StripToolResultImages replaces supported inline image blocks in one stored
@@ -50,18 +51,18 @@ func DowngradeOffloadedToolResultImages(content string) (string, ToolImageStats)
 func stripToolResultImageArrayWithInline(
 	content string, stripInline bool,
 ) (string, ToolImageStats) {
-	var blocks []json.RawMessage
+	var blocks []jsontext.Value
 	if err := json.Unmarshal([]byte(content), &blocks); err != nil || blocks == nil {
 		return content, ToolImageStats{}
 	}
 
-	projected := make([]json.RawMessage, len(blocks))
+	projected := make([]jsontext.Value, len(blocks))
 	copy(projected, blocks)
 	var stats ToolImageStats
 	changed := false
 	for i, raw := range blocks {
 		var block toolImageBlock
-		if err := json.Unmarshal(raw, &block); err != nil {
+		if err := json.Unmarshal(raw, &block, json.MatchCaseInsensitiveNames(true)); err != nil {
 			continue
 		}
 		if block.Type == "agentsview_image" {
@@ -77,7 +78,7 @@ func stripToolResultImageArrayWithInline(
 		if !stripInline || block.Type != "input_image" {
 			continue
 		}
-		var fields map[string]json.RawMessage
+		var fields map[string]jsontext.Value
 		if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
 			continue
 		}
@@ -85,15 +86,15 @@ func stripToolResultImageArrayWithInline(
 		if !ok {
 			continue
 		}
-		placeholderFields := make(map[string]json.RawMessage, len(fields)+6)
+		placeholderFields := make(map[string]jsontext.Value, len(fields)+6)
 		for key, value := range fields {
 			if !strings.EqualFold(key, "type") &&
 				!strings.EqualFold(key, "image_url") {
 				placeholderFields[key] = value
 			}
 		}
-		placeholderFields["type"] = json.RawMessage(`"agentsview_image"`)
-		placeholderFields["version"] = json.RawMessage(`1`)
+		placeholderFields["type"] = jsontext.Value(`"agentsview_image"`)
+		placeholderFields["version"] = jsontext.Value(`1`)
 		textValue, _ := json.Marshal(
 			fmt.Sprintf("[Image: %s, %d bytes]", mediaType, decodedBytes),
 		)
@@ -102,7 +103,7 @@ func stripToolResultImageArrayWithInline(
 		placeholderFields["media_type"] = mediaValue
 		byteSizeValue, _ := json.Marshal(decodedBytes)
 		placeholderFields["byte_size"] = byteSizeValue
-		sha256Value := json.RawMessage(`""`)
+		sha256Value := jsontext.Value(`""`)
 		if rawSHA, ok := fields["sha256"]; ok {
 			var sha256 string
 			if err := json.Unmarshal(rawSHA, &sha256); err == nil && sha256 != "" {
@@ -110,7 +111,7 @@ func stripToolResultImageArrayWithInline(
 			}
 		}
 		placeholderFields["sha256"] = sha256Value
-		placeholder, err := json.Marshal(placeholderFields)
+		placeholder, err := json.Marshal(placeholderFields, json.Deterministic(true))
 		if err != nil {
 			continue
 		}
@@ -135,20 +136,20 @@ func stripToolResultImageArrayWithInline(
 	return result.String(), stats
 }
 
-func stripOffloadedImagePlaceholder(raw json.RawMessage) (json.RawMessage, bool) {
+func stripOffloadedImagePlaceholder(raw jsontext.Value) (jsontext.Value, bool) {
 	var placeholder struct {
 		Type      string `json:"type"`
 		ImageRef  string `json:"image_ref"`
 		MediaType string `json:"media_type"`
 		ByteSize  int64  `json:"byte_size"`
 	}
-	if err := json.Unmarshal(raw, &placeholder); err != nil ||
+	if err := json.Unmarshal(raw, &placeholder, json.MatchCaseInsensitiveNames(true)); err != nil ||
 		placeholder.Type != "agentsview_image" ||
 		!strings.HasPrefix(placeholder.ImageRef, "asset://") ||
 		placeholder.MediaType == "" || placeholder.ByteSize < 0 {
 		return nil, false
 	}
-	var fields map[string]json.RawMessage
+	var fields map[string]jsontext.Value
 	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
 		return nil, false
 	}
@@ -165,7 +166,7 @@ func stripOffloadedImagePlaceholder(raw json.RawMessage) (json.RawMessage, bool)
 		return nil, false
 	}
 	fields["text"] = textValue
-	projected, err := json.Marshal(fields)
+	projected, err := json.Marshal(fields, json.Deterministic(true))
 	if err != nil {
 		return nil, false
 	}
@@ -177,7 +178,7 @@ func stripOffloadedImagePlaceholder(raw json.RawMessage) (json.RawMessage, bool)
 // array occupies in content and its raw bytes. Preview, strip and migrate all
 // scan through here so they cannot disagree about which sections exist.
 func scanSummarySections(
-	content string, fn func(arrayStart, end int, raw json.RawMessage),
+	content string, fn func(arrayStart, end int, raw jsontext.Value),
 ) {
 	for start := 0; start < len(content); {
 		section := strings.TrimLeft(content[start:], " \t\r\n")
@@ -192,10 +193,9 @@ func scanSummarySections(
 		// Decode the complete value before looking for the next separator:
 		// provider JSON can itself contain blank lines. Anonymous sections have
 		// no agent label, including the trailing section of a mixed summary.
-		decoder := json.NewDecoder(strings.NewReader(content[arrayStart:]))
-		var raw json.RawMessage
+		decoder := jsontext.NewDecoder(strings.NewReader(content[arrayStart:]))
 		scanEnd := start
-		if err := decoder.Decode(&raw); err == nil {
+		if raw, err := decoder.ReadValue(); err == nil {
 			end := arrayStart + int(decoder.InputOffset())
 			scanEnd = end
 			tail, _, _ := strings.Cut(content[end:], "\n\n")
@@ -217,7 +217,7 @@ func stripToolResultSummaryImagesWithInline(
 	var result strings.Builder
 	var stats ToolImageStats
 	copied := 0
-	scanSummarySections(content, func(arrayStart, end int, raw json.RawMessage) {
+	scanSummarySections(content, func(arrayStart, end int, raw jsontext.Value) {
 		projected, found := stripToolResultImageArrayWithInline(
 			string(raw), stripInline,
 		)
@@ -260,7 +260,7 @@ func parseInlineImageHeader(uri string) (mediaType, payload string, ok bool) {
 	return parsedType, payload, true
 }
 
-func decodeInlineImageURL(raw json.RawMessage) (string, int64, int64, bool) {
+func decodeInlineImageURL(raw jsontext.Value) (string, int64, int64, bool) {
 	var uri string
 	if err := json.Unmarshal(raw, &uri); err != nil {
 		return "", 0, 0, false
@@ -279,7 +279,7 @@ func decodeInlineImageURL(raw json.RawMessage) (string, int64, int64, bool) {
 
 // decodeInlineImage returns the parsed media type and decoded bytes of a
 // supported inline data URI. Acceptance matches decodeInlineImageURL.
-func decodeInlineImage(raw json.RawMessage) (mediaType string, decoded []byte, ok bool) {
+func decodeInlineImage(raw jsontext.Value) (mediaType string, decoded []byte, ok bool) {
 	var uri string
 	if err := json.Unmarshal(raw, &uri); err != nil {
 		return "", nil, false
@@ -302,9 +302,9 @@ type imagePutFunc func(mediaType string, body []byte) (ref string, created bool,
 // isMigratableToolImageBlock reports whether one stored block holds an inline
 // image payload this migration can move. The block must be an input_image
 // with a base64 data URI whose media type is one the asset store accepts.
-func isMigratableToolImageBlock(raw json.RawMessage) bool {
+func isMigratableToolImageBlock(raw jsontext.Value) bool {
 	var block toolImageBlock
-	if err := json.Unmarshal(raw, &block); err != nil || block.Type != "input_image" {
+	if err := json.Unmarshal(raw, &block, json.MatchCaseInsensitiveNames(true)); err != nil || block.Type != "input_image" {
 		return false
 	}
 	var uri string
@@ -335,12 +335,12 @@ func migrateToolResultImages(content string, put imagePutFunc) (string, error) {
 }
 
 func migrateToolResultImageArray(content string, put imagePutFunc) (string, error) {
-	var blocks []json.RawMessage
+	var blocks []jsontext.Value
 	if err := json.Unmarshal([]byte(content), &blocks); err != nil || blocks == nil {
 		return content, nil
 	}
 
-	projected := make([]json.RawMessage, len(blocks))
+	projected := make([]jsontext.Value, len(blocks))
 	copy(projected, blocks)
 	changed := false
 
@@ -351,10 +351,10 @@ func migrateToolResultImageArray(content string, put imagePutFunc) (string, erro
 			continue
 		}
 		var block toolImageBlock
-		if err := json.Unmarshal(raw, &block); err != nil {
+		if err := json.Unmarshal(raw, &block, json.MatchCaseInsensitiveNames(true)); err != nil {
 			continue
 		}
-		var fields map[string]json.RawMessage
+		var fields map[string]jsontext.Value
 		if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
 			continue
 		}
@@ -372,15 +372,15 @@ func migrateToolResultImageArray(content string, put imagePutFunc) (string, erro
 		sha256hex := fmt.Sprintf("%x", sum[:])
 		decodedBytes := int64(len(decoded))
 
-		placeholderFields := make(map[string]json.RawMessage, len(fields)+7)
+		placeholderFields := make(map[string]jsontext.Value, len(fields)+7)
 		for key, value := range fields {
 			if !strings.EqualFold(key, "type") &&
 				!strings.EqualFold(key, "image_url") {
 				placeholderFields[key] = value
 			}
 		}
-		placeholderFields["type"] = json.RawMessage(`"agentsview_image"`)
-		placeholderFields["version"] = json.RawMessage(`1`)
+		placeholderFields["type"] = jsontext.Value(`"agentsview_image"`)
+		placeholderFields["version"] = jsontext.Value(`1`)
 		textValue, _ := json.Marshal(
 			fmt.Sprintf("![Image: %s, %d bytes](%s)", mediaType, decodedBytes, ref),
 		)
@@ -394,7 +394,7 @@ func migrateToolResultImageArray(content string, put imagePutFunc) (string, erro
 		imageRefValue, _ := json.Marshal(ref)
 		placeholderFields["image_ref"] = imageRefValue
 
-		placeholder, err := json.Marshal(placeholderFields)
+		placeholder, err := json.Marshal(placeholderFields, json.Deterministic(true))
 		if err != nil {
 			continue
 		}
@@ -420,7 +420,7 @@ func migrateToolResultSummaryImages(content string, put imagePutFunc) (string, e
 	var result strings.Builder
 	var putErr error
 	copied := 0
-	scanSummarySections(content, func(arrayStart, end int, raw json.RawMessage) {
+	scanSummarySections(content, func(arrayStart, end int, raw jsontext.Value) {
 		// The first put failure abandons the rewrite; later sections are still
 		// walked but do no work, so no further payload leaves the row.
 		if putErr != nil {

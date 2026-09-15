@@ -5,7 +5,8 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -1157,7 +1158,7 @@ func compactManifestPath(databasePath string) string {
 }
 
 func writeCompactManifest(path string, manifest compactManifest) error {
-	data, err := json.MarshalIndent(manifest, "", "  ")
+	data, err := json.Marshal(manifest, jsontext.WithIndent("  "))
 	if err != nil {
 		return err
 	}
