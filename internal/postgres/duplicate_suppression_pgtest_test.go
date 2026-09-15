@@ -38,7 +38,7 @@ func TestPGDuplicateSuppressionRequiresLiveCanonical(t *testing.T) {
 			('augure-desktop:live-copy', 'm', 'p', 'augure-desktop', 3),
 			('goose:dead', 'm', 'p', 'goose', 3),
 			('augure-desktop:dead-copy', 'm', 'p', 'augure-desktop', 3);
-		UPDATE sessions SET deleted_at = strftime('now')
+		UPDATE sessions SET deleted_at = now()
 			WHERE id = 'goose:dead';
 		INSERT INTO duplicate_group_members
 			(session_id, group_key, role, canonical_id, member_count)
@@ -69,7 +69,7 @@ func TestPGDuplicateSuppressionRequiresLiveCanonical(t *testing.T) {
 	// Live pair: the duplicate's 50 tokens are suppressed. Dead pair: the
 	// deleted canonical's 100 are invisible anyway, so suppressing its
 	// duplicate would drop 50 counted tokens; the predicate must keep them.
-	assert.Equal(t, int64(150), daily.Totals.OutputTokens,
+	assert.Equal(t, 150, daily.Totals.OutputTokens,
 		"suppression applies for the live canonical only")
 
 	counts, err := store.GetUsageSessionCounts(ctx, filter)
