@@ -91,6 +91,12 @@ func (s *stubGetService) FindSessionIDsByPartial(
 	return s.partialIDs, nil
 }
 
+func (s *stubGetService) FindSessionIDsByRawSuffix(
+	context.Context, string, int,
+) ([]string, error) {
+	panic("FindSessionIDsByRawSuffix not expected")
+}
+
 // Stubs for the remaining SessionService methods — resolveBareCodebuffID
 // and resolveCodebuffBareID do not exercise them, so they panic.
 func (s *stubGetService) List(context.Context, service.ListFilter) (*service.SessionList, error) {

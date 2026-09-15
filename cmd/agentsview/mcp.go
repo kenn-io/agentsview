@@ -241,6 +241,16 @@ func (s *mcpDaemonService) FindSessionIDsByPartial(
 	return svc.FindSessionIDsByPartial(ctx, partial, limit)
 }
 
+func (s *mcpDaemonService) FindSessionIDsByRawSuffix(
+	ctx context.Context, raw string, limit int,
+) ([]string, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.FindSessionIDsByRawSuffix(ctx, raw, limit)
+}
+
 func (s *mcpDaemonService) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {

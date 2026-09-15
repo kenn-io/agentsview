@@ -81,6 +81,196 @@ func TestSearchSessions_ReturnsHitsWithOrdinal(t *testing.T) {
 	assert.Zero(t, out.ExcludedActive)
 }
 
+func TestSearchSessions_SessionIDLookup(t *testing.T) {
+	ts, d := newTestToolset(t)
+	active := fixedNow.Add(-time.Minute).Format(time.RFC3339)
+	dbtest.SeedSession(t, d, "full_session_id", "exact-project", func(s *db.Session) {
+		s.SessionName = new("Exact session")
+		s.EndedAt = new("2024-06-14T10:00:00Z")
+	})
+	dbtest.SeedSession(t, d, "codex:colon-uuid", "colon-project", func(s *db.Session) {
+		s.EndedAt = new("2024-06-13T10:00:00Z")
+	})
+	dbtest.SeedSession(t, d, "host~host-uuid", "host-project", func(s *db.Session) {
+		s.StartedAt = &active
+	})
+	dbtest.SeedSession(t, d, "host~host-uuid-fork", "fork-project", func(s *db.Session) {
+		s.EndedAt = new("2024-06-12T10:00:00Z")
+	})
+	dbtest.SeedSession(t, d, "host~wild_%_literal", "wild-project", func(s *db.Session) {
+		s.EndedAt = new("2024-06-11T10:00:00Z")
+	})
+	dbtest.SeedSession(t, d, "host~bare_%_id", "bare-project")
+	dbtest.SeedSession(t, d, "codex:ambiguous", "ambiguous-project", func(s *db.Session) {
+		s.EndedAt = new("2024-06-10T10:00:00Z")
+	})
+	dbtest.SeedSession(t, d, "host~ambiguous", "ambiguous-project", func(s *db.Session) {
+		s.EndedAt = new("2024-06-09T10:00:00Z")
+	})
+	dbtest.SeedSession(t, d, "host~trashed", "trash-project", func(s *db.Session) {
+		s.EndedAt = new("2024-06-08T10:00:00Z")
+	})
+	require.NoError(t, d.SoftDeleteSession("host~trashed"))
+
+	tests := []struct {
+		name        string
+		input       searchSessionsIn
+		wantID      string
+		wantProject string
+		wantEnded   string
+		wantName    string
+	}{
+		{
+			name:        "exact full ID takes precedence",
+			input:       searchSessionsIn{SessionID: "full_session_id", Query: "missing", DateFrom: "bad"},
+			wantID:      "full_session_id",
+			wantProject: "exact-project",
+			wantEnded:   "2024-06-14T10:00:00Z",
+			wantName:    "Exact session",
+		},
+		{
+			name:        "agent suffix",
+			input:       searchSessionsIn{SessionID: "colon-uuid"},
+			wantID:      "codex:colon-uuid",
+			wantProject: "colon-project",
+			wantEnded:   "2024-06-13T10:00:00Z",
+		},
+		{
+			name:        "host suffix includes active session",
+			input:       searchSessionsIn{SessionID: "host-uuid"},
+			wantID:      "host~host-uuid",
+			wantProject: "host-project",
+			wantEnded:   active,
+		},
+		{
+			name:        "wildcards stay literal",
+			input:       searchSessionsIn{SessionID: "wild_%_literal"},
+			wantID:      "host~wild_%_literal",
+			wantProject: "wild-project",
+			wantEnded:   "2024-06-11T10:00:00Z",
+		},
+		{
+			name:        "timestampless session",
+			input:       searchSessionsIn{SessionID: "bare_%_id"},
+			wantID:      "host~bare_%_id",
+			wantProject: "bare-project",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, out, err := ts.searchSessions(context.Background(), nil, tc.input)
+			require.NoError(t, err)
+			require.Len(t, out.Results, 1)
+			assert.Equal(t, tc.wantID, out.Results[0].SessionID)
+			assert.Equal(t, tc.wantProject, out.Results[0].Project)
+			assert.Equal(t, tc.wantEnded, out.Results[0].EndedAt)
+			assert.Equal(t, tc.wantName, out.Results[0].Name)
+			assert.Empty(t, out.Results[0].Snippet)
+			assert.Zero(t, out.Results[0].MatchOrdinal)
+			assert.Nil(t, out.NextCursor)
+			t.Logf("head: lookup=%s project=%s ended=%s", out.Results[0].SessionID, out.Results[0].Project, out.Results[0].EndedAt)
+		})
+	}
+
+	_, _, ambiguityErr := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+		SessionID: "ambiguous",
+	})
+	require.ErrorContains(t, ambiguityErr, "ambiguous session UUID")
+
+	_, _, trashedErr := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+		SessionID: "trashed",
+	})
+	require.ErrorContains(t, trashedErr, "session not found")
+
+	_, _, missingErr := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+		SessionID: "missing",
+	})
+	require.ErrorContains(t, missingErr, "session not found")
+	t.Logf("head: ambiguity_error=%q trashed_error=%q missing_error=%q", ambiguityErr, trashedErr, missingErr)
+
+}
+
+type sessionIDRoutingService struct {
+	service.SessionService
+	details     map[string]*service.SessionDetail
+	rawIDs      map[string][]string
+	getCalls    []string
+	rawCalls    []string
+	searchCalls int
+}
+
+func (s *sessionIDRoutingService) Get(
+	_ context.Context, id string,
+) (*service.SessionDetail, error) {
+	s.getCalls = append(s.getCalls, id)
+	return s.details[id], nil
+}
+
+func (s *sessionIDRoutingService) FindSessionIDsByRawSuffix(
+	_ context.Context, raw string, _ int,
+) ([]string, error) {
+	s.rawCalls = append(s.rawCalls, raw)
+	return s.rawIDs[raw], nil
+}
+
+func (s *sessionIDRoutingService) Search(
+	context.Context, service.SearchRequest,
+) (*service.SessionSearchResult, error) {
+	s.searchCalls++
+	panic("Search must not run for session_id lookup")
+}
+
+func TestSearchSessions_SessionIDRouting(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		requested string
+		details   map[string]*service.SessionDetail
+		rawIDs    map[string][]string
+		wantGets  []string
+		wantRaw   []string
+		wantID    string
+	}{
+		{
+			name:      "exact Get",
+			requested: "exact",
+			details: map[string]*service.SessionDetail{
+				"exact": {Session: db.Session{ID: "exact", Project: "project", Agent: "codex"}},
+			},
+			wantGets: []string{"exact"},
+			wantID:   "exact",
+		},
+		{
+			name:      "raw suffix fallback",
+			requested: "uuid",
+			details: map[string]*service.SessionDetail{
+				"codex:uuid": {Session: db.Session{ID: "codex:uuid", Project: "project", Agent: "codex"}},
+			},
+			rawIDs:   map[string][]string{"uuid": {"codex:uuid"}},
+			wantGets: []string{"uuid", "codex:uuid"},
+			wantRaw:  []string{"uuid"},
+			wantID:   "codex:uuid",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &sessionIDRoutingService{
+				details: tc.details,
+				rawIDs:  tc.rawIDs,
+			}
+			ts := &toolset{svc: svc}
+			_, out, err := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+				SessionID: tc.requested,
+			})
+			require.NoError(t, err)
+			require.Len(t, out.Results, 1)
+			assert.Equal(t, tc.wantID, out.Results[0].SessionID)
+			assert.Equal(t, tc.wantGets, svc.getCalls)
+			assert.Equal(t, tc.wantRaw, svc.rawCalls)
+			assert.Zero(t, svc.searchCalls)
+			t.Logf("head: gets=%v raw_suffix=%v search_calls=%d", svc.getCalls, svc.rawCalls, svc.searchCalls)
+		})
+	}
+}
+
 func TestSearchSessions_ChineseSegmentation(t *testing.T) {
 	ts, d := newTestToolset(t)
 	if !d.HasCJKFTS() {
