@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -15,6 +16,7 @@ import (
 
 type serveRuntimeOptions struct {
 	Mode           string
+	BasePath       string
 	RequestedPort  int
 	OnCaddyStarted func(int)
 }
@@ -141,7 +143,7 @@ func startServerWithOptionalCaddy(
 	return &serveRuntime{
 		Cfg:        cfg,
 		LocalURL:   fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port),
-		PublicURL:  browserURL(cfg),
+		PublicURL:  strings.TrimRight(browserURL(cfg), "/") + strings.TrimRight(opts.BasePath, "/"),
 		ServeErrCh: serveErrCh,
 		Caddy:      caddy,
 	}, nil

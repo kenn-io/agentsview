@@ -1357,7 +1357,7 @@ func TestResolveArchiveWriteBackendCopiesNoSyncRuntime(t *testing.T) {
 	dataDir := t.TempDir()
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dataDir, host, port, "test", false, false, true,
+		dataDir, host, port, "test", "", false, false, true,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { RemoveDaemonRuntime(dataDir) })

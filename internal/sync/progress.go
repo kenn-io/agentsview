@@ -11,6 +11,7 @@ type Phase string
 
 const (
 	PhaseIdle             Phase = "idle"
+	PhaseOpeningDatabase  Phase = "opening_database"
 	PhaseDiscovering      Phase = "discovering"
 	PhasePreparingResync  Phase = "preparing_resync"
 	PhaseSyncing          Phase = "syncing"

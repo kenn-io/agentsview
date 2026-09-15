@@ -335,7 +335,7 @@ func TestResolveHealthSessionIDUsesDaemonPartialLookup(t *testing.T) {
 
 	got, err := resolveHealthSessionID(
 		context.Background(),
-		service.NewHTTPBackend(ts.URL, "", false),
+		service.NewHTTPBackend(ts.URL, "", false, ""),
 		"partial-target",
 	)
 

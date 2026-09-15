@@ -1143,7 +1143,7 @@ func configureReaderPool(reader *sql.DB) {
 // If the schema is current but the data version is stale, the database
 // is also preserved and marked for a re-sync on the next cycle.
 func Open(path string) (*DB, error) {
-	return open(context.Background(), path, true, config.ArchiveContentFull)
+	return open(context.Background(), path, true, config.ArchiveContentFull, nil)
 }
 
 // OpenWithArchiveContent opens an archive under a storage policy. The policy
@@ -1152,19 +1152,43 @@ func Open(path string) (*DB, error) {
 func OpenWithArchiveContent(
 	path string, policy config.ArchiveContent,
 ) (*DB, error) {
-	return open(context.Background(), path, true, policy)
+	return OpenWithProgress(path, policy, nil)
+}
+
+// OpenProgress describes database startup work or a required archive rebuild.
+type OpenProgress struct {
+	Detail         string
+	ResyncRequired bool
+}
+
+// OpenProgressFunc reports a database startup stage before its work begins.
+// Callbacks run synchronously and must not write to the archive.
+type OpenProgressFunc func(OpenProgress)
+
+func (progress OpenProgressFunc) report(detail string) {
+	if progress != nil {
+		progress(OpenProgress{Detail: detail})
+	}
+}
+
+// OpenWithProgress opens an archive under a storage policy and reports schema,
+// index, and migration work. A nil callback disables progress reporting.
+func OpenWithProgress(
+	path string, policy config.ArchiveContent, progress OpenProgressFunc,
+) (*DB, error) {
+	return open(context.Background(), path, true, policy, progress)
 }
 
 // OpenIsolated opens an archive without starting long-running database
 // maintenance. Short-lived, isolated workflows must close the returned DB.
 func OpenIsolated(path string) (*DB, error) {
-	return open(context.Background(), path, false, config.ArchiveContentFull)
+	return open(context.Background(), path, false, config.ArchiveContentFull, nil)
 }
 
 // OpenIsolatedContext is OpenIsolated with cooperative cancellation between
 // database initialization phases. The returned database must be closed.
 func OpenIsolatedContext(ctx context.Context, path string) (*DB, error) {
-	return open(ctx, path, false, config.ArchiveContentFull)
+	return open(ctx, path, false, config.ArchiveContentFull, nil)
 }
 
 // OpenFreshIsolatedContext initializes a current-schema archive in an empty,
@@ -1182,7 +1206,7 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	if !info.Mode().IsRegular() || info.Size() != 0 {
 		return nil, errors.New("fresh database file must be an empty regular file")
 	}
-	d, err := openAndInit(ctx, path, false, false)
+	d, err := openAndInit(ctx, path, false, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1210,6 +1234,7 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 func open(
 	ctx context.Context, path string,
 	backgroundMaintenance bool, policy config.ArchiveContent,
+	progress OpenProgressFunc,
 ) (*DB, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1225,15 +1250,21 @@ func open(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	progress.report("Opening database")
 	schemaRepairNeeded, dataStale, err := probeDatabase(path)
 	if err != nil {
 		return nil, fmt.Errorf("checking database: %w", err)
+	}
+	if (dataStale || schemaRepairNeeded) && progress != nil {
+		progress(OpenProgress{
+			Detail: "Database upgrade requires full resync", ResyncRequired: true,
+		})
 	}
 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	d, err := openAndInit(ctx, path, schemaRepairNeeded, backgroundMaintenance)
+	d, err := openAndInit(ctx, path, schemaRepairNeeded, backgroundMaintenance, progress)
 	if err != nil {
 		return nil, err
 	}
@@ -1248,9 +1279,10 @@ func open(
 	if err := ctx.Err(); err != nil {
 		return closeOnError(err)
 	}
-	if err := d.migrateColumns(ctx); err != nil {
+	if err := d.migrateColumns(ctx, progress); err != nil {
 		return closeOnError(fmt.Errorf("migrating columns: %w", err))
 	}
+	progress.report("Finalizing database setup")
 	if err := ctx.Err(); err != nil {
 		return closeOnError(err)
 	}
@@ -1619,6 +1651,7 @@ func UpgradeExportSchemaInPlace(path string, cause error) (retErr error) {
 		func(query string, args ...any) (sql.Result, error) {
 			return tx.Exec(query, args...)
 		},
+		nil,
 	); err != nil {
 		return err
 	}
@@ -2583,7 +2616,7 @@ func schemaColumnMigrations() []schemaColumnMigration {
 	}
 }
 
-func applySchemaColumnMigrations(w *writerHandle) error {
+func applySchemaColumnMigrations(w *writerHandle, progress OpenProgressFunc) error {
 	tx, err := w.BeginTx(context.Background(), nil)
 	if err != nil {
 		return fmt.Errorf("starting column migration transaction: %w", err)
@@ -2601,6 +2634,7 @@ func applySchemaColumnMigrations(w *writerHandle) error {
 			return tx.QueryRow(query, args...)
 		},
 		tx.Exec,
+		progress,
 	); err != nil {
 		return err
 	}
@@ -2614,6 +2648,7 @@ func applyColumnMigrations(
 	migrations []schemaColumnMigration,
 	queryRow func(string, ...any) rowScanner,
 	exec func(string, ...any) (sql.Result, error),
+	progress OpenProgressFunc,
 ) error {
 	for _, m := range migrations {
 		var tableCount int
@@ -2641,6 +2676,7 @@ func applyColumnMigrations(
 			)
 		}
 		if count == 0 {
+			progress.report(fmt.Sprintf("Adding column %s.%s", m.table, m.column))
 			if _, err := exec(m.ddl); err != nil {
 				return fmt.Errorf(
 					"adding %s.%s: %w",
@@ -2659,7 +2695,7 @@ func applyColumnMigrations(
 // repairLegacySchemaBeforeInit adds legacy columns before schema initialization.
 // The stale data marker is committed in the same transaction so a restart
 // cannot skip the required full resync.
-func repairLegacySchemaBeforeInit(ctx context.Context, w *writerHandle) error {
+func repairLegacySchemaBeforeInit(ctx context.Context, w *writerHandle, progress OpenProgressFunc) error {
 	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("starting schema repair transaction: %w", err)
@@ -2674,6 +2710,7 @@ func repairLegacySchemaBeforeInit(ctx context.Context, w *writerHandle) error {
 		func(query string, args ...any) (sql.Result, error) {
 			return tx.ExecContext(ctx, query, args...)
 		},
+		progress,
 	); err != nil {
 		return err
 	}
@@ -2845,13 +2882,14 @@ END;
 // migrateColumns adds columns introduced by this branch to databases created
 // by older releases, then runs the data repairs required by a normal writable
 // startup. Schema-only callers use applySchemaColumnMigrations directly.
-func (db *DB) migrateColumns(ctx context.Context) error {
+func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	progress.report("Migrating database columns")
 	if err := migrateMoneyColumnsLocked(w); err != nil {
 		return err
 	}
@@ -2867,7 +2905,7 @@ func (db *DB) migrateColumns(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := applySchemaColumnMigrations(w); err != nil {
+	if err := applySchemaColumnMigrations(w, progress); err != nil {
 		return err
 	}
 	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerCreatesSQL); err != nil {
@@ -2876,6 +2914,7 @@ func (db *DB) migrateColumns(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	progress.report("Updating database indexes and triggers")
 	if err := installSyncMarkerSchemaLocked(ctx, w); err != nil {
 		return err
 	}
@@ -2888,6 +2927,7 @@ func (db *DB) migrateColumns(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	progress.report("Backfilling database metadata")
 	if err := db.backfillIsAutomatedLocked(w); err != nil {
 		return err
 	}
@@ -4293,6 +4333,7 @@ func openAndInit(
 	ctx context.Context,
 	path string,
 	schemaRepairNeeded, backgroundMaintenance bool,
+	progress OpenProgressFunc,
 ) (*DB, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -4328,12 +4369,13 @@ func openAndInit(
 		)
 	}
 	if schemaRepairNeeded {
+		progress.report("Repairing database schema")
 		if err := ctx.Err(); err != nil {
 			_ = db.CloseContext(ctx)
 			return nil, err
 		}
 		db.mu.Lock()
-		err = repairLegacySchemaBeforeInit(ctx, db.getWriter())
+		err = repairLegacySchemaBeforeInit(ctx, db.getWriter(), progress)
 		db.mu.Unlock()
 		if err != nil {
 			_ = db.CloseContext(ctx)
@@ -4347,7 +4389,7 @@ func openAndInit(
 		_ = db.CloseContext(ctx)
 		return nil, err
 	}
-	if err := db.init(ctx); err != nil {
+	if err := db.init(ctx, progress); err != nil {
 		_ = db.CloseContext(ctx)
 		return nil, fmt.Errorf("initializing schema: %w", err)
 	}
@@ -4658,10 +4700,11 @@ func (db *DB) setDataVersion(ctx context.Context) error {
 	return nil
 }
 
-func (db *DB) init(ctx context.Context) error {
+func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
+	progress.report("Updating database schema and indexes")
 	if err := execSchemaScriptLocked(ctx, w); err != nil {
 		return err
 	}
@@ -4683,6 +4726,7 @@ func (db *DB) init(ctx context.Context) error {
 		}
 	}
 
+	progress.report("Initializing full-text search")
 	// Check if FTS table exists before trying to create it
 	var ftsCount int
 	if err := w.QueryRowContext(ctx,

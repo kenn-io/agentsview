@@ -126,7 +126,7 @@ func TestHTTPBackend_Search_SendsParams(t *testing.T) {
 			_, _ = w.Write([]byte(`{"results":[],"next":0}`))
 		}))
 	t.Cleanup(srv.Close)
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := service.NewHTTPBackend(srv.URL, "", false, "")
 
 	_, err := svc.Search(context.Background(), service.SearchRequest{
 		Query: "needle", Project: "proj", Sort: "recency", Cursor: 7, Limit: 5,
@@ -148,7 +148,7 @@ func TestHTTPBackend_Search_Unavailable(t *testing.T) {
 			w.WriteHeader(http.StatusNotImplemented)
 		}))
 	t.Cleanup(srv.Close)
-	svc := service.NewHTTPBackend(srv.URL, "", true)
+	svc := service.NewHTTPBackend(srv.URL, "", true, "")
 
 	_, err := svc.Search(context.Background(), service.SearchRequest{Query: "fox"})
 	require.Error(t, err)
@@ -182,7 +182,7 @@ func TestHTTPBackend_SearchContent_SemanticUnavailable(t *testing.T) {
 			w.WriteHeader(http.StatusNotImplemented)
 		}))
 	t.Cleanup(srv.Close)
-	svc := service.NewHTTPBackend(srv.URL, "", true)
+	svc := service.NewHTTPBackend(srv.URL, "", true, "")
 
 	_, err := svc.SearchContent(context.Background(), service.ContentSearchRequest{
 		Pattern: "fox", Mode: "semantic",

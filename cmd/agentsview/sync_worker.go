@@ -162,11 +162,19 @@ func runSyncWorkerStartup(
 	emit func(workerLine),
 	onProgress func(sync.Progress),
 ) error {
-	database, writeLock, err := openWorkerWriteDB(cfg)
+	reportOpening := func(p db.OpenProgress) {
+		onProgress(sync.Progress{Phase: sync.PhaseOpeningDatabase, Detail: p.Detail, Resync: p.ResyncRequired})
+	}
+	reportOpening(db.OpenProgress{Detail: "Waiting for database write lock"})
+	database, writeLock, err := openWorkerWriteDB(cfg, reportOpening)
 	if err != nil {
 		return err
 	}
 	defer closeWriteDB(database, writeLock)
+	onProgress(sync.Progress{
+		Phase: sync.PhaseDiscovering, Detail: "Preparing session sync",
+		Resync: mode == "startup" && database.NeedsResync(),
+	})
 
 	// Remove stale temp DB from a prior crashed resync before ResyncAll
 	// stages a fresh one, matching runServe's startup cleanup.
@@ -371,8 +379,10 @@ func workerResultFromStats(
 // must tear down through closeWriteDB so a failed database close (undrained
 // connections) retains the write-owner flock instead of letting another
 // process acquire writer ownership alongside a surviving SQLite connection.
-func openWorkerWriteDB(cfg config.Config) (*db.DB, *writeOwnerLock, error) {
-	return openWriteDB(context.Background(), cfg)
+func openWorkerWriteDB(cfg config.Config, progress db.OpenProgressFunc) (*db.DB, *writeOwnerLock, error) {
+	return openWriteDBWith(context.Background(), cfg, func(cfg config.Config) (*db.DB, error) {
+		return openDBWithProgress(cfg, progress)
+	})
 }
 
 // workerEngineConfig mirrors the sync.EngineConfig literal in runServe minus the

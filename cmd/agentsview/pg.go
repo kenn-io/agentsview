@@ -581,6 +581,7 @@ func preparePGServeImpl(appCfg config.Config, basePath string) (pgServeStartup, 
 
 	rtOpts := serveRuntimeOptions{
 		Mode:          "pg-serve",
+		BasePath:      basePath,
 		RequestedPort: appCfg.Port,
 	}
 	appCfg, err = prepareServeRuntimeConfig(appCfg, rtOpts)
@@ -612,7 +613,7 @@ func preparePGServeImpl(appCfg config.Config, basePath string) (pgServeStartup, 
 		opts = append(opts, rawSyncOption)
 	}
 	if basePath != "" {
-		opts = append(opts, server.WithBasePath(basePath))
+		opts = append(opts, server.WithBasePath(rtOpts.BasePath))
 	}
 	return pgServeStartup{
 		cfg: appCfg, ctx: ctx, rtOpts: rtOpts,
@@ -683,7 +684,7 @@ func runPGServe(appCfg config.Config, basePath string) {
 
 func writePGServeRuntimeRecord(rt *serveRuntime) bool {
 	if _, sfErr := writeDaemonRuntimeWithAuth(
-		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, true,
+		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, rt.PublicURL, true,
 		rt.Cfg.RequireAuth,
 		rt.Caddy.Pid(),
 	); sfErr != nil {

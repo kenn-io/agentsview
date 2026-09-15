@@ -314,18 +314,18 @@ func TestRunServeRuntimeWarningHelperProcess(t *testing.T) {
 	}
 	if os.Getenv("AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_FAIL") == "true" {
 		writeDaemonRuntimeWithAuthAndNoSync = func(
-			string, string, int, string, bool, bool, bool, ...int,
+			string, string, int, string, string, bool, bool, bool, ...int,
 		) (string, error) {
 			return "", errors.New("forced runtime-record write failure")
 		}
 	} else {
 		original := writeDaemonRuntimeWithAuthAndNoSync
 		writeDaemonRuntimeWithAuthAndNoSync = func(
-			dataDir, host string, port int, version string, readOnly,
+			dataDir, host string, port int, version, browserURL string, readOnly,
 			requireAuth, noSync bool, caddyPID ...int,
 		) (string, error) {
 			path, err := original(
-				dataDir, host, port, version, readOnly, requireAuth, noSync,
+				dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync,
 				caddyPID...,
 			)
 			fmt.Println("runtime record write reached")
@@ -399,7 +399,7 @@ func TestRunPGRuntimeWarningHelperProcess(t *testing.T) {
 		return
 	}
 	writeDaemonRuntimeWithAuth = func(
-		string, string, int, string, bool, bool, ...int,
+		string, string, int, string, string, bool, bool, ...int,
 	) (string, error) {
 		return "", errors.New("forced runtime-record write failure")
 	}
@@ -441,7 +441,7 @@ func TestRunDuckDBRuntimeWarningHelperProcess(t *testing.T) {
 		return
 	}
 	writeDaemonRuntimeWithAuth = func(
-		string, string, int, string, bool, bool, ...int,
+		string, string, int, string, string, bool, bool, ...int,
 	) (string, error) {
 		return "", errors.New("forced runtime-record write failure")
 	}
@@ -517,8 +517,10 @@ func TestMustLoadConfig(t *testing.T) {
 
 func TestPrepareServeRuntimeConfigPortZeroUsesAssignedPort(t *testing.T) {
 	cfg := config.Config{
-		Host: "127.0.0.1",
-		Port: 0,
+		DataDir:   t.TempDir(),
+		Host:      "127.0.0.1",
+		Port:      0,
+		PublicURL: "http://viewer.example:0",
 	}
 
 	var err error
@@ -537,6 +539,15 @@ func TestPrepareServeRuntimeConfigPortZeroUsesAssignedPort(t *testing.T) {
 		"unexpected literal port 0 fallback message")
 	assert.Contains(t, out, "Using available port",
 		"missing ephemeral port message")
+	wantURL := fmt.Sprintf("http://viewer.example:%d", cfg.Port)
+	assert.Equal(t, wantURL, cfg.PublicURL)
+	require.True(t, writePGServeRuntimeRecord(&serveRuntime{
+		Cfg: cfg, PublicURL: browserURL(cfg),
+	}))
+	recordPath, err := runtimeStore(cfg.DataDir).Path(os.Getpid())
+	require.NoError(t, err)
+	rt := daemonRuntimeFromRecord(readRuntimeRecord(t, recordPath))
+	assert.Equal(t, wantURL, rt.BrowserURL)
 }
 
 func TestSetupLogFile(t *testing.T) {

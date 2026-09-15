@@ -3,6 +3,9 @@ package mcp
 import (
 	"context"
 	"encoding/json/v2"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -240,7 +243,7 @@ func TestSearchSessions_SessionIDRouting(t *testing.T) {
 			name:      "exact Get",
 			requested: "exact",
 			details: map[string]*service.SessionDetail{
-				"exact": {Session: db.Session{ID: "exact", Project: "project", Agent: "codex"}},
+				"exact": {Session: db.Session{ID: "exact", Project: "project", Agent: "codex", WebURL: "https://example.test/sessions/exact"}},
 			},
 			wantGets: []string{"exact"},
 			wantID:   "exact",
@@ -249,7 +252,7 @@ func TestSearchSessions_SessionIDRouting(t *testing.T) {
 			name:      "raw suffix fallback",
 			requested: "uuid",
 			details: map[string]*service.SessionDetail{
-				"codex:uuid": {Session: db.Session{ID: "codex:uuid", Project: "project", Agent: "codex"}},
+				"codex:uuid": {Session: db.Session{ID: "codex:uuid", Project: "project", Agent: "codex", WebURL: "https://example.test/sessions/codex/uuid"}},
 			},
 			rawIDs:   map[string][]string{"uuid": {"codex:uuid"}},
 			wantGets: []string{"uuid", "codex:uuid"},
@@ -269,10 +272,11 @@ func TestSearchSessions_SessionIDRouting(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, out.Results, 1)
 			assert.Equal(t, tc.wantID, out.Results[0].SessionID)
+			assert.Equal(t, tc.details[tc.wantID].WebURL, out.Results[0].WebURL)
 			assert.Equal(t, tc.wantGets, svc.getCalls)
 			assert.Equal(t, tc.wantRaw, svc.rawCalls)
 			assert.Zero(t, svc.searchCalls)
-			t.Logf("head: gets=%v raw_suffix=%v search_calls=%d", svc.getCalls, svc.rawCalls, svc.searchCalls)
+			t.Logf("head: gets=%v raw_suffix=%v search_calls=%d web_url=%s", svc.getCalls, svc.rawCalls, svc.searchCalls, out.Results[0].WebURL)
 		})
 	}
 }
@@ -1637,4 +1641,17 @@ func TestSearchSessions_RejectsInvalidDateRange(t *testing.T) {
 			assert.Contains(t, inputErr.Error(), tc.message)
 		})
 	}
+}
+
+func TestListSessionsIncludesBrowserLink(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/sessions", r.URL.Path)
+		fmt.Fprint(w, `{"sessions":[{"id":"codex:session-42"}]}`)
+	}))
+	defer server.Close()
+	tools := &toolset{svc: service.NewHTTPBackend(server.URL, "", false, "")}
+	_, out, err := tools.listSessions(t.Context(), nil, listSessionsIn{})
+	require.NoError(t, err)
+	require.Len(t, out.Sessions, 1)
+	assert.Equal(t, server.URL+"/sessions/codex/session-42", out.Sessions[0].WebURL)
 }

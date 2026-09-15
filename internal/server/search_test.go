@@ -99,7 +99,7 @@ func TestSearchDateRangeHTTPTransport(t *testing.T) {
 	srv.routes()
 	httpServer := httptest.NewServer(srv.mux)
 	t.Cleanup(httpServer.Close)
-	client := service.NewHTTPBackend(httpServer.URL, "", true)
+	client := service.NewHTTPBackend(httpServer.URL, "", true, "")
 	_, err := client.Search(context.Background(), service.SearchRequest{
 		Query: "hello", DateFrom: "2024-06-01", DateTo: "2024-06-02",
 	})

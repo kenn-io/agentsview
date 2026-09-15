@@ -116,6 +116,12 @@ is ready. Canceling that wait with `Ctrl+C` leaves the child running. Use
 slow. If startup state remains stuck, follow the error's guidance to verify the
 owning process before terminating it manually and retrying.
 
+Startup reports database opening, schema and index updates, and column
+migrations before that work begins. These steps appear in the terminal and
+`serve.log`, which also records their elapsed times. An upgrade that requires a
+full resync is announced as soon as the database version or schema check detects
+it. Session counters begin after database preparation finishes.
+
 ______________________________________________________________________
 
 ### `agentsview serve`

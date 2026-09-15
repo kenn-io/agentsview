@@ -64,6 +64,8 @@ type ContentSearchFilter struct {
 // span overlapping the window masked (including secrets that extend past the
 // window). The CLI sanitizes it for terminal display.
 type ContentMatch struct {
+	// WebURL is a client-derived browser link, never persisted.
+	WebURL    string `json:"web_url,omitempty"`
 	SessionID string `json:"session_id"`
 	Project   string `json:"project"`
 	Agent     string `json:"agent"`

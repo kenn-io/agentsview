@@ -66,4 +66,5 @@ export interface ServiceSessionDetail {
   transcript_fidelity?: string;
   transcript_revision?: string;
   user_message_count: number;
+  web_url?: string;
 }

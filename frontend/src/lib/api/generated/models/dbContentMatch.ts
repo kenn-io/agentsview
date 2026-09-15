@@ -25,4 +25,5 @@ export interface DbContentMatch {
   subordinate?: boolean;
   timestamp: string;
   tool_name?: string;
+  web_url?: string;
 }
