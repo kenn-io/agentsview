@@ -382,6 +382,7 @@ func (e *Engine) SyncWatchBatchThenRun(
 		e.syncMu.Unlock()
 		if changed {
 			e.emit("sessions")
+			e.scheduleDuplicateGroupRebuild()
 		}
 	}()
 	e.reportProgress(nil, Progress{

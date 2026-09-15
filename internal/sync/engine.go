@@ -1873,6 +1873,7 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) error {
 	}()
 	if stats.hasSessionChanges() || tombstoned > 0 {
 		e.emit("sessions")
+		e.scheduleDuplicateGroupRebuild()
 	}
 	return err
 }
@@ -4749,7 +4750,10 @@ func (e *Engine) RebuildDuplicateGroups(
 // scheduleDuplicateGroupRebuild queues one background duplicate-group
 // membership rebuild after a sync pass changed sessions. Concurrent callers
 // coalesce: a running rebuild leaves a pending marker and re-runs itself so
-// a change missed by the in-flight pass is not lost.
+// a change missed by the in-flight pass is not lost. When a rebuild actually
+// changes membership it emits "sessions" so UI and mirror consumers see the
+// refreshed indicators; emission happens outside syncMu (the goroutine never
+// takes it) so Emitter implementations cannot widen a sync critical section.
 func (e *Engine) scheduleDuplicateGroupRebuild() {
 	e.duplicateRebuildMu.Lock()
 	if e.duplicateRebuildRunning {
@@ -4761,9 +4765,11 @@ func (e *Engine) scheduleDuplicateGroupRebuild() {
 	e.duplicateRebuildMu.Unlock()
 	go func() {
 		for {
-			_, err := e.db.RebuildDuplicateGroups(context.Background())
+			result, err := e.db.RebuildDuplicateGroups(context.Background())
 			if err != nil {
 				log.Printf("warning: duplicate group rebuild: %v", err)
+			} else if result.NotifiedIDs > 0 {
+				e.emit("sessions")
 			}
 			e.duplicateRebuildMu.Lock()
 			if !e.duplicateRebuildPending {
@@ -5039,6 +5045,7 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 	}()
 	if changed {
 		e.emit("sessions")
+		e.scheduleDuplicateGroupRebuild()
 	}
 	return errors.Join(errs...)
 }
@@ -7633,6 +7640,7 @@ func (e *Engine) SyncAllSince(
 	defer func() {
 		if stats.hasSessionChanges() {
 			e.emit("sessions")
+			e.scheduleDuplicateGroupRebuild()
 		}
 	}()
 	defer e.syncMu.Unlock()
@@ -7657,6 +7665,7 @@ func (e *Engine) SyncRootsSince(
 	defer func() {
 		if stats.hasSessionChanges() {
 			e.emit("sessions")
+			e.scheduleDuplicateGroupRebuild()
 		}
 	}()
 	defer e.syncMu.Unlock()
@@ -18496,6 +18505,24 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 	tWrite := time.Now()
 	result, err := e.db.WriteSessionBatchContext(ctx, writes)
 	e.phaseStats.WriteNanos.Add(int64(time.Since(tWrite)))
+	if err == nil && len(result.WrittenIndexes) > 0 {
+		// The batch path bypasses writeIncremental, so remap rules must be
+		// applied here too or fully parsed sessions keep their parser agent
+		// until a manual apply. Runs after the batch commit; written IDs only.
+		writtenIDs := make([]string, 0, len(result.WrittenIndexes))
+		for _, writtenIndex := range result.WrittenIndexes {
+			if writtenIndex >= 0 && writtenIndex < len(writes) {
+				writtenIDs = append(writtenIDs, writes[writtenIndex].Session.ID)
+			}
+		}
+		if len(writtenIDs) > 0 {
+			if _, remapErr := e.db.ApplyAgentRemapRulesToSessions(
+				ctx, writtenIDs,
+			); remapErr != nil {
+				log.Printf("apply agent remap rules to batch: %v", remapErr)
+			}
+		}
+	}
 	e.phaseStats.Batches.Add(1)
 	e.phaseStats.WriteBatchSize.Add(int64(len(writes)))
 	e.phaseStats.BatchedWrites.Add(int64(result.WrittenSessions))

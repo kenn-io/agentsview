@@ -546,7 +546,12 @@ func (s *Store) ListTrashedSessions(
 		return nil, fmt.Errorf("querying trashed sessions: %w", err)
 	}
 	defer rows.Close()
-	return scanPGSessionRows(rows)
+	sessions, err := scanPGSessionRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	s.decorateSessionsWithDuplicateRoles(ctx, sessions)
+	return sessions, nil
 }
 
 // EmptyTrash permanently deletes every trashed session.
