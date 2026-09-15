@@ -10,8 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func agentRemapTimePtr(s string) *string { return &s }
-
 func TestAgentRemapTargetEvaluator(t *testing.T) {
 	sess := Session{ID: "goose:abc", Agent: "goose"}
 	// First-match-by-ID wins; wildcard beats nothing when a specific rule
@@ -87,7 +85,7 @@ func TestAgentRemapGlobSQLAgreement(t *testing.T) {
 	ctx := context.Background()
 	insertSession(t, d, "goose:1", "p", func(s *Session) {
 		s.Agent = "goose"
-		s.StartedAt = agentRemapTimePtr("2026-09-01T00:00:00Z")
+		s.StartedAt = new("2026-09-01T00:00:00Z")
 	})
 	insertMessages(t, d,
 		userMsg("goose:1", 0, "hi"),
@@ -174,7 +172,7 @@ func TestAgentRemapPreviewAndApply(t *testing.T) {
 	require.NoError(t, d.UpsertSession(Session{
 		ID: "goose:dup", Project: "p", Machine: defaultMachine,
 		Agent: "goose", MessageCount: 5,
-		StartedAt: agentRemapTimePtr("2026-09-01T00:00:00Z"),
+		StartedAt: new("2026-09-01T00:00:00Z"),
 	}))
 	insertMessages(t, d,
 		userMsg("goose:dup", 0, "hi"),
@@ -184,7 +182,7 @@ func TestAgentRemapPreviewAndApply(t *testing.T) {
 	require.NoError(t, d.UpsertSession(Session{
 		ID: "goose:plain", Project: "p", Machine: defaultMachine,
 		Agent: "goose", MessageCount: 1,
-		StartedAt: agentRemapTimePtr("2026-09-02T00:00:00Z"),
+		StartedAt: new("2026-09-02T00:00:00Z"),
 	}))
 
 	_, err := d.CreateAgentRemapRule(ctx, AgentRemapRule{

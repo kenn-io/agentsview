@@ -196,7 +196,7 @@
   .review-groups {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: var(--space-3, 12px);
     margin-top: 8px;
   }
 

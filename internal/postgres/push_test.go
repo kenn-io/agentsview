@@ -969,6 +969,8 @@ type pushSessionProbeState struct {
 	existingExcluded    map[string]bool
 	upsertQuery         string
 	upsertArgs          []driver.NamedValue
+	duplicateUpserts    int
+	duplicateDeletes    int
 }
 
 var (
@@ -1073,6 +1075,12 @@ func (c *pushSessionProbeConn) ExecContext(
 				c.state.excludedIDs[ids] = true
 			}
 		}
+		return driver.RowsAffected(1), nil
+	case strings.Contains(normalized, "insert into duplicate_group_members"):
+		c.state.duplicateUpserts++
+		return driver.RowsAffected(1), nil
+	case strings.Contains(normalized, "delete from duplicate_group_members"):
+		c.state.duplicateDeletes++
 		return driver.RowsAffected(1), nil
 	default:
 		return nil, errors.New("unexpected push-session probe exec")

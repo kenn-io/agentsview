@@ -161,7 +161,7 @@ func (db *DB) RebuildDuplicateGroups(
 
 	result := DuplicateGroupsResult{GroupSizes: []int{}}
 	changed := map[string]bool{}
-	newMemberIDs := map[string]bool{}
+	newMembers := map[string]DuplicateGroupMember{}
 	for key, members := range groups {
 		_ = key
 		if len(members) < 2 {
@@ -196,7 +196,13 @@ func (db *DB) RebuildDuplicateGroups(
 					"inserting duplicate group member %s: %w", m.id, err,
 				)
 			}
-			newMemberIDs[m.id] = true
+			newMembers[m.id] = DuplicateGroupMember{
+				SessionID:   m.id,
+				GroupKey:    key,
+				Role:        role,
+				CanonicalID: canonicalID,
+				MemberCount: count,
+			}
 			prev, existed := prevMembers[m.id]
 			if !existed || prev.Role != role ||
 				prev.CanonicalID != canonicalID || prev.MemberCount != count {
@@ -206,7 +212,7 @@ func (db *DB) RebuildDuplicateGroups(
 	}
 	// Sessions that left membership entirely also changed.
 	for id := range prevMembers {
-		if !newMemberIDs[id] {
+		if _, stillMember := newMembers[id]; !stillMember {
 			changed[id] = true
 		}
 	}
@@ -230,6 +236,11 @@ func (db *DB) RebuildDuplicateGroups(
 			"committing duplicate group rebuild: %w", err,
 		)
 	}
+
+	// Publish the new membership snapshot before signalling the change so
+	// read-path decoration never serves a snapshot older than the
+	// committed rows it mirrors.
+	db.storeDuplicateMembersSnapshot(newMembers)
 
 	if len(changed) > 0 {
 		ids := make([]string, 0, len(changed))
@@ -280,52 +291,69 @@ func loadDuplicateMembersTx(
 	return out, rows.Err()
 }
 
+// storeDuplicateMembersSnapshot atomically publishes the rebuilt
+// membership map to the read-path cache.
+func (db *DB) storeDuplicateMembersSnapshot(
+	members map[string]DuplicateGroupMember,
+) {
+	db.duplicateMembers.Store(&members)
+}
+
+// duplicateMembersSnapshot returns the cached membership map, repopulating
+// it from the database on first use (or after a compact/reopen swap cleared
+// it). Callers treat the returned map as read-only.
+func (db *DB) duplicateMembersSnapshot() map[string]DuplicateGroupMember {
+	if cached := db.duplicateMembers.Load(); cached != nil {
+		return *cached
+	}
+	db.duplicateMembersMu.Lock()
+	defer db.duplicateMembersMu.Unlock()
+	if cached := db.duplicateMembers.Load(); cached != nil {
+		return *cached
+	}
+	rows, err := db.getReader().QueryContext(context.Background(), `
+		SELECT session_id, group_key, role, canonical_id, member_count
+		FROM duplicate_group_members`)
+	if err != nil {
+		log.Printf("warning: duplicate membership load failed: %v", err)
+		return map[string]DuplicateGroupMember{}
+	}
+	defer rows.Close()
+	members := make(map[string]DuplicateGroupMember)
+	for rows.Next() {
+		var m DuplicateGroupMember
+		if err := rows.Scan(
+			&m.SessionID, &m.GroupKey, &m.Role, &m.CanonicalID,
+			&m.MemberCount,
+		); err != nil {
+			log.Printf("warning: duplicate membership scan failed: %v", err)
+			return map[string]DuplicateGroupMember{}
+		}
+		members[m.SessionID] = m
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("warning: duplicate membership iteration failed: %v", err)
+		return map[string]DuplicateGroupMember{}
+	}
+	db.duplicateMembers.Store(&members)
+	return members
+}
+
 // decorateSessionsWithDuplicateRoles fills the duplicate-group indicator
-// fields on the given sessions in one lookup. Sessions without membership
+// fields from the cached membership snapshot. Sessions without membership
 // are left at zero values, which the JSON transport omits.
 func (db *DB) decorateSessionsWithDuplicateRoles(sessions []Session) {
 	if len(sessions) == 0 {
 		return
 	}
-	ctx := context.Background()
-	placeholders := strings.Repeat("?,", len(sessions))
-	placeholders = placeholders[:len(placeholders)-1]
-	args := make([]any, len(sessions))
-	byID := make(map[string][]*Session, len(sessions))
+	members := db.duplicateMembersSnapshot()
 	for i := range sessions {
-		args[i] = sessions[i].ID
-		byID[sessions[i].ID] = append(byID[sessions[i].ID], &sessions[i])
-	}
-	query := `
-		SELECT session_id, group_key, role, canonical_id, member_count
-		FROM duplicate_group_members
-		WHERE session_id IN (` + placeholders + `)`
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
-	if err != nil {
-		log.Printf("warning: duplicate indicator lookup failed: %v", err)
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var (
-			sessionID string
-			m         DuplicateGroupMember
-		)
-		if err := rows.Scan(
-			&sessionID, &m.GroupKey, &m.Role, &m.CanonicalID, &m.MemberCount,
-		); err != nil {
-			log.Printf("warning: duplicate indicator scan failed: %v", err)
-			return
+		if m, ok := members[sessions[i].ID]; ok {
+			sessions[i].DuplicateRole = m.Role
+			sessions[i].DuplicateCanonicalID = m.CanonicalID
+			sessions[i].DuplicateMemberCount = m.MemberCount
+			sessions[i].DuplicateGroupKey = m.GroupKey
 		}
-		for _, s := range byID[sessionID] {
-			s.DuplicateRole = m.Role
-			s.DuplicateCanonicalID = m.CanonicalID
-			s.DuplicateMemberCount = m.MemberCount
-			s.DuplicateGroupKey = m.GroupKey
-		}
-	}
-	if err := rows.Err(); err != nil {
-		log.Printf("warning: duplicate indicator iteration failed: %v", err)
 	}
 }
 
@@ -338,42 +366,12 @@ func (db *DB) decorateSidebarIndexWithDuplicateRoles(
 	if len(rows) == 0 {
 		return
 	}
-	ctx := context.Background()
-	placeholders := strings.Repeat("?,", len(rows))
-	placeholders = placeholders[:len(placeholders)-1]
-	args := make([]any, len(rows))
-	byID := make(map[string][]*SidebarSessionIndexRow, len(rows))
+	members := db.duplicateMembersSnapshot()
 	for i := range rows {
-		args[i] = rows[i].ID
-		byID[rows[i].ID] = append(byID[rows[i].ID], &rows[i])
-	}
-	query := `
-		SELECT session_id, role, member_count
-		FROM duplicate_group_members
-		WHERE session_id IN (` + placeholders + `)`
-	dbRows, err := db.getReader().QueryContext(ctx, query, args...)
-	if err != nil {
-		log.Printf("warning: sidebar duplicate lookup failed: %v", err)
-		return
-	}
-	defer dbRows.Close()
-	for dbRows.Next() {
-		var (
-			sessionID string
-			role      string
-			count     int
-		)
-		if err := dbRows.Scan(&sessionID, &role, &count); err != nil {
-			log.Printf("warning: sidebar duplicate scan failed: %v", err)
-			return
+		if m, ok := members[rows[i].ID]; ok {
+			rows[i].DuplicateRole = m.Role
+			rows[i].DuplicateMemberCount = m.MemberCount
 		}
-		for _, row := range byID[sessionID] {
-			row.DuplicateRole = role
-			row.DuplicateMemberCount = count
-		}
-	}
-	if err := dbRows.Err(); err != nil {
-		log.Printf("warning: sidebar duplicate iteration failed: %v", err)
 	}
 }
 
@@ -440,47 +438,6 @@ func (db *DB) ListDuplicateGroups(
 		out = append(out, *byGroup[group])
 	}
 	return out, nil
-}
-
-// duplicateSuppressionForSession reports whether the session's usage facts
-// should lose token eligibility: only when the session is a duplicate member
-// AND its canonical carries at least one token-bearing usage event. When the
-// canonical has no usage (the migration-shape case), the duplicate's usage
-// stays counted so nothing is lost.
-func (db *DB) duplicateSuppressionForSession(
-	ctx context.Context, sessionID string,
-) (bool, error) {
-	var (
-		role        string
-		canonicalID string
-	)
-	err := db.getReader().QueryRowContext(ctx, `
-		SELECT role, canonical_id FROM duplicate_group_members
-		WHERE session_id = ?`, sessionID,
-	).Scan(&role, &canonicalID)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf(
-			"reading duplicate membership for %s: %w", sessionID, err,
-		)
-	}
-	if role != DuplicateRoleDuplicate || canonicalID == "" {
-		return false, nil
-	}
-	var hasUsage bool
-	err = db.getReader().QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM usage_events
-			WHERE session_id = ? AND model <> '')`, canonicalID,
-	).Scan(&hasUsage)
-	if err != nil {
-		return false, fmt.Errorf(
-			"reading canonical usage presence for %s: %w", canonicalID, err,
-		)
-	}
-	return hasUsage, nil
 }
 
 // notifyUsageSessionsWithDuplicates extends a mutation notification with the
