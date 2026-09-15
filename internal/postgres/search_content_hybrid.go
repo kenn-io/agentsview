@@ -50,9 +50,7 @@ func (postgresFullTextCapability) SearchHybridContent(
 	if len(terms) == 0 {
 		return nil, nil
 	}
-	scopeWhere, scopeArgs := db.BuildSessionBaseFilterSQL(
-		semanticPGSessionFilter(f), db.PortableBunSessionQueryDialect(),
-	)
+	scopeWhere, scopeArgs := db.BunSessionBaseFilter(semanticPGSessionFilter(f))
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	predicates := make([]string, len(terms))

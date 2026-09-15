@@ -2,19 +2,20 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 	"go.kenn.io/agentsview/internal/db"
 )
 
 func replacePGSessionAliases(
-	ctx context.Context, tx *sql.Tx, sess db.Session,
+	ctx context.Context, tx bun.IConn, sess db.Session,
 ) error {
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM session_aliases WHERE session_id = $1`,
+		`DELETE FROM session_aliases WHERE session_id = ?0`,
 		sess.ID,
 	); err != nil {
 		return fmt.Errorf("deleting pg session aliases for %s: %w", sess.ID, err)
@@ -22,7 +23,7 @@ func replacePGSessionAliases(
 	for _, aliasID := range pgSessionAliasIDs(sess) {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO session_aliases (session_id, alias_id)
-			 VALUES ($1, $2)
+			 VALUES (?0, ?1)
 			 ON CONFLICT (session_id, alias_id) DO NOTHING`,
 			sess.ID, aliasID,
 		); err != nil {
@@ -70,7 +71,7 @@ func pgVibeFallbackAliasID(id, agent, filePath string) string {
 }
 
 func insertPGExcludedSessionIDs(
-	ctx context.Context, execer pgSessionExecer, ids []string,
+	ctx context.Context, execer bun.IDB, ids []string,
 ) error {
 	ids = uniqueNonEmptyStrings(ids)
 	if len(ids) == 0 {
@@ -78,9 +79,9 @@ func insertPGExcludedSessionIDs(
 	}
 	if _, err := execer.ExecContext(ctx,
 		`INSERT INTO excluded_sessions (id)
-		 SELECT unnest($1::text[])
+		 SELECT unnest(?0::text[])
 		 ON CONFLICT (id) DO NOTHING`,
-		ids,
+		pgdialect.Array(ids),
 	); err != nil {
 		return fmt.Errorf("recording pg excluded session ids: %w", err)
 	}

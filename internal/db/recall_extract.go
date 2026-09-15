@@ -1328,7 +1328,7 @@ func extractCandidateSQL(q ExtractCandidateQuery) (string, []any, error) {
 	}
 	sb.WriteString(`
 		)
-		ORDER BY ended_at ASC, id ASC
+		ORDER BY julianday(ended_at) ASC, id ASC
 		LIMIT ?`)
 	args = append(args, limit)
 	return sb.String(), args, nil

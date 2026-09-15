@@ -7,7 +7,7 @@ import (
 )
 
 // ListStarredSessionIDsForScope returns starred session IDs restricted to
-// the given project scope (see BuildSessionFilterSQL's project/exclude
+// the given project scope (see the canonical Bun session filter's project/exclude
 // semantics), sorted for deterministic output. Cost is bounded by the
 // number of starred rows (one join lookup each), not archive size: callers
 // needing a scope-filtered curation fingerprint should use this instead of

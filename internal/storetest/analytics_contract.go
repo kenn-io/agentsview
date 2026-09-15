@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -53,6 +54,29 @@ func RunAnalyticsContract(t *testing.T, backend AnalyticsBackend) {
 		assertAnalyticsBreakdowns(t, store, filter)
 		assertAnalyticsSignals(t, store, filter)
 		assertAnalyticsReports(t, store, filter)
+		assertAnalyticsPercentileParity(t, store)
+	})
+}
+
+func assertAnalyticsPercentileParity(t *testing.T, store AnalyticsStore) {
+	t.Helper()
+
+	t.Run("even median truncates", func(t *testing.T) {
+		got, err := store.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{
+			From: "2026-08-04", To: "2026-08-04", Timezone: "UTC",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 2, got.TotalSessions)
+		assert.Equal(t, 1, got.MedianMessages)
+	})
+
+	t.Run("p90 uses nearest rank", func(t *testing.T) {
+		got, err := store.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{
+			From: "2026-08-05", To: "2026-08-05", Timezone: "UTC",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 11, got.TotalSessions)
+		assert.Equal(t, 10, got.P90Messages)
 	})
 }
 
@@ -275,6 +299,26 @@ func InsertBunAnalyticsFixture(
 			CreatedAt: timestamp("2026-08-03T09:00:00Z"), SourceArchiveID: archiveID,
 			SourceDatabaseGeneration: generation,
 		},
+	}
+	for i, messageCount := range []int{1, 2} {
+		sessions = append(sessions, bunmodel.Session{
+			ID:      fmt.Sprintf("analytics-median-%02d", i+1),
+			Project: "percentiles", Machine: "host-a", Agent: "codex",
+			StartedAt:    timestampPtr("2026-08-04T10:00:00Z"),
+			MessageCount: messageCount, UserMessageCount: 1,
+			CreatedAt:       timestamp("2026-08-04T10:00:00Z"),
+			SourceArchiveID: archiveID, SourceDatabaseGeneration: generation,
+		})
+	}
+	for messageCount := 1; messageCount <= 11; messageCount++ {
+		sessions = append(sessions, bunmodel.Session{
+			ID:      fmt.Sprintf("analytics-p90-%02d", messageCount),
+			Project: "percentiles", Machine: "host-a", Agent: "codex",
+			StartedAt:    timestampPtr("2026-08-05T10:00:00Z"),
+			MessageCount: messageCount, UserMessageCount: 1,
+			CreatedAt:       timestamp("2026-08-05T10:00:00Z"),
+			SourceArchiveID: archiveID, SourceDatabaseGeneration: generation,
+		})
 	}
 	for i := range sessions {
 		if _, err := store.NewInsert().Model(&sessions[i]).Exec(ctx); err != nil {

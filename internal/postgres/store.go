@@ -25,19 +25,15 @@ func NewStore(
 	return newStore(pg), nil
 }
 
-// DB returns the underlying *sql.DB for operations that need
-// direct access (e.g. schema compatibility checks).
+// DB exposes the stable driver pool only to adapter-owned schema, connection,
+// and vector capability setup. Server-facing application queries are owned by
+// the embedded BunStore.
 func (s *Store) DB() *sql.DB { return s.pg }
 
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
 	return s.pg.Close()
 }
-
-// ReadOnly returns true because PG serve still treats the remote
-// session store as remote; local file, upload, and batch-ingest
-// paths stay blocked while dashboard curation uses dedicated methods.
-func (s *Store) ReadOnly() bool { return true }
 
 // InsightGenerationAvailable reports whether startup proved this PG role can
 // persist generated insights.
@@ -126,10 +122,6 @@ func probeInsightDeletionAvailabilityTx(
 	return true, nil
 }
 
-// ------------------------------------------------------------
-// Unsupported write stubs (return db.ErrReadOnly)
-// ------------------------------------------------------------
-
 func mapPGWriteError(action string, err error) error {
 	if err == nil {
 		return nil
@@ -138,24 +130,4 @@ func mapPGWriteError(action string, err error) error {
 		return fmt.Errorf("%s: %w: %w", action, db.ErrReadOnly, err)
 	}
 	return fmt.Errorf("%s: %w", action, err)
-}
-
-// UpsertSession is not supported in read-only mode.
-func (s *Store) UpsertSession(_ db.Session) error {
-	return db.ErrReadOnly
-}
-
-// ReplaceSessionMessages is not supported in read-only mode.
-func (s *Store) ReplaceSessionMessages(
-	_ string, _ []db.Message,
-) error {
-	return db.ErrReadOnly
-}
-
-// WriteSessionBatchAtomic is not supported in read-only mode.
-func (s *Store) WriteSessionBatchAtomic(
-	_ []db.SessionBatchWrite,
-	_ ...func() error,
-) (db.SessionBatchResult, error) {
-	return db.SessionBatchResult{}, db.ErrReadOnly
 }

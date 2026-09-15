@@ -487,9 +487,6 @@ func (q *quackClient) attachConn(ctx context.Context, conn *sql.Conn) error {
 			redactQuackClientError(err, q.rawURL, q.token),
 		)
 	}
-	if _, err := conn.ExecContext(ctx, "USE "+quackAttachmentName); err != nil {
-		return fmt.Errorf("selecting quack catalog: %w", err)
-	}
 	return nil
 }
 

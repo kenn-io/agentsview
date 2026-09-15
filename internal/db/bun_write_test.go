@@ -169,8 +169,11 @@ func TestCanonicalBunRowsPreservePortableCoordinates(t *testing.T) {
 		ToolCalls: []ToolCall{{
 			ToolName: "Read", Category: "Read", InputJSON: `{"path":"file"}`,
 			ResultEvents: []ToolResultEvent{{
-				EventIndex: 7, Source: "tool", Status: "completed",
+				EventIndex: 7, Source: "tool", Status: "started",
 				Content: "result", Timestamp: "2026-08-03T12:00:01Z",
+			}, {
+				EventIndex: 7, Source: "tool", Status: "completed",
+				Content: "result", Timestamp: "2026-08-03T12:00:02Z",
 			}},
 		}},
 	}})
@@ -180,8 +183,9 @@ func TestCanonicalBunRowsPreservePortableCoordinates(t *testing.T) {
 	require.Len(t, calls, 1)
 	assert.Equal(t, 4, calls[0].MessageOrdinal)
 	assert.Equal(t, 0, calls[0].CallIndex)
-	require.Len(t, results, 1)
-	assert.Equal(t, 7, results[0].EventIndex)
+	require.Len(t, results, 2)
+	assert.Equal(t, 0, results[0].EventIndex)
+	assert.Equal(t, 1, results[1].EventIndex)
 
 	usage, err := CanonicalUsageEventRows([]UsageEvent{{
 		ID: 12, SessionID: "portable", Source: "message", Model: "model",

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -13,6 +15,62 @@ import (
 )
 
 const canonicalWriteBatchSize = 100
+
+var (
+	canonicalSessionConflictClause = canonicalConflictUpdateClause(
+		canonicalReplacementColumns((*bunmodel.Session)(nil), "id"),
+	)
+	canonicalSessionPreserveDataVersionConflictClause = canonicalConflictUpdateClause(
+		canonicalReplacementColumns((*bunmodel.Session)(nil), "id", "data_version"),
+	)
+)
+
+func canonicalReplacementColumns(model any, excluded ...string) []string {
+	excludedSet := make(map[string]struct{}, len(excluded))
+	for _, column := range excluded {
+		excludedSet[column] = struct{}{}
+	}
+	columns := bunmodel.ModelColumns(model)
+	return slices.DeleteFunc(columns, func(column string) bool {
+		_, skip := excludedSet[column]
+		return skip
+	})
+}
+
+func canonicalConflictUpdateClause(columns []string) string {
+	return canonicalConflictUpdateClauseForKey("id", columns)
+}
+
+func canonicalConflictUpdateClauseForKey(key string, columns []string) string {
+	var clause strings.Builder
+	clause.WriteString("CONFLICT (")
+	clause.WriteString(key)
+	clause.WriteString(") DO UPDATE SET ")
+	for index, column := range columns {
+		if index > 0 {
+			clause.WriteString(", ")
+		}
+		clause.WriteByte('"')
+		clause.WriteString(column)
+		clause.WriteString("\" = EXCLUDED.\"")
+		clause.WriteString(column)
+		clause.WriteByte('"')
+	}
+	return clause.String()
+}
+
+func canonicalSessionUpsertConflictClause(preservedColumns []string) string {
+	if len(preservedColumns) == 0 {
+		return canonicalSessionConflictClause
+	}
+	if len(preservedColumns) == 1 && preservedColumns[0] == "data_version" {
+		return canonicalSessionPreserveDataVersionConflictClause
+	}
+	excludedColumns := append([]string{"id"}, preservedColumns...)
+	return canonicalConflictUpdateClause(canonicalReplacementColumns(
+		(*bunmodel.Session)(nil), excludedColumns...,
+	))
+}
 
 func (db *DB) beginBunWriteTx(
 	ctx context.Context,
@@ -46,18 +104,13 @@ func CanonicalSessionRow(session Session) (bunmodel.Session, error) {
 // rules must apply those policies before calling this helper.
 func UpsertSessionRow(
 	ctx context.Context, store bun.IDB, row bunmodel.Session,
+	preservedColumns ...string,
 ) error {
 	if row.ID == "" {
 		return fmt.Errorf("upserting canonical session: empty id")
 	}
 	query := store.NewInsert().Model(&row).
-		On("CONFLICT (id) DO UPDATE").Returning("")
-	for _, column := range bunmodel.ModelColumns((*bunmodel.Session)(nil)) {
-		if column == "id" {
-			continue
-		}
-		query = query.Set("? = EXCLUDED.?", bun.Ident(column), bun.Ident(column))
-	}
+		On(canonicalSessionUpsertConflictClause(preservedColumns)).Returning("")
 	if _, err := query.Exec(ctx); err != nil {
 		return fmt.Errorf("upserting canonical session %s: %w", row.ID, err)
 	}
@@ -374,10 +427,11 @@ func appendMessageRows(
 	for start := 0; start < len(rows); start += canonicalWriteBatchSize {
 		end := min(start+canonicalWriteBatchSize, len(rows))
 		batch := rows[start:end]
-		query := tx.NewInsert().Model(&batch).Returning("")
+		columns := canonicalReplacementColumns((*bunmodel.Message)(nil))
 		if tx.Dialect().Name().String() != "custom" {
-			query = query.ExcludeColumn("id")
+			columns = canonicalReplacementColumns((*bunmodel.Message)(nil), "id")
 		}
+		query := tx.NewInsert().Model(&batch).Column(columns...).Returning("")
 		if _, err := query.Exec(ctx); err != nil {
 			return fmt.Errorf("inserting canonical messages for %s: %w", sessionID, err)
 		}
@@ -420,7 +474,9 @@ func appendToolRows(
 	for start := 0; start < len(calls); start += canonicalWriteBatchSize {
 		end := min(start+canonicalWriteBatchSize, len(calls))
 		batch := calls[start:end]
-		insert := tx.NewInsert().Model(&batch).ExcludeColumn("id").Returning("")
+		insert := tx.NewInsert().Model(&batch).
+			Column(canonicalReplacementColumns((*bunmodel.ToolCall)(nil), "id")...).
+			Returning("")
 		if _, err := insert.Exec(ctx); err != nil {
 			return fmt.Errorf("inserting canonical tool calls for %s: %w", sessionID, err)
 		}
@@ -428,7 +484,8 @@ func appendToolRows(
 	for start := 0; start < len(results); start += canonicalWriteBatchSize {
 		end := min(start+canonicalWriteBatchSize, len(results))
 		batch := results[start:end]
-		if _, err := tx.NewInsert().Model(&batch).ExcludeColumn("id").
+		if _, err := tx.NewInsert().Model(&batch).
+			Column(canonicalReplacementColumns((*bunmodel.ToolResultEvent)(nil), "id")...).
 			Returning("").Exec(ctx); err != nil {
 			return fmt.Errorf("inserting canonical tool results for %s: %w", sessionID, err)
 		}
@@ -471,7 +528,9 @@ func replaceToolRows(
 	for start := 0; start < len(calls); start += canonicalWriteBatchSize {
 		end := min(start+canonicalWriteBatchSize, len(calls))
 		batch := calls[start:end]
-		if _, err := tx.NewInsert().Model(&batch).ExcludeColumn("id").Returning("").
+		if _, err := tx.NewInsert().Model(&batch).
+			Column(canonicalReplacementColumns((*bunmodel.ToolCall)(nil), "id")...).
+			Returning("").
 			On("CONFLICT (session_id, message_ordinal, call_index) DO UPDATE").
 			Set("message_id = EXCLUDED.message_id").
 			Set("tool_name = EXCLUDED.tool_name").
@@ -490,7 +549,9 @@ func replaceToolRows(
 	for start := 0; start < len(results); start += canonicalWriteBatchSize {
 		end := min(start+canonicalWriteBatchSize, len(results))
 		batch := results[start:end]
-		if _, err := tx.NewInsert().Model(&batch).ExcludeColumn("id").Returning("").
+		if _, err := tx.NewInsert().Model(&batch).
+			Column(canonicalReplacementColumns((*bunmodel.ToolResultEvent)(nil), "id")...).
+			Returning("").
 			On("CONFLICT (session_id, tool_call_message_ordinal, call_index, event_index) DO UPDATE").
 			Set("tool_use_id = EXCLUDED.tool_use_id").
 			Set("agent_id = EXCLUDED.agent_id").
@@ -589,10 +650,11 @@ func ReplaceUsageEventRows(
 	for start := 0; start < len(rows); start += canonicalWriteBatchSize {
 		end := min(start+canonicalWriteBatchSize, len(rows))
 		batch := rows[start:end]
-		query := tx.NewInsert().Model(&batch).Returning("")
+		columns := canonicalReplacementColumns((*bunmodel.UsageEvent)(nil))
 		if tx.Dialect().Name().String() != "custom" {
-			query = query.ExcludeColumn("id")
+			columns = canonicalReplacementColumns((*bunmodel.UsageEvent)(nil), "id")
 		}
+		query := tx.NewInsert().Model(&batch).Column(columns...).Returning("")
 		if _, err := query.Exec(ctx); err != nil {
 			return fmt.Errorf("inserting canonical usage events for %s: %w", sessionID, err)
 		}
@@ -617,7 +679,8 @@ func ReplaceSecretFindingRows(
 	for start := 0; start < len(rows); start += canonicalWriteBatchSize {
 		end := min(start+canonicalWriteBatchSize, len(rows))
 		batch := rows[start:end]
-		if _, err := tx.NewInsert().Model(&batch).ExcludeColumn("id").
+		if _, err := tx.NewInsert().Model(&batch).
+			Column(canonicalReplacementColumns((*bunmodel.SecretFinding)(nil), "id")...).
 			Returning("").Exec(ctx); err != nil {
 			return fmt.Errorf("inserting canonical secret findings for %s: %w", sessionID, err)
 		}

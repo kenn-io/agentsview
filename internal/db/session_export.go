@@ -1244,8 +1244,7 @@ func sessionExportFiltersEqual(
 }
 
 func buildSessionExportFilter(f SessionFilter) (string, []any) {
-	dialect := SQLiteQueryDialect()
-	return BuildSessionFilterSQL(f, dialect)
+	return buildBunSessionFilterForAlias(f, sqliteTimestampOrderExpr, "sessions")
 }
 
 func sessionExportLastActivityExpr() string {

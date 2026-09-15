@@ -18,13 +18,17 @@ import (
 )
 
 const (
-	usageBaseID      = "usage-base"
-	usageBandID      = "usage-band"
-	usageAggregateID = "usage-aggregate"
-	usageReportedID  = "usage-reported"
-	usageDuplicateID = "usage-duplicate"
-	usageModel       = "contract-model"
-	usageCursorModel = "cursor-model"
+	usageBaseID       = "usage-base"
+	usageBandID       = "usage-band"
+	usageAggregateID  = "usage-aggregate"
+	usageReportedID   = "usage-reported"
+	usageDuplicateID  = "usage-duplicate"
+	usageCreatedID    = "usage-created-fallback"
+	usageRangeID      = "usage-range-dedup"
+	usageModel        = "contract-model"
+	usageCursorModel  = "cursor-model"
+	usageCreatedModel = "created-fallback-model"
+	usageRangeModel   = "range-dedup-model"
 )
 
 // UsageStore is the Task 7 pricing and usage surface owned by BunStore.
@@ -101,6 +105,36 @@ func RunUsageContract(t *testing.T, backend UsageBackend) {
 		require.NoError(t, err)
 		assert.Equal(t, 5, matching,
 			"matching sessions include the duplicate session before usage deduplication")
+
+		assertUsageTimestampParity(t, store)
+	})
+}
+
+func assertUsageTimestampParity(t *testing.T, store UsageStore) {
+	t.Helper()
+
+	t.Run("session created-at fallback", func(t *testing.T) {
+		result, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
+			From: "2026-08-03", To: "2026-08-03", Timezone: "UTC",
+			Model: usageCreatedModel,
+		})
+		require.NoError(t, err)
+		require.Len(t, result.Daily, 1)
+		assert.Equal(t, "2026-08-03", result.Daily[0].Date)
+		assert.Equal(t, 6, result.Daily[0].InputTokens)
+		assert.Equal(t, 2, result.Daily[0].OutputTokens)
+	})
+
+	t.Run("out-of-range cursor row cannot suppress in-range event", func(t *testing.T) {
+		result, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
+			From: "2026-08-04", To: "2026-08-04", Timezone: "UTC",
+			Model: usageRangeModel,
+		})
+		require.NoError(t, err)
+		require.Len(t, result.Daily, 1)
+		assert.Equal(t, "2026-08-04", result.Daily[0].Date)
+		assert.Equal(t, 7, result.Daily[0].InputTokens)
+		assert.Equal(t, 3, result.Daily[0].OutputTokens)
 	})
 }
 
@@ -261,8 +295,10 @@ func InsertBunUsageFixture(
 			return fmt.Errorf("inserting usage event %s: %w", events[index].SessionID, err)
 		}
 	}
-	if _, err := store.NewInsert().Model(&cursor).Exec(ctx); err != nil {
-		return fmt.Errorf("inserting cursor usage event: %w", err)
+	for index := range cursor {
+		if _, err := store.NewInsert().Model(&cursor[index]).Exec(ctx); err != nil {
+			return fmt.Errorf("inserting cursor usage event: %w", err)
+		}
 	}
 	return nil
 }
@@ -322,24 +358,29 @@ func InsertSQLiteUsageFixture(
 			return fmt.Errorf("inserting SQLite usage event %s: %w", row.SessionID, err)
 		}
 	}
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO cursor_usage_events (
-			id, occurred_at, model, kind, input_tokens, output_tokens,
-			cache_write_tokens, cache_read_tokens, charged_microdollars,
-			cursor_token_fee_microdollars, user_id, user_email, is_headless, dedup_key
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		cursor.ID, cursor.OccurredAt.Format("2006-01-02T15:04:05Z07:00"),
-		cursor.Model, cursor.Kind, cursor.InputTokens, cursor.OutputTokens,
-		cursor.CacheWriteTokens, cursor.CacheReadTokens, cursor.ChargedMicrodollars,
-		cursor.CursorTokenFeeMicrodollars, cursor.UserID, cursor.UserEmail,
-		cursor.IsHeadless, cursor.DedupKey,
-	)
-	return err
+	for _, row := range cursor {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO cursor_usage_events (
+				id, occurred_at, model, kind, input_tokens, output_tokens,
+				cache_write_tokens, cache_read_tokens, charged_microdollars,
+				cursor_token_fee_microdollars, user_id, user_email, is_headless, dedup_key
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			row.ID, row.OccurredAt.Format("2006-01-02T15:04:05Z07:00"),
+			row.Model, row.Kind, row.InputTokens, row.OutputTokens,
+			row.CacheWriteTokens, row.CacheReadTokens, row.ChargedMicrodollars,
+			row.CursorTokenFeeMicrodollars, row.UserID, row.UserEmail,
+			row.IsHeadless, row.DedupKey,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func bunUsageRows(
 	archiveID, generation string,
-) ([]bunmodel.Session, []bunmodel.Message, []bunmodel.UsageEvent, bunmodel.CursorUsageEvent) {
+) ([]bunmodel.Session, []bunmodel.Message, []bunmodel.UsageEvent, []bunmodel.CursorUsageEvent) {
 	timestamp := func(value string) *bunmodel.Timestamp {
 		parsed, err := bunmodel.ParseTimestamp(value)
 		if err != nil {
@@ -370,8 +411,16 @@ func bunUsageRows(
 			StartedAt: timestamp("2026-08-01T21:00:00Z"), MessageCount: 1,
 			UserMessageCount: 1, CreatedAt: required("2026-08-01T21:00:00Z"),
 			SourceArchiveID: archiveID, SourceDatabaseGeneration: generation},
+		{ID: usageCreatedID, Project: "usage-contract", Machine: "host-c", Agent: "codex",
+			MessageCount: 1, UserMessageCount: 1,
+			CreatedAt:       required("2026-08-03T10:00:00Z"),
+			SourceArchiveID: archiveID, SourceDatabaseGeneration: generation},
+		{ID: usageRangeID, Project: "usage-contract", Machine: "host-c", Agent: "codex",
+			StartedAt: timestamp("2026-08-04T01:00:00Z"), MessageCount: 1,
+			UserMessageCount: 1, CreatedAt: required("2026-08-04T01:00:00Z"),
+			SourceArchiveID: archiveID, SourceDatabaseGeneration: generation},
 	}
-	messageIDs := []int64{2101, 2102, 2103}
+	messageIDs := []int64{2101, 2102, 2103, 2104}
 	messages := []bunmodel.Message{
 		{ID: &messageIDs[0], SessionID: usageBaseID, Ordinal: 0, Role: "assistant",
 			Content: "base usage", Timestamp: timestamp("2026-08-02T10:00:00Z"),
@@ -385,6 +434,10 @@ func bunUsageRows(
 			Content: "reported usage", Timestamp: timestamp("2026-08-02T11:00:00Z"),
 			Model: usageModel, TokenUsage: json.RawMessage(`{"input_tokens":1,"output_tokens":1}`),
 			SourceUUID: "reported-message"},
+		{ID: &messageIDs[3], SessionID: usageCreatedID, Ordinal: 0, Role: "assistant",
+			Content: "created fallback usage", Model: usageCreatedModel,
+			TokenUsage: json.RawMessage(`{"input_tokens":6,"output_tokens":2}`),
+			SourceUUID: "created-fallback-message"},
 	}
 	ordinal := 0
 	reportedCost := int64(17)
@@ -398,12 +451,18 @@ func bunUsageRows(
 		{ID: 2203, SessionID: usageReportedID, Source: "copilot", Model: usageModel,
 			CostMicrodollars: &reportedCost, CostSource: db.CopilotReportedCostSource,
 			OccurredAt: timestamp("2026-08-02T11:01:00Z"), DedupKey: "reported"},
+		{ID: 2204, SessionID: usageRangeID, Source: "request", Model: usageRangeModel,
+			InputTokens: 7, OutputTokens: 3,
+			OccurredAt: timestamp("2026-08-04T01:00:00Z"), DedupKey: "overlap"},
 	}
-	cursorID := int64(2301)
-	cursor := bunmodel.CursorUsageEvent{
-		ID: &cursorID, OccurredAt: required("2026-08-02T14:00:00Z"),
-		Model: usageCursorModel, Kind: "included", InputTokens: 4,
-		ChargedMicrodollars: 19, DedupKey: "cursor-contract",
+	cursorIDs := []int64{2301, 2302}
+	cursor := []bunmodel.CursorUsageEvent{
+		{ID: &cursorIDs[0], OccurredAt: required("2026-08-02T14:00:00Z"),
+			Model: usageCursorModel, Kind: "included", InputTokens: 4,
+			ChargedMicrodollars: 19, DedupKey: "cursor-contract"},
+		{ID: &cursorIDs[1], OccurredAt: required("2026-08-03T23:00:00Z"),
+			Model: usageRangeModel, Kind: "included", InputTokens: 99,
+			DedupKey: usageRangeID + ":request:overlap"},
 	}
 	return sessions, messages, events, cursor
 }

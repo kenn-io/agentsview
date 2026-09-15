@@ -148,6 +148,12 @@ func TestDuckSearchContentSidechainRunSubordinate(t *testing.T) {
 		DataVersion:     1,
 		ReplaceMessages: true,
 	}})
+	messages, err := store.GetAllMessages(t.Context(), "duck-unit-side")
+	require.NoError(t, err)
+	require.Len(t, messages, 4)
+	assert.True(t, messages[1].IsSidechain)
+	assert.True(t, messages[2].IsSidechain)
+	assert.False(t, messages[3].IsSidechain)
 
 	ctx := context.Background()
 	side, err := store.SearchContent(ctx, db.ContentSearchFilter{

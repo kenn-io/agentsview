@@ -52,7 +52,7 @@ type SessionSort struct {
 	// version-aware CASE, and the filter so it can mirror the active scanner
 	// rule versions. Timestamp sorts use the dialect's empty-string-aware
 	// wrapping; most sorts are a plain column name shared across backends.
-	expr func(b *QueryBuilder, f SessionFilter) string
+	expr func(b *bunFilterArgs, f SessionFilter) string
 	// value returns the row's sort value formatted as the cursor stores it, plus
 	// ok=false when the underlying column is NULL. It receives the filter so the
 	// secrets sort encodes the same version-gated value it sorts by.
@@ -62,7 +62,7 @@ type SessionSort struct {
 // orderExpr renders the non-null SQL expression used in both ORDER BY and the
 // keyset cursor predicate for the resolved direction. It may add bind
 // parameters to b, so callers must render it at its textual position.
-func (sp SessionSort) orderExpr(b *QueryBuilder, desc bool, f SessionFilter) string {
+func (sp SessionSort) orderExpr(b *bunFilterArgs, desc bool, f SessionFilter) string {
 	e := sp.expr(b, f)
 	if sp.nullable {
 		e = "COALESCE(" + e + ", " + sentinelLiteral(sp.kind, desc) + ")"
@@ -240,6 +240,70 @@ func appendIDTiebreaker(rs []ResolvedSort) []ResolvedSort {
 	return append(out, ResolvedSort{Sort: sessionSortByKey["id"], Desc: rs[len(rs)-1].Desc})
 }
 
+func bunOrderByClause(
+	builder *bunFilterArgs, resolved []ResolvedSort, filter SessionFilter,
+) string {
+	columns := appendIDTiebreaker(resolved)
+	parts := make([]string, len(columns))
+	for index, column := range columns {
+		parts[index] = column.Sort.orderExpr(builder, column.Desc, filter) + " " +
+			orderDirectionSQL(column.Desc)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func bunCursorPredicate(
+	builder *bunFilterArgs,
+	resolved []ResolvedSort,
+	filter SessionFilter,
+	values []any,
+	id string,
+) string {
+	columns := appendIDTiebreaker(resolved)
+	boundValues := values
+	if len(columns) > len(resolved) {
+		boundValues = append(append(make([]any, 0, len(columns)), values...), id)
+	}
+	clauses := make([]string, 0, len(columns))
+	for current := range columns {
+		parts := make([]string, 0, current+1)
+		for prior := range current {
+			expression := columns[prior].Sort.orderExpr(
+				builder, columns[prior].Desc, filter,
+			)
+			parts = append(parts, expression+" = "+
+				builder.timestampIfNeeded(builder.bind(boundValues[prior]),
+					columns[prior].Sort.kind))
+		}
+		operator := ">"
+		if columns[current].Desc {
+			operator = "<"
+		}
+		expression := columns[current].Sort.orderExpr(
+			builder, columns[current].Desc, filter,
+		)
+		parts = append(parts, expression+" "+operator+" "+
+			builder.timestampIfNeeded(builder.bind(boundValues[current]),
+				columns[current].Sort.kind))
+		clauses = append(clauses, "("+strings.Join(parts, " AND ")+")")
+	}
+	return "(" + strings.Join(clauses, " OR ") + ")"
+}
+
+func (b *bunFilterArgs) timestampIfNeeded(value string, kind valueKind) string {
+	if kind == kindTimestamp {
+		return b.timestamp(value)
+	}
+	return value
+}
+
+func orderDirectionSQL(descending bool) string {
+	if descending {
+		return "DESC"
+	}
+	return "ASC"
+}
+
 // NextSessionCursor builds the pagination token for a page's last row under the
 // resolved multi-key sort. Each sort term contributes a typed keyset value. For
 // a single-key sort the legacy Sort/Desc/Value fields (and EndedAt for the
@@ -362,19 +426,18 @@ func intValue(get func(*Session) int) func(*Session, SessionFilter) (string, boo
 	}
 }
 
-func recentExpr(b *QueryBuilder, _ SessionFilter) string {
-	return "COALESCE(" + b.dialect.timestampExpr("ended_at") + ", " +
-		b.dialect.timestampExpr("started_at") + ", " +
-		b.dialect.timestampExpr("created_at") + ")"
+func recentExpr(b *bunFilterArgs, _ SessionFilter) string {
+	return "COALESCE(" + b.timestamp("ended_at") + ", " +
+		b.timestamp("started_at") + ", " + b.timestamp("created_at") + ")"
 }
 
-func startedExpr(b *QueryBuilder, _ SessionFilter) string {
-	return "COALESCE(" + b.dialect.timestampExpr("started_at") + ", " +
-		b.dialect.timestampExpr("created_at") + ")"
+func startedExpr(b *bunFilterArgs, _ SessionFilter) string {
+	return "COALESCE(" + b.timestamp("started_at") + ", " +
+		b.timestamp("created_at") + ")"
 }
 
-func plainExpr(col string) func(*QueryBuilder, SessionFilter) string {
-	return func(*QueryBuilder, SessionFilter) string { return col }
+func plainExpr(col string) func(*bunFilterArgs, SessionFilter) string {
+	return func(*bunFilterArgs, SessionFilter) string { return col }
 }
 
 // secretsExpr orders by the same secret count the service layer displays: when
@@ -382,12 +445,12 @@ func plainExpr(col string) func(*QueryBuilder, SessionFilter) string {
 // to 0 (matching hideStaleSecretCount), so sessions shown with 0 secrets do not
 // rank above sessions with current findings. With no versions (raw db callers),
 // it falls back to the raw column, mirroring the HasSecret filter's convention.
-func secretsExpr(b *QueryBuilder, f SessionFilter) string {
+func secretsExpr(b *bunFilterArgs, f SessionFilter) string {
 	versions := nonEmpty(f.SecretsRulesVersions)
 	if len(versions) == 0 {
 		return "secret_leak_count"
 	}
-	return "CASE WHEN " + inPredicate("secrets_rules_version", versions, b) +
+	return "CASE WHEN " + bunInPredicate("secrets_rules_version", versions, b) +
 		" THEN secret_leak_count ELSE 0 END"
 }
 

@@ -107,11 +107,7 @@ func (s *BunStore) GetCachedInsight(
 }
 
 func (s *BunStore) bunInsightTimeOrder() string {
-	dialect := s.backend.SessionQueryDialect()
-	if dialect.timestampOrderExpr != nil {
-		return dialect.timestampOrderExpr("created_at")
-	}
-	return "created_at"
+	return s.backend.TimestampOrderExpr("created_at")
 }
 
 func applyBunInsightFilter(

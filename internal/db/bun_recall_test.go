@@ -23,9 +23,7 @@ func (*replayingRecallBackend) Capabilities() BackendCapabilities {
 	return BackendCapabilities{Recall: true}
 }
 
-func (*replayingRecallBackend) SessionQueryDialect() QueryDialect {
-	return PortableBunSessionQueryDialect()
-}
+func (*replayingRecallBackend) TimestampOrderExpr(column string) string { return column }
 
 func (*replayingRecallBackend) SessionVersion(
 	context.Context, bun.IDB, string,

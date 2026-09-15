@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/uptrace/bun"
 )
@@ -37,23 +36,25 @@ func (s *BunStore) ListSecretFindings(
 	}
 	var page SecretFindingPage
 	err := s.view(ctx, func(store bun.IDB) error {
-		dialect := s.backend.SessionQueryDialect()
-		builder := NewQueryBuilder(dialect, 0)
-		predicates := []string{"session.deleted_at IS NULL"}
-		add := func(column string, value any) {
-			predicates = append(predicates, column+" = "+builder.Add(value))
-		}
+		query := store.NewSelect().TableExpr("secret_findings AS finding").
+			ColumnExpr(`finding.session_id, finding.rule_name,
+				finding.confidence, finding.location_kind, finding.message_ordinal,
+				finding.call_index, finding.event_index, finding.match_start,
+				finding.match_end, finding.match_index, finding.redacted_match,
+				finding.rules_version, session.project, session.agent`).
+			Join("JOIN sessions AS session ON session.id = finding.session_id").
+			Where("session.deleted_at IS NULL")
 		if filter.Project != "" {
-			add("session.project", filter.Project)
+			query = query.Where("session.project = ?", filter.Project)
 		}
 		if filter.Agent != "" {
-			add("session.agent", filter.Agent)
+			query = query.Where("session.agent = ?", filter.Agent)
 		}
 		if filter.Rule != "" {
-			add("finding.rule_name", filter.Rule)
+			query = query.Where("finding.rule_name = ?", filter.Rule)
 		}
 		if filter.Confidence != "" && filter.Confidence != "all" {
-			add("finding.confidence", filter.Confidence)
+			query = query.Where("finding.confidence = ?", filter.Confidence)
 		}
 		versions := make([]string, 0, len(filter.RulesVersions))
 		for _, version := range filter.RulesVersions {
@@ -62,36 +63,27 @@ func (s *BunStore) ListSecretFindings(
 			}
 		}
 		if len(versions) > 0 {
-			predicates = append(predicates,
-				inPredicate("finding.rules_version", versions, builder))
+			query = query.Where("finding.rules_version IN (?)", bun.List(versions))
 		}
-		qualify := func(column string) string { return "session." + column }
-		started := dialect.dateStartExpr(qualify)
+		timestampOrderExpr := s.backend.TimestampOrderExpr
+		started := timestampOrderExpr("COALESCE(" +
+			bunNullableTimestamp("session.started_at") + ", session.created_at)")
 		if filter.DateFrom != "" {
-			predicates = append(predicates, started+" >= "+dialect.dateParam(
-				builder.Add(sessionDateBoundary(filter.DateFrom, "UTC", false))))
+			query = query.Where(started+" >= "+timestampOrderExpr("?"),
+				sessionDateBoundary(filter.DateFrom, "UTC", false))
 		}
 		if filter.DateTo != "" {
-			predicates = append(predicates, started+" < "+dialect.dateParam(
-				builder.Add(sessionDateBoundary(filter.DateTo, "UTC", true))))
+			query = query.Where(started+" < "+timestampOrderExpr("?"),
+				sessionDateBoundary(filter.DateTo, "UTC", true))
 		}
-		activity := "COALESCE(" + dialect.timestampExpr("session.ended_at") + ", " +
-			dialect.timestampExpr("session.started_at") + ", " +
-			dialect.timestampExpr("session.created_at") + ")"
-		query := `SELECT finding.session_id, finding.rule_name,
-			finding.confidence, finding.location_kind, finding.message_ordinal,
-			finding.call_index, finding.event_index, finding.match_start,
-			finding.match_end, finding.match_index, finding.redacted_match,
-			finding.rules_version, session.project, session.agent
-			FROM secret_findings AS finding
-			JOIN sessions AS session ON session.id = finding.session_id
-			WHERE ` + strings.Join(predicates, " AND ") + `
-			ORDER BY ` + dialect.NullsLast(activity+" DESC") + `,
-				finding.session_id, finding.message_ordinal, finding.match_start,
-				finding.match_index, finding.id
-			` + builder.LimitOffset(filter.Limit+1, filter.Cursor)
+		activity := "COALESCE(" + timestampOrderExpr("session.ended_at") + ", " +
+			timestampOrderExpr("session.started_at") + ", " +
+			timestampOrderExpr("session.created_at") + ")"
 		var rows []bunSecretFindingRow
-		if err := store.NewRaw(query, builder.Args()...).Scan(ctx, &rows); err != nil {
+		if err := query.OrderExpr(activity+" DESC").
+			OrderExpr(`finding.session_id, finding.message_ordinal,
+				finding.match_start, finding.match_index, finding.id`).
+			Limit(filter.Limit+1).Offset(filter.Cursor).Scan(ctx, &rows); err != nil {
 			return fmt.Errorf("listing Bun secret findings: %w", err)
 		}
 		findings := make([]SecretFindingRow, len(rows))

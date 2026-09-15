@@ -13,6 +13,37 @@ type bunUnitBoundsQuerier struct {
 	parent *BunStore
 }
 
+var _ UnitBoundsQuerier = (*BunStore)(nil)
+
+// NearestUserBoundaries resolves canonical message boundaries inside one
+// guarded backend view; adapters only supply their search-prefix capability.
+func (s *BunStore) NearestUserBoundaries(
+	ctx context.Context, probes []UnitProbe,
+) ([]UnitBounds, error) {
+	var bounds []UnitBounds
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		var err error
+		bounds, err = (bunUnitBoundsQuerier{store: store, parent: s}).
+			NearestUserBoundaries(ctx, probes)
+		return err
+	})
+	return bounds, err
+}
+
+// RunExtents resolves canonical assistant runs inside one guarded view.
+func (s *BunStore) RunExtents(
+	ctx context.Context, probes []ExtentProbe,
+) ([][2]int, error) {
+	var extents [][2]int
+	err := s.consistentView(ctx, func(store bun.IDB) error {
+		var err error
+		extents, err = (bunUnitBoundsQuerier{store: store, parent: s}).
+			RunExtents(ctx, probes)
+		return err
+	})
+	return extents, err
+}
+
 func (q bunUnitBoundsQuerier) NearestUserBoundaries(
 	ctx context.Context, probes []UnitProbe,
 ) ([]UnitBounds, error) {

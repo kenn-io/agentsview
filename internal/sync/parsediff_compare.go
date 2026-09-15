@@ -31,9 +31,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/db/bunmodel"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -183,11 +185,11 @@ func compareSessionFields(
 	if len(diffs) > before {
 		markIncrementalHistory(&diffs[len(diffs)-1], prepared.Agent)
 	}
-	diffs = appendTextFieldDiff(
+	diffs = appendCanonicalTimestampFieldDiff(
 		diffs, FieldStartedAt,
 		stored.StartedAt, prepared.StartedAt,
 	)
-	diffs = appendTextFieldDiff(
+	diffs = appendCanonicalTimestampFieldDiff(
 		diffs, FieldEndedAt,
 		stored.EndedAt, prepared.EndedAt,
 	)
@@ -480,6 +482,23 @@ func appendTextFieldDiff(
 	}
 	d.Detail = strings.Join(notes, "; ")
 	return append(diffs, d)
+}
+
+func appendCanonicalTimestampFieldDiff(
+	diffs []FieldDiff, field string, stored, parsed *string,
+) []FieldDiff {
+	if stored == nil || parsed == nil {
+		return appendTextFieldDiff(diffs, field, stored, parsed)
+	}
+	storedTime, storedErr := bunmodel.ParseTimestamp(*stored)
+	parsedTime, parsedErr := bunmodel.ParseTimestamp(*parsed)
+	if storedErr == nil && parsedErr == nil &&
+		storedTime.Time.UTC().Truncate(time.Microsecond).Equal(
+			parsedTime.Time.UTC().Truncate(time.Microsecond),
+		) {
+		return diffs
+	}
+	return appendTextFieldDiff(diffs, field, stored, parsed)
 }
 
 func renderTextValue(ptr *string, sanitized string) string {

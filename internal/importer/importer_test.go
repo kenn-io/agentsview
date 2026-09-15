@@ -444,10 +444,14 @@ func TestImportSkipPathBumpsLocalModifiedAt(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, full2.LocalModifiedAt)
 	t2 := *full2.LocalModifiedAt
+	t1Time, err := time.Parse(time.RFC3339Nano, t1)
+	require.NoError(t, err)
+	t2Time, err := time.Parse(time.RFC3339Nano, t2)
+	require.NoError(t, err)
 
 	// local_modified_at must be bumped on the skip path so incremental PG
 	// push picks up the session_name change.
-	assert.True(t, t2 > t1,
+	assert.True(t, t2Time.After(t1Time),
 		"local_modified_at must advance on skip-path reimport (t1=%s t2=%s)", t1, t2)
 
 	// Confirm session_name was also updated.

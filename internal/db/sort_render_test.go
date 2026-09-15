@@ -21,25 +21,26 @@ func resolvedFor(t *testing.T, spec string) []ResolvedSort {
 func TestOrderByClause_MultiKey(t *testing.T) {
 	rs := resolvedFor(t, "messages:asc,started:desc")
 
-	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	b := newBunFilterArgs(sqliteTimestampOrderExpr)
 	assert.Equal(t,
-		"ORDER BY message_count ASC, "+
-			"COALESCE(NULLIF(started_at, ''), NULLIF(created_at, '')) DESC, id DESC",
-		b.OrderByClause(rs, SessionFilter{}))
+		"message_count ASC, "+
+			"COALESCE(julianday(NULLIF(started_at, '')), "+
+			"julianday(NULLIF(created_at, ''))) DESC, id DESC",
+		bunOrderByClause(b, rs, SessionFilter{}))
 
-	bpg := NewQueryBuilder(PostgresQueryDialect(), 0)
+	bpg := newBunFilterArgs(nil)
 	assert.Equal(t,
-		"ORDER BY message_count ASC, "+
+		"message_count ASC, "+
 			"COALESCE(started_at, created_at) DESC, id DESC",
-		bpg.OrderByClause(rs, SessionFilter{}))
+		bunOrderByClause(bpg, rs, SessionFilter{}))
 }
 
 // TestOrderByClause_IDOnly keeps the single id-sort form free of a duplicate id
 // tie-breaker.
 func TestOrderByClause_IDOnly(t *testing.T) {
 	rs := resolvedFor(t, "id:desc")
-	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
-	assert.Equal(t, "ORDER BY id DESC", b.OrderByClause(rs, SessionFilter{}))
+	b := newBunFilterArgs(sqliteTimestampOrderExpr)
+	assert.Equal(t, "id DESC", bunOrderByClause(b, rs, SessionFilter{}))
 }
 
 // TestCursorPredicate_MultiKey locks the lexicographic OR-expansion that backs
@@ -48,27 +49,29 @@ func TestCursorPredicate_MultiKey(t *testing.T) {
 	rs := resolvedFor(t, "messages:asc,started:desc")
 	values := []any{int64(5), "2024-01-01T00:00:00Z"}
 
-	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
-	gotSQLite := b.CursorPredicate(rs, SessionFilter{}, values, "sid")
+	b := newBunFilterArgs(sqliteTimestampOrderExpr)
+	gotSQLite := bunCursorPredicate(b, rs, SessionFilter{}, values, "sid")
 	assert.Equal(t,
 		"((message_count > ?) OR "+
 			"(message_count = ? AND "+
-			"COALESCE(NULLIF(started_at, ''), NULLIF(created_at, '')) < ?) OR "+
+			"COALESCE(julianday(NULLIF(started_at, '')), "+
+			"julianday(NULLIF(created_at, ''))) < julianday(NULLIF(?, ''))) OR "+
 			"(message_count = ? AND "+
-			"COALESCE(NULLIF(started_at, ''), NULLIF(created_at, '')) = ? AND id < ?))",
+			"COALESCE(julianday(NULLIF(started_at, '')), "+
+			"julianday(NULLIF(created_at, ''))) = julianday(NULLIF(?, '')) AND id < ?))",
 		gotSQLite)
 	// Six bound params: one comparison at level 0, two at level 1, three at
 	// level 2 (the id tie-break being the last).
-	assert.Len(t, b.Args(), 6)
+	assert.Len(t, b.values(), 6)
 
-	bpg := NewQueryBuilder(PostgresQueryDialect(), 0)
-	gotPG := bpg.CursorPredicate(rs, SessionFilter{}, values, "sid")
+	bpg := newBunFilterArgs(nil)
+	gotPG := bunCursorPredicate(bpg, rs, SessionFilter{}, values, "sid")
 	assert.Equal(t,
-		"((message_count > $1::bigint) OR "+
-			"(message_count = $2::bigint AND "+
-			"COALESCE(started_at, created_at) < $3::timestamptz) OR "+
-			"(message_count = $4::bigint AND "+
-			"COALESCE(started_at, created_at) = $5::timestamptz AND id < $6))",
+		"((message_count > ?) OR "+
+			"(message_count = ? AND "+
+			"COALESCE(started_at, created_at) < ?) OR "+
+			"(message_count = ? AND "+
+			"COALESCE(started_at, created_at) = ? AND id < ?))",
 		gotPG)
 }
 
@@ -77,10 +80,15 @@ func TestCursorPredicate_MultiKey(t *testing.T) {
 // comparison: value-compare OR (equal AND id-compare).
 func TestCursorPredicate_SingleKeyRecent(t *testing.T) {
 	rs := resolvedFor(t, "recent:desc")
-	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
-	got := b.CursorPredicate(rs, SessionFilter{}, []any{"2024-05-01T00:00:00Z"}, "sid")
-	activity := "COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), NULLIF(created_at, ''))"
+	b := newBunFilterArgs(sqliteTimestampOrderExpr)
+	got := bunCursorPredicate(
+		b, rs, SessionFilter{}, []any{"2024-05-01T00:00:00Z"}, "sid",
+	)
+	activity := "COALESCE(julianday(NULLIF(ended_at, '')), " +
+		"julianday(NULLIF(started_at, '')), julianday(NULLIF(created_at, '')))"
+	parameter := "julianday(NULLIF(?, ''))"
 	assert.Equal(t,
-		"(("+activity+" < ?) OR ("+activity+" = ? AND id < ?))",
+		"(("+activity+" < "+parameter+") OR ("+activity+" = "+parameter+
+			" AND id < ?))",
 		got)
 }
