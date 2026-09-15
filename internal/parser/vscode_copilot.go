@@ -252,6 +252,11 @@ func parseVSCodeCopilotData(
 			continue
 		}
 
+		// The model is recorded per message because a session can
+		// switch models between turns; the per-turn usage event
+		// carries the same value for cost accounting.
+		md, _ := vscodeCopilotMetadataOf(req)
+
 		messages = append(messages, ParsedMessage{
 			Ordinal:       ordinal,
 			Role:          RoleAssistant,
@@ -260,6 +265,7 @@ func parseVSCodeCopilotData(
 			HasToolUse:    hasToolUse,
 			ContentLength: len(displayContent),
 			ToolCalls:     toolCalls,
+			Model:         vscodeCopilotModel(req, md),
 		})
 		ordinal++
 	}
@@ -329,8 +335,8 @@ func vscodeCopilotUsageEvent(
 	if req.Result == nil || len(req.Result.Metadata) == 0 {
 		return ParsedUsageEvent{}, false
 	}
-	var md vscodeCopilotMetadata
-	if err := json.Unmarshal(req.Result.Metadata, &md); err != nil {
+	md, ok := vscodeCopilotMetadataOf(req)
+	if !ok {
 		return ParsedUsageEvent{}, false
 	}
 	if md.PromptTokens <= 0 && md.OutputTokens <= 0 {
@@ -340,11 +346,7 @@ func vscodeCopilotUsageEvent(
 	// resolvedModel is already in pricing-catalog form
 	// (e.g. "claude-opus-4-8"). Fall back to the prefixed modelId
 	// (e.g. "copilot/claude-opus-4.8") and normalize it.
-	model := md.ResolvedModel
-	if model == "" {
-		model = strings.TrimPrefix(req.ModelID, "copilot/")
-	}
-	model = normalizeCopilotModel(model)
+	model := vscodeCopilotModel(req, md)
 
 	return ParsedUsageEvent{
 		Source:       "vscode-copilot",
@@ -353,6 +355,37 @@ func vscodeCopilotUsageEvent(
 		OutputTokens: md.OutputTokens,
 		OccurredAt:   timeString(req.Timestamp.Time(), sessionStart),
 	}, true
+}
+
+// vscodeCopilotMetadataOf decodes a request's result.metadata, which
+// carries the per-turn token accounting and resolved model. ok is
+// false when the request has no metadata object.
+func vscodeCopilotMetadataOf(
+	req vscodeCopilotRequest,
+) (vscodeCopilotMetadata, bool) {
+	if req.Result == nil || len(req.Result.Metadata) == 0 {
+		return vscodeCopilotMetadata{}, false
+	}
+	var md vscodeCopilotMetadata
+	if err := json.Unmarshal(req.Result.Metadata, &md); err != nil {
+		return vscodeCopilotMetadata{}, false
+	}
+	return md, true
+}
+
+// vscodeCopilotModel resolves the model that served a request, for
+// both its usage event and its assistant message. resolvedModel is
+// already in pricing-catalog form (e.g. "claude-opus-4-8"); the
+// prefixed modelId (e.g. "copilot/claude-opus-4.8") is the fallback
+// used when a request carries no metadata.
+func vscodeCopilotModel(
+	req vscodeCopilotRequest, md vscodeCopilotMetadata,
+) string {
+	model := md.ResolvedModel
+	if model == "" {
+		model = strings.TrimPrefix(req.ModelID, "copilot/")
+	}
+	return normalizeCopilotModel(model)
 }
 
 // parseVSCodeCopilotResponse extracts text and tool calls
