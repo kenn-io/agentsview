@@ -350,8 +350,6 @@
             placeholder={m.agent_remap_select_agent()}
             title={m.agent_remap_source()}
             emptyLabel={m.agent_remap_no_matching_agent()}
-            allowCustom
-            customLabel={m.agent_remap_use_custom_agent({ query: "{query}" })}
             onselect={(value) => {
               sourceAgent = value;
             }}
@@ -396,8 +394,6 @@
             placeholder={m.agent_remap_select_agent()}
             title={m.agent_remap_target()}
             emptyLabel={m.agent_remap_no_matching_agent()}
-            allowCustom
-            customLabel={m.agent_remap_use_custom_agent({ query: "{query}" })}
             onselect={(value) => {
               targetAgent = value;
             }}

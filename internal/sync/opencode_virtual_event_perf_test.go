@@ -53,6 +53,9 @@ func TestOpenCodeVirtualEventDoesNotRecheckUnrelatedMembers(t *testing.T) {
 						require.NoError(t, err)
 					}
 					require.Equal(t, count, env.engine.SyncAll(t.Context(), nil).Synced)
+					// Keep the scheduled background duplicate-group rebuild out
+					// of the measured region.
+					env.engine.WaitDuplicateGroupRebuildDrained()
 					path := parser.OpenCodeSQLiteVirtualPath(oc.path, "ses00000")
 					var syncErr error
 					allocations = append(allocations, testing.AllocsPerRun(3, func() {
@@ -107,6 +110,9 @@ func TestOpenCodeMissingSidecarWorkStaysBounded(t *testing.T) {
 				}
 			})
 			require.Equal(t, count, env.engine.SyncAll(t.Context(), nil).Synced)
+			// Keep the scheduled background duplicate-group rebuild out of
+			// the measured region.
+			env.engine.WaitDuplicateGroupRebuildDrained()
 			require.NoError(t, oc.db.Close())
 			for _, suffix := range []string{"-wal", "-shm"} {
 				work := testing.AllocsPerRun(3, func() {

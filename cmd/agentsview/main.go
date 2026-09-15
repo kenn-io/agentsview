@@ -534,6 +534,11 @@ func runServe(cfg config.Config, opts serveOptions) {
 		srvOpts = append(srvOpts, server.WithLocalCompactRunner(
 			newForegroundCompactRunner(engine, database),
 		))
+		// Trash, restore, and permanent-delete routes change which sessions
+		// form duplicate groups; the scheduled rebuild re-derives membership
+		// and emits "sessions" when it changed. Notify never blocks.
+		srvOpts = append(srvOpts,
+			server.WithSessionMutationNotifier(engine.ScheduleDuplicateGroupRebuild))
 	}
 	srvOpts = append(srvOpts, server.WithArtifactExchangeRunner(
 		newDaemonArtifactExchangeRunner(cfg, database, engine, emitter),
