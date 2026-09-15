@@ -239,8 +239,12 @@ func (d *DB) RecordNotificationEvent(
 	return tx.Commit()
 }
 
-// NotificationEvents returns the recent decided notifications,
-// newest first. Diagnostics surface for the settings panel.
+// NotificationEvents returns the recent decided notifications, newest first,
+// capped at limit when limit > 0. It reads the bounded ring written by
+// RecordNotificationEvent.
+//
+// Only tests call it: no HTTP route, CLI command, or other production code
+// reads it today, so it is not currently a settings-panel diagnostics surface.
 func (d *DB) NotificationEvents(
 	ctx context.Context, limit int,
 ) ([]notify.Notification, error) {
