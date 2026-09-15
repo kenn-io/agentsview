@@ -105,6 +105,21 @@ func (w *startupStateWriter) SetPhase(phase string) {
 	w.write()
 }
 
+// SetPhaseDetail publishes a discrete startup step immediately. Unlike session
+// counters, a step may be reported only once before a long operation starts.
+func (w *startupStateWriter) SetPhaseDetail(phase, detail string) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.state.Phase == phase && w.state.Detail == detail {
+		return
+	}
+	w.state.Phase, w.state.Detail = phase, detail
+	w.write()
+}
+
 // SetCaddyProcess publishes the managed proxy identity as soon as it starts,
 // before the daemon runtime record exists. This lets daemon stop clean up the
 // proxy even when startup is interrupted before runtime publication.
