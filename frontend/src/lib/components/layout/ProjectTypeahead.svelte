@@ -14,6 +14,7 @@
     placeholder?: string;
     title?: string;
     emptyLabel?: string;
+    disabled?: boolean;
   }
 
   let {
@@ -27,6 +28,7 @@
     placeholder = m.shared_project_filter_placeholder(),
     title = m.shared_select_project(),
     emptyLabel = m.shared_no_matching_projects(),
+    disabled = false,
   }: Props = $props();
 
   const allOption = {
@@ -59,6 +61,7 @@
 </script>
 
 <Typeahead
+  {disabled}
   {options}
   {value}
   fallbackLabel={displayValue}

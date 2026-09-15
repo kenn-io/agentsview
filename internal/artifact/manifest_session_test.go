@@ -1,6 +1,7 @@
 package artifact
 
 import (
+	"encoding/json/v2"
 	"fmt"
 	"reflect"
 	"testing"
@@ -28,30 +29,44 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	var sess db.Session
 	populateWireFixture(t, reflect.ValueOf(&sess).Elem(), 1)
 
-	// Deliberate parity exemption: quality_signals is hoisted to the
+	// Deliberate parity exemptions: quality_signals is hoisted to the
 	// manifest-level session_quality_signals field because db.Session's
 	// pointer is load-path-transient (see the manifestSession struct
-	// comment). The reference for parity is the session without it.
+	// comment). project_assigned records database-only assignment provenance;
+	// the selected project itself is already carried by the project field.
+	// The reference for parity excludes both fields.
 	reference := sess
 	reference.QualitySignals = nil
 	type sessionAlias db.Session
+	artifactReference := func(s db.Session) ([]byte, error) {
+		data, err := canonicalJSON(sessionAlias(s))
+		if err != nil {
+			return nil, err
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(data, &fields); err != nil {
+			return nil, err
+		}
+		delete(fields, "project_assigned")
+		return canonicalJSON(fields)
+	}
 
-	want, err := canonicalJSON(sessionAlias(reference))
+	want, err := artifactReference(reference)
 	require.NoError(t, err)
 	got, err := canonicalJSON(manifestSessionFromDB(sess))
 	require.NoError(t, err)
 	assert.Equal(t, string(want), string(got),
-		"manifestSession must serialize byte-identically to db.Session minus quality_signals")
+		"manifestSession must serialize byte-identically to db.Session minus database-only fields")
 
 	withoutPointer, err := canonicalJSON(manifestSessionFromDB(reference))
 	require.NoError(t, err)
 	assert.Equal(t, string(got), string(withoutPointer),
 		"manifest bytes must not depend on the transient quality_signals pointer")
 
-	roundTrip, err := canonicalJSON(sessionAlias(manifestSessionFromDB(sess).dbSession()))
+	roundTrip, err := artifactReference(manifestSessionFromDB(sess).dbSession())
 	require.NoError(t, err)
 	assert.Equal(t, string(want), string(roundTrip),
-		"converting to the wire DTO and back must preserve every wire-visible field")
+		"converting to the wire DTO and back must preserve every artifact-visible field")
 }
 
 func TestManifestQualitySignalsMatchesDBWireFormat(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,11 +15,12 @@ import (
 
 const worktreeCandidateExampleLimit = 10
 
-// ArchiveWorktreeCandidateRequest selects a project across the whole
-// archive, with no Activity date range or filter scoping.
+// ArchiveWorktreeCandidateRequest selects a project with an optional Data
+// date range, independently of the Activity page's filters.
 type ArchiveWorktreeCandidateRequest struct {
 	ProjectLabel string
 	ProjectKey   string
+	ProjectDateFilter
 }
 
 type WorktreeCandidateExample struct {
@@ -58,7 +60,7 @@ type worktreeCandidateGroup struct {
 
 // ListArchiveWorktreeCandidates returns the machine/path groups for a
 // project selected by (display label, project key) across every visible
-// session in the archive, with no Activity date range or filter scoping.
+// session in the archive that falls within the optional Data date range.
 func (db *DB) ListArchiveWorktreeCandidates(
 	ctx context.Context,
 	request ArchiveWorktreeCandidateRequest,
@@ -66,7 +68,7 @@ func (db *DB) ListArchiveWorktreeCandidates(
 	if strings.TrimSpace(request.ProjectKey) == "" {
 		return nil, fmt.Errorf("project_key is required")
 	}
-	sessions, err := db.archiveWorktreeCandidateSessions(ctx)
+	sessions, err := db.archiveWorktreeCandidateSessions(ctx, request.ProjectDateFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -96,16 +98,15 @@ func (db *DB) ListArchiveWorktreeCandidates(
 }
 
 // SelectWorktreeCandidateProjects validates that the requested display label
-// identifies the requested opaque project key, then expands the selection to
-// raw labels with the same resolved project identity. The display label
-// disambiguates a clicked inventory row; it must not exclude historical
-// aliases that display differently but resolve to the same repository.
+// identifies the requested opaque project key, then selects every raw label
+// represented by that exact inventory project. Distinct project keys can
+// resolve to the same repository while still representing different inventory
+// rows and session sets, so repository identity must not broaden the selection.
 func SelectWorktreeCandidateProjects(
 	request ArchiveWorktreeCandidateRequest,
 	labels map[string]struct{},
 	projects map[string]export.ProjectMapEntry,
 ) map[string]struct{} {
-	identityKeys := make(map[string]struct{})
 	labelMatches := false
 	for label := range labels {
 		entry := projects[label]
@@ -114,11 +115,6 @@ func SelectWorktreeCandidateProjects(
 			continue
 		}
 		labelMatches = true
-		if entry.Resolution == export.ProjectResolutionResolved &&
-			entry.Identity != nil &&
-			strings.TrimSpace(entry.Identity.Key) != "" {
-			identityKeys[entry.Identity.Key] = struct{}{}
-		}
 	}
 	if !labelMatches {
 		return map[string]struct{}{}
@@ -128,14 +124,6 @@ func SelectWorktreeCandidateProjects(
 	for label := range labels {
 		entry := projects[label]
 		if entry.ProjectKey == request.ProjectKey {
-			selected[label] = struct{}{}
-			continue
-		}
-		if entry.Resolution != export.ProjectResolutionResolved ||
-			entry.Identity == nil {
-			continue
-		}
-		if _, ok := identityKeys[entry.Identity.Key]; ok {
 			selected[label] = struct{}{}
 		}
 	}
@@ -150,18 +138,21 @@ type archiveCandidateSessionRef struct {
 }
 
 // archiveWorktreeCandidateSessions returns every archive-wide visible
-// session (deleted_at IS NULL) with no date or relationship-type bound.
+// session (deleted_at IS NULL) within the optional Data date range, without
+// excluding child or empty sessions.
 // Data inventory counts these same rows, including zero-message sessions,
 // so the selected project's session count and its folder groups stay
 // reconcilable.
 func (db *DB) archiveWorktreeCandidateSessions(
 	ctx context.Context,
+	filter ProjectDateFilter,
 ) ([]archiveCandidateSessionRef, error) {
+	where, args := BuildSessionBaseFilterSQL(filter.SessionFilter(), SQLiteQueryDialect())
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT id, project
 		FROM sessions
-		WHERE deleted_at IS NULL
-		ORDER BY id`)
+		WHERE `+where+`
+		ORDER BY id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying archive worktree candidate sessions: %w", err)
 	}
@@ -216,7 +207,10 @@ func BuildWorktreeCandidates(
 	groups := make(map[worktreeCandidateGroupKey]*worktreeCandidateGroup)
 	for _, session := range sessions {
 		key := worktreeCandidateGroupKey{machine: session.Machine}
-		if root := candidateSnapshotRoot(session); root != "" {
+		if prefix := observedWorktreePrefix(session.Cwd); prefix != "" {
+			key.kind, key.root = "worktree", prefix
+		} else if root := candidateSnapshotRoot(session); root != "" &&
+			worktreePathMatches(root, normalizedMappingPath(session.Cwd)) {
 			key.kind, key.root = "snapshot", root
 		} else if root := compatibleAggregateRoot(session, observations); root != "" {
 			key.kind, key.root = "aggregate", root
@@ -232,6 +226,7 @@ func BuildWorktreeCandidates(
 		}
 		group.sessions = append(group.sessions, session)
 	}
+	groups = collapseObservedParents(groups)
 
 	result := make([]WorktreeReclassificationCandidate, 0, len(groups))
 	for _, group := range groups {
@@ -242,6 +237,12 @@ func BuildWorktreeCandidates(
 		if left.Machine != right.Machine {
 			return left.Machine < right.Machine
 		}
+		if left.Available != right.Available {
+			return left.Available
+		}
+		if left.ContributingSessions != right.ContributingSessions {
+			return left.ContributingSessions > right.ContributingSessions
+		}
 		if candidateKindOrder(left.EvidenceKind) != candidateKindOrder(right.EvidenceKind) {
 			return candidateKindOrder(left.EvidenceKind) < candidateKindOrder(right.EvidenceKind)
 		}
@@ -251,6 +252,74 @@ func BuildWorktreeCandidates(
 		return left.ID < right.ID
 	})
 	return result
+}
+
+// observedWorktreePrefix only truncates a recorded cwd. It never constructs
+// a sibling checkout or guesses a repository from a similar folder name.
+func observedWorktreePrefix(cwd string) string {
+	cwd = normalizedMappingPath(cwd)
+	for _, marker := range []string{"/.claude/worktrees/", "/.worktrees/"} {
+		if before, _, ok := strings.Cut(cwd, marker); ok {
+			return before + strings.TrimSuffix(marker, "/")
+		}
+	}
+	for _, marker := range []string{"/.t3/worktrees/", "/.superset/worktrees/", "/conductor/workspaces/", "/.roborev/ci-worktrees/"} {
+		if before, after, ok := strings.Cut(cwd, marker); ok {
+			repo, _, _ := strings.Cut(after, "/")
+			return before + marker + repo
+		}
+	}
+	parts := strings.Split(cwd, "/")
+	for i, part := range parts {
+		if strings.HasSuffix(part, ".worktrees") && part != ".worktrees" {
+			return strings.Join(parts[:i+1], "/")
+		}
+	}
+	return ""
+}
+
+// Collapse sibling observations once, at their nearest shared parent. Do not
+// repeatedly climb toward a home directory or drive root, and do not broaden
+// a known worktree container. Each group retains its actual session examples.
+func collapseObservedParents(
+	groups map[worktreeCandidateGroupKey]*worktreeCandidateGroup,
+) map[worktreeCandidateGroupKey]*worktreeCandidateGroup {
+	parents := make(map[worktreeCandidateGroupKey][]*worktreeCandidateGroup)
+	for _, group := range groups {
+		if group.key.kind == "worktree" || group.key.kind == "unavailable" {
+			continue
+		}
+		candidate := candidateFromGroup(group)
+		if !candidate.Available {
+			continue
+		}
+		parent := path.Dir(candidate.SuggestedPrefix)
+		if strings.HasPrefix(candidate.SuggestedPrefix, "//") {
+			parent = "/" + parent // path.Dir cleans the UNC double slash.
+		}
+		if parent == "." || isFilesystemRootMappingPath(parent) ||
+			(len(parent) == 2 && parent[1] == ':') {
+			continue
+		}
+		key := worktreeCandidateGroupKey{machine: group.key.machine, kind: "parent", root: parent}
+		parents[key] = append(parents[key], group)
+	}
+	for key, children := range parents {
+		paths := make(map[string]struct{})
+		for _, child := range children {
+			paths[candidateFromGroup(child).SuggestedPrefix] = struct{}{}
+		}
+		if len(paths) < 2 {
+			continue
+		}
+		merged := &worktreeCandidateGroup{key: key}
+		for _, child := range children {
+			merged.sessions = append(merged.sessions, child.sessions...)
+			delete(groups, child.key)
+		}
+		groups[key] = merged
+	}
+	return groups
 }
 
 func (db *DB) loadWorktreeCandidateSessions(
@@ -365,9 +434,12 @@ func candidateFromGroup(group *worktreeCandidateGroup) WorktreeReclassificationC
 	}
 	suggestedPrefix := ""
 	if len(paths) > 0 {
-		if group.key.kind == "fallback" {
+		switch group.key.kind {
+		case "worktree", "parent":
+			suggestedPrefix = group.key.root
+		case "fallback":
 			suggestedPrefix = group.key.fallbackCwd
-		} else {
+		default:
 			suggestedPrefix = longestCommonDirectoryPrefix(paths)
 		}
 	}

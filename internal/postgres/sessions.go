@@ -44,7 +44,7 @@ type Store struct {
 
 // pgSessionBaseCols is the column list for PG session queries that do not
 // expose source paths.
-const pgSessionBaseCols = `id, project, machine, agent,
+const pgSessionBaseCols = `id, project, project_assigned, machine, agent,
 	agent_label, entrypoint, session_kind,
 	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
 	ended_at, message_count, user_message_count,
@@ -214,7 +214,7 @@ func scanPGSessionWithSource(
 	var createdAt *time.Time
 	var startedAt, endedAt, deletedAt *time.Time
 	targets := []any{
-		&s.ID, &s.Project, &s.Machine, &s.Agent,
+		&s.ID, &s.Project, &s.ProjectAssigned, &s.Machine, &s.Agent,
 		&s.AgentLabel, &s.Entrypoint, &s.SessionKind,
 		&s.FirstMessage, &s.DisplayName,
 		&createdAt, &startedAt, &endedAt,
@@ -556,6 +556,7 @@ func (s *Store) GetSidebarSessionIndex(
 			parent_session_id,
 			relationship_type,
 			project,
+			project_assigned,
 			machine,
 			agent,
 			agent_label,
@@ -796,6 +797,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			s.parent_session_id,
 			s.relationship_type,
 			s.project,
+			s.project_assigned,
 			s.machine,
 			s.agent,
 			s.agent_label,
@@ -844,6 +846,7 @@ func scanPGSidebarSessionIndexRows(
 			&row.ParentSessionID,
 			&row.RelationshipType,
 			&row.Project,
+			&row.ProjectAssigned,
 			&row.Machine,
 			&row.Agent,
 			&row.AgentLabel,

@@ -6,9 +6,26 @@
   import type { DbProjectInventoryRow } from "../../api/generated/index";
   import type { ProjectInfo } from "../../api/types/core.js";
   import ProjectInventoryTable from "./ProjectInventoryTable.svelte";
+  import ProjectBatchWorkspace from "./ProjectBatchWorkspace.svelte";
   import ProjectWorkspace from "./ProjectWorkspace.svelte";
   import WorktreeMappingRules from "./WorktreeMappingRules.svelte";
-  import { SegmentedControl, type SegmentedControlOption } from "@kenn-io/kit-ui";
+  import RangePicker from "../shared/RangePicker.svelte";
+  import type { RangeSelection } from "../shared/rangeSelection.js";
+  import {
+    FlashBanner,
+    SegmentedControl,
+    showFlash,
+    type SegmentedControlOption,
+  } from "@kenn-io/kit-ui";
+  import { PROJECT_MAPPING_WORKSPACE_ENABLED } from "../../feature-flags.js";
+
+  interface Props {
+    projectWorkspaceEnabled?: boolean;
+  }
+
+  let {
+    projectWorkspaceEnabled = PROJECT_MAPPING_WORKSPACE_ENABLED,
+  }: Props = $props();
 
   const viewOptions: SegmentedControlOption[] = $derived([
     { value: "inventory", label: m.data_view_inventory() },
@@ -16,6 +33,7 @@
   ]);
 
   let workspaceGeneration = $state(0);
+  let selectedProjectKeys = $state<string[]>([]);
 
   const dataReadOnly = $derived(sync.serverVersion === null || sync.readOnly);
 
@@ -24,15 +42,38 @@
     return rows.map((row) => ({ name: row.label, session_count: row.sessions }));
   });
 
+  const tableSelectedKeys = $derived(
+    selectedProjectKeys.length > 0
+      ? selectedProjectKeys
+      : data.selectedProjectKey
+        ? [data.selectedProjectKey]
+        : [],
+  );
+
+  const selectedRows = $derived.by((): DbProjectInventoryRow[] => {
+    const rows = (data.inventory?.projects ?? []) as DbProjectInventoryRow[];
+    const keys = new Set(tableSelectedKeys);
+    return rows.filter((row) => keys.has(row.project_key));
+  });
+
   function onViewChange(value: string) {
-    if (value === "rules") data.showRules();
+    if (value === "rules") {
+      selectedProjectKeys = [];
+      data.showRules();
+    }
     else data.showInventory();
+  }
+
+  function openRules(machine: string) {
+    selectedProjectKeys = [];
+    data.showRules(machine);
   }
 
   function selectProjectByLabel(label: string) {
     const rows = data.inventory?.projects ?? [];
     const row = rows.find((r) => r.label === label);
     if (row) {
+      selectedProjectKeys = [row.project_key];
       data.selectProject(row.project_key);
     } else {
       // The inventory may not have loaded yet, or the rule may target a
@@ -44,6 +85,7 @@
 
   function closeWorkspace() {
     const key = data.selectedProjectKey;
+    selectedProjectKeys = [];
     data.clearSelection();
     requestAnimationFrame(() => {
       // Match on dataset instead of an attribute selector so arbitrary
@@ -57,10 +99,55 @@
     });
   }
 
+  function selectProjects(activeKey: string, keys: string[]) {
+    selectedProjectKeys = keys;
+    data.selectProject(activeKey);
+  }
+
+  function selectDateRange(selection: RangeSelection) {
+    selectedProjectKeys = [];
+    workspaceGeneration += 1;
+    data.setDateSelection(selection);
+  }
+
+  async function refreshSingleCorrection(key: string, target: string): Promise<boolean> {
+    const refreshed = await data.refreshAfterApply(key, target);
+    if (refreshed) {
+      selectedProjectKeys = data.selectedProjectKey ? [data.selectedProjectKey] : [];
+    }
+    return refreshed;
+  }
+
+  async function refreshBatchCorrection(target: string): Promise<boolean> {
+    const refreshed = await data.loadAfterMutation();
+    if (!refreshed) return false;
+    const rows = (data.inventory?.projects ?? []) as DbProjectInventoryRow[];
+    const targetRow = rows.find((row) => row.label === target);
+    selectedProjectKeys = targetRow ? [targetRow.project_key] : [];
+    if (targetRow) data.selectProject(targetRow.project_key);
+    else data.clearSelection();
+    return true;
+  }
+
+  function completeCorrection(target: string) {
+    workspaceGeneration += 1;
+    showFlash(m.data_reclassify_saved({ project: target }), { tone: "success" });
+  }
+
+  function completeBatchCorrection(target: string, _count: number) {
+    workspaceGeneration += 1;
+    showFlash(m.data_batch_saved({ project: target }), { tone: "success" });
+  }
+
   onMount(() => {
-    const detach = data.attach();
-    void data.load();
+    const detach = data.attach(projectWorkspaceEnabled);
+    const clearRangeSelection = () => {
+      selectedProjectKeys = [];
+    };
+    window.addEventListener("popstate", clearRangeSelection);
+    if (projectWorkspaceEnabled) void data.load();
     return () => {
+      window.removeEventListener("popstate", clearRangeSelection);
       data.cancelInFlightReads();
       detach();
     };
@@ -68,17 +155,38 @@
 </script>
 
 <div class="data-page">
-  <div class="data-header">
-    <h2>{m.data_projects_heading()}</h2>
-    <SegmentedControl
-      options={viewOptions}
-      value={data.view}
-      ariaLabel={m.data_view_toggle_label()}
-      onchange={onViewChange}
-    />
-  </div>
+  <FlashBanner toneLabels={{ success: m.data_flash_success_label() }} />
+  {#if projectWorkspaceEnabled}
+    <div class="data-header">
+      <div class="header-summary">
+        <h2>{m.data_projects_heading()}</h2>
+        {#if data.view === "inventory" && data.inventory}
+          <div class="summary-strip">
+            <span>{m.data_summary_projects({ count: data.inventory.total_projects })}</span>
+            <span>{m.data_summary_sessions({ count: data.inventory.total_sessions })}</span>
+            {#if !data.dateFiltered}
+              <span>{m.data_summary_governed({ count: data.inventory.governed_sessions })}</span>
+            {/if}
+          </div>
+        {/if}
+      </div>
+      {#if data.view === "inventory"}
+        <RangePicker selection={data.dateSelection} onSelect={selectDateRange} busy={data.loading} />
+      {/if}
+      <SegmentedControl
+        options={viewOptions}
+        value={data.view}
+        ariaLabel={m.data_view_toggle_label()}
+        onchange={onViewChange}
+      />
+    </div>
+  {/if}
 
-  {#if data.view === "rules"}
+  {#if projectWorkspaceEnabled && data.view === "inventory" && data.dateFiltered}
+    <p class="notice">{m.data_date_filter_scope()}</p>
+  {/if}
+
+  {#if !projectWorkspaceEnabled || data.view === "rules"}
     <!-- The rules component captures its machine prop once at mount, so
          store-driven machine changes remount it and reset machine-specific
          form state. Background refreshes stay in place so drafts survive. -->
@@ -88,20 +196,16 @@
         machine={data.rulesMachine}
         refreshVersion={data.rulesRefreshVersion}
         onMachineChange={(machine) => data.setRulesMachine(machine)}
-        onSelectProject={selectProjectByLabel}
-        onMutated={() => void data.load({ background: true })}
+        onSelectProject={projectWorkspaceEnabled ? selectProjectByLabel : undefined}
+        onMutated={projectWorkspaceEnabled
+          ? () => void data.load({ background: true })
+          : undefined}
       />
     {/key}
   {:else if data.inventory}
     <!-- Inventory-first ordering: once inventory has loaded once it keeps
          rendering through background reloads; loading/error below only
          apply before that first successful load. -->
-    <div class="summary-strip">
-      <span>{m.data_summary_projects({ count: data.inventory.total_projects })}</span>
-      <span>{m.data_summary_sessions({ count: data.inventory.total_sessions })}</span>
-      <span>{m.data_summary_governed({ count: data.inventory.governed_sessions })}</span>
-    </div>
-
     {#if data.unknownProjectKey}
       <div class="notice" role="status">{m.data_unknown_project_key()}</div>
     {/if}
@@ -109,25 +213,40 @@
     {#if data.inventory.total_projects === 0}
       <div class="status">{m.data_empty()}</div>
     {:else}
-      <div class="split" class:has-selection={data.selectedRow !== null}>
+      <div class="split" class:has-selection={selectedRows.length > 0}>
         <div class="pane-table">
           <ProjectInventoryTable
             inventory={data.inventory}
-            selectedKey={data.selectedProjectKey}
-            onSelect={(key) => data.selectProject(key)}
+            selectedKeys={tableSelectedKeys}
+            onSelect={selectProjects}
+            onClear={closeWorkspace}
           />
         </div>
-        {#if data.selectedRow}
+        {#if selectedRows.length > 1}
           <div class="pane-detail">
-            {#key `${data.selectedProjectKey}:${workspaceGeneration}`}
-              <ProjectWorkspace
-                row={data.selectedRow}
+            {#key `${tableSelectedKeys.join(":")}:${workspaceGeneration}:${JSON.stringify(data.dateParams)}`}
+              <ProjectBatchWorkspace
+                rows={selectedRows}
                 projects={inventoryProjects}
                 readOnly={dataReadOnly}
                 onClose={closeWorkspace}
-                onRefresh={(key, target) => data.refreshAfterApply(key, target)}
-                onComplete={() => (workspaceGeneration += 1)}
-                onOpenRules={(machine) => data.showRules(machine)}
+                onRefresh={refreshBatchCorrection}
+                onComplete={completeBatchCorrection}
+                onOpenRules={openRules}
+              />
+            {/key}
+          </div>
+        {:else if selectedRows[0]}
+          <div class="pane-detail">
+            {#key `${data.selectedProjectKey}:${workspaceGeneration}:${JSON.stringify(data.dateParams)}`}
+              <ProjectWorkspace
+                row={selectedRows[0]}
+                projects={inventoryProjects}
+                readOnly={dataReadOnly}
+                onClose={closeWorkspace}
+                onRefresh={refreshSingleCorrection}
+                onComplete={completeCorrection}
+                onOpenRules={openRules}
               />
             {/key}
           </div>
@@ -152,14 +271,22 @@
     gap: 12px;
     padding: 12px;
     min-height: 0;
-    overflow-y: auto;
+    overflow: hidden;
   }
 
   .data-header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+  }
+
+  .header-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
   }
 
   h2 {
@@ -169,36 +296,46 @@
 
   .summary-strip {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 16px;
+    gap: 4px 16px;
     font-size: 11px;
     color: var(--text-muted);
   }
 
   .split {
-    display: flex;
-    gap: 12px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-5);
     min-height: 0;
     flex: 1;
   }
 
-  .pane-table {
-    flex: 1 1 55%;
-    min-width: 0;
+  .split.has-selection {
+    grid-template-columns: minmax(380px, 1.15fr) minmax(340px, 0.85fr);
   }
 
+  .pane-table,
   .pane-detail {
-    flex: 1 1 45%;
     min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
   }
 
   @media (max-width: 760px) {
+    .split.has-selection {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
     .split.has-selection .pane-table {
       display: none;
     }
 
     .pane-detail {
-      flex-basis: 100%;
+      grid-column: 1 / -1;
     }
   }
 

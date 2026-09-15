@@ -32,6 +32,14 @@ by classification rules.
 Selecting a row opens the project workspace. Unknown `project_key` deep links
 show the full inventory with a non-blocking notice.
 
+The optional date picker limits the sessions used for project counts, folder
+suggestions, and session previews. Choose a calendar month such as August, a
+custom range, or **All time** to remove the filter. Dates use your browser's
+timezone and include sessions whose activity overlaps the range. The governed
+session total is archive-wide and is hidden while a date filter is active.
+Folder rules still apply across all dates; this filter changes what you browse,
+not which sessions a rule can correct.
+
 ![Observed folders for a selected project](/docs/assets/generated/screenshots/data-workspace.png)
 
 ## Create A Project Mapping
@@ -60,6 +68,25 @@ one atomic step, then reloads the inventory. If the applied rule renamed the
 selected project, the selection follows the new name. If mappings changed
 between preview and apply, the apply is rejected and a fresh preview is
 required.
+
+Session previews appear below the correction controls. Their header contains
+previous/next navigation and a filter button to include automated sessions,
+which are hidden by default. Navigation loads another page of session records
+only when needed, and loads transcript messages only for the selected session.
+Sessions without stored messages remain available for mapping, with a notice
+instead of a transcript. Collapse folder suggestions to give previews more room.
+
+During a bulk correction, the Save button shows the number of completed
+corrections and a progress bar. Each correction applies separately. Overlapping
+previews count each matched or changing session once. If the rules also match
+projects outside your selection, Save first asks you to confirm. Folder
+suggestions stay grouped by project, then machine, with larger session groups
+first within each machine.
+
+Bulk saves stop if another rule edit or a change to the affected sessions makes
+the reviewed impact stale. The editor refreshes the impact and asks you to
+confirm again. Corrections already saved remain applied; their expected effects
+do not interrupt the rest of the batch.
 
 ## Rules
 

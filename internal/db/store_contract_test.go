@@ -685,7 +685,7 @@ func contractDataInventoryRulesCandidates(
 	t.Helper()
 	ctx := context.Background()
 
-	inventory, err := store.GetProjectInventory(ctx)
+	inventory, err := store.GetProjectInventory(ctx, ProjectDateFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 3, inventory.TotalProjects)
 	assert.Equal(t, 6, inventory.TotalSessions,

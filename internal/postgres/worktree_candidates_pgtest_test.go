@@ -143,9 +143,57 @@ func TestPGWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 	assert.Equal(t, "host-b.example", localCandidates[4].Machine,
 		"the other-machine session forms its own group despite sharing a cwd")
 	assert.Equal(t, "fallback", localCandidates[4].EvidenceKind)
+
+	filter := db.ProjectDateFilter{DateFrom: "2020-01-01", DateTo: "2020-01-31", Timezone: "UTC"}
+	req.ProjectDateFilter = filter
+	localFiltered, err := localDB.ListArchiveWorktreeCandidates(ctx, req)
+	require.NoError(t, err)
+	pgFiltered, err := pgStore.ListArchiveWorktreeCandidates(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, localFiltered, pgFiltered)
+	require.Len(t, pgFiltered, 1)
+	assert.Equal(t, 1, pgFiltered[0].ContributingSessions)
+	assert.Equal(t, "old-session", pgFiltered[0].Examples[0].SessionID)
+	localInventory, err := localDB.GetProjectInventory(ctx, filter)
+	require.NoError(t, err)
+	pgInventory, err := pgStore.GetProjectInventory(ctx, filter)
+	require.NoError(t, err)
+	localInventory.Projects = truncateInventoryRows(localInventory.Projects)
+	pgInventory.Projects = truncateInventoryRows(pgInventory.Projects)
+	assert.Equal(t, localInventory, pgInventory)
+	assert.Equal(t, 1, pgInventory.TotalSessions)
 }
 
-func TestPGWorktreeCandidatesIncludeResolvedProjectAliases(t *testing.T) {
+func TestPGWorktreeCandidatesCollapseObservedParents(t *testing.T) {
+	push, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_candidate_parents_test")
+	for id, cwd := range map[string]string{
+		"worktree-a": "/srv/repo/.claude/worktrees/run-a",
+		"worktree-b": "/srv/repo/.claude/worktrees/run-b/src",
+		"checkout-a": "D:/Repos/repo-feature-a",
+		"checkout-b": "D:/Repos/repo-feature-b",
+	} {
+		seedPGCandidateSession(t, local, id, "selected", "host.example", cwd, "2025-06-02T10:00:00Z")
+	}
+	_, err := push.Push(ctx, false, nil)
+	require.NoError(t, err)
+	projects, err := local.BuildProjectIdentityMap(ctx, []string{"selected"})
+	require.NoError(t, err)
+	request := db.ArchiveWorktreeCandidateRequest{
+		ProjectLabel: "selected", ProjectKey: projects["selected"].ProjectKey,
+	}
+	want, err := local.ListArchiveWorktreeCandidates(ctx, request)
+	require.NoError(t, err)
+	got, err := (&Store{pg: pg}).ListArchiveWorktreeCandidates(ctx, request)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+	require.Len(t, got, 2)
+	assert.ElementsMatch(t, []string{"/srv/repo/.claude/worktrees", "D:/Repos"},
+		[]string{got[0].SuggestedPrefix, got[1].SuggestedPrefix})
+	assert.Equal(t, 2, got[0].ContributingSessions)
+	assert.Equal(t, 2, got[1].ContributingSessions)
+}
+
+func TestPGWorktreeCandidatesExcludeDifferentProjectKeys(t *testing.T) {
 	const schema = "agentsview_worktree_candidates_alias_test"
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 	const (
@@ -199,7 +247,9 @@ func TestPGWorktreeCandidatesIncludeResolvedProjectAliases(t *testing.T) {
 
 	assert.Equal(t, localCandidates, pgCandidates)
 	require.Len(t, pgCandidates, 1)
-	assert.Equal(t, 2, pgCandidates[0].ContributingSessions)
+	assert.Equal(t, 1, pgCandidates[0].ContributingSessions)
+	require.Len(t, pgCandidates[0].Examples, 1)
+	assert.Equal(t, "primary-session", pgCandidates[0].Examples[0].SessionID)
 }
 
 func TestPGWorktreeCandidatesUseSessionDatabaseGeneration(t *testing.T) {

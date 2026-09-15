@@ -64,6 +64,8 @@ func TestWorktreeReclassificationPreviewCountsAlreadyTargetSessionsByProject(
 
 	assert.Equal(t, 2, preview.MatchedSessions)
 	assert.Equal(t, 1, preview.UpdatedSessions)
+	assert.ElementsMatch(t, []string{"already-target", "changes-project"}, preview.MatchedSessionIDs)
+	assert.Equal(t, []string{"changes-project"}, preview.UpdatedSessionIDs)
 	assert.Equal(t, 2, preview.DistinctProjects)
 	assert.Equal(t, []WorktreeReclassificationProjectSample{
 		{Project: "branch", Count: 1},
@@ -95,6 +97,11 @@ func TestWorktreeReclassificationPreviewHonorsSpecificRuleAndBoundsSamples(t *te
 	assert.Equal(t, 14, preview.MatchedSessions)
 	assert.Equal(t, 14, preview.UpdatedSessions)
 	assert.Equal(t, 14, preview.DistinctProjects)
+	assert.Equal(t, []string{
+		"branch_00", "branch_01", "branch_02", "branch_03", "branch_04",
+		"branch_05", "branch_06", "branch_07", "branch_08", "branch_09",
+		"branch_10", "branch_11", "branch_12", "branch_13",
+	}, preview.MatchedProjects)
 	assert.Len(t, preview.ProjectSamples, 10)
 	assert.Len(t, preview.SessionSamples, 10)
 	assert.Equal(t, "branch_00", preview.ProjectSamples[0].Project)
@@ -137,6 +144,11 @@ func TestWorktreeReclassificationTokenBindsDraftAndAffectedSessions(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, "branch", mapping.OriginalProject)
 	assert.Equal(t, 2, applied.UpdatedSessions)
+	afterSave, err := d.PreviewWorktreeReclassification(ctx, draft)
+	require.NoError(t, err)
+	assert.NotEqual(t, current.MappingSetToken, applied.MappingSetToken)
+	assert.Equal(t, afterSave.MappingSetToken, applied.MappingSetToken,
+		"batch continuation must identify precisely the rules committed by this save")
 
 	stalePreview, err := d.PreviewWorktreeReclassification(ctx, WorktreeReclassificationDraft{
 		Machine: "other.example", PathPrefix: "/worktrees/service",
