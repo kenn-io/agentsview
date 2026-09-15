@@ -387,6 +387,7 @@ func runDuckDBServe(appCfg config.Config, basePath string) {
 
 	rtOpts := serveRuntimeOptions{
 		Mode:          "duckdb-serve",
+		BasePath:      basePath,
 		RequestedPort: appCfg.Port,
 	}
 	appCfg, err = prepareServeRuntimeConfig(appCfg, rtOpts)
@@ -404,7 +405,7 @@ func runDuckDBServe(appCfg config.Config, basePath string) {
 		server.WithBaseContext(ctx),
 	}
 	if basePath != "" {
-		opts = append(opts, server.WithBasePath(basePath))
+		opts = append(opts, server.WithBasePath(rtOpts.BasePath))
 	}
 	srv := server.New(appCfg, store, nil, opts...)
 	rt, err := startServerWithOptionalCaddy(ctx, appCfg, srv, rtOpts)
