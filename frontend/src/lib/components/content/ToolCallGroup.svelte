@@ -6,8 +6,8 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { formatMessageForCopy } from "../../utils/copy-message.js";
   import { parseContent, enrichSegments } from "../../utils/content-parser.js";
-  import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
+  import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import ToolBlock from "./ToolBlock.svelte";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import { collectSearchBlocks } from "../../search/block-text.js";
@@ -54,10 +54,13 @@
     return map;
   });
 
-  function soloDurationLabel(ct: CallTiming | undefined, turn: TurnTiming | undefined, msg: Message): string | undefined {
-    if (ct?.subagent_session_id && ct.duration_ms != null) return formatDuration(ct.duration_ms);
-    if (turn?.duration_ms != null) return formatDuration(turn.duration_ms);
-    if (sessionTiming.timing?.running && turn != null) {
+  function soloDurationLabel(
+    ct: CallTiming | undefined,
+    turn: TurnTiming | undefined,
+    msg: Message,
+  ): string | undefined {
+    if (ct?.duration_ms != null) return formatDuration(ct.duration_ms);
+    if (sessionTiming.timing?.running && turn != null && turn.duration_ms == null) {
       const startMs = new Date(turn.started_at ?? msg.timestamp).getTime();
       const elapsed = Number.isNaN(startMs) ? 0 : Math.max(0, liveTick.now - startMs);
       return m.tool_call_group_running_duration({ duration: formatDuration(elapsed) });
@@ -117,7 +120,11 @@
             toolCall={soloCall}
             content=""
             label={displayToolName(soloCall)}
-            durationLabel={soloDurationLabel(callByToolUseID.get(soloCall.tool_use_id ?? ""), turn, message)}
+            durationLabel={soloDurationLabel(
+              callByToolUseID.get(soloCall.tool_use_id ?? ""),
+              turn,
+              message,
+            )}
             isRunning={isRunningTurn(message)}
             searchScope={searchable ? { ordinal: message.ordinal, callIdx: 0 } : undefined}
           />
@@ -125,7 +132,6 @@
           <ParallelGroup
             toolCalls={calls}
             callTimingByID={callByToolUseID}
-            turnDurationMs={turn?.duration_ms ?? null}
             isRunning={isRunningTurn(message)}
             searchOrdinal={searchable ? message.ordinal : undefined}
           />

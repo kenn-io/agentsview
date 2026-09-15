@@ -1,9 +1,4 @@
-/** Mirrors Go SessionTiming struct in internal/db/timing.go.
- *  Payload of GET /api/v1/sessions/{id}/timing and the
- *  session.timing SSE event. All durations are in milliseconds.
- *  Nullable number fields are null when the underlying value is
- *  unknown (e.g. running, missing timestamp, parallel non-sub-agent
- *  call). */
+/** HTTP and SSE timing payload, with durations in milliseconds. */
 export interface SessionTiming {
   session_id: string;
   total_duration_ms: number;
@@ -14,6 +9,24 @@ export interface SessionTiming {
   slowest_call: CallTiming | null;
   by_category: CategoryTotal[];
   turns: TurnTiming[];
+  activity: TurnActivity[];
+  activity_totals: ActivityTotals;
+  running: boolean;
+}
+
+export interface ActivityTotals {
+  thinking_ms: number;
+  generation_ms: number;
+  tool_ms: number;
+  unattributed_ms: number;
+}
+
+export interface TurnActivity extends ActivityTotals {
+  message_id: number;
+  ordinal: number;
+  started_at: string;
+  duration_ms: number;
+  precision: "message_only";
   running: boolean;
 }
 
@@ -39,6 +52,7 @@ export interface CallTiming {
   category: string;
   skill_name?: string;
   subagent_session_id?: string;
+  /** Unknown until a closed execution interval is recorded. */
   duration_ms: number | null;
   is_parallel: boolean;
   input_preview: string;

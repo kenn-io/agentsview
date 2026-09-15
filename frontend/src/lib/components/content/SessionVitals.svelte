@@ -8,6 +8,8 @@
   import { isAbortError } from "../../api/runtime.js";
   import { formatDuration } from "../../utils/duration.js";
   import { categoryToken } from "../../utils/categoryToken.js";
+  import { activityToken, type ActivityKind } from "../../utils/activityToken.js";
+  import { turnHasCategory } from "../../utils/timing.js";
   import { displayToolName } from "../../utils/toolDisplay.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { m } from "../../i18n/index.js";
@@ -15,6 +17,7 @@
   import type {
     CallTiming,
     SessionTiming,
+    TurnActivity,
     TurnTiming,
   } from "../../api/types/timing.js";
   import ActivityLane from "./ActivityLane.svelte";
@@ -38,6 +41,12 @@
   });
 
   let timing = $derived(sessionTiming.timing);
+  let activityKinds: { kind: ActivityKind; label: string }[] = $derived([
+    { kind: "thinking", label: m.session_vitals_activity_thinking() },
+    { kind: "generation", label: m.session_vitals_activity_generation() },
+    { kind: "tool", label: m.session_vitals_activity_tool() },
+    { kind: "unattributed", label: m.session_vitals_activity_unattributed() },
+  ]);
 
   let categoryFilter = $state<string | null>(null);
 
@@ -168,12 +177,39 @@
     );
   }
 
-  /** Wall-clock elapsed for the running tail turn, recomputed on
-   *  each `liveTick.now`. Returns 0 when no turn is running. */
   function liveElapsedFor(turn: TurnTiming): number {
     const start = new Date(turn.started_at).getTime();
     if (Number.isNaN(start)) return 0;
     return Math.max(0, liveTick.now - start);
+  }
+
+  function activityDuration(activity: TurnActivity): number {
+    if (!activity.running) return activity.duration_ms;
+    const start = new Date(activity.started_at).getTime();
+    if (Number.isNaN(start)) return activity.duration_ms;
+    return Math.max(activity.duration_ms, liveTick.now - start, 0);
+  }
+
+  function activityValue(
+    activity: TurnActivity,
+    kind: ActivityKind,
+    durationMs: number,
+  ): number {
+    if (kind !== "unattributed") return activity[`${kind}_ms`];
+    return Math.max(
+      0,
+      durationMs - activity.thinking_ms - activity.generation_ms - activity.tool_ms,
+    );
+  }
+
+  function activityTotal(kind: ActivityKind): number {
+    if (!timing || timing.activity.length === 0) {
+      return timing?.activity_totals[`${kind}_ms`] ?? 0;
+    }
+    return timing.activity.reduce((total, activity) => {
+      const durationMs = activityDuration(activity);
+      return total + activityValue(activity, kind, durationMs);
+    }, 0);
   }
 
   function turnForCall(call: CallTiming): TurnTiming | undefined {
@@ -188,18 +224,7 @@
     if (turn) ui.scrollToOrdinal(turn.ordinal);
   }
 
-  // Bar width for one call, scaled against the longest call duration
-  // in the supplied session's scope. The slowest call fills the bar;
-  // everything else is relative to it, so call-vs-call comparisons are
-  // legible even in long sessions where any single call is a tiny
-  // fraction of total wall-clock. Parallel siblings (duration_ms ==
-  // null) use the parent turn's duration both when computing the max
-  // and when scaling each row, so a turn whose only signal lives at
-  // the group level still contributes meaningfully.
-  //
-  // The max is memoized per SessionTiming reference: callBarPct runs
-  // once per rendered row, and recomputing the max each time would
-  // be O(n²) across the call list.
+  // Cache the largest measured call once per timing snapshot.
   const maxCallMsCache = new WeakMap<SessionTiming, number>();
 
   function maxCallMs(t: SessionTiming): number {
@@ -207,9 +232,8 @@
     if (cached !== undefined) return cached;
     let max = 0;
     for (const turn of t.turns) {
-      const turnFallback = turn.duration_ms ?? 0;
       for (const call of turn.calls) {
-        const d = call.duration_ms ?? turnFallback;
+        const d = call.duration_ms ?? 0;
         if (d > max) max = d;
       }
     }
@@ -220,27 +244,10 @@
   function callBarPct(c: CallTiming, t: SessionTiming): number {
     const maxMs = maxCallMs(t);
     if (maxMs <= 0) return 0;
-    let dur = c.duration_ms;
-    if (dur == null) {
-      const turn = t.turns.find((tt) => tt.calls.includes(c));
-      dur = turn?.duration_ms ?? 0;
-    }
+    const dur = c.duration_ms ?? 0;
     if (dur <= 0) return 0;
     const pct = (dur / maxMs) * 100;
     return Math.min(100, Math.max(pct, 4));
-  }
-
-  function turnHeaderBarPct(
-    turn: TurnTiming,
-    t: SessionTiming,
-  ): number {
-    if (turn.duration_ms == null || t.total_duration_ms <= 0) {
-      return 0;
-    }
-    return Math.min(
-      100,
-      (turn.duration_ms / t.total_duration_ms) * 100,
-    );
   }
 
   // Timeline-lane geometry. Both endpoints are in epoch-ms; the duration
@@ -379,8 +386,8 @@
           </div>
           <div>
             <div class="lbl">{m.session_vitals_tool_time()}</div>
-            <div class="val" class:live={timing.running}>
-              {formatDuration(timing.tool_duration_ms)}{timing.running ? "+" : ""}
+            <div class="val">
+              {formatDuration(timing.tool_duration_ms)}
             </div>
           </div>
           <div>
@@ -415,6 +422,44 @@
   <RecallPanel {sessionId} />
 
   {#if timing}
+    <section class="v-section activity-section">
+      <header class="v-h">
+        <span>{m.session_vitals_activity()}</span>
+      </header>
+      <p class="activity-hint">{m.session_vitals_activity_hint()}</p>
+      <div class="activity-totals">
+        {#each activityKinds as { kind, label } (kind)}
+          <span>
+            <span class="legend-dot" style="background: {activityToken(kind)};"></span>
+            {label} · {formatDuration(activityTotal(kind))}
+          </span>
+        {/each}
+      </div>
+      {#each timing.activity as activity, index (activity.message_id)}
+        {@const durationMs = activityDuration(activity)}
+        <button
+          type="button"
+          class="agg-row activity-row"
+          data-activity-ordinal={activity.ordinal}
+          aria-label={m.session_vitals_activity_turn({ ordinal: formatNumber(index + 1), duration: formatDuration(durationMs) })}
+          onclick={() => ui.scrollToOrdinal(activity.ordinal)}
+        >
+          <span class="agg-name">{formatNumber(index + 1)}</span>
+          <span class="activity-track">
+            {#each activityKinds as { kind, label } (kind)}
+              {@const valueMs = activityValue(activity, kind, durationMs)}
+              <span
+                data-activity-kind={kind}
+                title={`${label} · ${formatDuration(valueMs)}`}
+                style="width: {(valueMs / Math.max(durationMs, 1)) * 100}%; background: {activityToken(kind)};"
+              ></span>
+            {/each}
+          </span>
+          <span class="agg-val">{formatDuration(durationMs)}</span>
+        </button>
+      {/each}
+    </section>
+
     {#if timing.by_category.length > 0}
       <section class="v-section">
         <header class="v-h">
@@ -473,7 +518,7 @@
               <button
                 class="lane-mark"
                 class:live={isLive}
-                class:dimmed={categoryFilter !== null && t.primary_category !== categoryFilter}
+                class:dimmed={categoryFilter !== null && !turnHasCategory(t, categoryFilter)}
                 style="left: {turnLeftPct(t)}%; width: {turnWidthPct(t)}%; {isLive
                   ? ''
                   : `background: ${categoryToken(t.primary_category)};`}"
@@ -498,7 +543,7 @@
           >
             <span class="lane-label">{cat.category}</span>
             <span class="lane-track">
-              {#each timing.turns.filter((tt) => tt.primary_category === cat.category) as t (t.message_id)}
+              {#each timing.turns.filter((tt) => turnHasCategory(tt, cat.category)) as t (t.message_id)}
                 {@const isLive = t.duration_ms == null}
                 <button
                   class="lane-mark"
@@ -626,14 +671,11 @@
               {:else}
                 <CallGroup
                   calls={turn.calls}
-                  groupDurationMs={turn.duration_ms}
                   barScalePct={(c) => callBarPct(c, timing)}
-                  headerBarPct={turnHeaderBarPct(turn, timing)}
                   {isLive}
                   liveDurationMs={liveElapsed}
                   isSlow={isSlowCall}
-                  dimmed={categoryFilter !== null &&
-                    turn.primary_category !== categoryFilter}
+                  dimmed={categoryFilter !== null && !turnHasCategory(turn, categoryFilter)}
                   onCallClick={() => ui.scrollToOrdinal(turn.ordinal)}
                   onSubagentExpand={(c) => {
                     void toggleSubagent(c);
@@ -830,10 +872,6 @@
   }
   .stat-grid .val { color: var(--text-primary); }
   .stat-grid .val.slow { color: var(--slow-fg); }
-  .stat-grid .val.live {
-    color: var(--running-fg);
-    animation: duration-pulse 1.6s ease-in-out infinite;
-  }
   .stat-grid .val-link {
     background: transparent;
     border: 0;
@@ -909,6 +947,35 @@
     font-size: 10px;
     color: var(--text-muted);
     text-align: right;
+  }
+
+  .activity-hint {
+    color: var(--text-muted);
+    font-size: 10px;
+    margin: 0 0 8px;
+  }
+  .activity-totals {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    margin-bottom: 8px;
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+  .activity-track {
+    display: flex;
+    min-width: 0;
+    height: 8px;
+    overflow: hidden;
+    border-radius: 1px;
+    background: var(--bg-inset);
+  }
+  .activity-track > span {
+    height: 100%;
+  }
+  .activity-row:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
   }
 
   .filter-chip {

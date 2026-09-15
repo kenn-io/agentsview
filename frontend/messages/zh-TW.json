@@ -302,7 +302,6 @@
       }
     }
   ],
-  "parallel_group_each_duration": "每個 ≤ {duration}",
   "parallel_group_running": "執行中...",
   "subagent_inline_label": "Subagent 對話",
   "subagent_inline_message_count": [
@@ -1307,9 +1306,16 @@
   "session_vitals_jump_to_call": "跳轉到調用",
   "session_vitals_turns": "回合",
   "session_vitals_subagents": "sub-agents",
+  "session_vitals_activity": "每輪活動",
+  "session_vitals_activity_thinking": "思考",
+  "session_vitals_activity_generation": "生成",
+  "session_vitals_activity_tool": "工具執行",
+  "session_vitals_activity_unattributed": "未歸屬",
+  "session_vitals_activity_turn": "第 {ordinal} 輪 · {duration}",
+  "session_vitals_activity_hint": "沒有測量到階段起止邊界的時間歸為未歸屬。",
   "session_vitals_time_spent": "耗時分布",
   "session_vitals_clear_category_filter": "清除分類篩選",
-  "session_vitals_completed_turns_hint": "已完成回合 · 點擊高亮顯示",
+  "session_vitals_completed_turns_hint": "實測工具時間 · 點擊反白",
   "session_vitals_timeline": "時間線",
   "session_vitals_click_marks_to_scroll": "點擊標記滾動",
   "session_vitals_jump_to_turn": "跳轉到 {time} 的 {category} 回合",

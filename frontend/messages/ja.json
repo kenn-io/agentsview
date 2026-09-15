@@ -312,7 +312,6 @@
       }
     }
   ],
-  "parallel_group_each_duration": "≤ 各 {duration}",
   "parallel_group_running": "走っています...",
   "subagent_inline_label": "サブエージェントセッション",
   "subagent_inline_message_count": [
@@ -1366,9 +1365,16 @@
   "session_vitals_jump_to_call": "呼び出しに移動",
   "session_vitals_turns": "ターン",
   "session_vitals_subagents": "サブエージェント",
+  "session_vitals_activity": "ターンごとのアクティビティ",
+  "session_vitals_activity_thinking": "思考",
+  "session_vitals_activity_generation": "生成",
+  "session_vitals_activity_tool": "ツール実行",
+  "session_vitals_activity_unattributed": "未分類",
+  "session_vitals_activity_turn": "ターン {ordinal} · {duration}",
+  "session_vitals_activity_hint": "フェーズの開始・終了を測定できない時間は未分類です。",
   "session_vitals_time_spent": "費やした時間",
   "session_vitals_clear_category_filter": "カテゴリフィルターをクリア",
-  "session_vitals_completed_turns_hint": "完了したターン · クリックしてハイライト表示",
+  "session_vitals_completed_turns_hint": "測定されたツール時間 · クリックしてハイライト表示",
   "session_vitals_timeline": "タイムライン",
   "session_vitals_click_marks_to_scroll": "マークをクリックしてスクロールします",
   "session_vitals_jump_to_turn": "{category} に {time} ターンにジャンプ",
