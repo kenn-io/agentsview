@@ -17127,6 +17127,10 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		written:  make([]bool, len(batch)),
 		resolved: make([]bool, len(batch)),
 	}
+	// Sessions written by the loop below bypass the incremental path's
+	// per-session remap and the bulk batch's post-commit remap, so their IDs
+	// are collected here and rules are applied once after the loop.
+	var remapIDs []string
 	if ctx.Err() != nil {
 		return outcome
 	}
@@ -17382,8 +17386,29 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		outcome.writtenMessages += len(msgs)
 		outcome.written[i] = true
 		outcome.resolved[i] = true
+		remapIDs = append(remapIDs, s.ID)
 	}
+	e.applyAgentRemapRulesToWritten(ctx, remapIDs)
 	return outcome
+}
+
+// applyAgentRemapRulesToWritten centralizes the post-write remap step shared
+// by the full-parse write paths: a freshly written session must land with the
+// enabled rules applied, or it keeps the parser agent until a manual apply.// Errors are logged, not fatal — the session content is already committed and
+// a later write or manual apply still matches it.
+func (e *Engine) applyAgentRemapRulesToWritten(
+	ctx context.Context, sessionIDs []string,
+) {
+	if len(sessionIDs) == 0 {
+		return
+	}
+	if _, err := e.db.ApplyAgentRemapRulesToSessions(
+		ctx, sessionIDs,
+	); err != nil {
+		log.Printf(
+			"apply agent remap rules to written sessions: %v", err,
+		)
+	}
 }
 
 // sessionWriteVerdict says whether prepareSessionWrite produced a
@@ -18411,6 +18436,9 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		written:  make([]bool, len(batch)),
 		resolved: make([]bool, len(batch)),
 	}
+	// Staged writes and post-commit batch writes both collect their IDs for
+	// the shared post-batch remap at the function's single return.
+	var remapIDs []string
 	writes := make([]db.SessionBatchWrite, 0, len(batch))
 	pendingIndexes := make([]int, 0, len(batch))
 	sources := make(map[string]batchSourceFile, len(batch))
@@ -18501,6 +18529,10 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 				outcome.failedSessions++
 				continue
 			}
+			// Remap rules run via the shared post-batch apply below; the
+			// staged branch bypasses the post-commit bulk remap, so the ID
+			// must be collected here like the ordinary loop does.
+			remapIDs = append(remapIDs, s.ID)
 			outcome.written[pendingIndex] = true
 			outcome.writtenSessions++
 			outcome.writtenMessages += len(msgs)
@@ -18596,13 +18628,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 				writtenIDs = append(writtenIDs, writes[writtenIndex].Session.ID)
 			}
 		}
-		if len(writtenIDs) > 0 {
-			if _, remapErr := e.db.ApplyAgentRemapRulesToSessions(
-				ctx, writtenIDs,
-			); remapErr != nil {
-				log.Printf("apply agent remap rules to batch: %v", remapErr)
-			}
-		}
+		e.applyAgentRemapRulesToWritten(ctx, writtenIDs)
 	}
 	e.phaseStats.Batches.Add(1)
 	e.phaseStats.WriteBatchSize.Add(int64(len(writes)))
@@ -18644,6 +18670,7 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 	outcome.writtenSessions = result.WrittenSessions
 	outcome.writtenMessages = result.WrittenMessages
 	outcome.failedSessions += result.FailedSessions
+	e.applyAgentRemapRulesToWritten(ctx, remapIDs)
 	return outcome
 }
 

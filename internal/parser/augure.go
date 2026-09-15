@@ -13,11 +13,14 @@ const augureIDPrefix = string(AgentAugure) + ":"
 // relabelCodexResultAsAugure rewrites a Codex-format parse result onto the
 // Augure agent. sess is nil on the provider's incremental path, which keeps
 // the stored session ID and only needs the appended message rows relabeled.
-func relabelCodexResultAsAugure(sess *ParsedSession, msgs []ParsedMessage) {
+func relabelCodexResultAsAugure(
+	sess *ParsedSession, msgs []ParsedMessage, updates []ParsedToolCallUpdate,
+) {
 	if sess != nil {
 		relabelCodexSessionAsAugure(sess)
 	}
 	relabelCodexMessagesAsAugure(msgs)
+	relabelCodexToolCallUpdatesAsAugure(updates)
 }
 
 func relabelCodexSessionAsAugure(sess *ParsedSession) {
@@ -39,13 +42,29 @@ func relabelCodexMessagesAsAugure(msgs []ParsedMessage) {
 		for j := range msgs[i].ToolCalls {
 			call := &msgs[i].ToolCalls[j]
 			call.SubagentSessionID = augureSessionID(call.SubagentSessionID)
-			for k := range call.ResultEvents {
-				event := &call.ResultEvents[k]
-				event.SubagentSessionID = augureSessionID(
-					event.SubagentSessionID,
-				)
-			}
+			relabelCodexResultEventsAsAugure(call.ResultEvents)
 		}
+	}
+}
+
+// relabelCodexToolCallUpdatesAsAugure applies the same subagent-link rewrite
+// to the incremental path's late tool-result updates, whose events never pass
+// through the message relabel. Skipping them leaves codex:-prefixed links on
+// freshly appended tool results.
+func relabelCodexToolCallUpdatesAsAugure(
+	updates []ParsedToolCallUpdate,
+) {
+	for i := range updates {
+		relabelCodexResultEventsAsAugure(updates[i].ResultEvents)
+	}
+}
+
+func relabelCodexResultEventsAsAugure(events []ParsedToolResultEvent) {
+	for k := range events {
+		event := &events[k]
+		event.SubagentSessionID = augureSessionID(
+			event.SubagentSessionID,
+		)
 	}
 }
 
