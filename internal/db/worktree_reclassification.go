@@ -41,6 +41,7 @@ type WorktreeReclassificationSessionSample struct {
 
 type WorktreeReclassificationPreview struct {
 	MappingToken      string                                  `json:"mapping_token"`
+	MappingSetToken   string                                  `json:"mapping_set_token"`
 	NormalizedProject string                                  `json:"normalized_project"`
 	ExistingMappingID *int64                                  `json:"existing_mapping_id,omitempty"`
 	MatchedSessions   int                                     `json:"matched_sessions"`
@@ -170,6 +171,12 @@ func (db *DB) ApplyWorktreeReclassification(
 			}
 		}
 	}
+	// Return the rule state committed by this correction, so a sequential batch
+	// can distinguish its own writes from intervening edits to the same machine.
+	savedMappings, err := loadWorktreeMappingsForMachineTx(ctx, tx, normalized.Machine)
+	if err != nil {
+		return WorktreeProjectMapping{}, WorktreeReclassificationPreview{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return WorktreeProjectMapping{}, WorktreeReclassificationPreview{}, fmt.Errorf(
 			"committing worktree reclassification apply: %w", err,
@@ -181,6 +188,7 @@ func (db *DB) ApplyWorktreeReclassification(
 		mapping.Project, mappingIDPointer(&mapping), evaluation,
 	)
 	preview.UpdatedSessions = updated
+	preview.MappingSetToken = worktreeMappingSetToken(savedMappings)
 	return mapping, preview, nil
 }
 
@@ -215,11 +223,13 @@ func previewWorktreeReclassificationTx(
 	if err != nil {
 		return WorktreeReclassificationPreview{}, err
 	}
-	return worktreeReclassificationPreviewFromEvaluation(
+	preview := worktreeReclassificationPreviewFromEvaluation(
 		worktreeReclassificationToken(stored, draft, collision, evaluation),
 		draft.Project,
 		mappingIDPointer(collision), evaluation,
-	), nil
+	)
+	preview.MappingSetToken = worktreeMappingSetToken(stored)
+	return preview, nil
 }
 
 func loadWorktreeMappingsForMachineTx(

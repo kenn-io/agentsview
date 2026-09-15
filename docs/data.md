@@ -83,6 +83,11 @@ projects outside your selection, Save first asks you to confirm. Folder
 suggestions stay grouped by project, then machine, with larger session groups
 first within each machine.
 
+Bulk saves stop if another rule edit or a change to the affected sessions makes
+the reviewed impact stale. The editor refreshes the impact and asks you to
+confirm again. Corrections already saved remain applied; their expected effects
+do not interrupt the rest of the batch.
+
 ## Rules
 
 The **Rules** toggle shows the worktree mapping rules for one machine at a time,

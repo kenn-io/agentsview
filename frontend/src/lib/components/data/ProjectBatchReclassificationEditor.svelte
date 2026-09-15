@@ -61,6 +61,7 @@
   let refreshing = $state(false);
   let savedCount = $state(0);
   let reviewing = $state(false);
+  let conflict = $state(false);
   let previewTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
   const candidatesRead = new LatestRead();
@@ -185,6 +186,7 @@
 
   function clearPreview() {
     reviewing = false;
+    conflict = false;
     previewRead.cancel();
     previews = [];
     previewLoading = false;
@@ -217,6 +219,7 @@
       previews = results;
     } catch (error) {
       if (isAbortError(error) || !previewRead.isCurrent(signal)) return;
+      previews = [];
       previewError = error instanceof Error
         ? error.message
         : m.data_reclassify_preview_failed();
@@ -225,27 +228,59 @@
     }
   }
 
+  async function refreshChangedImpact() {
+    conflict = true;
+    await loadPreviews();
+    reviewing = true;
+  }
+
+  function sameIDs(actual: string[], expected: string[]) {
+    const ids = new Set(expected);
+    return actual.length === ids.size && actual.every((id) => ids.has(id));
+  }
+
   async function applyAll() {
     if (!canApply) return;
-    if (reachesUnselectedProjects && !reviewing) {
+    if ((reachesUnselectedProjects || conflict) && !reviewing) {
       reviewing = true;
       return;
     }
     applying = true;
+    conflict = false;
     applyError = "";
     savedCount = 0;
     const target = previews[0]?.preview.normalized_project || targetProject.trim();
     try {
-      const requests = usableCandidates.map(draft);
-      for (const requestBody of requests) {
+      const requests = previews.map(({ entry, preview }) => ({ requestBody: draft(entry), accepted: preview }));
+      const savedRuleStates = new Map<string, string>();
+      const savedSessionIDs = new Set<string>();
+      for (const { requestBody, accepted } of requests) {
         const current = await callGenerated(() =>
           SettingsService.postApiV1SettingsWorktreeMappingsPreview(requestBody),
         );
-        await callGenerated(() =>
+        const savedState = savedRuleStates.get(requestBody.machine);
+        // Before our first write on a machine, require the exact reviewed token.
+        // Later writes may only account for our own rule edits and sessions
+        // already moved to this batch's destination, including overlapping rules.
+        const unchanged = savedState === undefined
+          ? current.mapping_token === accepted.mapping_token
+          : current.mapping_set_token === savedState &&
+            current.normalized_project === accepted.normalized_project &&
+            sameIDs(current.matched_session_ids, accepted.matched_session_ids) &&
+            sameIDs(current.updated_session_ids, accepted.updated_session_ids.filter((id) => !savedSessionIDs.has(id))) &&
+            current.matched_projects.every((project) =>
+              project === target || accepted.matched_projects.includes(project));
+        if (!unchanged) {
+          await refreshChangedImpact();
+          return;
+        }
+        const result = await callGenerated(() =>
           SettingsService.postApiV1SettingsWorktreeMappingsReclassify({
             ...requestBody, mapping_token: current.mapping_token,
           }),
         );
+        savedRuleStates.set(requestBody.machine, result.result.mapping_set_token);
+        for (const id of current.updated_session_ids) savedSessionIDs.add(id);
         savedCount += 1;
       }
       applied = true;
@@ -256,7 +291,11 @@
       if (refreshed) onComplete(target, savedCount);
     } catch (error) {
       if (disposed) return;
-      applyError = error instanceof Error ? error.message : m.data_reclassify_apply_failed();
+      if (typeof error === "object" && error !== null && "status" in error && error.status === 409) {
+        await refreshChangedImpact();
+      } else {
+        applyError = error instanceof Error ? error.message : m.data_reclassify_apply_failed();
+      }
     } finally {
       if (!disposed) {
         applying = false;
@@ -343,8 +382,14 @@
       {/if}
 
       {#if previewError}<p class="error-text">{previewError}</p>{/if}
-      {#if reviewing}
+      {#if reviewing && reachesUnselectedProjects}
         <p class="warning" role="alert">{m.data_batch_outside_selection()}</p>
+      {/if}
+      {#if conflict}
+        <p class="warning" role="alert">
+          {m.data_reclassify_conflict()}
+          {#if savedCount > 0}{m.data_batch_partial_save({ saved: savedCount, count: usableCandidates.length })}{/if}
+        </p>
       {/if}
       {#if applyError}
         <p class="error-text">

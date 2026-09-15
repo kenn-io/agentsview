@@ -144,6 +144,11 @@ func TestWorktreeReclassificationTokenBindsDraftAndAffectedSessions(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, "branch", mapping.OriginalProject)
 	assert.Equal(t, 2, applied.UpdatedSessions)
+	afterSave, err := d.PreviewWorktreeReclassification(ctx, draft)
+	require.NoError(t, err)
+	assert.NotEqual(t, current.MappingSetToken, applied.MappingSetToken)
+	assert.Equal(t, afterSave.MappingSetToken, applied.MappingSetToken,
+		"batch continuation must identify precisely the rules committed by this save")
 
 	stalePreview, err := d.PreviewWorktreeReclassification(ctx, WorktreeReclassificationDraft{
 		Machine: "other.example", PathPrefix: "/worktrees/service",
