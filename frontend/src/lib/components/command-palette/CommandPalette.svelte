@@ -287,6 +287,25 @@
         }}
         ariaLabel={m.command_palette_search_mode_label()}
       />
+      {#if showSearchResults}
+        <ProjectTypeahead
+          projects={sessions.projects}
+          value={project}
+          onselect={(value) => {
+            project = value;
+            searchStore.search(inputValue, project);
+            selectedIndex = 0;
+          }}
+        />
+        <RangePicker
+          selection={searchStore.range}
+          onSelect={(selection) => {
+            searchStore.setRange(selection);
+            selectedIndex = 0;
+          }}
+          align="right"
+        />
+      {/if}
       {#if showSearchResults && searchStore.mode === "fulltext"}
         <div class="palette-sort">
           <button
@@ -301,27 +320,6 @@
             onmousedown={(e: MouseEvent) => e.preventDefault()}
             onclick={() => { searchStore.setSort("recency"); selectedIndex = 0; }}
           >{m.command_palette_recency()}</button>
-        </div>
-      {/if}
-      {#if showSearchResults}
-        <div class="palette-scope">
-          <ProjectTypeahead
-            projects={sessions.projects}
-            value={project}
-            onselect={(value) => {
-              project = value;
-              searchStore.search(inputValue, project);
-              selectedIndex = 0;
-            }}
-          />
-          <RangePicker
-            selection={searchStore.range}
-            onSelect={(selection) => {
-              searchStore.setRange(selection);
-              selectedIndex = 0;
-            }}
-            align="right"
-          />
         </div>
       {/if}
     </div>
@@ -481,6 +479,8 @@
   }
 
   .palette-controls {
+    --typeahead-min-width: 120px;
+    --typeahead-max-width: 140px;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -488,13 +488,6 @@
     gap: 8px;
     padding: 6px 14px;
     border-bottom: 1px solid var(--border-default);
-  }
-
-  .palette-scope {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    width: 100%;
   }
 
   .palette-section-label {
