@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -159,10 +160,8 @@ func agentRemapGlobMatches(glob string, models []string) bool {
 		if err != nil {
 			continue
 		}
-		for _, model := range models {
-			if re.MatchString(model) {
-				return true
-			}
+		if slices.ContainsFunc(models, re.MatchString) {
+			return true
 		}
 	}
 	return false

@@ -747,6 +747,12 @@ type DB struct {
 	usageBackfillDone    chan struct{}
 	usageBackfillErr     error
 	usageBackfillStarted func()
+	// duplicateMembers caches the duplicate_group_members membership map
+	// for read-path decoration (session list/detail/sidebar rows). The
+	// hot paths pay no query; the snapshot swaps atomically and is
+	// repopulated lazily if a reader finds it missing.
+	duplicateMembers   atomic.Pointer[map[string]DuplicateGroupMember]
+	duplicateMembersMu sync.Mutex
 	// usageBackfillEnabled records that this process explicitly started
 	// background backfill (the daemon lifecycle). Reopen restarts a pass
 	// only then, so CLI resyncs never trigger an unrequested archive scan.

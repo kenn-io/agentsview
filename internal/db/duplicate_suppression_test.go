@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,11 +24,8 @@ func fillDuplicateFacts(
 	require.NoError(t, err)
 	versions := make([]usageSourceVersion, 0, len(sessionIDs))
 	for _, version := range snapshot.Versions {
-		for _, id := range sessionIDs {
-			if version.SessionID == id {
-				versions = append(versions, version)
-				break
-			}
+		if slices.Contains(sessionIDs, version.SessionID) {
+			versions = append(versions, version)
 		}
 	}
 	results, err := cache.fill.Ensure(
