@@ -26,7 +26,7 @@ func NewStore(
 	if err != nil {
 		return nil, err
 	}
-	return &Store{pg: pg}, nil
+	return newStore(pg), nil
 }
 
 // DB returns the underlying *sql.DB for operations that need
@@ -39,6 +39,9 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
+	if s.BunStore != nil {
+		s.BunStore.SetCustomPricing(p)
+	}
 	s.pricingMu.Lock()
 	defer s.pricingMu.Unlock()
 	s.customPricing = p
@@ -47,6 +50,9 @@ func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
 
 // SetCursorSecret sets the HMAC key used for cursor signing.
 func (s *Store) SetCursorSecret(secret []byte) {
+	if s.BunStore != nil {
+		s.BunStore.SetCursorSecret(secret)
+	}
 	s.cursorMu.Lock()
 	defer s.cursorMu.Unlock()
 	s.cursorSecret = append([]byte(nil), secret...)

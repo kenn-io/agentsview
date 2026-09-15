@@ -355,7 +355,8 @@ func seedCandidateSession(
 func deleteCandidateSnapshot(t *testing.T, d *DB, id string) {
 	t.Helper()
 	_, err := d.getWriter().Exec(
-		`DELETE FROM session_project_identity_snapshots WHERE session_id = ?`, id)
+		`DELETE FROM source_session_project_identity_snapshots
+		 WHERE source_session_id = ?`, id)
 	require.NoError(t, err)
 }
 
@@ -365,9 +366,13 @@ func setCandidateSnapshot(
 	t.Helper()
 	deleteCandidateSnapshot(t, d, id)
 	_, err := d.getWriter().Exec(`
-		INSERT INTO session_project_identity_snapshots (
-			session_id, project, machine, root_path, worktree_root_path, observed_at
-		) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, project, machine, root, worktreeRoot, "2025-06-02T10:00:00Z")
+		INSERT INTO source_session_project_identity_snapshots (
+			source_archive_id, source_database_generation, source_session_id,
+			project, machine, root_path, worktree_root_path, observed_at
+		)
+		SELECT source_archive_id, source_database_generation, id,
+			?, ?, ?, ?, ?
+		FROM sessions WHERE id = ?`,
+		project, machine, root, worktreeRoot, "2025-06-02T10:00:00Z", id)
 	require.NoError(t, err)
 }

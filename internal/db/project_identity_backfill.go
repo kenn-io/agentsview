@@ -58,8 +58,11 @@ func ensureProjectIdentityBackfillQueuedTx(
 		SELECT EXISTS(
 			SELECT 1 FROM sessions s
 			WHERE NOT EXISTS (
-				SELECT 1 FROM session_project_identity_snapshots p
-				WHERE p.session_id = s.id
+				SELECT 1 FROM source_session_project_identity_snapshots p
+				WHERE p.source_archive_id = s.source_archive_id
+				  AND p.source_database_generation =
+					s.source_database_generation
+				  AND p.source_session_id = s.id
 			)
 		)`).Scan(&missing); err != nil {
 		return fmt.Errorf("checking project identity backfill candidates: %w", err)
@@ -199,8 +202,10 @@ func (db *DB) countMissingProjectIdentitySnapshots(ctx context.Context) (int, er
 	if err := db.getReader().QueryRowContext(ctx, `
 		SELECT count(*) FROM sessions s
 		WHERE NOT EXISTS (
-			SELECT 1 FROM session_project_identity_snapshots p
-			WHERE p.session_id = s.id
+			SELECT 1 FROM source_session_project_identity_snapshots p
+			WHERE p.source_archive_id = s.source_archive_id
+			  AND p.source_database_generation = s.source_database_generation
+			  AND p.source_session_id = s.id
 		)`).Scan(&missing); err != nil {
 		return 0, fmt.Errorf("counting missing project identity snapshots: %w", err)
 	}
@@ -226,8 +231,10 @@ func (db *DB) ProjectIdentityBackfillCandidatesAfter(
 			s.started_at
 		FROM sessions s
 		WHERE s.id > ? AND NOT EXISTS (
-			SELECT 1 FROM session_project_identity_snapshots p
-			WHERE p.session_id = s.id
+			SELECT 1 FROM source_session_project_identity_snapshots p
+			WHERE p.source_archive_id = s.source_archive_id
+			  AND p.source_database_generation = s.source_database_generation
+			  AND p.source_session_id = s.id
 		)
 		ORDER BY s.id
 		LIMIT ?`, afterID, projectIdentityBackfillBatchSize)

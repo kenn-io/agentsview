@@ -137,8 +137,8 @@ func (s *Sync) commitWorktreeMappingPublication(
 		if err := exec(`
 			INSERT INTO source_worktree_project_mappings
 			(source_archive_id, machine, path_prefix, layout, project,
-			 original_project, enabled, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			 original_project, enabled, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (source_archive_id, machine, path_prefix)
 			DO UPDATE SET
 				layout = excluded.layout,
@@ -147,7 +147,7 @@ func (s *Sync) commitWorktreeMappingPublication(
 				enabled = excluded.enabled,
 				updated_at = excluded.updated_at`,
 			s.archiveID, m.Machine, m.PathPrefix, m.Layout, m.Project,
-			m.OriginalProject, m.Enabled, m.UpdatedAt); err != nil {
+			m.OriginalProject, m.Enabled, m.CreatedAt, m.UpdatedAt); err != nil {
 			return fmt.Errorf("upserting duckdb mapping mirror row: %w", err)
 		}
 	}

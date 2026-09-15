@@ -167,6 +167,12 @@ func (c *pushAliasRoutingConn) QueryContext(
 			columns: []string{"coalesce"},
 			values:  [][]driver.Value{{0}},
 		}, nil
+	case strings.Contains(normalized, "select data_type") &&
+		strings.Contains(normalized, "from information_schema.columns"):
+		return &pushAliasRoutingRows{
+			columns: []string{"data_type"},
+			values:  [][]driver.Value{{"timestamp with time zone"}},
+		}, nil
 	case strings.Contains(normalized, "from information_schema.tables"):
 		return &pushAliasRoutingRows{
 			columns: []string{"exists"},

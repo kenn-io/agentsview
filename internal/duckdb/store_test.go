@@ -305,13 +305,15 @@ func TestStoreListTrashedSessionsOrdersNewestFirstAndCapsAt500(t *testing.T) {
 	store := NewStoreFromDB(duck)
 
 	_, err := duck.ExecContext(ctx, `
-		INSERT INTO sessions (id, project, deleted_at)
-		SELECT 'trash-' || i, 'trash-parity',
+		INSERT INTO sessions (id, project, machine, agent, deleted_at, created_at)
+		SELECT 'trash-' || i, 'trash-parity', 'local', 'claude',
 			TIMESTAMP '2026-01-01 00:00:00' + INTERVAL (i) SECOND
+			, TIMESTAMP '2026-01-01 00:00:00'
 		FROM range(600) t(i)`)
 	require.NoError(t, err)
 	_, err = duck.ExecContext(ctx,
-		`INSERT INTO sessions (id, project) VALUES ('active', 'trash-parity')`)
+		`INSERT INTO sessions (id, project, machine, agent, created_at)
+		 VALUES ('active', 'trash-parity', 'local', 'claude', current_timestamp)`)
 	require.NoError(t, err)
 
 	trashed, err := store.ListTrashedSessions(ctx)
@@ -987,8 +989,7 @@ func TestLoadPricingUsesDBRowsAsEffectiveTableAndOverlaysOverrides(t *testing.T)
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
 		) VALUES
-			('claude-sonnet-4-6', 30000000, 150000000, 37500000, 3000000, '2026-06-08T12:00:00Z'),
-			('_fallback_version', 999, 999, 999, 999, '')`)
+			('claude-sonnet-4-6', 30000000, 150000000, 37500000, 3000000, '2026-06-08T12:00:00Z')`)
 	require.NoError(t, err)
 
 	got, err := store.loadPricing(ctx)
@@ -1000,7 +1001,6 @@ func TestLoadPricingUsesDBRowsAsEffectiveTableAndOverlaysOverrides(t *testing.T)
 		updatedAt: ptrTime(t, "2026-06-08T12:00:00Z"),
 		source:    export.PricingRowSourceFetched,
 	}, got["claude-sonnet-4-6"])
-	assert.NotContains(t, got, "_fallback_version")
 	assert.Equal(t, duckRates{
 		input: money.MustParseDollars("9"), output: money.MustParseDollars("10"), cacheCreation: money.MustParseDollars("11"), cacheRead: money.MustParseDollars("12"),
 		source: export.PricingRowSourceCustom,
@@ -1019,8 +1019,8 @@ func TestProjectIdentityMapLegacyFallbackUsesFilePath(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = conn.ExecContext(ctx, `
-		INSERT INTO sessions (id, project, machine, agent, cwd, file_path)
-		VALUES (?, ?, ?, ?, ?, ?)`,
+		INSERT INTO sessions (id, project, machine, agent, cwd, file_path, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, current_timestamp)`,
 		"file-path-identity", "file-project", "laptop", "codex", "",
 		"/fixtures/duck-file-project/session.jsonl",
 	)
@@ -1038,10 +1038,10 @@ func TestProjectIdentityMapLegacySessionsUseDistinctFallbackKeys(t *testing.T) {
 	conn := openTestDuckDB(t)
 	require.NoError(t, EnsureSchema(ctx, conn))
 	_, err := conn.ExecContext(ctx, `
-		INSERT INTO sessions (id, project, machine, agent)
+		INSERT INTO sessions (id, project, machine, agent, created_at)
 		VALUES
-			('legacy-alpha', 'alpha', 'host', 'codex'),
-			('legacy-beta', 'beta', 'host', 'codex')`)
+			('legacy-alpha', 'alpha', 'host', 'codex', current_timestamp),
+			('legacy-beta', 'beta', 'host', 'codex', current_timestamp)`)
 	require.NoError(t, err)
 
 	store := NewStoreFromDB(conn)

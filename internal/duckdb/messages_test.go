@@ -26,10 +26,10 @@ func TestGetAllMessagesSkipsNegativeCallIndex(t *testing.T) {
 	// Inject malformed rows with call_index = -1 for that same message.
 	_, err := store.duck.ExecContext(ctx, `
 		INSERT INTO tool_calls (
-			id, message_id, session_id, tool_name, category,
+			id, message_id, session_id, message_ordinal, tool_name, category,
 			call_index, tool_use_id
 		)
-		SELECT 90001, m.id, m.session_id, 'bad', 'other', -1, 'bad-tool'
+		SELECT 90001, m.id, m.session_id, m.ordinal, 'bad', 'other', -1, 'bad-tool'
 		FROM messages m
 		WHERE m.session_id = ? AND m.ordinal = 1`, fixture.alphaID)
 	require.NoError(t, err)

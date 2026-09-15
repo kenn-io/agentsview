@@ -309,11 +309,13 @@ func NewQuackStore(
 	if err != nil {
 		return nil, err
 	}
-	return &Store{
+	store := &Store{
 		duck:           client.DB(),
 		quack:          client,
 		connectionKind: duckDBQuackClientConnection,
-	}, nil
+	}
+	store.initializeBun()
+	return store, nil
 }
 
 type quackClient struct {
