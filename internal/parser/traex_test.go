@@ -71,7 +71,7 @@ func TestRelabelCodexResultAsTraeX(t *testing.T) {
 		}},
 	}}
 
-	relabelCodexResultAsTraeX(sess, msgs)
+	relabelCodexResultAsTraeX(sess, msgs, nil)
 
 	assert.Equal(t, "traex:child", sess.ID)
 	assert.Equal(t, "traex:parent", sess.ParentSessionID)
@@ -99,11 +99,39 @@ func TestRelabelCodexResultAsTraeXIncremental(t *testing.T) {
 		}},
 	}}
 	require.NotPanics(t, func() {
-		relabelCodexResultAsTraeX(nil, msgs)
+		relabelCodexResultAsTraeX(nil, msgs, nil)
 	})
 	assert.Equal(
 		t, "traex:spawned", msgs[0].ToolCalls[0].SubagentSessionID,
 	)
+}
+
+// TestRelabelCodexToolCallUpdatesAsTraeX covers the incremental path's late
+// tool-result updates: their events are appended after the message relabel
+// ran, so they must be relabeled too or the stored rows keep codex: links.
+func TestRelabelCodexToolCallUpdatesAsTraeX(t *testing.T) {
+	updates := []ParsedToolCallUpdate{{
+		ToolUseID: "call_1",
+		ResultEvents: []ParsedToolResultEvent{{
+			SubagentSessionID: "codex:spawned",
+			AgentID:           "spawned",
+		}},
+	}}
+
+	relabelCodexToolCallUpdatesAsTraeX(updates)
+
+	require.Len(t, updates[0].ResultEvents, 1)
+	assert.Equal(
+		t, "traex:spawned",
+		updates[0].ResultEvents[0].SubagentSessionID,
+	)
+	assert.Equal(t, "spawned", updates[0].ResultEvents[0].AgentID,
+		"AgentID is the raw upstream thread ID and must be untouched")
+
+	require.NotPanics(t, func() {
+		relabelCodexResultAsTraeX(nil, nil, updates)
+		relabelCodexResultAsTraeX(nil, nil, nil)
+	})
 }
 
 func TestTraeXRegistryEntry(t *testing.T) {

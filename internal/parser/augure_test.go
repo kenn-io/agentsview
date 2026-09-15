@@ -73,7 +73,7 @@ func TestRelabelCodexResultAsAugure(t *testing.T) {
 		}},
 	}}
 
-	relabelCodexResultAsAugure(sess, msgs)
+	relabelCodexResultAsAugure(sess, msgs, nil)
 
 	assert.Equal(t, "augure:child", sess.ID)
 	assert.Equal(t, "augure:parent", sess.ParentSessionID)
@@ -101,10 +101,44 @@ func TestRelabelCodexResultAsAugureIncremental(t *testing.T) {
 		}},
 	}}
 	require.NotPanics(t, func() {
-		relabelCodexResultAsAugure(nil, msgs)
+		relabelCodexResultAsAugure(nil, msgs, nil)
 	})
 	assert.Equal(
 		t, "augure:spawned", msgs[0].ToolCalls[0].SubagentSessionID,
+	)
+}
+
+// TestRelabelCodexToolCallUpdatesAsAugure covers the incremental path's late
+// tool-result updates: their events are appended after the message relabel
+// ran, so they must be relabeled too or the stored rows keep codex: links.
+func TestRelabelCodexToolCallUpdatesAsAugure(t *testing.T) {
+	updates := []ParsedToolCallUpdate{{
+		ToolUseID: "call_1",
+		ResultEvents: []ParsedToolResultEvent{{
+			SubagentSessionID: "codex:spawned",
+			AgentID:           "spawned",
+		}},
+	}}
+
+	relabelCodexToolCallUpdatesAsAugure(updates)
+
+	require.Len(t, updates[0].ResultEvents, 1)
+	assert.Equal(
+		t, "augure:spawned",
+		updates[0].ResultEvents[0].SubagentSessionID,
+	)
+	assert.Equal(t, "spawned", updates[0].ResultEvents[0].AgentID,
+		"AgentID is the raw upstream thread ID and must be untouched")
+
+	// The provider hook relabels updates on the incremental path and must
+	// tolerate an empty update slice.
+	require.NotPanics(t, func() {
+		relabelCodexResultAsAugure(nil, nil, updates)
+		relabelCodexResultAsAugure(nil, nil, nil)
+	})
+	assert.Equal(
+		t, "augure:spawned",
+		updates[0].ResultEvents[0].SubagentSessionID,
 	)
 }
 
