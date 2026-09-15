@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -453,7 +454,7 @@ func TestEnsureTransport_ArchiveWriteRestartsOlderDaemon(t *testing.T) {
 	dir := daemonRuntimeDir(t)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "1.0.0", false, false, true,
+		dir, host, port, "1.0.0", "", false, false, true,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
@@ -486,7 +487,7 @@ func TestEnsureTransport_ReadIntentRestartsOlderDaemon(t *testing.T) {
 	dir := daemonRuntimeDir(t)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "1.0.0", false, false, true,
+		dir, host, port, "1.0.0", "", false, false, true,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
@@ -544,7 +545,7 @@ func TestEnsureTransport_ReadIntentPreservesExplicitNoSyncWhenRestartingOlderDae
 	dir := daemonRuntimeDir(t)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "1.0.0", false, false, false,
+		dir, host, port, "1.0.0", "", false, false, false,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
@@ -994,7 +995,7 @@ auth_token = "generated-token"
 `)
 		RemoveDaemonRuntime(dir)
 		_, err := WriteDaemonRuntimeWithAuth(
-			dir, newHost, newPort, version, false, true,
+			dir, newHost, newPort, version, "", false, true,
 		)
 		if err == nil {
 			err = launchLock.Unlock()
@@ -1033,7 +1034,7 @@ func TestEnsureTransportReadAdoptsAuthAfterDaemonStartupWait(t *testing.T) {
 auth_token = "generated-token"
 `)
 		_, err := WriteDaemonRuntimeWithAuth(
-			dir, newHost, newPort, version, false, true,
+			dir, newHost, newPort, version, "", false, true,
 		)
 		unlockStart()
 		published <- err
@@ -1252,16 +1253,38 @@ func TestUrlFromDaemonRuntime_BindAllMapsToLoopback(t *testing.T) {
 	}
 }
 
-func TestNewServiceUsesPublicBrowserURL(t *testing.T) {
+func TestServicesUseRunningDaemonBrowserURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/v1/sessions/codex:session:42", r.URL.Path)
 		fmt.Fprint(w, `{"id":"codex:session:42"}`)
 	}))
 	defer server.Close()
-	svc, cleanup, err := newService(config.Config{PublicURL: "https://viewer.example/base"}, transport{Mode: transportHTTP, URL: server.URL})
+	host, port := splitTestServerURL(t, server.URL)
+	dir := t.TempDir()
+	path, err := WriteDaemonRuntimeWithAuthAndNoSync(dir, host, port, "test", "https://viewer.example/base", false, false, false)
 	require.NoError(t, err)
-	defer cleanup()
-	detail, err := svc.Get(t.Context(), "codex:session:42")
-	require.NoError(t, err)
-	assert.Equal(t, "https://viewer.example/base/sessions/codex/session:42", detail.WebURL)
+	rt := daemonRuntimeFromRecord(readRuntimeRecord(t, path))
+	tr := transportFromRuntime(rt)
+	// A separate client's config may predate startup or change after it.
+	cfg := config.Config{DataDir: t.TempDir(), PublicURL: "https://stale.example"}
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration) (*DaemonRuntime, error) { return rt, nil })
+	for _, tc := range []struct {
+		name  string
+		build func(config.Config, transport) (service.SessionService, func(), error)
+	}{
+		{"CLI", newService},
+		{"sync", syncService},
+		{"MCP", func(cfg config.Config, _ transport) (service.SessionService, func(), error) {
+			return newMCPDaemonService(cfg), func() {}, nil
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, cleanup, err := tc.build(cfg, tr)
+			require.NoError(t, err)
+			defer cleanup()
+			detail, err := svc.Get(t.Context(), "codex:session:42")
+			require.NoError(t, err)
+			assert.Equal(t, "https://viewer.example/base/sessions/codex/session:42", detail.WebURL)
+		})
+	}
 }

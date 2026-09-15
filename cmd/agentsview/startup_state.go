@@ -32,6 +32,7 @@ type startupState struct {
 	Detail           string    `json:"detail,omitempty"`
 	LogPath          string    `json:"log_path,omitempty"`
 	Host             string    `json:"host,omitempty"`
+	BrowserURL       string    `json:"browser_url,omitempty"`
 	Port             int       `json:"port,omitempty"`
 	RuntimeError     string    `json:"runtime_error,omitempty"`
 	CreateTime       string    `json:"create_time,omitempty"`
@@ -195,13 +196,14 @@ func readStartupState(dataDir string) *startupState {
 // lifecycle readers can still report startup progress and require a daemon-
 // authored snapshot before trusting this fallback.
 func publishStartupStateFallback(
-	dataDir, host string, port int, requireAuth, noSync bool, caddyPID int, runtimeErr error,
+	dataDir, host string, port int, browserURL string, requireAuth, noSync bool, caddyPID int, runtimeErr error,
 ) {
 	st := readStartupState(dataDir)
 	if st == nil || host == "" || port <= 0 || runtimeErr == nil {
 		return
 	}
 	st.Host = host
+	st.BrowserURL = browserURL
 	st.Port = port
 	st.RuntimeError = runtimeErr.Error()
 	st.RequireAuth = requireAuth

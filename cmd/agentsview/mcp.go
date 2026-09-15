@@ -218,7 +218,7 @@ func (s *mcpDaemonService) daemonService(
 		)
 	}
 	s.cfg.AuthToken = cfg.AuthToken
-	return service.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, cfg.PublicURL), nil
+	return service.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL), nil
 }
 
 func (s *mcpDaemonService) Get(

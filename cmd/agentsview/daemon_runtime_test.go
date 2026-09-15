@@ -726,13 +726,14 @@ func TestWriteDaemonRuntimeFailurePreservesUpdateLaunchArgs(t *testing.T) {
 	require.NoError(t, os.Mkdir(runtimePath, 0o700))
 
 	_, err = WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "test", false, true, true,
+		dir, host, port, "test", "https://viewer.example/base", false, true, true,
 	)
 	require.Error(t, err)
 
 	rt := FindWritableDaemonRuntime(dir)
 	require.NotNil(t, rt)
 	assert.Equal(t, "test", rt.Record.Version)
+	assert.Equal(t, "https://viewer.example/base", rt.BrowserURL)
 	state := readStartupState(dir)
 	require.NotNil(t, state)
 	assert.True(t, state.RequireAuthKnown)
@@ -764,7 +765,7 @@ func TestWriteDaemonRuntimeFailurePreservesManagedCaddyIdentity(t *testing.T) {
 	require.True(t, ok)
 
 	_, err = WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "test", false, false, false, os.Getpid(),
+		dir, host, port, "test", "", false, false, false, os.Getpid(),
 	)
 	require.Error(t, err)
 
@@ -985,7 +986,7 @@ func TestWriteAndRemoveDaemonRuntime(t *testing.T) {
 	endpoint := newPingDaemon(t)
 
 	path, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, endpoint.Host, endpoint.Port, "1.0.0", false, true, true,
+		dir, endpoint.Host, endpoint.Port, "1.0.0", "", false, true, true,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, runtimePathForTest(dir, os.Getpid()), path)

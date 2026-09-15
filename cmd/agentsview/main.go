@@ -541,7 +541,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 	// is active" marker so token-use doesn't start a competing
 	// on-demand sync against our live DB.
 	if _, sfErr := writeDaemonRuntimeWithAuthAndNoSync(
-		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, false,
+		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, rt.PublicURL, false,
 		rt.Cfg.RequireAuth, rt.Cfg.NoSync,
 		rt.Caddy.Pid(),
 	); sfErr != nil {

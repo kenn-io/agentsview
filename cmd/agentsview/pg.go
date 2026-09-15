@@ -683,7 +683,7 @@ func runPGServe(appCfg config.Config, basePath string) {
 
 func writePGServeRuntimeRecord(rt *serveRuntime) bool {
 	if _, sfErr := writeDaemonRuntimeWithAuth(
-		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, true,
+		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, rt.PublicURL, true,
 		rt.Cfg.RequireAuth,
 		rt.Caddy.Pid(),
 	); sfErr != nil {
