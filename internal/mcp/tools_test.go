@@ -1452,7 +1452,7 @@ func TestListSessionsIncludesBrowserLink(t *testing.T) {
 		fmt.Fprint(w, `{"sessions":[{"id":"codex:session-42"}]}`)
 	}))
 	defer server.Close()
-	tools := &toolset{svc: service.NewHTTPBackend(server.URL, "", false)}
+	tools := &toolset{svc: service.NewHTTPBackend(server.URL, "", false, "")}
 	_, out, err := tools.listSessions(t.Context(), nil, listSessionsIn{})
 	require.NoError(t, err)
 	require.Len(t, out.Sessions, 1)

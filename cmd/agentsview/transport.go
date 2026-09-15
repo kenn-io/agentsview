@@ -464,7 +464,7 @@ func newService(
 ) (service.SessionService, func(), error) {
 	switch tr.Mode {
 	case transportHTTP:
-		return service.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly),
+		return service.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, cfg.PublicURL),
 			func() {}, nil
 	default:
 		if err := directIncompatibleDaemonError(tr); err != nil {

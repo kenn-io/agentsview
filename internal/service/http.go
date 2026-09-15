@@ -77,6 +77,7 @@ func notImplementedMessage(body []byte) string {
 
 type httpBackend struct {
 	baseURL           string
+	browserURL        string
 	client            *http.Client
 	longRunningClient *http.Client
 	readOnly          bool
@@ -98,9 +99,14 @@ type HTTPServerCapabilities struct {
 // Sync returns a clear error without making the HTTP round-trip.
 // token, when non-empty, is attached as `Authorization: Bearer ...`
 // on every request so the backend works against daemons running
-// with require_auth=true.
-func NewHTTPBackend(baseURL, token string, readOnly bool) SessionService {
-	return newHTTPBackend(baseURL, token, readOnly, !readOnly)
+// with require_auth=true. browserURL selects the browser-facing address;
+// an empty value uses baseURL.
+func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) SessionService {
+	b := newHTTPBackend(baseURL, token, readOnly, !readOnly)
+	if browserURL != "" {
+		b.browserURL = browserURL
+	}
+	return b
 }
 
 // NewHTTPBackendForServer constructs a backend whose advertised capabilities
@@ -122,6 +128,7 @@ func newHTTPBackend(
 ) *httpBackend {
 	return &httpBackend{
 		baseURL:           strings.TrimSuffix(baseURL, "/"),
+		browserURL:        baseURL,
 		client:            &http.Client{Timeout: 30 * time.Second},
 		longRunningClient: &http.Client{Timeout: 0},
 		readOnly:          readOnly,
@@ -357,6 +364,7 @@ func (b *httpBackend) Sync(
 	if err := json.UnmarshalRead(resp.Body, &detail); err != nil {
 		return nil, err
 	}
+	detail.WebURL = b.sessionWebURL(detail.ID)
 	return &detail, nil
 }
 
@@ -1230,5 +1238,14 @@ func (b *httpBackend) sessionWebURL(id string) string {
 	if found {
 		path += "/" + url.PathEscape(rest)
 	}
-	return strings.TrimRight(b.baseURL, "/") + "/sessions/" + path
+	base, err := url.Parse(b.browserURL)
+	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
+		return ""
+	}
+	base.User = nil
+	base.RawQuery = ""
+	base.ForceQuery = false
+	base.Fragment = ""
+	base.RawFragment = ""
+	return strings.TrimRight(base.String(), "/") + "/sessions/" + path
 }

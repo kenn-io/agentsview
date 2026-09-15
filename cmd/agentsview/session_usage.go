@@ -177,7 +177,7 @@ func httpSessionUsageData(
 	}
 	sessionID := query.SessionID
 	resolvedID, err := resolveServiceSessionID(
-		ctx, service.NewHTTPBackend(baseURL, token, false), sessionID,
+		ctx, service.NewHTTPBackend(baseURL, token, false, ""), sessionID,
 	)
 	if err != nil {
 		if strings.HasPrefix(err.Error(), "session not found:") {
@@ -187,7 +187,7 @@ func httpSessionUsageData(
 		return nil, tokenUseExitErr, err
 	}
 	if !query.OwnOnly {
-		backend := service.NewHTTPBackend(baseURL, token, false)
+		backend := service.NewHTTPBackend(baseURL, token, false, "")
 		if _, syncErr := backend.Sync(ctx, service.SyncInput{
 			ID: resolvedID, Subagents: true,
 		}); syncErr != nil && !errors.Is(syncErr, db.ErrReadOnly) {

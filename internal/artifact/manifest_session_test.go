@@ -37,6 +37,8 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	// The reference for parity excludes both fields.
 	reference := sess
 	reference.QualitySignals = nil
+	// Browser links belong to a client connection, not archived content.
+	reference.WebURL = ""
 	type sessionAlias db.Session
 	artifactReference := func(s db.Session) ([]byte, error) {
 		data, err := canonicalJSON(sessionAlias(s))
@@ -56,12 +58,12 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	got, err := canonicalJSON(manifestSessionFromDB(sess))
 	require.NoError(t, err)
 	assert.Equal(t, string(want), string(got),
-		"manifestSession must serialize byte-identically to db.Session minus database-only fields")
+		"manifestSession must serialize byte-identically to db.Session minus database-only and transient fields")
 
 	withoutPointer, err := canonicalJSON(manifestSessionFromDB(reference))
 	require.NoError(t, err)
 	assert.Equal(t, string(got), string(withoutPointer),
-		"manifest bytes must not depend on the transient quality_signals pointer")
+		"manifest bytes must not depend on the transient quality_signals or web_url")
 
 	roundTrip, err := artifactReference(manifestSessionFromDB(sess).dbSession())
 	require.NoError(t, err)
