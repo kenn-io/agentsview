@@ -4760,7 +4760,8 @@ func (e *Engine) scheduleDuplicateGroupRebuild() {
 		return
 	}
 	e.duplicateRebuildRunning = true
-	e.duplicateRebuildDone = make(chan struct{})
+	done := make(chan struct{})
+	e.duplicateRebuildDone = done
 	e.duplicateRebuildMu.Unlock()
 	go func() {
 		for {
@@ -4774,7 +4775,11 @@ func (e *Engine) scheduleDuplicateGroupRebuild() {
 			if !e.duplicateRebuildPending {
 				e.duplicateRebuildRunning = false
 				e.duplicateRebuildMu.Unlock()
-				close(e.duplicateRebuildDone)
+				// Close the snapshot taken at schedule time, not the struct
+				// field: a caller that scheduled a rebuild while this worker
+				// was finishing may have already swapped in a fresh channel,
+				// and closing that under their feet would race the write.
+				close(done)
 				return
 			}
 			e.duplicateRebuildPending = false
