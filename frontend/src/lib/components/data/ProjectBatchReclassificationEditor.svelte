@@ -65,6 +65,11 @@
   const previewRead = new LatestRead();
 
   const usableCandidates = $derived(candidates.filter((entry) => entry.candidate.available));
+  const saveLabel = $derived(refreshing
+    ? m.data_reclassify_refreshing()
+    : applying
+    ? m.data_batch_saving_progress({ saved: savedCount, count: usableCandidates.length })
+    : m.data_batch_save({ count: usableCandidates.length }));
   const matchedSessions = $derived(
     previews.reduce((sum, item) => sum + item.preview.matched_sessions, 0),
   );
@@ -282,14 +287,26 @@
 
         <div class="action-row">
           <Button
-            label={applying || refreshing
-              ? m.data_batch_saving()
-              : m.data_batch_save({ count: usableCandidates.length })}
+            class="bulk-save"
+            label={saveLabel}
+            ariaLabel={saveLabel}
             disabled={!canApply || applying || refreshing}
             tone="info"
             surface="solid"
             onclick={applyAll}
-          />
+          >
+            {#if applying || refreshing}
+              <span
+                class="save-progress"
+                role="progressbar"
+                aria-label={m.data_batch_saving()}
+                aria-valuemin="0"
+                aria-valuemax={usableCandidates.length}
+                aria-valuenow={savedCount}
+                style:width={`${usableCandidates.length ? savedCount / usableCandidates.length * 100 : 0}%`}
+              ></span>
+            {/if}
+          </Button>
         </div>
       </div>
 
@@ -371,6 +388,15 @@
 </div>
 
 <style>
+  .action-row :global(.bulk-save) { position: relative; overflow: hidden; }
+  .save-progress {
+    position: absolute;
+    inset-inline-start: 0;
+    bottom: 0;
+    height: 3px;
+    background: currentColor;
+    pointer-events: none;
+  }
   .editor {
     display: flex;
     min-height: 0;

@@ -30,6 +30,28 @@ func TestPruneFilterZeroValue(t *testing.T) {
 	requireErrContains(t, err, "at least one filter is required")
 }
 
+func TestSessionFilterIncludesEmptyForProjectMapping(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "empty", "mapping", func(s *Session) { s.MessageCount = 0 })
+	insertSession(t, d, "populated", "mapping", func(s *Session) { s.MessageCount = 2 })
+	for _, includeEmpty := range []bool{false, true} {
+		page, err := d.ListSessions(context.Background(), SessionFilter{
+			ProjectLabels: []string{"mapping"}, IncludeEmpty: includeEmpty,
+		})
+		require.NoError(t, err)
+		ids := make([]string, len(page.Sessions))
+		for i, session := range page.Sessions {
+			ids[i] = session.ID
+		}
+		want := []string{"populated"}
+		if includeEmpty {
+			want = append(want, "empty")
+		}
+		assert.ElementsMatch(t, want, ids)
+		assert.Equal(t, len(want), page.Total)
+	}
+}
+
 func TestSessionFilterDateFields(t *testing.T) {
 	d := testDB(t)
 	sessionSet(t, d)

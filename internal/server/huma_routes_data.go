@@ -85,7 +85,10 @@ type dataStripImagesApplyRequest struct {
 }
 
 type dataProjectSessionsInput struct {
-	ProjectKey string `path:"project_key" required:"true" doc:"Opaque project identity key"`
+	ProjectKey       string `path:"project_key" required:"true" doc:"Opaque project identity key"`
+	Cursor           string `query:"cursor" doc:"Opaque pagination cursor"`
+	Limit            int    `query:"limit" minimum:"0" doc:"Maximum number of results per page"`
+	IncludeAutomated bool   `query:"include_automated" doc:"Include automated sessions"`
 }
 
 func (s *Server) humaDataProjects(
@@ -129,10 +132,13 @@ func (s *Server) humaDataProjectSessions(
 		return nil, apiError(http.StatusNotFound, "project not found")
 	}
 	page, err := s.db.ListSessions(ctx, db.SessionFilter{
-		ProjectLabels:   resolved,
-		IncludeChildren: true,
-		Limit:           20,
-		OrderBy:         "recent",
+		ProjectLabels:    resolved,
+		IncludeChildren:  true,
+		IncludeEmpty:     true,
+		Limit:            clampLimit(in.Limit, db.DefaultSessionLimit, db.MaxSessionLimit),
+		Cursor:           in.Cursor,
+		ExcludeAutomated: !in.IncludeAutomated,
+		OrderBy:          "recent",
 	})
 	if err != nil {
 		return nil, internalError("list project sessions", err)

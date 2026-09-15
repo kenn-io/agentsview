@@ -61,6 +61,16 @@ selected project, the selection follows the new name. If mappings changed
 between preview and apply, the apply is rejected and a fresh preview is
 required.
 
+Session previews appear below the correction controls. Their header contains
+previous/next navigation and a filter button to include automated sessions,
+which are hidden by default. Navigation loads another page of session records
+only when needed, and loads transcript messages only for the selected session.
+Sessions without stored messages remain available for mapping, with a notice
+instead of a transcript. Collapse folder suggestions to give previews more room.
+
+During a bulk correction, the Save button shows the number of completed
+corrections and a progress bar. Each correction applies separately.
+
 ## Rules
 
 The **Rules** toggle shows the worktree mapping rules for one machine at a time,

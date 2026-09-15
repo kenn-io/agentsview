@@ -13,6 +13,7 @@ import type {
   DbStripImagesReport,
   GetApiV1DataProjectReclassificationCandidatesParams,
   GetApiV1DataProjectRulesParams,
+  GetApiV1DataProjectsByProjectKeySessionsParams,
   GetApiV1DataProjectsByProjectKeySessionsPathParameters,
 } from "../models";
 
@@ -124,10 +125,23 @@ export const getApiV1DataProjects = async (
   });
 };
 
-export const getGetApiV1DataProjectsByProjectKeySessionsUrl = ({
-  projectKey,
-}: GetApiV1DataProjectsByProjectKeySessionsPathParameters) => {
-  return `/api/v1/data/projects/${encodeURIComponent(String(projectKey))}/sessions`;
+export const getGetApiV1DataProjectsByProjectKeySessionsUrl = (
+  { projectKey }: GetApiV1DataProjectsByProjectKeySessionsPathParameters,
+  params?: GetApiV1DataProjectsByProjectKeySessionsParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : String(value));
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/v1/data/projects/${encodeURIComponent(String(projectKey))}/sessions?${stringifiedParams}`
+    : `/api/v1/data/projects/${encodeURIComponent(String(projectKey))}/sessions`;
 };
 
 /**
@@ -135,12 +149,16 @@ export const getGetApiV1DataProjectsByProjectKeySessionsUrl = ({
  */
 export const getApiV1DataProjectsByProjectKeySessions = async (
   { projectKey }: GetApiV1DataProjectsByProjectKeySessionsPathParameters,
+  params?: GetApiV1DataProjectsByProjectKeySessionsParams,
   options?: Parameters<typeof orvalFetch>[1],
 ): Promise<DbSessionPage> => {
-  return orvalFetch<DbSessionPage>(getGetApiV1DataProjectsByProjectKeySessionsUrl({ projectKey }), {
-    ...options,
-    method: "GET",
-  });
+  return orvalFetch<DbSessionPage>(
+    getGetApiV1DataProjectsByProjectKeySessionsUrl({ projectKey }, params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
 };
 
 export const getPostApiV1DataStripImagesUrl = () => {

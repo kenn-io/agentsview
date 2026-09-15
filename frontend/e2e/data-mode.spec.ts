@@ -54,9 +54,29 @@ test.describe("Data mode project reclassification", () => {
         json: { projects: [project], total_projects: 1, total_sessions: 80, governed_sessions: 0 },
       }),
     );
-    await page.route("**/api/v1/data/projects/layout-fixture/sessions", (route) =>
+    await page.route("**/api/v1/data/projects/layout-fixture/sessions?*", (route) =>
       route.fulfill({
-        json: { sessions: [], total: 0 },
+        json: {
+          sessions: ["session-a", "session-b"].map((id) => ({
+            id,
+            agent: "claude",
+            project: "project-a",
+            cwd: "/srv/checkouts/project-0",
+          })),
+          total: 2,
+        },
+      }),
+    );
+    await page.route("**/api/v1/sessions/session-*/messages?*", (route) =>
+      route.fulfill({
+        json: {
+          messages: Array.from({ length: 12 }, (_, id) => ({
+            id,
+            role: "user",
+            content: "Explain this project's folder mapping. ".repeat(20),
+          })),
+          count: 12,
+        },
       }),
     );
     await page.route("**/api/v1/data/project-reclassification/candidates?*", (route) =>
@@ -83,6 +103,15 @@ test.describe("Data mode project reclassification", () => {
       await page.setViewportSize(viewport);
       await page.goto("/data?project_key=layout-fixture");
       await page.getByRole("radio", { name: "All folders", exact: true }).click();
+      if (viewport.width >= 980) {
+        const heading = await page
+          .getByRole("heading", { name: "Projects", exact: true })
+          .boundingBox();
+        const summary = await page.getByText("80 sessions", { exact: true }).first().boundingBox();
+        expect(summary!.y).toBeGreaterThanOrEqual(heading!.y);
+        expect(summary!.y + summary!.height).toBeLessThanOrEqual(heading!.y + heading!.height);
+        expect(summary!.x).toBeGreaterThan(heading!.x + heading!.width);
+      }
       const ws = workspace(page);
       const save = ws.getByRole("button", { name: "Save 40 corrections" });
       const target = ws.getByTitle("Project", { exact: true });
@@ -102,6 +131,26 @@ test.describe("Data mode project reclassification", () => {
       expect(scrolled.height).toBeGreaterThan(80);
       expect(await save.boundingBox()).toEqual(before);
       await expect(save).toBeDisabled();
+      if (viewport.width === 1440) {
+        await page.getByRole("radio", { name: "One folder", exact: true }).click();
+        await ws.getByRole("button", { name: "/srv/checkouts/project-0", exact: true }).click();
+        const transcript = ws.locator(".session-transcript");
+        const beforeCollapse = await transcript.boundingBox();
+        await ws.getByRole("button", { name: "Folder suggestions", exact: true }).click();
+        const afterCollapse = await transcript.boundingBox();
+        expect(afterCollapse!.y).toBeLessThan(beforeCollapse!.y);
+        expect(afterCollapse!.height).toBeGreaterThan(beforeCollapse!.height);
+        const previewHeading = await ws
+          .getByRole("button", { name: "2 session previews", exact: true })
+          .boundingBox();
+        const next = ws.getByRole("button", { name: "Next session", exact: true });
+        const nextBox = await next.boundingBox();
+        expect(nextBox!.y + nextBox!.height / 2).toBe(
+          previewHeading!.y + previewHeading!.height / 2,
+        );
+        await next.click();
+        await expect(ws.getByText("2 of 2", { exact: true })).toBeVisible();
+      }
     }
   });
 

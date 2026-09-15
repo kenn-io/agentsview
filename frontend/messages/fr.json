@@ -1,4 +1,16 @@
 {
+  "data_reclassify_session_preview_filtered_empty": "Aucune session à prévisualiser. Les sessions automatisées sont masquées ; utilisez le bouton de filtre pour les inclure.",
+  "data_batch_saving_progress": [
+    {
+      "declarations": [
+        "input saved",
+        "input count",
+        "local savedNumber = saved: number",
+        "local countNumber = count: number"
+      ],
+      "match": { "*": "Enregistrement de {savedNumber} sur {countNumber}…" }
+    }
+  ],
   "data_candidate_worktree_prefix": "Préfixe de worktree",
   "data_candidate_common_parent": "Dossier parent commun",
   "data_candidate_paths_sample": "Extrait des chemins enregistrés.",

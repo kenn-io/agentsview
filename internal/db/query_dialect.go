@@ -433,6 +433,9 @@ func BuildSessionBaseFilterSQL(
 		"message_count > 0",
 		"deleted_at IS NULL",
 	}
+	if f.IncludeEmpty {
+		preds = preds[1:]
+	}
 	filterPreds, oneShotPred := sessionFilterPredicates(f, b, func(col string) string { return col })
 	preds = append(preds, filterPreds...)
 	if oneShotPred != "" {
@@ -492,6 +495,9 @@ func buildSessionFilterWithBuilder(
 	basePreds := []string{
 		q("message_count") + " > 0",
 		q("deleted_at") + " IS NULL",
+	}
+	if f.IncludeEmpty {
+		basePreds = basePreds[1:]
 	}
 	// Opaque project-key callers have already resolved every raw label that
 	// belongs to the identity. Match those labels on each row directly so

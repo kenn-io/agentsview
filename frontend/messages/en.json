@@ -1,4 +1,16 @@
 {
+  "data_reclassify_session_preview_filtered_empty": "No sessions to preview. Automated sessions are hidden; use the filter button to include them.",
+  "data_batch_saving_progress": [
+    {
+      "declarations": [
+        "input saved",
+        "input count",
+        "local savedNumber = saved: number",
+        "local countNumber = count: number"
+      ],
+      "match": { "*": "Saving {savedNumber} of {countNumber}…" }
+    }
+  ],
   "data_candidate_worktree_prefix": "Worktree prefix",
   "data_candidate_common_parent": "Common parent",
   "data_candidate_paths_sample": "Showing a sample of the recorded paths.",

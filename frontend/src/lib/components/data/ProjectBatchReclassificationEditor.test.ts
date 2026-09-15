@@ -139,4 +139,36 @@ describe("ProjectBatchReclassificationEditor", () => {
     expect(onRefresh).toHaveBeenCalledWith("agentsview");
     expect(onComplete).toHaveBeenCalledWith("agentsview", 3);
   });
+
+  it("shows completed corrections inside Save while the rest of the batch is pending", async () => {
+    const second = Promise.withResolvers<object>();
+    const refreshed = Promise.withResolvers<boolean>();
+    api.apply.mockResolvedValueOnce({}).mockReturnValueOnce(second.promise);
+    component = mount(ProjectBatchReclassificationEditor, {
+      target: document.body,
+      props: {
+        rows: [row("k1", "source-alpha"), row("k2", "source-beta"), row("k3", "source-gamma")],
+        projects: [{ name: "agentsview", session_count: 20 }],
+        onRefresh: () => refreshed.promise,
+        onComplete: vi.fn(),
+      },
+    });
+    await flush();
+    await fireEvent.click(screen.getByTitle("Project"));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "agentsview (20)" }));
+    await vi.advanceTimersByTimeAsync(300);
+    await fireEvent.click(screen.getByRole("button", { name: "Save 3 corrections" }));
+    await flush();
+    await flush();
+    const progress = screen.getByRole("progressbar");
+    expect(progress.getAttribute("aria-valuenow")).toBe("1");
+    expect(progress.getAttribute("aria-valuemax")).toBe("3");
+    expect(screen.getByRole("button", { name: "Saving 1 of 3…" }).contains(progress)).toBe(true);
+    second.resolve({});
+    await flush();
+    await flush();
+    expect(progress.getAttribute("aria-valuenow")).toBe("3");
+    refreshed.resolve(true);
+    await flush();
+  });
 });

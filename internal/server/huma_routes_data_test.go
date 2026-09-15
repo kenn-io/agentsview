@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -105,6 +106,58 @@ func TestDataProjectSessionsEndpointUsesExactOpaqueIdentity(t *testing.T) {
 	assert.ElementsMatch(t, []string{"target-root", "target-child"}, []string{
 		page.Sessions[0].ID, page.Sessions[1].ID,
 	})
+}
+
+func TestDataProjectSessionsPaginationAndAutomation(t *testing.T) {
+	te := setup(t)
+	for i := range 25 {
+		te.seedSession(t, fmt.Sprintf("preview-%02d", i), "project-a", 1)
+	}
+	te.seedSession(t, "automated-preview", "project-a", 1, func(s *db.Session) {
+		s.IsAutomated = true
+	})
+	identities, err := te.db.BuildProjectIdentityMap(context.Background(), []string{"project-a"})
+	require.NoError(t, err)
+	endpoint := "/api/v1/data/projects/" + url.PathEscape(identities["project-a"].ProjectKey) + "/sessions"
+	w := te.get(t, endpoint+"?limit=20")
+	assertStatus(t, w, http.StatusOK)
+	var first db.SessionPage
+	decodeInto(t, w, &first)
+	require.Len(t, first.Sessions, 20)
+	assert.Equal(t, 25, first.Total)
+	require.NotEmpty(t, first.NextCursor)
+	w = te.get(t, endpoint+"?limit=20&cursor="+url.QueryEscape(first.NextCursor))
+	assertStatus(t, w, http.StatusOK)
+	var last db.SessionPage
+	decodeInto(t, w, &last)
+	require.Len(t, last.Sessions, 5)
+	assert.Empty(t, last.NextCursor)
+	ids := make(map[string]bool)
+	for _, session := range append(first.Sessions, last.Sessions...) {
+		assert.False(t, session.IsAutomated)
+		ids[session.ID] = true
+	}
+	assert.Len(t, ids, 25)
+	w = te.get(t, endpoint+"?include_automated=true")
+	assertStatus(t, w, http.StatusOK)
+	var all db.SessionPage
+	decodeInto(t, w, &all)
+	assert.Equal(t, 26, all.Total)
+	assert.Len(t, all.Sessions, 26)
+}
+
+func TestDataProjectSessionsIncludesEmptySessionsForMapping(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "empty-preview", "empty-project", 0)
+	identities, err := te.db.BuildProjectIdentityMap(context.Background(), []string{"empty-project"})
+	require.NoError(t, err)
+	w := te.get(t, "/api/v1/data/projects/"+url.PathEscape(identities["empty-project"].ProjectKey)+"/sessions")
+	assertStatus(t, w, http.StatusOK)
+	var page db.SessionPage
+	decodeInto(t, w, &page)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "empty-preview", page.Sessions[0].ID)
+	assert.Equal(t, 1, page.Total)
 }
 
 func TestDataProjectRulesDefaultsToLocalMachine(t *testing.T) {

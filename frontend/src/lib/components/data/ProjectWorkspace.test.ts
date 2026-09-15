@@ -96,16 +96,6 @@ describe("ProjectWorkspace", () => {
     api.listSessions.mockResolvedValue({
       sessions: [
         {
-          id: "session-automated",
-          project: "wrong-project",
-          cwd: "/srv/worktrees/example/repo",
-          display_name: "Automated review",
-          first_message: "Review the changes",
-          agent: "codex",
-          started_at: "2026-03-09T18:32:00Z",
-          is_automated: true,
-        },
-        {
           id: "session-1",
           project: "wrong-project",
           cwd: "/srv/worktrees/example/repo",
@@ -113,6 +103,16 @@ describe("ProjectWorkspace", () => {
           first_message: "Work out which project this session belongs to",
           agent: "codex",
           started_at: "2026-03-09T18:30:00Z",
+          is_automated: false,
+        },
+        {
+          id: "session-2",
+          project: "wrong-project",
+          cwd: "/srv/worktrees/example/repo",
+          display_name: "Investigate folders",
+          first_message: "Identify the repository",
+          agent: "codex",
+          started_at: "2026-03-09T18:29:00Z",
           is_automated: false,
         },
       ],
@@ -238,13 +238,18 @@ describe("ProjectWorkspace", () => {
     });
   });
 
-  it("shows a human-started session before newer automated sessions", async () => {
+  it("requests non-automated sessions before loading the selected transcript", async () => {
     render();
     await flush();
     await flush();
 
     expect(api.listSessions.mock.lastCall?.[0]).toEqual({
       projectKey: "pl1:sha256:wrong",
+    });
+    expect(api.listSessions.mock.lastCall?.[1]).toEqual({
+      cursor: undefined,
+      limit: 20,
+      include_automated: false,
     });
     expect(api.listMessages).toHaveBeenCalledWith(
       {
@@ -262,9 +267,9 @@ describe("ProjectWorkspace", () => {
   });
 
   it("keeps cached transcript content when a session left behind fails", async () => {
-    const automatedMessages = deferred<never>();
+    const secondMessages = deferred<never>();
     api.listMessages.mockImplementation(({ id }: { id: string }) => {
-      if (id === "session-automated") return automatedMessages.promise;
+      if (id === "session-2") return secondMessages.promise;
       return Promise.resolve({
         count: 1,
         messages: [
@@ -296,11 +301,89 @@ describe("ProjectWorkspace", () => {
     await fireEvent.click(
       screen.getByRole("button", { name: m.data_reclassify_session_preview_previous() }),
     );
-    automatedMessages.reject(new Error("late failure"));
+    secondMessages.reject(new Error("late failure"));
     await flush();
 
     expect(screen.getByText("Cached mapping context")).toBeTruthy();
     expect(screen.queryByText(m.data_reclassify_session_preview_failed())).toBeNull();
+  });
+
+  it("fetches the next session page only when navigation reaches its boundary", async () => {
+    api.listSessions.mockImplementation((_path, params) => {
+      if (!params.cursor)
+        return Promise.resolve({
+          sessions: [{ id: "session-1" }, { id: "session-2" }],
+          total: 3,
+          next_cursor: "next-page",
+        });
+      expect(params.cursor).toBe("next-page");
+      return Promise.resolve({ sessions: [{ id: "session-3" }], total: 3 });
+    });
+    render();
+    await flush();
+    expect(api.listSessions).toHaveBeenCalledTimes(1);
+    expect(api.listMessages).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("1 of 3")).toBeTruthy();
+    await fireEvent.click(
+      screen.getByRole("button", { name: m.data_reclassify_session_preview_next() }),
+    );
+    await flush();
+    expect(api.listSessions).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("2 of 3")).toBeTruthy();
+    await fireEvent.click(
+      screen.getByRole("button", { name: m.data_reclassify_session_preview_next() }),
+    );
+    await flush();
+    expect(api.listSessions).toHaveBeenCalledTimes(2);
+    expect(api.listSessions.mock.lastCall?.[1]).toEqual({
+      cursor: "next-page",
+      limit: 20,
+      include_automated: false,
+    });
+    expect(api.listMessages.mock.lastCall?.[0]).toEqual({ id: "session-3" });
+    expect(screen.getByText("3 of 3")).toBeTruthy();
+    await fireEvent.click(
+      screen.getByRole("button", { name: m.data_reclassify_session_preview_previous() }),
+    );
+    await flush();
+    expect(api.listSessions).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("2 of 3")).toBeTruthy();
+  });
+
+  it("can include automated sessions when the non-automated selection is empty", async () => {
+    api.listSessions.mockImplementation((_path, params) =>
+      Promise.resolve(
+        params.include_automated
+          ? { sessions: [{ id: "automated-session", is_automated: true }], total: 1 }
+          : { sessions: [], total: 0 },
+      ),
+    );
+    render();
+    await flush();
+    const filter = screen.getByRole("button", { name: m.sidebar_filters_include_automated() });
+    expect(filter.getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByText(m.data_reclassify_session_preview_filtered_empty())).toBeTruthy();
+    expect(api.listMessages).not.toHaveBeenCalled();
+    await fireEvent.click(filter);
+    await flush();
+    expect(api.listSessions.mock.lastCall?.[1].include_automated).toBe(true);
+    expect(api.listMessages.mock.lastCall?.[0]).toEqual({ id: "automated-session" });
+    expect(screen.getByText("1 of 1")).toBeTruthy();
+    expect(filter.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByText(m.data_reclassify_session_preview_filtered_empty())).toBeNull();
+  });
+
+  it("keeps a session without messages available for mapping", async () => {
+    api.listSessions.mockResolvedValue({
+      sessions: [{ id: "empty-session", message_count: 0, cwd: "/tmp/example" }],
+      total: 1,
+    });
+    api.listMessages.mockResolvedValue({ messages: [] });
+    render();
+    await flush();
+    expect(screen.getByText("1 of 1")).toBeTruthy();
+    expect(screen.getByText(m.data_reclassify_session_preview_no_message())).toBeTruthy();
+    expect(screen.getByText(m.data_session_assignment_heading())).toBeTruthy();
   });
 
   it("assigns only the active session to a selected project", async () => {

@@ -150,7 +150,16 @@
   <FlashBanner toneLabels={{ success: m.data_flash_success_label() }} />
   {#if projectWorkspaceEnabled}
     <div class="data-header">
-      <h2>{m.data_projects_heading()}</h2>
+      <div class="header-summary">
+        <h2>{m.data_projects_heading()}</h2>
+        {#if data.view === "inventory" && data.inventory}
+          <div class="summary-strip">
+            <span>{m.data_summary_projects({ count: data.inventory.total_projects })}</span>
+            <span>{m.data_summary_sessions({ count: data.inventory.total_sessions })}</span>
+            <span>{m.data_summary_governed({ count: data.inventory.governed_sessions })}</span>
+          </div>
+        {/if}
+      </div>
       <SegmentedControl
         options={viewOptions}
         value={data.view}
@@ -180,12 +189,6 @@
     <!-- Inventory-first ordering: once inventory has loaded once it keeps
          rendering through background reloads; loading/error below only
          apply before that first successful load. -->
-    <div class="summary-strip">
-      <span>{m.data_summary_projects({ count: data.inventory.total_projects })}</span>
-      <span>{m.data_summary_sessions({ count: data.inventory.total_sessions })}</span>
-      <span>{m.data_summary_governed({ count: data.inventory.governed_sessions })}</span>
-    </div>
-
     {#if data.unknownProjectKey}
       <div class="notice" role="status">{m.data_unknown_project_key()}</div>
     {/if}
@@ -256,9 +259,17 @@
 
   .data-header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+  }
+
+  .header-summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
   }
 
   h2 {
@@ -268,11 +279,11 @@
 
   .summary-strip {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 16px;
+    gap: 4px 16px;
     font-size: 11px;
     color: var(--text-muted);
-    padding: 0 2px;
   }
 
   .split {

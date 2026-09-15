@@ -177,12 +177,15 @@
 
   .correction-pane {
     display: flex;
-    flex: 0 1 60%;
+    flex: 0 1 auto;
+    max-height: 60%;
     min-height: 0;
     overflow: hidden;
   }
 
   .project-session-pane {
+    display: flex;
+    flex-direction: column;
     flex: 1 1 180px;
     min-height: 120px;
     overflow-y: auto;

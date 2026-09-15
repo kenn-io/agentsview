@@ -1,4 +1,16 @@
 {
+  "data_reclassify_session_preview_filtered_empty": "沒有可預覽的工作階段。自動工作階段已隱藏；使用篩選按鈕可將其包含在內。",
+  "data_batch_saving_progress": [
+    {
+      "declarations": [
+        "input saved",
+        "input count",
+        "local savedNumber = saved: number",
+        "local countNumber = count: number"
+      ],
+      "match": { "*": "正在儲存：{savedNumber}/{countNumber}…" }
+    }
+  ],
   "data_candidate_worktree_prefix": "工作樹前綴",
   "data_candidate_common_parent": "共同父目錄",
   "data_candidate_paths_sample": "顯示部分已記錄的路徑。",

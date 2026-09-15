@@ -1,4 +1,16 @@
 {
+  "data_reclassify_session_preview_filtered_empty": "プレビューするセッションがありません。自動セッションは非表示です。含めるにはフィルターボタンを使用してください。",
+  "data_batch_saving_progress": [
+    {
+      "declarations": [
+        "input saved",
+        "input count",
+        "local savedNumber = saved: number",
+        "local countNumber = count: number"
+      ],
+      "match": { "*": "{countNumber} 件中 {savedNumber} 件を保存中…" }
+    }
+  ],
   "data_candidate_worktree_prefix": "ワークツリープレフィックス",
   "data_candidate_common_parent": "共通の親フォルダー",
   "data_candidate_paths_sample": "記録されたパスの一部を表示しています。",

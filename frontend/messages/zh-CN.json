@@ -1,4 +1,16 @@
 {
+  "data_reclassify_session_preview_filtered_empty": "没有可预览的会话。自动会话已隐藏；使用筛选按钮可将其包含在内。",
+  "data_batch_saving_progress": [
+    {
+      "declarations": [
+        "input saved",
+        "input count",
+        "local savedNumber = saved: number",
+        "local countNumber = count: number"
+      ],
+      "match": { "*": "正在保存：{savedNumber}/{countNumber}…" }
+    }
+  ],
   "data_candidate_worktree_prefix": "工作树前缀",
   "data_candidate_common_parent": "共同父目录",
   "data_candidate_paths_sample": "显示部分已记录的路径。",

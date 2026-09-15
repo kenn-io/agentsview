@@ -8,7 +8,7 @@
     type DbSession,
   } from "../../api/generated/index";
   import { callGenerated, isAbortError } from "../../api/runtime.js";
-  import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from "../../icons.js";
+  import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, FunnelIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
   import type { Message } from "../../api/types.js";
   import { LatestRead } from "../../utils/latest-read.js";
@@ -27,6 +27,10 @@
 
   let sessions = $state<DbSession[]>([]);
   let expanded = $state(true);
+  let includeAutomated = $state(false);
+  let total = $state(0);
+  let nextCursor = $state<string | undefined>();
+  let loadingMore = $state(false);
   let activeIndex = $state(0);
   let loading = $state(true);
   let loadError = $state("");
@@ -51,38 +55,47 @@
     messagesRead.cancel();
   });
 
-  async function loadSessions() {
+  async function loadSessions(append = false): Promise<boolean> {
     const signal = sessionsRead.begin();
-    loading = true;
+    if (append) loadingMore = true;
+    else loading = true;
     loadError = "";
     try {
       const response = await callGenerated(
         (options) => DataService.getApiV1DataProjectsByProjectKeySessions({
           projectKey,
-        }, options),
+        }, { cursor: append ? nextCursor : undefined, limit: 20, include_automated: includeAutomated }, options),
         signal,
       );
-      if (!sessionsRead.isCurrent(signal)) return;
-      // The generated list model currently exposes `sessions` as `any[]`.
-      // Keep the cast at this API boundary and use the generated row model
-      // everywhere inside the component.
-      const loadedSessions = (response.sessions ?? []) as DbSession[];
-      sessions = [
-        ...loadedSessions.filter((session) => !session.is_automated),
-        ...loadedSessions.filter((session) => session.is_automated),
-      ];
-      activeIndex = 0;
-      const firstSession = sessions[0];
-      if (firstSession) await loadMessages(firstSession.id);
+      if (!sessionsRead.isCurrent(signal)) return false;
+      const page = (response.sessions ?? []) as DbSession[];
+      sessions = append ? [...sessions, ...page] : page;
+      total = response.total;
+      nextCursor = response.next_cursor;
+      if (!append) {
+        activeIndex = 0;
+        targetProject = "";
+        const firstSession = sessions[0];
+        if (firstSession) void loadMessages(firstSession.id);
+      }
+      return true;
     } catch (error) {
-      if (isAbortError(error) || !sessionsRead.isCurrent(signal)) return;
+      if (isAbortError(error) || !sessionsRead.isCurrent(signal)) return false;
       loadError = m.data_reclassify_session_preview_failed();
+      return false;
     } finally {
-      if (sessionsRead.finish(signal)) loading = false;
+      if (sessionsRead.finish(signal)) {
+        loading = false;
+        loadingMore = false;
+      }
     }
   }
 
-  function move(offset: number) {
+  async function move(offset: number) {
+    if (loadingMore || loading || assigning) return;
+    if (offset > 0 && activeIndex === sessions.length - 1 && nextCursor) {
+      if (!await loadSessions(true)) return;
+    }
     const nextIndex = Math.max(0, Math.min(sessions.length - 1, activeIndex + offset));
     if (nextIndex === activeIndex) return;
     activeIndex = nextIndex;
@@ -197,15 +210,11 @@
 </script>
 
 <section class="project-session-previews">
-  {#if loading}
-    <p class="preview-status">{m.data_reclassify_session_preview_loading()}</p>
-  {:else if loadError}
-    <p class="preview-status error-text">{loadError}</p>
-  {:else if sessions.length > 0}
+  <div class="preview-header">
     <Button
       size="sm"
       class="session-preview-toggle"
-      label={m.data_reclassify_session_preview_count({ count: sessions.length })}
+      label={m.data_reclassify_session_preview_count({ count: total })}
       ariaExpanded={expanded}
       onclick={() => (expanded = !expanded)}
     >
@@ -219,110 +228,134 @@
     </Button>
 
     {#if expanded && activeSession}
-      <div class="carousel" aria-live="polite">
-        <div class="carousel-nav">
-          <span>{m.data_reclassify_session_preview_position({ current: activeIndex + 1, count: sessions.length })}</span>
-          <div class="carousel-buttons">
-            <IconButton
-              size="sm"
-              ariaLabel={m.data_reclassify_session_preview_previous()}
-              disabled={assigning || activeIndex === 0}
-              onclick={() => move(-1)}
-            >
-              <ChevronLeftIcon size="14" aria-hidden="true" />
-            </IconButton>
-            <IconButton
-              size="sm"
-              ariaLabel={m.data_reclassify_session_preview_next()}
-              disabled={assigning || activeIndex === sessions.length - 1}
-              onclick={() => move(1)}
-            >
-              <ChevronRightIcon size="14" aria-hidden="true" />
-            </IconButton>
-          </div>
-        </div>
-
-        <div class="session-transcript">
-          {#if messagesLoadingId === activeSession.id}
-            <p class="preview-status">{m.data_reclassify_session_preview_loading()}</p>
-          {:else if messagesError}
-            <p class="preview-status error-text">{messagesError}</p>
-          {:else if activeMessages.length === 0}
-            <p class="preview-status">{m.data_reclassify_session_preview_no_message()}</p>
-          {:else}
-            {#each activeMessages as message (message.id)}
-              <div class="preview-message">
-                <MessageContent
-                  {message}
-                  session={activeSession}
-                  compact
-                  allowMutations={false}
-                />
-              </div>
-            {/each}
-          {/if}
-        </div>
-
-        {#if activeSession.cwd}
-          <div class="session-folder">
-            <span>{m.data_reclassify_session_preview_folder()}</span>
-            <code>{activeSession.cwd}</code>
-          </div>
-        {/if}
-
-        <div class="session-assignment">
-          <div class="assignment-copy">
-            <div class="assignment-heading">
-              <strong>{m.data_session_assignment_heading()}</strong>
-              <span class:manual={activeSession.project_assigned} class="assignment-status">
-                {activeSession.project_assigned
-                  ? m.data_session_assignment_manual()
-                  : m.data_session_assignment_automatic()}
-              </span>
-            </div>
-            <span>{m.data_session_assignment_intro()}</span>
-          </div>
-          {#if readOnly}
-            <p class="preview-status">{m.data_reclassify_read_only()}</p>
-          {:else}
-            <div class="assignment-controls">
-              <ProjectTypeahead
-                {projects}
-                value={targetProject}
-                onselect={(value) => (targetProject = value)}
-                onquery={() => (assignmentError = "")}
-                includeAll={false}
-                allowCustom={true}
-                customLabel={m.data_reclassify_use_custom_project({ query: "{query}" })}
-                placeholder={m.data_session_assignment_target()}
-                title={m.data_session_assignment_target()}
-              />
-              <Button
-                size="sm"
-                label={assigning
-                  ? m.data_session_assignment_saving()
-                  : m.data_session_assignment_save()}
-                disabled={!targetProject.trim() || assigning}
-                onclick={() => void assignActiveSession()}
-              />
-              {#if activeSession.project_assigned}
-                <Button
-                  size="sm"
-                  label={assigning
-                    ? m.data_session_assignment_clearing()
-                    : m.data_session_assignment_use_automatic()}
-                  disabled={assigning}
-                  onclick={() => void clearActiveAssignment()}
-                />
-              {/if}
-            </div>
-            {#if assignmentError}
-              <p class="preview-status error-text" role="alert">{assignmentError}</p>
-            {/if}
-          {/if}
+      <div class="carousel-nav">
+        <span>{m.data_reclassify_session_preview_position({ current: activeIndex + 1, count: total })}</span>
+        <div class="carousel-buttons">
+          <IconButton
+            size="sm"
+            ariaLabel={m.data_reclassify_session_preview_previous()}
+            disabled={assigning || loading || loadingMore || activeIndex === 0}
+            onclick={() => move(-1)}
+          >
+            <ChevronLeftIcon size="14" aria-hidden="true" />
+          </IconButton>
+          <IconButton
+            size="sm"
+            ariaLabel={m.data_reclassify_session_preview_next()}
+            disabled={assigning || loading || loadingMore || (activeIndex === sessions.length - 1 && !nextCursor)}
+            onclick={() => move(1)}
+          >
+            <ChevronRightIcon size="14" aria-hidden="true" />
+          </IconButton>
         </div>
       </div>
     {/if}
+    <IconButton
+      size="sm"
+      ariaLabel={m.sidebar_filters_include_automated()}
+      title={m.sidebar_filters_include_automated()}
+      ariaPressed={includeAutomated}
+      tone={includeAutomated ? "info" : "neutral"}
+      disabled={assigning || loading || loadingMore}
+      onclick={() => {
+        includeAutomated = !includeAutomated;
+        void loadSessions();
+      }}
+    >
+      <FunnelIcon size="14" aria-hidden="true" />
+    </IconButton>
+  </div>
+
+  {#if loading}
+    <p class="preview-status">{m.data_reclassify_session_preview_loading()}</p>
+  {:else if loadError}
+    <p class="preview-status error-text">{loadError}</p>
+  {:else if expanded && !activeSession}
+    <p class="preview-status">{includeAutomated
+      ? m.data_reclassify_session_preview_no_message()
+      : m.data_reclassify_session_preview_filtered_empty()}</p>
+  {:else if expanded && activeSession}
+    <div class="carousel" aria-live="polite">
+      <div class="session-transcript">
+        {#if messagesLoadingId === activeSession.id}
+          <p class="preview-status">{m.data_reclassify_session_preview_loading()}</p>
+        {:else if messagesError}
+          <p class="preview-status error-text">{messagesError}</p>
+        {:else if activeMessages.length === 0}
+          <p class="preview-status">{m.data_reclassify_session_preview_no_message()}</p>
+        {:else}
+          {#each activeMessages as message (message.id)}
+            <div class="preview-message">
+              <MessageContent
+                {message}
+                session={activeSession}
+                compact
+                allowMutations={false}
+              />
+            </div>
+          {/each}
+        {/if}
+      </div>
+
+      {#if activeSession.cwd}
+        <div class="session-folder">
+          <span>{m.data_reclassify_session_preview_folder()}</span>
+          <code>{activeSession.cwd}</code>
+        </div>
+      {/if}
+
+      <div class="session-assignment">
+        <div class="assignment-copy">
+          <div class="assignment-heading">
+            <strong>{m.data_session_assignment_heading()}</strong>
+            <span class:manual={activeSession.project_assigned} class="assignment-status">
+              {activeSession.project_assigned
+                ? m.data_session_assignment_manual()
+                : m.data_session_assignment_automatic()}
+            </span>
+          </div>
+          <span>{m.data_session_assignment_intro()}</span>
+        </div>
+        {#if readOnly}
+          <p class="preview-status">{m.data_reclassify_read_only()}</p>
+        {:else}
+          <div class="assignment-controls">
+            <ProjectTypeahead
+              {projects}
+              value={targetProject}
+              onselect={(value) => (targetProject = value)}
+              onquery={() => (assignmentError = "")}
+              includeAll={false}
+              allowCustom={true}
+              customLabel={m.data_reclassify_use_custom_project({ query: "{query}" })}
+              placeholder={m.data_session_assignment_target()}
+              title={m.data_session_assignment_target()}
+            />
+            <Button
+              size="sm"
+              label={assigning
+                ? m.data_session_assignment_saving()
+                : m.data_session_assignment_save()}
+              disabled={!targetProject.trim() || assigning}
+              onclick={() => void assignActiveSession()}
+            />
+            {#if activeSession.project_assigned}
+              <Button
+                size="sm"
+                label={assigning
+                  ? m.data_session_assignment_clearing()
+                  : m.data_session_assignment_use_automatic()}
+                disabled={assigning}
+                onclick={() => void clearActiveAssignment()}
+              />
+            {/if}
+          </div>
+          {#if assignmentError}
+            <p class="preview-status error-text" role="alert">{assignmentError}</p>
+          {/if}
+        {/if}
+      </div>
+    </div>
   {/if}
   {#if assignmentRefreshError}
     <p class="preview-status error-text" role="status">
@@ -334,12 +367,15 @@
 <style>
   .project-session-previews {
     display: flex;
+    flex: 1;
+    min-height: 0;
     flex-direction: column;
     gap: 8px;
   }
 
   .project-session-previews :global(.session-preview-toggle.kit-button) {
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     min-height: 28px;
     justify-content: space-between;
     padding: 0 2px;
@@ -360,21 +396,24 @@
 
   .carousel {
     display: flex;
+    flex: 1;
+    min-height: 0;
     flex-direction: column;
     gap: 8px;
-    padding: 10px;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    background: var(--bg-surface);
   }
 
+  .preview-header,
   .carousel-nav,
   .carousel-buttons {
     display: flex;
     align-items: center;
   }
 
+  .preview-header { gap: 8px; }
+
   .carousel-nav {
+    flex: none;
+    gap: 8px;
     min-height: 24px;
     justify-content: space-between;
     color: var(--text-muted);
@@ -386,8 +425,8 @@
   }
 
   .session-transcript {
+    flex: 1;
     min-height: 120px;
-    max-height: 320px;
     overflow-y: auto;
     border-radius: var(--radius-sm);
     background: var(--bg-inset);

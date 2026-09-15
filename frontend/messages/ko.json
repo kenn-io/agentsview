@@ -1,4 +1,16 @@
 {
+  "data_reclassify_session_preview_filtered_empty": "미리 볼 세션이 없습니다. 자동 세션은 숨겨져 있습니다. 포함하려면 필터 버튼을 사용하세요.",
+  "data_batch_saving_progress": [
+    {
+      "declarations": [
+        "input saved",
+        "input count",
+        "local savedNumber = saved: number",
+        "local countNumber = count: number"
+      ],
+      "match": { "*": "{countNumber}개 중 {savedNumber}개 저장 중…" }
+    }
+  ],
   "data_candidate_worktree_prefix": "워크트리 접두 경로",
   "data_candidate_common_parent": "공통 상위 폴더",
   "data_candidate_paths_sample": "기록된 경로의 일부를 표시합니다.",
