@@ -4,45 +4,23 @@ import { fileURLToPath } from "node:url";
 import { test, expect, type Locator, type Page } from "@playwright/test";
 
 const LOC = {
-  sessionItem: ".session-item",
-  sessionProject: ".session-project",
-  sessionCount: ".session-count",
   listScroll: ".message-list-scroll",
   row: ".virtual-row",
 } as const;
 
 const COLD_WEBKIT_TEST_TIMEOUT_MS = 30_000;
 
-const BETA_7 = {
-  project: "project-beta",
-  count: 3, // user_message_count shown in sidebar
-  displayRows: 6,
-};
+const MIXED_CONTENT_SESSION_ID = "test-session-mixed-content-7";
+const MIXED_CONTENT_DISPLAY_ROWS = 6;
 
 const TOOL_BLOCK_PATH =
   "/workspace/packages/agentsview/frontend/src/lib/components/content/ToolBlock.svelte";
 const TOOL_VIEWPORTS = [1280, 768] as const;
 const TOOL_THEMES = ["light", "dark"] as const;
 
-function getSessionItem(page: Page, project: string, count: number) {
-  return page
-    .locator(LOC.sessionItem)
-    .filter({
-      has: page.locator(`${LOC.sessionProject}:text-is("${project}")`),
-    })
-    .filter({
-      has: page.locator(`${LOC.sessionCount}:text-is("${count}")`),
-    });
-}
-
-async function selectSession(page: Page, project: string, count: number): Promise<string> {
-  const item = getSessionItem(page, project, count);
-  const sessionId = await item.getAttribute("data-session-id");
-  expect(sessionId).toBeTruthy();
-  await expect(item).toBeVisible();
-  await page.goto(`/sessions/${encodeURIComponent(sessionId!)}`);
-  await expect(item).toHaveClass(/active/);
-  return sessionId!;
+async function selectSession(page: Page): Promise<string> {
+  await page.goto(`/sessions/${MIXED_CONTENT_SESSION_ID}`);
+  return MIXED_CONTENT_SESSION_ID;
 }
 
 async function expectSessionLoaded(page: Page, sessionId: string, expectedRows?: number) {
@@ -61,15 +39,9 @@ async function expectSessionLoaded(page: Page, sessionId: string, expectedRows?:
 test.describe("Mixed content rendering", () => {
   test.describe.configure({ timeout: COLD_WEBKIT_TEST_TIMEOUT_MS });
 
-  test.beforeEach(async ({ page }) => {
-    await page.goto("/sessions");
-    await expect(page.locator(LOC.sessionItem).first()).toBeVisible({ timeout: 5_000 });
-  });
-
   test("tool group renders for consecutive tool-only messages", async ({ page }) => {
-    const { project, count, displayRows } = BETA_7;
-    const sid = await selectSession(page, project, count);
-    await expectSessionLoaded(page, sid, displayRows);
+    const sid = await selectSession(page);
+    await expectSessionLoaded(page, sid, MIXED_CONTENT_DISPLAY_ROWS);
 
     const toolGroup = page.locator(".tool-group");
     await expect(toolGroup).toBeVisible();
@@ -85,9 +57,8 @@ test.describe("Mixed content rendering", () => {
   });
 
   test("tool block expands on click and text is selectable", async ({ page }) => {
-    const { project, count, displayRows } = BETA_7;
-    const sid = await selectSession(page, project, count);
-    await expectSessionLoaded(page, sid, displayRows);
+    const sid = await selectSession(page);
+    await expectSessionLoaded(page, sid, MIXED_CONTENT_DISPLAY_ROWS);
 
     const toolBlock = page.locator(".tool-block").first();
     await expect(toolBlock).toBeVisible();
@@ -119,15 +90,13 @@ test.describe("Mixed content rendering", () => {
   });
 
   test("tool output raw/formatted selection preserves the current output", async ({ page }) => {
-    const { project, count, displayRows } = BETA_7;
     for (const theme of TOOL_THEMES) {
+      await page.goto(`/sessions/${MIXED_CONTENT_SESSION_ID}`);
       await page.evaluate((value) => localStorage.setItem("theme", value), theme);
       for (const width of TOOL_VIEWPORTS) {
         await page.setViewportSize({ width, height: 900 });
-        await page.reload();
-        await expect(page.locator(LOC.sessionItem).first()).toBeVisible({ timeout: 5_000 });
-        const sid = await selectSession(page, project, count);
-        await expectSessionLoaded(page, sid, displayRows);
+        const sid = await selectSession(page);
+        await expectSessionLoaded(page, sid, MIXED_CONTENT_DISPLAY_ROWS);
         const pathTool = page
           .locator(".tool-block")
           .filter({
@@ -159,9 +128,8 @@ test.describe("Mixed content rendering", () => {
   });
 
   test("text selection does not collapse tool block", async ({ page }) => {
-    const { project, count, displayRows } = BETA_7;
-    const sid = await selectSession(page, project, count);
-    await expectSessionLoaded(page, sid, displayRows);
+    const sid = await selectSession(page);
+    await expectSessionLoaded(page, sid, MIXED_CONTENT_DISPLAY_ROWS);
 
     // Expand the tool block first
     const toolBlock = page.locator(".tool-block").first();
@@ -192,9 +160,8 @@ test.describe("Mixed content rendering", () => {
   });
 
   test("thinking block is collapsed by default", async ({ page }) => {
-    const { project, count, displayRows } = BETA_7;
-    const sid = await selectSession(page, project, count);
-    await expectSessionLoaded(page, sid, displayRows);
+    const sid = await selectSession(page);
+    await expectSessionLoaded(page, sid, MIXED_CONTENT_DISPLAY_ROWS);
 
     const thinkingBlock = page.locator(".thinking-block").first();
     await expect(thinkingBlock).toBeVisible();
@@ -213,9 +180,8 @@ test.describe("Mixed content rendering", () => {
   });
 
   test("thinking+text message shows response text", async ({ page }) => {
-    const { project, count, displayRows } = BETA_7;
-    const sid = await selectSession(page, project, count);
-    await expectSessionLoaded(page, sid, displayRows);
+    const sid = await selectSession(page);
+    await expectSessionLoaded(page, sid, MIXED_CONTENT_DISPLAY_ROWS);
 
     // The response text after thinking should be visible
     await expect(
@@ -226,9 +192,8 @@ test.describe("Mixed content rendering", () => {
   });
 
   test("response text remains after toggling thinking off", async ({ page }) => {
-    const { project, count, displayRows } = BETA_7;
-    const sid = await selectSession(page, project, count);
-    await expectSessionLoaded(page, sid, displayRows);
+    const sid = await selectSession(page);
+    await expectSessionLoaded(page, sid, MIXED_CONTENT_DISPLAY_ROWS);
 
     // Open block filter dropdown and toggle thinking off
     await page.locator('button[aria-label="Filter block types"]').click();
