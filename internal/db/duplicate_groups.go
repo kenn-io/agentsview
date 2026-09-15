@@ -254,7 +254,8 @@ func (db *DB) rebuildDuplicateGroupsLocked(
 				MemberCount: count,
 			}
 			prev, existed := prevMembers[m.id]
-			if !existed || prev.Role != role ||
+			if !existed || prev.GroupKey != key ||
+				prev.Role != role ||
 				prev.CanonicalID != canonicalID || prev.MemberCount != count {
 				changed[m.id] = true
 			}

@@ -176,6 +176,40 @@ func TestDuplicateGroupsSecondPassIsStable(t *testing.T) {
 		"unchanged membership must not re-notify the usage cache")
 }
 
+func TestDuplicateGroupsMachineRelabelChangesGroupKeys(t *testing.T) {
+	d := testDB(t)
+	seedDuplicateTwinPair(t, d, "goose:old", "augure-desktop:new",
+		"I need you to research and create a comprehensive plan.", 5, 4)
+
+	first, err := d.RebuildDuplicateGroups(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 2, first.NotifiedIDs)
+	before, ok := duplicateMembership(t, d, "goose:old")
+	require.True(t, ok)
+
+	// Relabeling the machine (installation identity changes rewrite
+	// sessions.machine wholesale) rewrites every group key while leaving
+	// roles, canonical IDs, and member counts untouched. The membership rows
+	// still changed, so mirror push windows must re-select them.
+	_, err = d.getWriter().Exec(
+		`UPDATE sessions SET machine = 'machine-b'
+		 WHERE id IN ('goose:old', 'augure-desktop:new')`)
+	require.NoError(t, err)
+
+	second, err := d.RebuildDuplicateGroups(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, second.NotifiedIDs,
+		"a group-key-only change must count as changed membership")
+
+	after, ok := duplicateMembership(t, d, "goose:old")
+	require.True(t, ok)
+	assert.NotEqual(t, before.GroupKey, after.GroupKey,
+		"the relabeled machine must produce a new group key")
+	assert.Equal(t, before.Role, after.Role)
+	assert.Equal(t, before.CanonicalID, after.CanonicalID)
+	assert.Equal(t, before.MemberCount, after.MemberCount)
+}
+
 func TestDuplicateGroupsBootstrapBackfillsOnce(t *testing.T) {
 	d := testDB(t)
 	seedDuplicateTwinPair(t, d, "goose:old", "augure-desktop:new",
