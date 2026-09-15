@@ -1179,6 +1179,62 @@ func TestSessionExportHermesStateDBWithoutSourceVersion(t *testing.T) {
 	}
 }
 
+func TestSessionExportAugureDesktopStateDB(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+
+	root := t.TempDir()
+	dbPath := createHermesExportStateDB(t, root)
+	virtualPath := dbPath + "#child"
+
+	seedSessionWithOpts(t, dataDir, "augure-desktop:child", "proj",
+		func(s *db.Session) {
+			s.Agent = string(parser.AgentAugureDesktop)
+			s.SourceSessionID = "child"
+			s.FilePath = &virtualPath
+		})
+
+	out, err := executeCommand(newRootCommand(),
+		"session", "export", "augure-desktop:child")
+	require.NoError(t, err)
+	// The selected session's JSONL must stream, not the SQLite file.
+	assert.NotContains(t, out, "SQLite format 3")
+	assert.Contains(t, out, `"role":"session_meta"`)
+	assert.Contains(t, out, "target hermes message")
+	assert.NotContains(t, out, "sibling hermes message")
+
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		assert.JSONEq(t, line, line)
+	}
+}
+
+func TestSessionExportAugureDesktopStateDBWithoutSourceSessionID(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+
+	root := t.TempDir()
+	dbPath := createHermesExportStateDB(t, root)
+	virtualPath := dbPath + "#child"
+
+	seedSessionWithOpts(t, dataDir, "augure-desktop:child", "proj",
+		func(s *db.Session) {
+			s.Agent = string(parser.AgentAugureDesktop)
+			s.FilePath = &virtualPath
+		})
+
+	// SourceSessionID is empty, so the raw ID is derived from the
+	// augure-desktop: prefix.
+	out, err := executeCommand(newRootCommand(),
+		"session", "export", "augure-desktop:child")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "SQLite format 3")
+	assert.Contains(t, out, `"role":"session_meta"`)
+	assert.Contains(t, out, "target hermes message")
+	assert.NotContains(t, out, "sibling hermes message")
+
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		assert.JSONEq(t, line, line)
+	}
+}
+
 func TestSessionExport_AiderVirtualPathStreamsOnlySelectedRun(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 
