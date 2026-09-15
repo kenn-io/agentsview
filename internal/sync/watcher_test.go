@@ -1174,6 +1174,25 @@ func TestWatcherCreatedDirectoryDiscoveryHonorsBackendExclusions(t *testing.T) {
 	assert.NotContains(t, batch.Paths, excluded)
 }
 
+func TestWatchExcludePatternMatchesFactoryLockStagingFiles(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{
+		"session.jsonl.events.lock",
+		"session.jsonl.events.lock.6ae5094a-78b2-4283-8c0f-137d5e0ec42f.pending",
+	} {
+		path := filepath.Join(root, name)
+		assert.True(t,
+			shouldExcludeForRoot([]string{"*.lock*"}, path, root),
+			"lock staging file should be excluded: %s", name,
+		)
+	}
+	assert.False(t, shouldExcludeForRoot(
+		[]string{"*.lock*"},
+		filepath.Join(root, "session.jsonl"),
+		root,
+	))
+}
+
 func TestWatcherCreatedDirectoryDiscoveryOverflowReconcilesOwningRoot(t *testing.T) {
 	backend := newFakeWatchBackend()
 	calls := make(chan WatchBatch, 1)

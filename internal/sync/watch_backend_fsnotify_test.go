@@ -161,6 +161,39 @@ func TestFSNotifyBackendRemoveDoesNotInheritBudgetSkippedParentOwnership(t *test
 		"budget-skipped parent root must not own explicit nested-root watches")
 }
 
+func TestFSNotifyBackendExcludesExistingLockFileEvents(t *testing.T) {
+	backend, err := newFSNotifyBackend([]string{"*.lock*"})
+	require.NoError(t, err)
+	t.Cleanup(backend.Stop)
+
+	root := t.TempDir()
+	require.NoError(t, backend.AddRecursive(root, math.MaxInt).Err)
+	lockPath := filepath.Join(root, "session.jsonl.events.lock.temporary.pending")
+	normalPath := filepath.Join(root, "session.jsonl")
+
+	for _, op := range []fsnotify.Op{
+		fsnotify.Create,
+		fsnotify.Write,
+		fsnotify.Remove,
+		fsnotify.Rename,
+	} {
+		event, relevant := backend.translateEvent(fsnotify.Event{
+			Name: lockPath,
+			Op:   op,
+		})
+		assert.False(t, relevant, "lock event should be ignored for op %v", op)
+		assert.Equal(t, backendEvent{}, event)
+	}
+
+	event, relevant := backend.translateEvent(fsnotify.Event{
+		Name: normalPath,
+		Op:   fsnotify.Write,
+	})
+	assert.True(t, relevant)
+	assert.Equal(t, filepath.Clean(normalPath), event.Path)
+	assert.Equal(t, backendOpWrite, event.Op)
+}
+
 type blockingRemoveWatchOps struct {
 	watcher       *fsnotify.Watcher
 	removeStarted chan struct{}
