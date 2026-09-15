@@ -8,6 +8,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTranscriptMessagesEqualUsesCanonicalTimestampPrecision(t *testing.T) {
+	stored := []Message{{
+		SessionID: "session", Ordinal: 0, Role: "assistant",
+		Timestamp: "2026-08-04T01:02:03.123456Z",
+		ToolCalls: []ToolCall{{ResultEvents: []ToolResultEvent{{
+			Timestamp: "2026-08-04T01:02:04.654321Z",
+		}}}},
+	}}
+	incoming := []Message{{
+		SessionID: "session", Ordinal: 0, Role: "assistant",
+		Timestamp: "2026-08-04T01:02:03.123456789Z",
+		ToolCalls: []ToolCall{{ResultEvents: []ToolResultEvent{{
+			Timestamp: "2026-08-04T01:02:04.654321987Z",
+		}}}},
+	}}
+	assert.True(t, transcriptMessagesEqual(stored, incoming))
+}
+
 func diffTestMsg(
 	sessionID string, ord int, role, content string,
 	mut ...func(*Message),

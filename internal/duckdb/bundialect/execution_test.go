@@ -38,6 +38,14 @@ type dialectValuesFixture struct {
 	Name string
 }
 
+type dialectDefaultFixture struct {
+	bun.BaseModel `bun:"table:dialect_default_fixtures"`
+	ID            int64  `bun:",pk"`
+	Name          string `bun:",notnull,default:''"`
+	Enabled       bool   `bun:",notnull,default:false"`
+	EventIndex    int    `bun:"event_index,notnull,default:0"`
+}
+
 func openDialectTestDB(t *testing.T) *bun.DB {
 	t.Helper()
 
@@ -126,6 +134,30 @@ func TestDialectAutoincrementTagRemainsSourceAssigned(t *testing.T) {
 	`).Scan(ctx, &sequenceCount)
 	require.NoError(t, err)
 	assert.Zero(t, sequenceCount)
+}
+
+func TestDialectMultirowInsertPreservesValuesAfterDefaultFirstRow(t *testing.T) {
+	store := openDialectTestDB(t)
+	ctx := t.Context()
+
+	_, err := store.NewCreateTable().Model((*dialectDefaultFixture)(nil)).Exec(ctx)
+	require.NoError(t, err)
+	rows := []dialectDefaultFixture{
+		{ID: 1},
+		{ID: 2, Name: "second", Enabled: true, EventIndex: 1},
+	}
+	_, err = store.NewInsert().Model(&rows).Exec(ctx)
+	require.NoError(t, err)
+
+	var stored []dialectDefaultFixture
+	require.NoError(t, store.NewSelect().Model(&stored).OrderExpr("id ASC").Scan(ctx))
+	require.Len(t, stored, 2)
+	assert.Equal(t, "", stored[0].Name)
+	assert.False(t, stored[0].Enabled)
+	assert.Zero(t, stored[0].EventIndex)
+	assert.Equal(t, "second", stored[1].Name)
+	assert.True(t, stored[1].Enabled)
+	assert.Equal(t, 1, stored[1].EventIndex)
 }
 
 func TestDialectAdvertisedFeaturesExecute(t *testing.T) {

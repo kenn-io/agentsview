@@ -100,7 +100,7 @@ func TestSemanticUnavailableError(t *testing.T) {
 }
 
 func TestStoreVectorSearcherWiring(t *testing.T) {
-	s := &Store{}
+	s := newSearchUnitStore()
 	assert.False(t, s.HasSemantic(), "no searcher wired")
 
 	s.SetVectorSearcher(NewVectorSearcher(nil, 1, 4, 100, nil))

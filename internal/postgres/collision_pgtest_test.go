@@ -82,7 +82,7 @@ func TestPushSessionGuardsAgainstCrossMachineCollision(t *testing.T) {
 	}}), "InsertMessages")
 
 	// Execute pushSession.
-	tx, err := pg.BeginTx(ctx, nil)
+	tx, err := sync.bunDB().BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
 	err = sync.pushSession(ctx, tx, sess, markerID, nil)
 	require.ErrorIs(t, err, errSessionOwnershipConflict, "pushSession should return ownership conflict sentinel")
@@ -154,7 +154,7 @@ func TestPushSessionAllowsMachineRenameForSameOwnerMarker(t *testing.T) {
 	}
 	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
 
-	tx, err := pg.BeginTx(ctx, nil)
+	tx, err := sync.bunDB().BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
 	require.NoError(t, sync.pushSession(ctx, tx, sess, markerID, nil), "pushSession")
 	require.NoError(t, tx.Commit(), "Commit")
@@ -211,7 +211,7 @@ func TestPushSessionAdoptsLegacyLocalSentinelRow(t *testing.T) {
 	}
 	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
 
-	tx, err := pg.BeginTx(ctx, nil)
+	tx, err := sync.bunDB().BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
 	markerID, err := sync.pushMarkerID()
 	require.NoError(t, err, "pushMarkerID")
@@ -225,4 +225,80 @@ func TestPushSessionAdoptsLegacyLocalSentinelRow(t *testing.T) {
 	require.NoError(t, err, "read back session")
 	assert.Equal(t, "host-a", machine)
 	assert.Equal(t, markerID, ownerMarker)
+}
+
+func TestPushSessionSerializesConcurrentFirstOwner(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_collision_concurrent_insert_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	ctx := t.Context()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localA, err := db.Open(filepath.Join(t.TempDir(), "a.db"))
+	require.NoError(t, err, "open local A")
+	defer localA.Close()
+	localB, err := db.Open(filepath.Join(t.TempDir(), "b.db"))
+	require.NoError(t, err, "open local B")
+	defer localB.Close()
+	syncA := &Sync{
+		pg: pg, local: localA, machine: "machine-a", schema: schema, schemaDone: true,
+	}
+	syncB := &Sync{
+		pg: pg, local: localB, machine: "machine-b", schema: schema, schemaDone: true,
+	}
+	markerA, err := syncA.pushMarkerID()
+	require.NoError(t, err, "marker A")
+	markerB, err := syncB.pushMarkerID()
+	require.NoError(t, err, "marker B")
+
+	ownerLocked := make(chan struct{})
+	releaseOwner := make(chan struct{})
+	competitorAttempting := make(chan struct{})
+	syncA.afterSessionOwnershipLock = func() {
+		close(ownerLocked)
+		<-releaseOwner
+	}
+	syncB.beforeSessionOwnershipLock = func() {
+		close(competitorAttempting)
+	}
+	push := func(syncer *Sync, machine, marker string) <-chan error {
+		result := make(chan error, 1)
+		go func() {
+			tx, err := syncer.bunDB().BeginTx(ctx, nil)
+			if err == nil {
+				err = syncer.pushSession(ctx, tx, db.Session{
+					ID: "concurrent-owner", Project: "project", Machine: machine,
+					Agent: "codex", CreatedAt: "2026-08-04T10:00:00Z",
+				}, marker, nil)
+			}
+			if err == nil {
+				err = tx.Commit()
+			} else {
+				_ = tx.Rollback()
+			}
+			result <- err
+		}()
+		return result
+	}
+
+	resultA := push(syncA, "machine-a", markerA)
+	<-ownerLocked
+	resultB := push(syncB, "machine-b", markerB)
+	<-competitorAttempting
+	close(releaseOwner)
+	require.NoError(t, <-resultA)
+	require.ErrorIs(t, <-resultB, errSessionOwnershipConflict)
+
+	var machine, marker string
+	require.NoError(t, pg.QueryRowContext(ctx,
+		`SELECT machine, owner_marker FROM sessions WHERE id = $1`,
+		"concurrent-owner",
+	).Scan(&machine, &marker))
+	assert.Equal(t, "machine-a", machine)
+	assert.Equal(t, markerA, marker)
 }

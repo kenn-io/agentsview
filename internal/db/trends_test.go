@@ -293,7 +293,7 @@ func TestGetTrendsTermsSQLiteUsesMessageTimestampRange(t *testing.T) {
 func TestGetTrendsTermsSQLiteDoesNotFilterBySessionTimestamp(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
-	start := "not-a-time"
+	start := "2030-01-01T00:00:00Z"
 	insertSession(t, d, "s1", "proj-a", func(s *Session) {
 		s.StartedAt = &start
 		s.MessageCount = 1

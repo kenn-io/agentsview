@@ -4,11 +4,38 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/uptrace/bun"
 
 	"go.kenn.io/agentsview/internal/db"
 )
+
+func pgSessionFilter(f db.ContentSearchFilter) db.SessionFilter {
+	return db.SessionFilter{
+		Project: f.Project, ExcludeProject: f.ExcludeProject,
+		Machine: f.Machine, GitBranch: f.GitBranch, Agent: f.Agent,
+		Date: f.Date, DateFrom: f.DateFrom, DateTo: f.DateTo,
+		Timezone:         f.Timezone,
+		ActiveSince:      f.ActiveSince,
+		ExcludeOneShot:   !f.IncludeOneShot,
+		ExcludeAutomated: !f.IncludeAutomated,
+		IncludeChildren:  f.IncludeChildren,
+	}
+}
+
+func pgSnippetBounds(text string, start, end int) (int, int) {
+	const radius = 60
+	lo := max(start-radius, 0)
+	hi := min(end+radius, len(text))
+	for lo < start && !utf8.RuneStart(text[lo]) {
+		lo++
+	}
+	for hi > end && hi < len(text) && !utf8.RuneStart(text[hi]) {
+		hi--
+	}
+	return lo, hi
+}
 
 func semanticPGSessionFilter(f db.ContentSearchFilter) db.SessionFilter {
 	sf := pgSessionFilter(f)

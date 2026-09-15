@@ -275,6 +275,7 @@ func TestCanonicalPricingWriteContract(t *testing.T) {
 	require.NoError(t, db.CreateCommonSchema(t.Context(), common))
 	t.Cleanup(func() { require.NoError(t, common.Close()) })
 	storetest.RunPricingWriteContract(t, "duckdb", common)
+	storetest.RunCursorUsageWriteContract(t, "duckdb", common)
 }
 
 func TestBunStoreAnalyticsContract(t *testing.T) {

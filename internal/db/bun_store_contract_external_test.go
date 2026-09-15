@@ -261,6 +261,13 @@ func TestBunStoreReadOnlyUsageAllowsMissingOptionalTables(t *testing.T) {
 	assert.Equal(t, 6, result.Daily[0].OutputTokens)
 }
 
+func TestCanonicalPricingWriteContract(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "pricing-write-contract.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	storetest.RunPricingWriteContract(t, "sqlite", database.BunWriterForTest())
+}
+
 func TestBunStoreAnalyticsContract(t *testing.T) {
 	storetest.RunAnalyticsContract(t, storetest.AnalyticsBackend{
 		Name: "sqlite",

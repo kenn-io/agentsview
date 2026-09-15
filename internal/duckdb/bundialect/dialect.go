@@ -23,7 +23,8 @@ const features = feature.CTE |
 	feature.TableNotExists |
 	feature.CreateIndexIfNotExists |
 	feature.SelectExists |
-	feature.CompositeIn
+	feature.CompositeIn |
+	feature.DefaultPlaceholder
 
 // Dialect describes the DuckDB SQL understood by the pinned database driver.
 type Dialect struct {

@@ -60,7 +60,7 @@ func TestPushSessionNameRoundTrip(t *testing.T) {
 	require.NoError(t, err, "pushMarkerID")
 
 	// Push via pushSession directly.
-	tx, err := pg.BeginTx(ctx, nil)
+	tx, err := sync.bunDB().BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
 	if err := sync.pushSession(ctx, tx, sess, markerID, nil); err != nil {
 		_ = tx.Rollback()
@@ -103,7 +103,7 @@ func TestPushSessionNameRoundTrip(t *testing.T) {
 	sess.SessionName = nil
 	sess.DisplayName = nil
 
-	tx2, err := pg.BeginTx(ctx, nil)
+	tx2, err := sync.bunDB().BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx (second)")
 	if err := sync.pushSession(ctx, tx2, sess, markerID, nil); err != nil {
 		_ = tx2.Rollback()

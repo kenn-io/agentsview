@@ -275,6 +275,7 @@ func TestCanonicalPricingWriteContract(t *testing.T) {
 	store := newStore(pg)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	storetest.RunPricingWriteContract(t, "postgres", store.bun)
+	storetest.RunCursorUsageWriteContract(t, "postgres", store.bun)
 }
 
 func TestBunStoreAnalyticsContract(t *testing.T) {

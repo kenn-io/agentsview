@@ -90,6 +90,19 @@ func pricingFieldsEqual(a, b ModelPricing) bool {
 		pricingBandsEqual(a.Bands, b.Bands)
 }
 
+// PricingMeta is pricing refresh state written atomically with a catalog
+// reconciliation. A zero Key writes nothing.
+type PricingMeta struct {
+	Key   string
+	Value string
+}
+
+// isPricingMetaPattern identifies logical metadata rows used by pricing sync
+// planning. Metadata is persisted separately from canonical pricing rows.
+func isPricingMetaPattern(pattern string) bool {
+	return strings.HasPrefix(pattern, "_")
+}
+
 func pricingBandsEqual(a, b []PricingBand) bool {
 	if len(a) != len(b) {
 		return false
@@ -199,15 +212,7 @@ func (db *DB) UpsertModelPricing(
 func (db *DB) UpsertModelPricingContext(
 	ctx context.Context, prices []ModelPricing,
 ) error {
-	return db.ReconcileModelPricingContext(ctx, prices, nil, PricingMeta{})
-}
-
-// PricingMeta is a sentinel metadata row (see SetPricingMeta) written
-// in the same transaction as a pricing reconciliation. A zero Key
-// writes nothing.
-type PricingMeta struct {
-	Key   string
-	Value string
+	return db.BunStore.UpsertModelPricingContext(ctx, prices)
 }
 
 // ReconcileModelPricing deletes removePatterns, upserts prices, and
@@ -451,12 +456,6 @@ const setPricingMetaSQL = `INSERT INTO pricing_metadata (key, value)
 	ON CONFLICT(key) DO UPDATE SET
 		value = excluded.value,
 		updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`
-
-// isPricingMetaPattern reports whether a model_pricing pattern is a
-// sentinel metadata row rather than a model.
-func isPricingMetaPattern(pattern string) bool {
-	return strings.HasPrefix(pattern, "_")
-}
 
 // SetPricingMeta stores SQLite-local pricing refresh state separately from
 // model rates.

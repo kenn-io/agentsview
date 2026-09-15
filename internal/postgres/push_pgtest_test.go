@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -107,7 +109,7 @@ func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
 	assert.Equal(t, "1", marker)
 }
 
-func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
+func TestPGCanonicalUsageComparisonPreservesExactMicrodollars(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_usage_fingerprint_money_test"
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -119,20 +121,13 @@ func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
-	require.NoError(t, err)
-	defer local.Close()
-	require.NoError(t, local.UpsertSession(db.Session{
-		ID: "exact-money", Project: "project", Machine: "machine", Agent: "codex",
-	}))
 	cost := money.Money{Microdollars: 9_007_199_254_740_993}
-	require.NoError(t, local.ReplaceSessionUsageEvents("exact-money", []db.UsageEvent{{
+	usageRows, err := db.CanonicalUsageEventRows([]db.UsageEvent{{
 		SessionID: "exact-money", Source: "provider", Model: "model",
 		InputTokens: 11, OutputTokens: 7, Cost: &cost,
 		CostStatus: "priced", CostSource: "provider",
 		OccurredAt: "2026-07-22T12:00:00Z", DedupKey: "exact-cost",
-	}}))
-	want, err := local.UsageEventFingerprint("exact-money")
+	}})
 	require.NoError(t, err)
 
 	_, err = pg.ExecContext(ctx, `
@@ -148,18 +143,20 @@ func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
 		)`)
 	require.NoError(t, err)
 
-	tx, err := pg.BeginTx(ctx, nil)
+	store := bun.NewDB(pg, pgdialect.New())
+	matches, err := db.CanonicalSessionDependentRowsMatch(
+		ctx, store, "exact-money", nil, nil, nil, usageRows,
+	)
 	require.NoError(t, err)
-	defer tx.Rollback()
-	got, err := pgUsageEventFingerprint(ctx, tx, "exact-money")
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
+	assert.True(t, matches)
 
-	batched := map[string]string{}
-	require.NoError(t, loadPushUsageEventFingerprints(
-		ctx, tx, []string{"exact-money"}, batched,
-	))
-	assert.Equal(t, want, batched["exact-money"])
+	differentCost := *usageRows[0].CostMicrodollars - 1
+	usageRows[0].CostMicrodollars = &differentCost
+	matches, err = db.CanonicalSessionDependentRowsMatch(
+		ctx, store, "exact-money", nil, nil, nil, usageRows,
+	)
+	require.NoError(t, err)
+	assert.False(t, matches)
 }
 
 func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
@@ -1183,7 +1180,7 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 
 	pushOnce := func(s db.Session) {
 		t.Helper()
-		tx, err := pg.BeginTx(ctx, nil)
+		tx, err := sync.bunDB().BeginTx(ctx, nil)
 		require.NoError(t, err, "BeginTx")
 		if err := sync.pushSession(ctx, tx, s, markerID, nil); err != nil {
 			_ = tx.Rollback()
@@ -1247,7 +1244,7 @@ func TestPushSessionPreservesSourceMachine(t *testing.T) {
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}
 
-	tx, err := pg.BeginTx(ctx, nil)
+	tx, err := sync.bunDB().BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
 	markerID, err := sync.pushMarkerID()
 	require.NoError(t, err, "pushMarkerID")
@@ -1260,6 +1257,89 @@ func TestPushSessionPreservesSourceMachine(t *testing.T) {
 		remoteSession.ID,
 	).Scan(&got), "read back machine")
 	assert.Equal(t, "remote-host", got)
+}
+
+func TestPushSessionNoopPreservesUpdatedAt(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_session_noop_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := t.Context()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg: pg, local: localDB, machine: "push-host", schema: schema,
+		schemaDone: true,
+	}
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+	displayName := "source name"
+	deletedAt := "2026-01-01T00:00:00.123456789Z"
+	deletionCause := "source_missing"
+	sourceLocalModifiedAt := "2026-01-01T01:00:00Z"
+	filePath := "/archive/session.jsonl"
+	fileSize := int64(123)
+	fileMtime := int64(456)
+	fileHash := "hash-a"
+	sess := db.Session{
+		ID: "session-noop", Project: "project", Machine: "push-host",
+		Agent: "codex", DisplayName: &displayName, DeletedAt: &deletedAt,
+		DeletionCause: &deletionCause, CreatedAt: "2026-01-01T00:00:00Z",
+		LocalModifiedAt: &sourceLocalModifiedAt, FilePath: &filePath,
+		FileSize: &fileSize, FileMtime: &fileMtime, FileHash: &fileHash,
+	}
+	push := func() {
+		t.Helper()
+		tx, err := sync.bunDB().BeginTx(ctx, nil)
+		require.NoError(t, err, "BeginTx")
+		if err := sync.pushSession(ctx, tx, sess, markerID, nil); err != nil {
+			_ = tx.Rollback()
+			require.NoError(t, err, "pushSession")
+		}
+		require.NoError(t, tx.Commit(), "Commit")
+	}
+	push()
+
+	wantUpdatedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	wantLocalModifiedAt := time.Date(2026, 1, 2, 2, 3, 4, 0, time.UTC)
+	_, err = pg.ExecContext(ctx,
+		`UPDATE sessions SET updated_at = $1, local_modified_at = $2 WHERE id = $3`,
+		wantUpdatedAt, wantLocalModifiedAt, sess.ID,
+	)
+	require.NoError(t, err, "install updated_at sentinel")
+
+	push()
+
+	var gotUpdatedAt time.Time
+	var gotLocalModifiedAt *time.Time
+	var gotFilePath *string
+	var gotFileSize, gotFileMtime *int64
+	var gotFileHash *string
+	require.NoError(t, pg.QueryRowContext(ctx,
+		`SELECT updated_at, local_modified_at, file_path, file_size, file_mtime, file_hash
+		 FROM sessions WHERE id = $1`, sess.ID,
+	).Scan(
+		&gotUpdatedAt, &gotLocalModifiedAt, &gotFilePath,
+		&gotFileSize, &gotFileMtime, &gotFileHash,
+	), "read session metadata")
+	assert.Equal(t, wantUpdatedAt, gotUpdatedAt.UTC(),
+		"identical session metadata must not publish a new revision")
+	require.NotNil(t, gotLocalModifiedAt)
+	assert.Equal(t, wantLocalModifiedAt, gotLocalModifiedAt.UTC(),
+		"PostgreSQL target curation owns local_modified_at")
+	assert.Equal(t, filePath, *gotFilePath)
+	assert.Equal(t, fileSize, *gotFileSize)
+	assert.Equal(t, fileMtime, *gotFileMtime)
+	assert.Equal(t, fileHash, *gotFileHash)
 }
 
 func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
@@ -1717,7 +1797,7 @@ func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
 	)
 	require.NoError(t, err, "insert excluded session")
 
-	tx, err := pg.BeginTx(ctx, nil)
+	tx, err := sync.bunDB().BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
 	markerID, err := sync.pushMarkerID()
 	require.NoError(t, err, "pushMarkerID")
@@ -1736,6 +1816,127 @@ func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
 		`SELECT COUNT(*) FROM sessions WHERE id = $1`,
 		sessionID,
 	).Scan(&count), "count skipped session")
+	assert.Zero(t, count)
+}
+
+func TestPushSessionStoresVibeFallbackAlias(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_push_vibe_alias_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	ctx := t.Context()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+	sync := &Sync{
+		pg: pg, local: localDB, machine: "machine", schema: schema, schemaDone: true,
+	}
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+	filePath := filepath.Join(
+		t.TempDir(), "session_20260616_083518_abc123", "messages.jsonl",
+	)
+	tx, err := sync.bunDB().BeginTx(ctx, nil)
+	require.NoError(t, err, "BeginTx")
+	require.NoError(t, sync.pushSession(ctx, tx, db.Session{
+		ID: "vibe:canonical", Project: "project", Machine: "machine",
+		Agent: "vibe", FilePath: &filePath, CreatedAt: "2026-08-04T10:00:00Z",
+	}, markerID, nil))
+	require.NoError(t, tx.Commit(), "Commit")
+
+	var aliasID string
+	require.NoError(t, pg.QueryRowContext(ctx,
+		`SELECT alias_id FROM session_aliases WHERE session_id = $1`,
+		"vibe:canonical",
+	).Scan(&aliasID))
+	assert.Equal(t, "vibe:session_20260616_083518_abc123", aliasID)
+}
+
+func TestPushSessionPropagatesVibeFallbackExclusion(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_push_vibe_alias_exclusion_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	ctx := t.Context()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+	sync := &Sync{
+		pg: pg, local: localDB, machine: "machine", schema: schema, schemaDone: true,
+	}
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+	const fallbackID = "vibe:session_20260616_083518_def456"
+	_, err = pg.ExecContext(ctx,
+		`INSERT INTO excluded_sessions (id) VALUES ($1)`, fallbackID,
+	)
+	require.NoError(t, err, "insert fallback exclusion")
+	filePath := filepath.Join(
+		t.TempDir(), "session_20260616_083518_def456", "messages.jsonl",
+	)
+	tx, err := sync.bunDB().BeginTx(ctx, nil)
+	require.NoError(t, err, "BeginTx")
+	err = sync.pushSession(ctx, tx, db.Session{
+		ID: "vibe:canonical", Project: "project", Machine: "machine",
+		Agent: "vibe", FilePath: &filePath, CreatedAt: "2026-08-04T10:00:00Z",
+	}, markerID, nil)
+	require.ErrorIs(t, err, errSessionExcluded)
+	require.NoError(t, tx.Commit(), "Commit exclusion propagation")
+
+	var excludedCount int
+	require.NoError(t, pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM excluded_sessions WHERE id = ANY($1)`,
+		[]string{"vibe:canonical", fallbackID},
+	).Scan(&excludedCount))
+	assert.Equal(t, 2, excludedCount)
+}
+
+func TestPushSessionRechecksExclusionAfterRowWrite(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_push_exclusion_race_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	ctx := t.Context()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+	sync := &Sync{
+		pg: pg, local: localDB, machine: "machine", schema: schema, schemaDone: true,
+	}
+	const sessionID = "excluded-during-write"
+	sync.afterSessionRowWrite = func() {
+		_, hookErr := pg.ExecContext(ctx,
+			`INSERT INTO excluded_sessions (id) VALUES ($1)`, sessionID,
+		)
+		require.NoError(t, hookErr, "insert concurrent exclusion")
+	}
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+	tx, err := sync.bunDB().BeginTx(ctx, nil)
+	require.NoError(t, err, "BeginTx")
+	err = sync.pushSession(ctx, tx, db.Session{
+		ID: sessionID, Project: "project", Machine: "machine", Agent: "codex",
+		CreatedAt: "2026-08-04T10:00:00Z",
+	}, markerID, nil)
+	require.ErrorIs(t, err, errSessionExcluded)
+	require.NoError(t, tx.Commit(), "Commit exclusion cleanup")
+
+	var count int
+	require.NoError(t, pg.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`, sessionID,
+	).Scan(&count))
 	assert.Zero(t, count)
 }
 
@@ -3453,6 +3654,117 @@ func TestSessionProvenanceBackfillForcesOneFullPush(t *testing.T) {
 	).Scan(&archiveID), "read back cleared provenance")
 	assert.Equal(t, "", archiveID,
 		"unchanged session must not be re-pushed after backfill completion")
+}
+
+func TestCanonicalSessionWriteContractUpgradesPreviousTargetProjection(t *testing.T) {
+	const schema = "agentsview_canonical_write_contract_upgrade_test"
+	pgURL := testPGURL(t)
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, localDB.Close()) })
+
+	fileSize := int64(1234)
+	fileMtime := int64(5678)
+	fileInode := int64(9012)
+	fileDevice := int64(34)
+	fileHash := "canonical-hash"
+	source := db.Session{
+		ID: "upgrade-session", Project: "project", Machine: "workstation",
+		Agent: "codex", AgentLabel: "Codex CLI", Entrypoint: "cli",
+		FileSize: &fileSize, FileMtime: &fileMtime, FileInode: &fileInode,
+		FileDevice: &fileDevice, FileHash: &fileHash,
+	}
+	require.NoError(t, localDB.UpsertSession(source))
+
+	syncer, err := New(pgURL, schema, localDB, "workstation", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	ctx := t.Context()
+	_, err = syncer.pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+	require.NoError(t, err)
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	markerID, err := syncer.pushMarkerID()
+	require.NoError(t, err)
+	require.NoError(t, syncer.writePushMarker(ctx, markerID, "", nil))
+	_, err = syncer.pg.ExecContext(ctx, `
+		INSERT INTO sessions (id, machine, owner_marker, project, agent, created_at)
+		VALUES ($1, $2, $3, $4, $5, NOW())`,
+		source.ID, "workstation", markerID, source.Project, source.Agent)
+	require.NoError(t, err)
+
+	require.NoError(t, markSessionAliasBackfillDone(
+		syncer.aliasBackfillSyncStateOrDefault()))
+	require.NoError(t, markSessionProvenanceBackfillDone(
+		syncer.aliasBackfillSyncStateOrDefault()))
+	require.NoError(t, markTranscriptRevisionBackfillDone(syncer.effectiveSyncState()))
+	oldTargetFingerprint, err := pgTargetFingerprintForContract(
+		pgURL, schema, "v1",
+	)
+	require.NoError(t, err)
+	state := syncer.effectiveSyncState()
+	const cutoff = "2030-01-01T00:00:00Z"
+	require.NoError(t, state.SetSyncState("last_push_at", cutoff))
+	require.NoError(t, state.SetSyncState(
+		lastPushTargetFingerprintKey, oldTargetFingerprint,
+	))
+	snapshot, err := localDB.ReadSessionReplicationSnapshot(ctx, source.ID)
+	require.NoError(t, err)
+	syncer.stampReplicationSnapshot(&snapshot)
+	fingerprint, err := postgresSessionReplicationFingerprint(snapshot, markerID)
+	require.NoError(t, err)
+	require.NoError(t, writePushBoundaryState(
+		state, cutoff, []db.Session{snapshot.Session}, nil,
+		map[string]string{source.ID: fingerprint},
+	))
+
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.SessionsPushed,
+		"the previous write contract must force a canonical-row backfill")
+	var got struct {
+		AgentLabel string
+		Entrypoint string
+		FileSize   *int64
+		FileMtime  *int64
+		FileInode  *int64
+		FileDevice *int64
+		FileHash   *string
+	}
+	require.NoError(t, syncer.bunDB().NewSelect().Table("sessions").
+		Column("agent_label", "entrypoint", "file_size", "file_mtime",
+			"file_inode", "file_device", "file_hash").
+		Where("id = ?", source.ID).Scan(ctx, &got))
+	assert.Equal(t, source.AgentLabel, got.AgentLabel)
+	assert.Equal(t, source.Entrypoint, got.Entrypoint)
+	assert.Equal(t, source.FileSize, got.FileSize)
+	assert.Equal(t, source.FileMtime, got.FileMtime)
+	assert.Equal(t, source.FileInode, got.FileInode)
+	assert.Equal(t, source.FileDevice, got.FileDevice)
+	assert.Equal(t, source.FileHash, got.FileHash)
+
+	result, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, result.SessionsPushed,
+		"the completed write-contract backfill must be a one-time repair")
+}
+
+func TestFullPushReadsEachSessionReplicationSnapshotOnce(t *testing.T) {
+	const schema = "agentsview_full_push_snapshot_cardinality_test"
+	syncer, localDB, _, ctx := newSessionProvenancePushSync(t, schema)
+	for _, id := range []string{"snapshot-a", "snapshot-b", "snapshot-c"} {
+		seedProvenanceSession(t, localDB, id, "workstation", "project", "")
+	}
+	reads := make(map[string]int)
+	syncer.afterSessionReplicationSnapshotRead = func(sessionID string) {
+		reads[sessionID]++
+	}
+
+	result, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.SessionsPushed)
+	assert.Equal(t, map[string]int{
+		"snapshot-a": 1, "snapshot-b": 1, "snapshot-c": 1,
+	}, reads, "a full push must not materialize transcripts in preflight")
 }
 
 // TestSessionProvenanceBackfillMarkerNotWrittenOnFailure verifies that a
