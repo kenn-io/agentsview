@@ -111,6 +111,10 @@ type JSONLSourceSetOptions struct {
 	// providers describe companions once as transcript->companions and the base
 	// drives watch, freshness, and changed-path mapping from that single hook.
 	CompanionFiles func(transcriptPath string) []string
+	// RejectSymlinkCompanions makes companion freshness use Lstat and ignore
+	// symlinked companions. The default preserves legacy followed-symlink
+	// behavior for existing JSONL providers.
+	RejectSymlinkCompanions bool
 
 	// CompanionTranscript is the inverse of CompanionFiles: it derives the
 	// owning transcript path from a changed sidecar path so companion events
@@ -495,8 +499,12 @@ func (s JSONLSourceSet) foldCompanionFingerprint(
 		hasher = h
 	}
 	folded := false
+	companionInfo := siblingMetadataFileInfo
+	if s.options.RejectSymlinkCompanions {
+		companionInfo = siblingMetadataFileInfoStrict
+	}
 	for _, companion := range companions {
-		info, err := siblingMetadataFileInfo(companion)
+		info, err := companionInfo(companion)
 		if err != nil {
 			return err
 		}

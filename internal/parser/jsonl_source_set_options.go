@@ -52,6 +52,13 @@ func WithFollowSymlinkFiles() JSONLOption {
 	return func(o *JSONLSourceSetOptions) { o.FollowSymlinkFiles = true }
 }
 
+// WithRejectSymlinkCompanions keeps symlinked companion files out of the
+// source freshness fingerprint. Existing providers follow companion symlinks
+// by default for compatibility.
+func WithRejectSymlinkCompanions() JSONLOption {
+	return func(o *JSONLSourceSetOptions) { o.RejectSymlinkCompanions = true }
+}
+
 // WithDescendPath gates which directories recursive discovery descends into and
 // which source ancestors a changed path may sit under.
 func WithDescendPath(fn func(root, path string) bool) JSONLOption {

@@ -62,6 +62,11 @@ type singleFileConfig struct {
 	// yields nothing, instead of emitting SkipNoSession. Providers whose parse
 	// drives session removal through exclusions (cowork) set this.
 	alwaysComplete bool
+	// storedSourceHintScope is the optional stored-source-hint-scope hook
+	// (WithFileStoredSourceHintScope). When unset, StoredSourceHintScopes
+	// resolves to nothing and the engine keeps its existing exact-file
+	// ownership scope.
+	storedSourceHintScope func(root, path string) (StoredSourceHintScope, bool)
 }
 
 type SingleFileOption func(*singleFileConfig)
@@ -106,6 +111,17 @@ func WithFileParse(
 	fn func(src singleFileSource, req ParseRequest) ([]ParseResult, []string, error),
 ) SingleFileOption {
 	return func(c *singleFileConfig) { c.parseFile = fn }
+}
+
+// WithFileStoredSourceHintScope registers the optional stored-source-hint
+// scope hook that maps a changed or stored path back to the bounded
+// stored-source scope the source owns. Cline enables it with its session
+// directory; other single-file providers leave it unset and keep their
+// existing exact-file ownership.
+func WithFileStoredSourceHintScope(
+	fn func(root, path string) (StoredSourceHintScope, bool),
+) SingleFileOption {
+	return func(c *singleFileConfig) { c.storedSourceHintScope = fn }
 }
 
 // WithAlwaysCompleteResultSet reports the result set as complete even when a
@@ -202,6 +218,24 @@ func (s singleFileSourceSet) WatchRoots(
 		return nil, err
 	}
 	return watchRootMetadata(s.cfg.watchRoots(s.roots)), nil
+}
+
+// StoredSourceHintScopes implements StoredSourceHintScopeProvider for
+// single-file providers with the optional WithFileStoredSourceHintScope hook
+// (Cline). Sources without the hook return nothing so the engine keeps its
+// existing exact-file ownership scope.
+func (s singleFileSourceSet) StoredSourceHintScopes(
+	req ChangedPathRequest,
+) []StoredSourceHintScope {
+	if s.cfg.storedSourceHintScope == nil {
+		return nil
+	}
+	for _, root := range s.roots {
+		if scope, ok := s.cfg.storedSourceHintScope(root, req.Path); ok {
+			return []StoredSourceHintScope{scope}
+		}
+	}
+	return nil
 }
 
 func (s singleFileSourceSet) SourcesForChangedPath(

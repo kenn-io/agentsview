@@ -67,6 +67,20 @@ func TestNormalizeToolCategory(t *testing.T) {
 		{"finishTask", "Tool"},
 		{"switchMode", "Tool"},
 
+		// Cline tools
+		{"replace_in_file", "Edit"},
+		{"list_code_definition_names", "Read"},
+		{"read_files", "Read"},
+		{"browser_action", "Tool"},
+		{"access_mcp_resource", "Tool"},
+		{"ask_followup_question", "Tool"},
+		{"attempt_completion", "Tool"},
+		{"new_task", "Task"},
+		{"team_spawn_teammate", "Task"},
+		{"team_run_task", "Task"},
+		{"team_task", "Task"},
+		{"team_shutdown_teammate", "Task"},
+
 		// Amp tools
 		{"create_file", "Write"},
 		{"look_at", "Read"},
