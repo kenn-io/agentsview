@@ -26,9 +26,9 @@ func TestPGSessionReadsDecorateDuplicateRoles(t *testing.T) {
 	ctx := context.Background()
 
 	_, err = store.DB().Exec(`
-		INSERT INTO sessions (id, machine, project, agent)
-		VALUES ('dup:canonical', 'm', 'p', 'goose'),
-		       ('dup:copy', 'm', 'p', 'augure-desktop');
+		INSERT INTO sessions (id, machine, project, agent, message_count)
+		VALUES ('dup:canonical', 'm', 'p', 'goose', 3),
+		       ('dup:copy', 'm', 'p', 'augure-desktop', 3);
 		INSERT INTO duplicate_group_members
 			(session_id, group_key, role, canonical_id, member_count)
 		VALUES
