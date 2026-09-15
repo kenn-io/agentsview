@@ -3,8 +3,22 @@
 Read this file before changing watchers, polling, sync scheduling, or other
 long-running background work. Also read it before investigating memory growth.
 
+## The internal/poller Scheduler
+
+Define interval-driven jobs against external APIs or shared resources as
+`poller.Job` values passed to `poller.Start` at daemon startup. Jobs cannot be
+added later. The scheduler owns jitter, cooldown recorded before attempts,
+capped failure backoff, `RetryAfterError`, and cancellation. Status is in memory
+only; `TriggerNow` bypasses cooldown.
+
+Pricing refresh uses the scheduler. Periodic session sync, vector embedding,
+and recall extraction still own their timing; migrating them is separate work.
+
+## Memory and Work Bounds
+
 - Keep passive daemon memory within a few hundred megabytes on macOS, Linux, and
   Windows. Treat sustained growth beyond that range as a regression.
+
 - Bound watcher, polling, and sync work by the changed batch, not the full
   archive. Do not scan or load every stored session for each filesystem event.
 - Declare costly scheduling inputs as provider capabilities. Compute them only
