@@ -27,6 +27,8 @@ func defaultExportReportingDeps() exportReportingDeps {
 
 func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 	var schemaVersion *int
+	var projectKeys *[]string
+	var bucket *string
 	command := &cobra.Command{
 		Use:          "hour YYYY-MM-DD-HH",
 		Short:        "Export one closed UTC reporting hour",
@@ -34,6 +36,12 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := validateReportingSchemaVersion(*schemaVersion); err != nil {
+				return err
+			}
+			if err := export.ValidateReportingProjectScope(*schemaVersion, *projectKeys); err != nil {
+				return err
+			}
+			if _, err := export.ParseReportingBucket(*schemaVersion, *bucket); err != nil {
 				return err
 			}
 			now := deps.now()
@@ -52,6 +60,8 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 					Date:          hourStart.Truncate(24 * time.Hour),
 					Now:           now,
 					SchemaVersion: *schemaVersion,
+					ProjectKeys:   *projectKeys,
+					Bucket:        *bucket,
 				},
 			)
 			if err != nil {
@@ -68,11 +78,15 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 		},
 	}
 	schemaVersion = bindReportingSchemaVersion(command)
+	projectKeys = bindReportingProjectKeys(command)
+	bucket = bindReportingBucket(command)
 	return command
 }
 
 func newExportDayCommand(deps exportReportingDeps) *cobra.Command {
 	var schemaVersion *int
+	var projectKeys *[]string
+	var bucket *string
 	command := &cobra.Command{
 		Use:          "day YYYY-MM-DD",
 		Short:        "Export all closed UTC reporting hours for a date",
@@ -80,6 +94,12 @@ func newExportDayCommand(deps exportReportingDeps) *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := validateReportingSchemaVersion(*schemaVersion); err != nil {
+				return err
+			}
+			if err := export.ValidateReportingProjectScope(*schemaVersion, *projectKeys); err != nil {
+				return err
+			}
+			if _, err := export.ParseReportingBucket(*schemaVersion, *bucket); err != nil {
 				return err
 			}
 			date, err := export.ParseReportingDate(args[0])
@@ -95,6 +115,7 @@ func newExportDayCommand(deps exportReportingDeps) *cobra.Command {
 				cmd.Context(),
 				db.ReportingExportOptions{
 					Date: date, Now: deps.now(), SchemaVersion: *schemaVersion,
+					ProjectKeys: *projectKeys, Bucket: *bucket,
 				},
 			)
 			if err != nil {
@@ -104,6 +125,8 @@ func newExportDayCommand(deps exportReportingDeps) *cobra.Command {
 		},
 	}
 	schemaVersion = bindReportingSchemaVersion(command)
+	projectKeys = bindReportingProjectKeys(command)
+	bucket = bindReportingBucket(command)
 	return command
 }
 
@@ -111,6 +134,8 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 	var fromValue string
 	var toValue string
 	var schemaVersion *int
+	var projectKeys *[]string
+	var bucket *string
 	command := &cobra.Command{
 		Use:          "digest --from YYYY-MM-DD --to YYYY-MM-DD",
 		Short:        "Export reporting digests for a UTC date range",
@@ -118,6 +143,13 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := validateReportingSchemaVersion(*schemaVersion); err != nil {
+				return err
+			}
+			if err := export.ValidateReportingProjectScope(*schemaVersion, *projectKeys); err != nil {
+				return err
+			}
+			duration, err := export.ParseReportingBucket(*schemaVersion, *bucket)
+			if err != nil {
 				return err
 			}
 			if fromValue == "" || toValue == "" {
@@ -155,6 +187,7 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 					cmd.Context(),
 					db.ReportingExportOptions{
 						Date: date, Now: now, SchemaVersion: *schemaVersion,
+						ProjectKeys: *projectKeys, Bucket: *bucket,
 					},
 				)
 				if err != nil {
@@ -172,15 +205,21 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 					HourDigests: hourDigests,
 				})
 			}
-			return writeCanonicalReportingDocument(cmd, export.ReportingDigest{
+			digest := export.ReportingDigest{
 				SchemaVersion: *schemaVersion,
 				From:          fromValue,
 				To:            toValue,
 				Days:          days,
-			})
+			}
+			if *schemaVersion == export.ReportingJointSchemaVersion {
+				digest.BucketSeconds = int(duration / time.Second)
+			}
+			return writeCanonicalReportingDocument(cmd, digest)
 		},
 	}
 	schemaVersion = bindReportingSchemaVersion(command)
+	projectKeys = bindReportingProjectKeys(command)
+	bucket = bindReportingBucket(command)
 	command.Flags().StringVar(
 		&fromValue, "from", "", "First UTC date (YYYY-MM-DD)",
 	)
@@ -196,9 +235,23 @@ func bindReportingSchemaVersion(command *cobra.Command) *int {
 		version,
 		"schema-version",
 		export.ReportingSchemaVersion,
-		fmt.Sprintf("Reporting export schema version (only %d is supported)", export.ReportingSchemaVersion),
+		fmt.Sprintf("Reporting export schema version (%d or %d)", export.ReportingSchemaVersion, export.ReportingJointSchemaVersion),
 	)
 	return version
+}
+
+func bindReportingProjectKeys(command *cobra.Command) *[]string {
+	keys := new([]string)
+	command.Flags().StringArrayVar(keys, "project-key", nil,
+		"Limit the complete export to an archive project key (repeatable; schema 4)")
+	return keys
+}
+
+func bindReportingBucket(command *cobra.Command) *string {
+	bucket := new(string)
+	command.Flags().StringVar(bucket, "bucket", "",
+		"Bucket duration: whole-minute divisor of one hour (schema 4; default 5m)")
+	return bucket
 }
 
 func validateReportingSchemaVersion(version int) error {

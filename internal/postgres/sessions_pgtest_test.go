@@ -41,6 +41,33 @@ func TestGetActiveProjectLabelsIncludesRelationshipSessions(t *testing.T) {
 	}, labels)
 }
 
+func TestSessionFilterIncludesEmptyForProjectMapping(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	_, err = store.DB().Exec(`INSERT INTO sessions (id, machine, project, agent, message_count)
+		VALUES ('empty', 'm', 'mapping', 'claude', 0), ('populated', 'm', 'mapping', 'claude', 2)`)
+	require.NoError(t, err)
+	for _, includeEmpty := range []bool{false, true} {
+		page, err := store.ListSessions(context.Background(), db.SessionFilter{
+			ProjectLabels: []string{"mapping"}, IncludeEmpty: includeEmpty,
+		})
+		require.NoError(t, err)
+		ids := make([]string, len(page.Sessions))
+		for i, session := range page.Sessions {
+			ids[i] = session.ID
+		}
+		want := []string{"populated"}
+		if includeEmpty {
+			want = append(want, "empty")
+		}
+		assert.ElementsMatch(t, want, ids)
+		assert.Equal(t, len(want), page.Total)
+	}
+}
+
 func TestListSessionsDateFilterIncludesOverlappingSessions(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)

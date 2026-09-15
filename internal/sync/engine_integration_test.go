@@ -12693,6 +12693,165 @@ func TestIncrementalSync_ClaudeStoredEntrypointAppendStaysIncremental(t *testing
 	})
 }
 
+func TestIncrementalSync_ClaudeAITitleAppendPersistsSessionName(t *testing.T) {
+	env := setupTestEnv(t)
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("First question", tsZero),
+		testjsonl.ClaudeAssistantJSON("First answer", tsZeroS1),
+	)
+	path := env.writeClaudeSession(t, "proj", "ai-title-append.jsonl", initial)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+
+	before, err := env.db.GetSessionFull(t.Context(), "ai-title-append")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	assert.Nil(t, before.SessionName)
+	beforeMessages := fetchMessages(t, env.db, "ai-title-append")
+	require.Len(t, beforeMessages, 2)
+
+	appendFile, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = appendFile.WriteString(
+		`{"type":"ai-title","aiTitle":"Generated title"}` + "\n",
+	)
+	require.NoError(t, err)
+	require.NoError(t, appendFile.Close())
+	env.engine.SyncPaths([]string{path})
+
+	after, err := env.db.GetSessionFull(t.Context(), "ai-title-append")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	name := "<nil>"
+	if after.SessionName != nil {
+		name = *after.SessionName
+	}
+	t.Logf("SessionName=%q message_count=%d", name, after.MessageCount)
+	assert.Equal(t, "Generated title", name)
+	assert.Equal(t, before.MessageCount, after.MessageCount)
+	assert.Equal(t, 2, after.MessageCount)
+	assertSessionState(t, env.db, "ai-title-append", func(sess *db.Session) {
+		assert.Equal(t, 2, sess.MessageCount)
+	})
+	afterMessages := fetchMessages(t, env.db, "ai-title-append")
+	require.Len(t, afterMessages, len(beforeMessages))
+	assert.Equal(t, beforeMessages[0].Content, afterMessages[0].Content)
+}
+
+func TestIncrementalSync_ClaudeAITitleAndMessageAppendPersistsSessionName(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("First question", tsZero),
+		testjsonl.ClaudeAssistantJSON("First answer", tsZeroS1),
+	)
+	path := env.writeClaudeSession(t, "proj", "ai-title-message.jsonl", initial)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+
+	appended := testjsonl.JoinJSONL(
+		`{"type":"ai-title","aiTitle":"Generated title"}`,
+		testjsonl.ClaudeUserJSON("Second question", tsZeroS5),
+	)
+	appendFile, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = appendFile.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, appendFile.Close())
+	env.engine.SyncPaths([]string{path})
+
+	stored, err := env.db.GetSessionFull(t.Context(), "ai-title-message")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.NotNil(t, stored.SessionName)
+	assert.Equal(t, "Generated title", *stored.SessionName)
+	assert.Equal(t, 3, stored.MessageCount)
+	assertSessionState(t, env.db, "ai-title-message", func(sess *db.Session) {
+		assert.Equal(t, 3, sess.MessageCount)
+	})
+	messages := fetchMessages(t, env.db, "ai-title-message")
+	require.Len(t, messages, 3)
+	assert.Equal(t, "Second question", messages[2].Content)
+	t.Logf("SessionName=%q message_count=%d new_message=%q", *stored.SessionName, stored.MessageCount, messages[2].Content)
+}
+
+func TestIncrementalSync_ClaudeStoredAITitleAppendStaysIncremental(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("First question", tsZero),
+		`{"type":"ai-title","aiTitle":"Stored title"}`,
+		testjsonl.ClaudeAssistantJSON("First answer", tsZeroS1),
+	)
+	path := env.writeClaudeSession(t, "proj", "stored-ai-title.jsonl", initial)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+
+	appended := "not json\n" +
+		`{"type":"ai-title","aiTitle":"Stored title"}` + "\n"
+	appendFile, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = appendFile.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, appendFile.Close())
+	env.engine.SyncPaths([]string{path})
+
+	stored, err := env.db.GetSessionFull(t.Context(), "stored-ai-title")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.NotNil(t, stored.SessionName)
+	assert.Equal(t, "Stored title", *stored.SessionName)
+	assert.Equal(t, 0, stored.ParserMalformedLines)
+	assert.True(t, stored.LastWriteIncremental)
+	assertSessionState(t, env.db, "stored-ai-title", func(sess *db.Session) {
+		assert.Equal(t, 0, sess.ParserMalformedLines)
+	})
+	t.Logf("ParserMalformedLines=%d SessionName=%q LastWriteIncremental=%t", stored.ParserMalformedLines, *stored.SessionName, stored.LastWriteIncremental)
+}
+
+func TestIncrementalSync_ClaudeClearedRenameAITitleAppendKeepsNameEmpty(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("First question", tsZero),
+		`{"type":"ai-title","aiTitle":"Generated title"}`,
+		`{"type":"system","content":"<command-name>/rename</command-name><command-args></command-args>"}`,
+		testjsonl.ClaudeAssistantJSON("First answer", tsZeroS1),
+	)
+	path := env.writeClaudeSession(t, "proj", "cleared-rename.jsonl", initial)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+
+	appendTitle := func() {
+		t.Helper()
+		appendFile, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		require.NoError(t, err)
+		_, err = appendFile.WriteString(
+			"not json\n" +
+				`{"type":"ai-title","aiTitle":"Generated title"}` + "\n",
+		)
+		require.NoError(t, err)
+		require.NoError(t, appendFile.Close())
+		env.engine.SyncPaths([]string{path})
+	}
+
+	appendTitle()
+	first, err := env.db.GetSessionFull(t.Context(), "cleared-rename")
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	assert.Nil(t, first.SessionName)
+	assert.Equal(t, 1, first.ParserMalformedLines)
+	appendTitle()
+	second, err := env.db.GetSessionFull(t.Context(), "cleared-rename")
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	assert.Nil(t, second.SessionName)
+	assert.Equal(t, 2, second.ParserMalformedLines)
+	assertSessionState(t, env.db, "cleared-rename", func(sess *db.Session) {
+		assert.Equal(t, 2, sess.ParserMalformedLines)
+	})
+	t.Logf("SessionName=%q ParserMalformedLines=%d then %d", "", first.ParserMalformedLines, second.ParserMalformedLines)
+}
+
 func TestIncrementalSync_ClaudeFilteredTailAdvancesNextOrdinal(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 

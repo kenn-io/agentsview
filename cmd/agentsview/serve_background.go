@@ -609,6 +609,8 @@ probeDaemon:
 	if err != nil {
 		return nil, err
 	}
+	progress := daemonLaunchProgressWriter{w: os.Stderr}
+	progress.launch(child.Process.Pid, logPath)
 	waitCh := make(chan error, 1)
 	go func() {
 		waitCh <- child.Wait()
@@ -617,6 +619,11 @@ probeDaemon:
 		ctx, cfg.DataDir, cfg.AuthToken, waitCh, waitTimeout,
 	)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, daemonWaitCanceledError("daemon autostart", backgroundLaunchResult{
+				childPID: child.Process.Pid, LogPath: logPath,
+			})
+		}
 		return nil, fmt.Errorf(
 			"server exited before becoming ready: %w; logs: %s",
 			err, logPath,
@@ -643,7 +650,10 @@ func waitForExternalServeStartup(
 	if waitTimeout <= 0 {
 		waitTimeout = backgroundServeReadyTimeout
 	}
-	deadline := time.Now().Add(waitTimeout)
+	started := time.Now()
+	deadline := started.Add(waitTimeout)
+	progress := daemonLaunchProgressWriter{w: os.Stderr}
+	var lastUpdate time.Time
 	for isExternalDaemonStarting(dataDir) {
 		if err := ctx.Err(); err != nil {
 			return nil, true, err
@@ -652,6 +662,12 @@ func waitForExternalServeStartup(
 			!rt.ReadOnly && rt.RuntimeFallback {
 			return rt, true, nil
 		}
+		state := readStartupState(dataDir)
+		if state != nil && state.UpdatedAt.After(lastUpdate) {
+			lastUpdate = state.UpdatedAt
+			deadline = time.Now().Add(waitTimeout)
+		}
+		progress.progress(state, startupSnapshotElapsed(state, started, time.Now()))
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return nil, true, errServeStartupInProgress
@@ -981,9 +997,10 @@ func waitForBackgroundServeReady(
 	waitCh <-chan error,
 	timeout time.Duration,
 ) (*DaemonRuntime, error) {
+	progress := daemonLaunchProgressWriter{w: os.Stderr}
 	return waitForBackgroundServeReadyWithPolicy(
 		ctx, dataDir, authToken, waitCh, timeout,
-		backgroundServeReadyWaitPolicy{},
+		backgroundServeReadyWaitPolicy{Observe: progress.progress},
 	)
 }
 

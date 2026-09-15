@@ -99,51 +99,77 @@ func openCodeSessionFromCached(db *sql.DB, dbPath, table string) (string, error)
 
 const openCodeV2BaseCountsExpr = `s.time_updated, COALESCE(pr.time_updated, 0), 0, 0, '', ''`
 
-// OpenCode v2 stores complete message states, updated in place; seq is their
-// original event order. Early previews select message format per session.
-func openCodeV2SupportedCached(db *sql.DB, dbPath string) (bool, error) {
+type openCodeProjectionFormat uint8
+
+const (
+	openCodeProjectionAbsent openCodeProjectionFormat = iota
+	openCodeProjectionChronological
+	openCodeProjectionSequenced
+)
+
+// OpenCode v2 stores complete message states, updated in place. Released Kilo
+// databases order them by creation time and ID; newer schemas add event seq.
+func openCodeProjectionFormatCached(db *sql.DB, dbPath string) (openCodeProjectionFormat, error) {
 	state, cacheable := StatSQLiteContainerState(dbPath)
 	openCodeSessionSchemaCacheMu.Lock()
 	entry, hit := openCodeSessionSchemaCache[dbPath]
 	openCodeSessionSchemaCacheMu.Unlock()
 	if cacheable && hit && entry.state == state && entry.v2Once {
-		return entry.hasV2, nil
+		return entry.projectionFormat, nil
 	}
 	has, err := openCodeTableHasColumn(db, "session_message", "data")
-	if err != nil || !cacheable {
-		return has, err
+	if err != nil {
+		return openCodeProjectionAbsent, err
+	}
+	format := openCodeProjectionAbsent
+	if has {
+		format = openCodeProjectionChronological
+		seq, err := openCodeTableHasColumn(db, "session_message", "seq")
+		if err != nil {
+			return openCodeProjectionAbsent, err
+		}
+		if seq {
+			format = openCodeProjectionSequenced
+		}
+	}
+	if !cacheable {
+		return format, nil
 	}
 	openCodeSessionSchemaCacheMu.Lock()
 	previous := openCodeSessionSchemaCache[dbPath]
 	if previous.state != state {
 		previous = openCodeSessionSchemaCacheEntry{state: state}
 	}
-	previous.hasV2, previous.v2Once = has, true
+	previous.projectionFormat, previous.v2Once = format, true
 	openCodeSessionSchemaCache[dbPath] = previous
 	openCodeSessionSchemaCacheMu.Unlock()
-	return has, nil
+	return format, nil
 }
 
 // Full discovery groups the projection table once. Polls and single-session
 // fingerprints use the producer's session_id index and never read other sessions.
-// Include seq in the identity because it determines transcript order.
-func openCodeV2AggregateSQL(v2, single bool) (columns, joins string) {
-	if !v2 {
+// Include the ordering column in the identity to detect transcript reordering.
+func openCodeV2AggregateSQL(format openCodeProjectionFormat, single bool) (columns, joins string) {
+	if format == openCodeProjectionAbsent {
 		return ", 0, 0, ''", ""
 	}
-	if single {
-		return `, COALESCE((SELECT MAX(time_updated) FROM session_message WHERE session_id = s.id), 0),
-		(SELECT COUNT(*) FROM session_message WHERE session_id = s.id),
-		(SELECT COALESCE(group_concat(id || ':' || seq || ':' || time_updated), '')
-		 FROM (SELECT id, seq, time_updated FROM session_message WHERE session_id = s.id ORDER BY id))`, ""
+	orderColumn := "seq"
+	if format == openCodeProjectionChronological {
+		orderColumn = "time_created"
 	}
-	return ", COALESCE(v.mx, 0), COALESCE(v.n, 0), COALESCE(v.ident, '')", `
+	if single {
+		return fmt.Sprintf(`, COALESCE((SELECT MAX(time_updated) FROM session_message WHERE session_id = s.id), 0),
+		(SELECT COUNT(*) FROM session_message WHERE session_id = s.id),
+		(SELECT COALESCE(group_concat(id || ':' || ordering || ':' || time_updated), '')
+		 FROM (SELECT id, %s AS ordering, time_updated FROM session_message WHERE session_id = s.id ORDER BY id))`, orderColumn), ""
+	}
+	return ", COALESCE(v.mx, 0), COALESCE(v.n, 0), COALESCE(v.ident, '')", fmt.Sprintf(`
 	LEFT JOIN (
 		SELECT session_id, MAX(time_updated) mx, COUNT(*) n,
-		       group_concat(id || ':' || seq || ':' || time_updated) ident
-		FROM (SELECT session_id, id, seq, time_updated FROM session_message ORDER BY session_id, id)
+		       group_concat(id || ':' || ordering || ':' || time_updated) ident
+		FROM (SELECT session_id, id, %s AS ordering, time_updated FROM session_message ORDER BY session_id, id)
 		GROUP BY session_id
-	) v ON v.session_id = s.id`
+	) v ON v.session_id = s.id`, orderColumn)
 }
 
 type openCodeV2Message struct {
@@ -186,6 +212,9 @@ type openCodeV2Content struct {
 		Content    []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
+			Name string `json:"name"`
+			MIME string `json:"mime"`
+			URI  string `json:"uri"`
 		} `json:"content"`
 		Error struct {
 			Message string `json:"message"`
@@ -193,8 +222,12 @@ type openCodeV2Content struct {
 	} `json:"state"`
 }
 
-func loadOpenCodeV2Messages(db *sql.DB, sessionID, cwd string) ([]ParsedMessage, bool, string, error) {
-	rows, err := db.Query(`SELECT id, type, time_created, data FROM session_message WHERE session_id = ? ORDER BY seq`, sessionID)
+func loadOpenCodeV2Messages(db *sql.DB, sessionID, cwd string, format openCodeProjectionFormat) ([]ParsedMessage, bool, string, error) {
+	order := "seq"
+	if format == openCodeProjectionChronological {
+		order = "time_created, id"
+	}
+	rows, err := db.Query(`SELECT id, type, time_created, data FROM session_message WHERE session_id = ? ORDER BY `+order, sessionID)
 	if err != nil {
 		return nil, false, "", fmt.Errorf("loading opencode v2 messages: %w", err)
 	}
@@ -251,7 +284,11 @@ func loadOpenCodeV2Messages(db *sql.DB, sessionID, cwd string) ([]ParsedMessage,
 					}
 				case "tool":
 					pm.HasToolUse = true
-					pm.ToolCalls = append(pm.ToolCalls, openCodeV2ToolCall(item, cwd))
+					call, err := openCodeV2ToolCall(item, cwd)
+					if err != nil {
+						return nil, true, "", fmt.Errorf("decoding opencode v2 tool %s: %w", item.ID, err)
+					}
+					pm.ToolCalls = append(pm.ToolCalls, call)
 				}
 			}
 			pm.Content = strings.Join(texts, "\n")
@@ -297,7 +334,7 @@ func loadOpenCodeV2Messages(db *sql.DB, sessionID, cwd string) ([]ParsedMessage,
 	return parsed, present, fmt.Sprintf("opencode-v2:%x", hash.Sum(nil)), rows.Err()
 }
 
-func openCodeV2ToolCall(item openCodeV2Content, cwd string) ParsedToolCall {
+func openCodeV2ToolCall(item openCodeV2Content, cwd string) (ParsedToolCall, error) {
 	call := ParsedToolCall{
 		ToolUseID: item.ID, ToolName: item.Name, Category: NormalizeToolCategory(item.Name),
 		InputJSON: string(item.State.Input),
@@ -312,16 +349,46 @@ func openCodeV2ToolCall(item openCodeV2Content, cwd string) ParsedToolCall {
 	}
 	if item.State.Status == "completed" || item.State.Status == "error" {
 		var texts []string
+		var blocks []map[string]string
+		hasFiles := false
 		for _, content := range item.State.Content {
-			if content.Type == "text" {
-				texts = append(texts, content.Text)
+			if content.Type == "file" {
+				hasFiles = true
+				break
+			}
+		}
+		appendText := func(text string) {
+			if hasFiles {
+				blocks = append(blocks, map[string]string{"type": "text", "text": text})
+			} else {
+				texts = append(texts, text)
+			}
+		}
+		for _, content := range item.State.Content {
+			switch content.Type {
+			case "text":
+				appendText(content.Text)
+			case "file":
+				block := map[string]string{"type": "file", "uri": content.URI, "mime": content.MIME}
+				if content.Name != "" {
+					block["name"] = content.Name
+				}
+				// Use the shared image representation so storage's keep/drop
+				// policy owns the payload. Other files retain the producer URI,
+				// including inline PDFs; external references are never fetched.
+				const imagePrefix = "data:image/"
+				if len(content.URI) >= len(imagePrefix) && strings.EqualFold(content.URI[:len(imagePrefix)], imagePrefix) {
+					block["type"], block["image_url"] = "input_image", content.URI
+					delete(block, "uri")
+				}
+				blocks = append(blocks, block)
 			}
 		}
 		// The v2 read tool returns text files as structured UTF-8 attachments.
 		structured := string(item.State.Structured)
 		if item.Name == "read" && gjson.Get(structured, "encoding").Str == "utf8" {
 			if content := gjson.Get(structured, "content").Str; content != "" {
-				texts = append(texts, content)
+				appendText(content)
 			}
 		}
 		status := "completed"
@@ -330,13 +397,21 @@ func openCodeV2ToolCall(item openCodeV2Content, cwd string) ParsedToolCall {
 		if item.State.Status == "error" || shellFailed {
 			status = "errored"
 			if item.State.Error.Message != "" {
-				texts = append(texts, item.State.Error.Message)
+				appendText(item.State.Error.Message)
 			}
 		}
+		content := strings.Join(texts, "\n")
+		if hasFiles {
+			encoded, err := json.Marshal(blocks, json.Deterministic(true))
+			if err != nil {
+				return call, err
+			}
+			content = string(encoded)
+		}
 		call.ResultEvents = []ParsedToolResultEvent{{
-			ToolUseID: item.ID, Status: status, Content: strings.Join(texts, "\n"),
+			ToolUseID: item.ID, Status: status, Content: content,
 			Timestamp: millisToTime(item.Time.Completed),
 		}}
 	}
-	return call
+	return call, nil
 }

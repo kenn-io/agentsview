@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -10,8 +11,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
@@ -156,11 +159,13 @@ func runUsageDaily(cfg UsageDailyConfig) {
 	}
 	noDefaultRange := cfg.All || cfg.Since != "" || cfg.Until != ""
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
 		Offline:              cfg.Offline,
 		NoSync:               cfg.NoSync,
 		AutoStart:            true,
+		SkipInitialSync:      true,
 		ReadOnlyDaemon:       archiveQuerySkipReadOnlyDaemon,
 		DirectReadOnlyAction: "refresh usage directly",
 	})
@@ -170,12 +175,15 @@ func runUsageDaily(cfg UsageDailyConfig) {
 	}
 	defer closeArchiveQueryBackend(cleanup)
 
+	progress, finishProgress := newUsageProgressPrinter(os.Stderr)
 	result, err := backend.DailyUsage(ctx, dailyUsageQuery{
+		Progress:       progress,
 		Filter:         filter,
 		NoDefaultRange: noDefaultRange,
 		Breakdowns:     cfg.Breakdown,
 		SessionCounts:  cfg.JSON,
 	})
+	finishProgress()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -255,7 +263,8 @@ func runUsageStatusline(cfg UsageStatuslineConfig) {
 		Timezone: timezone,
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
 		Offline:              cfg.Offline,
 		NoSync:               cfg.NoSync,
@@ -571,8 +580,11 @@ func fetchHTTPDailyUsage(
 	q.Set("include_one_shot", strconv.FormatBool(!filter.ExcludeOneShot))
 	q.Set("include_automated", strconv.FormatBool(!filter.ExcludeAutomated))
 
-	endpoint := strings.TrimSuffix(tr.URL, "/") +
-		"/api/v1/usage/summary?" + q.Encode()
+	path := "/api/v1/usage/summary"
+	if query.Progress != nil {
+		path += "/stream"
+	}
+	endpoint := strings.TrimSuffix(tr.URL, "/") + path + "?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return db.DailyUsageResult{}, err
@@ -592,6 +604,21 @@ func fetchHTTPDailyUsage(
 			resp.StatusCode, strings.TrimSpace(string(body)),
 		)
 	}
+	var body io.Reader = resp.Body
+	if query.Progress != nil {
+		if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+			return db.DailyUsageResult{}, fmt.Errorf("usage summary: expected a progress stream, received %q", resp.Header.Get("Content-Type"))
+		}
+		data, err := parseDaemonPushSSE[jsontext.Value](body, func(p struct {
+			Detail string `json:"detail"`
+		}) {
+			query.Progress(p.Detail)
+		})
+		if err != nil {
+			return db.DailyUsageResult{}, fmt.Errorf("usage summary: %w", err)
+		}
+		body = bytes.NewReader(data)
+	}
 	var out struct {
 		SchemaVersion int                               `json:"schema_version,omitempty"`
 		Pricing       *export.PricingBlock              `json:"pricing,omitempty"`
@@ -600,7 +627,7 @@ func fetchHTTPDailyUsage(
 		Daily         []db.DailyUsageEntry              `json:"daily"`
 		SessionCounts db.UsageSessionCounts             `json:"sessionCounts"`
 	}
-	if err := json.UnmarshalRead(resp.Body, &out); err != nil {
+	if err := json.UnmarshalRead(body, &out); err != nil {
 		return db.DailyUsageResult{}, err
 	}
 	if out.Projects == nil {
@@ -614,6 +641,33 @@ func fetchHTTPDailyUsage(
 		Totals:        out.Totals,
 		SessionCounts: out.SessionCounts,
 	}, nil
+}
+
+func newUsageProgressPrinter(w io.Writer) (func(string), func()) {
+	started := time.Now()
+	var phase atomic.Pointer[string]
+	phase.Store(new("Preparing usage report from the archive"))
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		var lastPhase string
+		var lastPrinted time.Duration
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				current, elapsed := *phase.Load(), time.Since(started)
+				if current != lastPhase || elapsed-lastPrinted >= 5*time.Second {
+					fmt.Fprintf(w, "%s (%s)\n", current, elapsed.Round(time.Second))
+					lastPhase, lastPrinted = current, elapsed
+				}
+			}
+		}
+	}()
+	return func(current string) { phase.Store(&current) }, func() { close(stop); <-done }
 }
 
 func printDailyTable(

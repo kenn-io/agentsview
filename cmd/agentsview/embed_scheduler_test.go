@@ -391,36 +391,38 @@ func TestEmbedSchedulerPendingBackstopRetriesBeforeNextTick(
 func TestEmbedSchedulerRepeatedBackstopFailuresReleaseIdleLease(
 	t *testing.T,
 ) {
-	buildErr := errors.New("embedding request rejected")
-	fake := &fakeEmbedManager{results: []fakeTryBuildResult{
-		{started: true, err: buildErr},
-		{started: true, err: buildErr},
-	}}
-	idled := make(chan struct{})
-	ctx, cancel := context.WithCancel(t.Context())
-	tracker := server.NewIdleTracker(30*time.Millisecond, func() {
-		close(idled)
-		cancel()
-	})
-	s := newEmbedScheduler(
-		fake, 20*time.Millisecond, 200*time.Millisecond, false, tracker,
-	)
-	go s.Run(ctx)
-	defer s.Stop()
+	synctest.Test(t, func(t *testing.T) {
+		buildErr := errors.New("embedding request rejected")
+		fake := &fakeEmbedManager{results: []fakeTryBuildResult{
+			{started: true, err: buildErr},
+			{started: true, err: buildErr},
+		}}
+		idled := make(chan struct{})
+		ctx, cancel := context.WithCancel(t.Context())
+		tracker := server.NewIdleTracker(30*time.Millisecond, func() {
+			close(idled)
+			cancel()
+		})
+		s := newEmbedScheduler(
+			fake, 20*time.Millisecond, 200*time.Millisecond, false, tracker,
+		)
+		go s.Run(ctx)
+		defer s.Stop()
 
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 2 },
-		"expected the failed backstop and its bounded retry")
-	// Start idle observation only after the backstop has acquired its lease;
-	// otherwise a detached daemon with no startup work could reap before the
-	// first deliberately delayed test tick.
-	go tracker.Run(ctx)
-	select {
-	case <-idled:
-	case <-time.After(150 * time.Millisecond):
-		require.Fail(t, "repeated backstop failures retained the idle lease")
-	}
-	assert.Equal(t, []vector.BuildRequest{{Backstop: true}, {Backstop: true}},
-		fake.callsSnapshot(), "one backstop tick should get one bounded retry")
+		// Finish the first tick and its retry without letting runner delays
+		// advance the clock to a second periodic tick.
+		synctest.Sleep(220 * time.Millisecond)
+		// Start idle observation after the backstop work; otherwise an idle
+		// daemon could reap before the first deliberately delayed test tick.
+		go tracker.Run(ctx)
+		select {
+		case <-idled:
+		case <-time.After(150 * time.Millisecond):
+			require.Fail(t, "repeated backstop failures retained the idle lease")
+		}
+		assert.Equal(t, []vector.BuildRequest{{Backstop: true}, {Backstop: true}},
+			fake.callsSnapshot(), "one backstop tick should get one bounded retry")
+	})
 }
 
 func TestEmbedSchedulerLaterBackstopStartsFreshLifecycle(t *testing.T) {

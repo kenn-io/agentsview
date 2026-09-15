@@ -1,9 +1,17 @@
 # AgentsView docs maintainer guide
 
-This directory contains the source for <https://agentsview.io>: a hand-written
-marketing tier (`/` and `/guide/`) plus the Zensical documentation tier under
-`/docs/`. The source lives on `main`; image media lives on orphan asset branches
-so normal clones do not pull screenshots and PNGs into the main history.
+Edit this directory to update <https://agentsview.io>. The homepage and guide
+are HTML pages under `website/`. Zensical turns the public Markdown guides into
+pages under `/docs/`.
+
+Follow the [documentation style](../AGENTS.md#documentation). Check claims
+against source, and use release tags to distinguish shipped behavior from newer
+`main` changes. Update each website page's Markdown companion when changing its
+copy. Keep plans and historical decisions in the unpublished maintainer
+directories below.
+
+Text lives on `main`. Images live on separate asset branches so normal clones do
+not download screenshots and other large media.
 
 ## Site structure
 

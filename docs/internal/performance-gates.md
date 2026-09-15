@@ -283,6 +283,17 @@ shape (call + late output, full inline signal/secret maintenance).
 
 ## Adding a benchmark to local comparisons
 
+`BenchmarkReportingJointDay` compares reporting v3 and v4 at one- and
+five-minute resolutions on the same synthetic SQLite archive: 200 sessions,
+eight models, three agents, model switches and overlap, with four or 100
+projects. It measures snapshot reads, aggregation, canonical digests and
+serialization, and reports allocations, bytes and cell count. Compare resolution
+independently of project cardinality; sparse cell counts and payload sizes do
+not grow in direct proportion to bucket counts. Setup is outside the timer. It
+does not measure CLI startup, full-history digest screening or a
+production-sized archive. Run it directly with
+`go test -tags fts5 ./internal/db -run '^$' -bench '^BenchmarkReportingJointDay$' -benchmem`.
+
 The local comparison includes every benchmark in the selected packages. A
 benchmark present in only one revision has no baseline and is reported without a
 threshold check.

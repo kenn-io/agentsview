@@ -28,6 +28,7 @@ type archiveQueryPolicy struct {
 	Offline              bool
 	NoSync               bool
 	AutoStart            bool
+	SkipInitialSync      bool
 	ReadOnlyDaemon       archiveQueryReadOnlyDaemonPolicy
 	DirectReadOnlyAction string
 }
@@ -47,6 +48,7 @@ type sessionUsageQuery struct {
 }
 
 type dailyUsageQuery struct {
+	Progress       func(string)
 	Filter         db.UsageFilter
 	NoDefaultRange bool
 	Breakdowns     bool
@@ -70,7 +72,7 @@ func resolveArchiveQueryBackendWithConfig(
 	policy archiveQueryPolicy,
 ) (archiveQueryBackend, func(), error) {
 	if !policy.Offline {
-		tr, err := resolveArchiveQueryTransport(&cfg, policy)
+		tr, err := resolveArchiveQueryTransport(ctx, &cfg, policy)
 		if err != nil {
 			return nil, nil, fmt.Errorf("detecting daemon: %w", err)
 		}
@@ -78,6 +80,15 @@ func resolveArchiveQueryBackendWithConfig(
 			switch {
 			case !tr.ReadOnly,
 				policy.ReadOnlyDaemon == archiveQueryUseReadOnlyDaemon:
+				if policy.AutoStart && !policy.SkipInitialSync && !policy.NoSync && !tr.ReadOnly {
+					progress := newResyncProgressPrinter(os.Stderr, time.Now)
+					_, err := postDaemonPush[sync.SyncStats](ctx, tr, cfg.AuthToken,
+						"/api/v1/sync?wait=true&startup_only=true", daemonPushRequest{}, progress.Print)
+					progress.Finish()
+					if err != nil {
+						return nil, nil, fmt.Errorf("waiting for startup sync: %w", err)
+					}
+				}
 				return daemonArchiveQueryBackend{tr: tr, authToken: cfg.AuthToken},
 					func() {}, nil
 			case policy.ReadOnlyDaemon == archiveQueryRejectReadOnlyDaemon:
@@ -112,16 +123,20 @@ func resolveArchiveQueryBackendWithConfig(
 }
 
 func resolveArchiveQueryTransport(
+	ctx context.Context,
 	cfg *config.Config,
 	policy archiveQueryPolicy,
 ) (transport, error) {
 	if policy.AutoStart && !policy.NoSync {
-		return ensureTransport(cfg, transportIntentArchiveWrite, 0)
+		// Daily reports can read committed data while sync runs after
+		// readiness. Session-specific commands still need startup ingestion.
+		cfg.SkipInitialSync = policy.SkipInitialSync
+		return ensureTransportContext(ctx, cfg, transportIntentArchiveWrite, 0)
 	}
 	if policy.NoSync {
 		cfg.NoSync = true
 	}
-	return ensureTransport(cfg, transportIntentRead, 0)
+	return ensureTransportContext(ctx, cfg, transportIntentRead, 0)
 }
 
 func directReadOnlyArchiveQueryError(
@@ -236,6 +251,7 @@ func (b localArchiveQueryBackend) DailyUsage(
 
 func localDailyUsageFilter(query dailyUsageQuery) db.UsageFilter {
 	filter := query.Filter
+	filter.Progress = query.Progress
 	filter.Breakdowns = query.Breakdowns
 	filter.SkipSessionCounts = !query.SessionCounts
 	if filter.Timezone == "" {

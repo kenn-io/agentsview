@@ -194,8 +194,17 @@ func runServe(cfg config.Config, opts serveOptions) {
 	// daemon falls back to its in-process initial sync.
 	var workerStartupResult workerResult
 	workerSyncDone := false
+	if opts.SkipInitialSync && !cfg.NoSync {
+		needsResync, err := db.ArchiveNeedsResync(cfg.DBPath)
+		if err != nil {
+			fatal("checking archive before startup: %v", err)
+		}
+		// A required archive reparse must finish before either launcher
+		// publishes readiness, even when routine ingestion is deferred.
+		opts.SkipInitialSync = !needsResync
+	}
 	if !opts.SkipInitialSync && !cfg.NoSync && !testing.Testing() {
-		startupProgress.SetPhase("initial sync")
+		startupProgress.SetPhase("opening database")
 		result, syncErr := runStartupSyncViaWorker(ctx, cfg, startupProgress)
 		workerStartupResult, workerSyncDone = startupWorkerOutcome(result, syncErr)
 		switch {
@@ -220,7 +229,21 @@ func runServe(cfg config.Config, opts serveOptions) {
 	}
 
 	startupProgress.SetPhase("opening database")
-	database, writeLock := mustOpenWriteDB(context.Background(), cfg)
+	databaseProgress := newResyncProgressPrinter(os.Stdout, time.Now)
+	database, writeLock, err := openWriteDBWith(context.Background(), cfg, func(cfg config.Config) (*db.DB, error) {
+		return openDBWithProgress(cfg, func(p db.OpenProgress) {
+			if p.ResyncRequired {
+				fmt.Println(p.Detail)
+			} else {
+				databaseProgress.Print(sync.Progress{Phase: sync.PhaseOpeningDatabase, Detail: p.Detail})
+			}
+			startupProgress.SetPhaseDetail("opening database", p.Detail)
+		})
+	})
+	if err != nil {
+		fatal("opening writable database: %v", err)
+	}
+	databaseProgress.Finish()
 	runtimeRecordDataDir := ""
 	defer func() {
 		closeWriteDB(database, writeLock)
@@ -547,7 +570,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 	// is active" marker so token-use doesn't start a competing
 	// on-demand sync against our live DB.
 	if _, sfErr := writeDaemonRuntimeWithAuthAndNoSync(
-		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, false,
+		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, rt.PublicURL, false,
 		rt.Cfg.RequireAuth, rt.Cfg.NoSync,
 		rt.Caddy.Pid(),
 	); sfErr != nil {
@@ -715,8 +738,8 @@ func runDeferredStartupSyncFallback(
 
 // runStartupSyncViaWorker runs the daemon's startup sync in a short-lived
 // worker process, relaying its progress phases into the startup-state writer so
-// `serve status` reports live phases, and to the console so a foreground serve
-// shows the same "Running initial sync..." progress the in-process path prints.
+// `serve status` reports live phases, and to the console so database upgrades
+// are visible before the first session counter arrives.
 // It must run before the daemon takes the write lock so the worker can acquire
 // it. It returns the worker's terminal result (used to acknowledge startup) and
 // any launch/protocol error.
@@ -726,23 +749,41 @@ func runDeferredStartupSyncFallback(
 func runStartupSyncViaWorker(
 	ctx context.Context, cfg config.Config, progress *startupStateWriter,
 ) (workerResult, error) {
-	fmt.Println("Running initial sync...")
 	t := time.Now()
 	resyncAnnounced := false
+	syncAnnounced := false
 	progressShown := false
 	terminal := isTerminalWriter(os.Stdout)
+	databaseProgress := newResyncProgressPrinter(os.Stdout, time.Now)
 	onLine := func(l workerLine) {
 		if l.Progress == nil {
 			return
 		}
 		p := *l.Progress
-		// Resync progress maps onto the "full resync" phase; the plain initial
-		// sync keeps the "initial sync" phase set before this call.
+		if p.Phase == sync.PhaseOpeningDatabase {
+			if p.Resync {
+				resyncAnnounced = true
+				fmt.Println(p.Detail)
+			} else {
+				databaseProgress.Print(p)
+			}
+			progress.SetPhaseDetail("opening database", startupProgressDetail(p))
+			return
+		}
+		databaseProgress.Finish()
+		// Database opening ends before either the full resync or incremental
+		// session sync begins.
 		if p.Resync {
 			progress.SetPhase("full resync")
 			if !resyncAnnounced {
 				resyncAnnounced = true
 				fmt.Println("Data version changed, running full resync...")
+			}
+		} else {
+			progress.SetPhase("initial sync")
+			if !syncAnnounced {
+				syncAnnounced = true
+				fmt.Println("Running initial sync...")
 			}
 		}
 		if writeSyncProgress(os.Stdout, terminal, p) {
@@ -1342,15 +1383,20 @@ func truncateLogFile(path string, limit int64) {
 }
 
 func openDB(cfg config.Config) (*db.DB, error) {
+	return openDBWithProgress(cfg, nil)
+}
+
+func openDBWithProgress(cfg config.Config, progress db.OpenProgressFunc) (*db.DB, error) {
 	if err := clearUsageOnlyVectors(context.Background(), cfg); err != nil {
 		return nil, err
 	}
 	applyClassifierConfig(cfg)
-	database, err := db.OpenWithArchiveContent(cfg.DBPath, cfg.ArchiveContent)
+	database, err := db.OpenWithProgress(cfg.DBPath, cfg.ArchiveContent, progress)
 	if err != nil {
 		return nil, err
 	}
 	database.SetToolResultImages(cfg.ToolResultImages)
+	database.SetAssetsDir(filepath.Join(cfg.DataDir, "assets"))
 	if cfg.InstallationID != "" {
 		unowned, err := database.EnsureInstallationIdentity(context.Background(), cfg.InstallationID)
 		if err != nil {

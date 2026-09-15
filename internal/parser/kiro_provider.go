@@ -134,18 +134,19 @@ func (p *kiroProvider) Parse(
 	case kiroSourceSQLiteDB:
 		return p.parseSQLiteDB(ctx, src, machine)
 	case kiroSourceSQLiteSession:
-		return p.parseSQLiteSession(src, machine, req.Fingerprint)
+		return p.parseSQLiteSession(ctx, src, machine, req.Fingerprint)
 	case kiroSourceCurrentJSONL:
-		return p.parseCurrentJSONL(src, machine, req.Fingerprint)
+		return p.parseCurrentJSONL(ctx, src, machine, req.Fingerprint)
 	default:
-		return p.parseLegacyJSONL(src, machine, req.Fingerprint)
+		return p.parseLegacyJSONL(ctx, src, machine, req.Fingerprint)
 	}
 }
 
 func (p *kiroProvider) parseCurrentJSONL(
-	src kiroSource, machine string, fingerprint SourceFingerprint,
+	ctx context.Context, src kiroSource, machine string,
+	fingerprint SourceFingerprint,
 ) (ParseOutcome, error) {
-	sess, msgs, err := p.parseCurrentSession(src.Path, src.SessionID, machine)
+	sess, msgs, err := p.parseCurrentSessionContext(ctx, src.Path, src.SessionID, machine)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -205,7 +206,7 @@ func (p *kiroProvider) parseSQLiteDB(
 		if err := ctx.Err(); err != nil {
 			return ParseOutcome{}, err
 		}
-		sess, msgs, err := store.ParseSession(meta.SessionID, machine)
+		sess, msgs, err := store.ParseSession(ctx, meta.SessionID, machine)
 		if err != nil {
 			sourceErrs = append(sourceErrs, SourceError{
 				SourceKey:   meta.VirtualPath,
@@ -243,6 +244,7 @@ func (p *kiroProvider) parseSQLiteDB(
 }
 
 func (p *kiroProvider) parseSQLiteSession(
+	ctx context.Context,
 	src kiroSource,
 	machine string,
 	fingerprint SourceFingerprint,
@@ -261,7 +263,7 @@ func (p *kiroProvider) parseSQLiteSession(
 		}
 		return ParseOutcome{}, fmt.Errorf("stat %s: %w", src.DBPath, err)
 	}
-	sess, msgs, err := parseKiroSQLiteSession(src.DBPath, src.SessionID, machine)
+	sess, msgs, err := parseKiroSQLiteSession(ctx, src.DBPath, src.SessionID, machine)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ParseOutcome{
 			ResultSetComplete: true,
@@ -296,11 +298,12 @@ func (p *kiroProvider) parseSQLiteSession(
 }
 
 func (p *kiroProvider) parseLegacyJSONL(
+	ctx context.Context,
 	src kiroSource,
 	machine string,
 	fingerprint SourceFingerprint,
 ) (ParseOutcome, error) {
-	sess, msgs, err := p.parseLegacySession(src.Path, machine)
+	sess, msgs, err := p.parseLegacySessionContext(ctx, src.Path, machine)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -1180,7 +1183,7 @@ func (s kiroSourceSet) sourceRefForChangedPath(root, path string) (SourceRef, bo
 		}
 		return s.newSourceRef(root, path, dbPath, sessionID, kiroSourceSQLiteSession), true
 	}
-	if dbPath, ok := kiroDBPathForEvent(root, path); ok {
+	if dbPath, ok := sqliteContainerPathForEvent(root, path, kiroSQLiteDBName, true); ok {
 		if !kiroDBUnderRoot(root, dbPath, false) {
 			return SourceRef{}, false
 		}
@@ -1342,27 +1345,6 @@ func kiroDBUnderRoot(root, dbPath string, requireRegular bool) bool {
 		return false
 	}
 	return !requireRegular || IsRegularFile(dbPath)
-}
-
-func kiroDBPathForEvent(root, path string) (string, bool) {
-	root = filepath.Clean(root)
-	path = filepath.Clean(path)
-	rel, ok := relUnder(root, path)
-	if !ok {
-		return "", false
-	}
-	// A bare "-shm" event is ignored: the provider's own read connections
-	// rewrite that index, and every committed write lands in the main file
-	// or a journal sibling.
-	if strings.HasSuffix(rel, "-shm") {
-		return "", false
-	}
-	if filepath.ToSlash(rel) == kiroSQLiteDBName ||
-		(filepath.Dir(rel) == "." &&
-			strings.HasPrefix(filepath.Base(rel), kiroSQLiteDBName+"-")) {
-		return filepath.Join(root, kiroSQLiteDBName), true
-	}
-	return "", false
 }
 
 func kiroLegacyPathUnderRoot(root, path string) bool {

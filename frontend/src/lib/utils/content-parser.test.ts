@@ -981,9 +981,9 @@ describe("hasVisibleSegments", () => {
   it("boundary card ignores the filters its body would parse into", () => {
     const body = "```sh\nexit 2\n```";
     const noCode = visibilityFrom(new Set(["user", "assistant", "thinking", "tool", "system"]));
-    // Control: the same body outside a boundary card is code-only, so the
-    // code filter does hide it. The card itself renders a label and a
-    // one-line preview, so that filter must not reach it.
+    // Control: with a generic predicate and no MessageList placeholder
+    // override, the same code-only body is hidden. The card itself renders a
+    // label and a one-line preview, so the code predicate must not reach it.
     const plain = makeMsg({ role: "user", content: body });
     const card = makeMsg({
       role: "user",
@@ -1152,7 +1152,7 @@ describe("hasVisibleSegments", () => {
     expect(hasVisibleSegments(m, onlyCode)).toBe(true);
   });
 
-  it("code block message hidden when code filter is off", () => {
+  it("generic code predicate hides a code-only message without the placeholder override", () => {
     const m = makeMsg({
       content: "```js\nconst x = 1;\n```",
     });

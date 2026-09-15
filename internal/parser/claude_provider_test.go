@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -373,6 +374,228 @@ func TestClaudeProviderParse(t *testing.T) {
 	assert.Equal(t, "abc123", result.Result.Session.File.Hash)
 	assert.Equal(t, "parse question", result.Result.Session.FirstMessage)
 	assert.Len(t, result.Result.Messages, 2)
+}
+
+func TestClaudeProviderParseAdoptsAITitle(t *testing.T) {
+	tests := []struct {
+		name  string
+		extra []string
+		want  string
+	}{
+		{name: "ai title only", extra: []string{`{"type":"ai-title","aiTitle":" Generated Title "}`}, want: "Generated Title"},
+		{name: "last title wins", extra: []string{`{"type":"ai-title","aiTitle":"Old"}`, `{"type":"ai-title","aiTitle":"New"}`}, want: "New"},
+		{name: "rename before title", extra: []string{`{"type":"system","content":"<command-name>/rename</command-name><command-args>Renamed</command-args>"}`, `{"type":"ai-title","aiTitle":"Generated"}`}, want: "Renamed"},
+		{name: "rename after title", extra: []string{`{"type":"ai-title","aiTitle":"Generated"}`, `{"type":"system","content":"<command-name>/rename</command-name><command-args>Renamed</command-args>"}`}, want: "Renamed"},
+		{name: "empty rename clears title", extra: []string{`{"type":"ai-title","aiTitle":"Generated"}`, `{"type":"system","content":"<command-name>/rename</command-name><command-args></command-args>"}`}, want: ""},
+		{name: "invalid titles keep fallback", extra: []string{`{"type":"ai-title","aiTitle":""}`, `{"type":"ai-title","aiTitle":42}`, `{"type":"ai-title"}`, `{malformed`}, want: ""},
+		{name: "compatible fields stay decoys", extra: []string{`{"type":"custom-title","customTitle":"Custom"}`, `{"type":"user","sessionName":"Session"}`}, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "project", "session.jsonl")
+			lines := append([]string{
+				`{"type":"user","timestamp":"2026-01-01T00:00:00Z","uuid":"u1","message":{"content":"First question"}}`,
+				`{"type":"assistant","timestamp":"2026-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"text","text":"Answer"}]}}`,
+			}, tt.extra...)
+			writeSourceFile(t, path, strings.Join(lines, "\n")+"\n")
+			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}, Machine: "devbox"})
+			require.True(t, ok)
+			sources, err := provider.Discover(context.Background())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			assert.Equal(t, tt.want, outcome.Results[0].Result.Session.SessionName)
+			t.Logf("SessionName=%q", outcome.Results[0].Result.Session.SessionName)
+			assert.Equal(t, "First question", outcome.Results[0].Result.Session.FirstMessage)
+			require.Len(t, outcome.Results[0].Result.Messages, 2)
+			assert.Equal(t, "Answer", outcome.Results[0].Result.Messages[1].Content)
+		})
+	}
+	t.Run("fork title fans out", func(t *testing.T) {
+		root := t.TempDir()
+		path := filepath.Join(root, "project", "fork.jsonl")
+		lines := []string{buildMetadataLine(map[string]any{
+			"type": "user", "uuid": "root", "message": map[string]any{"content": "Fork question"},
+		}), buildMetadataLine(map[string]any{
+			"type": "assistant", "uuid": "root-answer", "parentUuid": "root",
+			"message": map[string]any{"content": []map[string]any{{"type": "text", "text": "Root answer"}}},
+		})}
+		for _, prefix := range []string{"first", "second"} {
+			parent := "root-answer"
+			for i := 1; i <= 4; i++ {
+				user := fmt.Sprintf("%s-user-%d", prefix, i)
+				assistant := fmt.Sprintf("%s-assistant-%d", prefix, i)
+				lines = append(lines, buildMetadataLine(map[string]any{
+					"type": "user", "uuid": user, "parentUuid": parent,
+					"message": map[string]any{"content": fmt.Sprintf("%s question %d", prefix, i)},
+				}), buildMetadataLine(map[string]any{
+					"type": "assistant", "uuid": assistant, "parentUuid": user,
+					"message": map[string]any{"content": []map[string]any{{"type": "text", "text": fmt.Sprintf("%s answer %d", prefix, i)}}},
+				}))
+				parent = assistant
+			}
+		}
+		lines = append(lines, `{"type":"ai-title","aiTitle":"Fork title"}`)
+		writeSourceFile(t, path, strings.Join(lines, "\n")+"\n")
+		provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
+		require.True(t, ok)
+		sources, err := provider.Discover(context.Background())
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
+		outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+		require.NoError(t, err)
+		require.Len(t, outcome.Results, 2)
+		for _, result := range outcome.Results {
+			assert.Equal(t, "Fork title", result.Result.Session.SessionName)
+		}
+	})
+}
+
+func TestClaudeProviderUploadAndTitleBoundaries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "upload.jsonl")
+	writeSourceFile(t, path, strings.Join([]string{
+		`{"type":"ai-title","aiTitle":"Uploaded title"}`,
+		`{"type":"user","sessionId":"upload-session","isSidechain":false,"message":{"content":"Uploaded question"}}`,
+	}, "\n")+"\n")
+	results, err := parseClaudeSession(path, "uploaded-project", "devbox")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Empty(t, results[0].Session.SessionName)
+	assert.Equal(t, "uploaded-project", results[0].Session.Project)
+	assert.Equal(t, "Uploaded question", results[0].Session.FirstMessage)
+}
+
+func TestClaudeProviderIncrementalAITitleEscalation(t *testing.T) {
+	emptyName := ""
+	existingName := "Existing title"
+	tests := []struct {
+		name         string
+		storedName   *string
+		appended     string
+		wantStatus   IncrementalStatus
+		wantForce    bool
+		wantConsumed int64
+		wantMessages int
+		wantContent  string
+	}{
+		{
+			name:         "empty stored name",
+			storedName:   &emptyName,
+			appended:     `{"type":"ai-title","aiTitle":"Appended title"}`,
+			wantStatus:   IncrementalNeedsFullParse,
+			wantForce:    true,
+			wantMessages: 0,
+		},
+		{
+			name:         "existing stored name",
+			storedName:   &existingName,
+			appended:     `{"type":"ai-title","aiTitle":"Appended title"}`,
+			wantStatus:   IncrementalApplied,
+			wantConsumed: int64(len(`{"type":"ai-title","aiTitle":"Appended title"}`) + 1),
+			wantMessages: 0,
+		},
+		{
+			name:         "stored name unavailable",
+			appended:     `{"type":"ai-title","aiTitle":"Appended title"}`,
+			wantStatus:   IncrementalApplied,
+			wantConsumed: int64(len(`{"type":"ai-title","aiTitle":"Appended title"}`) + 1),
+			wantMessages: 0,
+		},
+		{
+			name:         "empty title",
+			storedName:   &emptyName,
+			appended:     `{"type":"ai-title","aiTitle":""}`,
+			wantStatus:   IncrementalApplied,
+			wantConsumed: int64(len(`{"type":"ai-title","aiTitle":""}`) + 1),
+			wantMessages: 0,
+		},
+		{
+			name:         "non-string title",
+			storedName:   &emptyName,
+			appended:     `{"type":"ai-title","aiTitle":42}`,
+			wantStatus:   IncrementalApplied,
+			wantConsumed: int64(len(`{"type":"ai-title","aiTitle":42}`) + 1),
+			wantMessages: 0,
+		},
+		{
+			name:         "missing title field",
+			storedName:   &emptyName,
+			appended:     `{"type":"ai-title"}`,
+			wantStatus:   IncrementalApplied,
+			wantConsumed: int64(len(`{"type":"ai-title"}`) + 1),
+			wantMessages: 0,
+		},
+		{
+			name:         "malformed line",
+			storedName:   &emptyName,
+			appended:     `{malformed`,
+			wantStatus:   IncrementalNoNewData,
+			wantMessages: 0,
+		},
+		{
+			name:         "ordinary user message",
+			storedName:   &emptyName,
+			appended:     testjsonl.ClaudeUserJSON("Appended question", tsEarlyS5),
+			wantStatus:   IncrementalApplied,
+			wantConsumed: int64(len(testjsonl.ClaudeUserJSON("Appended question", tsEarlyS5)) + 1),
+			wantMessages: 1,
+			wantContent:  "Appended question",
+		},
+	}
+
+	statusName := func(status IncrementalStatus) string {
+		switch status {
+		case IncrementalNoNewData:
+			return "IncrementalNoNewData"
+		case IncrementalApplied:
+			return "IncrementalApplied"
+		case IncrementalNeedsFullParse:
+			return "IncrementalNeedsFullParse"
+		default:
+			return "IncrementalUnsupported"
+		}
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "project", "incremental.jsonl")
+			initial := claudeProviderFixture("First question")
+			writeSourceFile(t, path, initial)
+			info, err := os.Stat(path)
+			require.NoError(t, err)
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+			require.NoError(t, err)
+			_, err = f.WriteString(tt.appended + "\n")
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+			current, err := os.Stat(path)
+			require.NoError(t, err)
+			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: "incremental"})
+			require.NoError(t, err)
+			require.True(t, ok)
+			outcome, status, err := provider.ParseIncremental(context.Background(), IncrementalRequest{
+				Source: source, Fingerprint: SourceFingerprint{Key: path, Size: current.Size()},
+				SessionID: "incremental", Offset: info.Size(), StartOrdinal: 2,
+				StoredSessionName: tt.storedName,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantStatus, status)
+			assert.Equal(t, tt.wantForce, outcome.ForceReplace)
+			assert.Equal(t, tt.wantConsumed, outcome.ConsumedBytes)
+			assert.Len(t, outcome.Messages, tt.wantMessages)
+			if tt.wantContent != "" {
+				require.Len(t, outcome.Messages, 1)
+				assert.Equal(t, tt.wantContent, outcome.Messages[0].Content)
+			}
+			t.Logf("appended=%s status=%s force_replace=%t consumed=%d messages=%d", tt.appended, statusName(status), outcome.ForceReplace, outcome.ConsumedBytes, len(outcome.Messages))
+		})
+	}
 }
 
 func TestClaudeProviderParseResolvesPersistedToolResultsThroughStoredPathResolver(t *testing.T) {

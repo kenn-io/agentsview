@@ -41,6 +41,7 @@ type WorktreeReclassificationSessionSample struct {
 
 type WorktreeReclassificationPreview struct {
 	MappingToken      string                                  `json:"mapping_token"`
+	MappingSetToken   string                                  `json:"mapping_set_token"`
 	NormalizedProject string                                  `json:"normalized_project"`
 	ExistingMappingID *int64                                  `json:"existing_mapping_id,omitempty"`
 	MatchedSessions   int                                     `json:"matched_sessions"`
@@ -48,10 +49,17 @@ type WorktreeReclassificationPreview struct {
 	DistinctProjects  int                                     `json:"distinct_projects"`
 	ProjectSamples    []WorktreeReclassificationProjectSample `json:"project_samples"`
 	SessionSamples    []WorktreeReclassificationSessionSample `json:"session_samples"`
+	// MatchedProjects contains every distinct source label, not just the
+	// bounded samples, so bulk previews can count overlapping projects once.
+	MatchedProjects    []string `json:"matched_projects"`
+	MatchedProjectKeys []string `json:"matched_project_keys"`
+	MatchedSessionIDs  []string `json:"matched_session_ids"`
+	UpdatedSessionIDs  []string `json:"updated_session_ids"`
 }
 
 type worktreeReclassificationEvaluation struct {
 	matched     int
+	matchedIDs  []string
 	updates     []worktreeMappingSessionUpdate
 	projects    map[string]int
 	sessions    []WorktreeReclassificationSessionSample
@@ -163,6 +171,12 @@ func (db *DB) ApplyWorktreeReclassification(
 			}
 		}
 	}
+	// Return the rule state committed by this correction, so a sequential batch
+	// can distinguish its own writes from intervening edits to the same machine.
+	savedMappings, err := loadWorktreeMappingsForMachineTx(ctx, tx, normalized.Machine)
+	if err != nil {
+		return WorktreeProjectMapping{}, WorktreeReclassificationPreview{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return WorktreeProjectMapping{}, WorktreeReclassificationPreview{}, fmt.Errorf(
 			"committing worktree reclassification apply: %w", err,
@@ -174,6 +188,7 @@ func (db *DB) ApplyWorktreeReclassification(
 		mapping.Project, mappingIDPointer(&mapping), evaluation,
 	)
 	preview.UpdatedSessions = updated
+	preview.MappingSetToken = worktreeMappingSetToken(savedMappings)
 	return mapping, preview, nil
 }
 
@@ -208,11 +223,13 @@ func previewWorktreeReclassificationTx(
 	if err != nil {
 		return WorktreeReclassificationPreview{}, err
 	}
-	return worktreeReclassificationPreviewFromEvaluation(
+	preview := worktreeReclassificationPreviewFromEvaluation(
 		worktreeReclassificationToken(stored, draft, collision, evaluation),
 		draft.Project,
 		mappingIDPointer(collision), evaluation,
-	), nil
+	)
+	preview.MappingSetToken = worktreeMappingSetToken(stored)
+	return preview, nil
 }
 
 func loadWorktreeMappingsForMachineTx(
@@ -288,14 +305,22 @@ func evaluateWorktreeMappingsTx(
 	sessionID string,
 ) (worktreeReclassificationEvaluation, error) {
 	query := `
-		SELECT id, project, cwd, file_path
+		SELECT id, project, cwd, file_path,
+			EXISTS (
+				SELECT 1 FROM session_project_assignments spa
+				WHERE spa.session_id = sessions.id
+			)
 		FROM sessions
 		WHERE machine = ? AND deleted_at IS NULL
 		ORDER BY id`
 	args := []any{machine}
 	if sessionID != "" {
 		query = `
-			SELECT id, project, cwd, file_path
+			SELECT id, project, cwd, file_path,
+				EXISTS (
+					SELECT 1 FROM session_project_assignments spa
+					WHERE spa.session_id = sessions.id
+				)
 			FROM sessions
 			WHERE machine = ? AND deleted_at IS NULL
 				AND (id = ? OR (
@@ -319,7 +344,9 @@ func evaluateWorktreeMappingsTx(
 		var row worktreeMappingSessionRow
 		var filePath sql.NullString
 		row.machine = machine
-		if err := rows.Scan(&row.id, &row.project, &row.cwd, &filePath); err != nil {
+		if err := rows.Scan(
+			&row.id, &row.project, &row.cwd, &filePath, &row.assigned,
+		); err != nil {
 			rows.Close()
 			return worktreeReclassificationEvaluation{}, fmt.Errorf(
 				"scanning session for worktree mapping evaluation: %w", err,
@@ -355,8 +382,11 @@ func evaluateWorktreeMappingsTx(
 
 	impactHash := sha256.New()
 	writeWorktreeTokenFields(impactHash, "impact-v1")
-	evaluation := worktreeReclassificationEvaluation{projects: map[string]int{}}
+	evaluation := worktreeReclassificationEvaluation{projects: map[string]int{}, matchedIDs: []string{}}
 	for _, row := range sessions {
+		if row.assigned {
+			continue
+		}
 		if sessionID != "" && row.id != sessionID {
 			continue
 		}
@@ -377,6 +407,7 @@ func evaluateWorktreeMappingsTx(
 			continue
 		}
 		evaluation.matched++
+		evaluation.matchedIDs = append(evaluation.matchedIDs, row.id)
 		evaluation.projects[row.project]++
 		matchCwd := row.matchCwd
 		if matchCwd == "" {
@@ -425,13 +456,21 @@ func worktreeReclassificationPreviewFromEvaluation(
 	sessionLimit := min(len(evaluation.sessions), worktreeReclassificationSampleLimit)
 	sessionSamples := append([]WorktreeReclassificationSessionSample(nil),
 		evaluation.sessions[:sessionLimit]...)
+	updatedIDs := make([]string, 0, len(evaluation.updates))
+	for _, update := range evaluation.updates {
+		updatedIDs = append(updatedIDs, update.id)
+	}
 	return WorktreeReclassificationPreview{
 		MappingToken: token, NormalizedProject: normalizedProject,
-		ExistingMappingID: existingMappingID,
-		MatchedSessions:   evaluation.matched,
-		UpdatedSessions:   len(evaluation.updates),
-		DistinctProjects:  len(evaluation.projects),
-		ProjectSamples:    projectSamples, SessionSamples: sessionSamples,
+		ExistingMappingID:  existingMappingID,
+		MatchedSessions:    evaluation.matched,
+		UpdatedSessions:    len(evaluation.updates),
+		DistinctProjects:   len(evaluation.projects),
+		MatchedProjects:    projectNames,
+		MatchedProjectKeys: []string{},
+		MatchedSessionIDs:  evaluation.matchedIDs,
+		UpdatedSessionIDs:  updatedIDs,
+		ProjectSamples:     projectSamples, SessionSamples: sessionSamples,
 	}
 }
 

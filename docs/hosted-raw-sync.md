@@ -1,24 +1,26 @@
 ---
 title: Hosted Raw Sync
-description: Keep original session files in hosted custody with authenticated, resumable uploads
+description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
 
-Hosted raw sync keeps original agent session files from one or more machines in
-hosted custody. Each laptop captures supported local sources, authenticates as a
-provisioned device, resumes interrupted uploads, and remembers durable progress
-across restarts. `agentsview raw-sync watch` keeps the hosted copy current.
+Hosted raw sync uploads original agent session files from your machines to a
+server. An operator provides each device's credentials. The client resumes
+interrupted uploads and saves its progress across restarts. Run
+`agentsview raw-sync watch` to keep the hosted copy current.
 
 ```mermaid
 flowchart LR
-    Watcher["Laptop watcher"] -->|"authenticated raw upload"| Custody["Immutable raw custody"]
-    Custody -. "future" .-> Parser["Server parsing"]
-    Parser --> PostgreSQL["PostgreSQL projection"]
-    PostgreSQL --> Embeddings["Server embeddings"]
+    Files["Original agent files"] --> Client["raw-sync watch"]
+    Client -->|"authenticated upload"| Server["Hosted raw-sync server"]
+    Server --> Storage["Retained source files"]
+    Server -->|"commit receipt"| Client
+    Client --> Checkpoint["Local upload checkpoint"]
 ```
 
-The raw archive gives an operator the source material needed to rebuild derived
-data. Version 0.42.0 ships capture and upload; it does not yet parse accepted
-generations into hosted sessions or build server-owned embeddings.
+The hosted copy retains source files for later processing. Capture and upload
+shipped in 0.42.0. Hosted parsing and embedding generation are not connected to
+server startup in 0.43.0. Use [`agentsview pg push`](/docs/pg-sync/) to make
+sessions browsable on a shared server.
 
 !!! note "You need provisioned device credentials"
 
@@ -34,7 +36,7 @@ generations into hosted sessions or build server-owned embeddings.
 The tracked delivery sequence and production acceptance criteria live in
 [GitHub issue #1352](https://github.com/kenn-io/agentsview/issues/1352).
 
-## Delivery status
+## What is available?
 
 | Layer                  | Status        | Current boundary                                                                                                             |
 | ---------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -45,11 +47,12 @@ The tracked delivery sequence and production acceptance criteria live in
 | Server derivation      | Not available | Accepted generations are not yet parsed into PostgreSQL sessions or embeddings                                               |
 | Operations and cutover | Not available | Retention, garbage collection, disaster rebuilds, and migration from `pg push` remain future work                            |
 
-The server parse-worker foundation now includes fenced PostgreSQL job leases,
-verified source materialization, provider parsing, retry handling, and a
-projection interface. It is an internal library: `pg serve` does not start a
-worker, and a PostgreSQL session-projection implementation is still pending.
-Hosted browsing and embeddings therefore continue to require `pg push`.
+### Work still in development
+
+An internal worker library can claim parse jobs, reconstruct their source files,
+parse them, and retry failures. `pg serve` does not start this worker. The code
+that would save its parsed sessions to PostgreSQL is also unfinished. This
+library does not yet provide hosted browsing or embeddings.
 
 The broader delivery issue remains open because public enrollment, hosted
 session derivation, and production lifecycle controls are not finished.

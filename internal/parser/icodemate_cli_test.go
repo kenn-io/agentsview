@@ -23,6 +23,28 @@ func TestIcodemateCLIDefaultDirs(t *testing.T) {
 	assert.Contains(t, def.DefaultDirs, ".icodemate/cli/projects")
 }
 
+func TestIcodemateCLITitlePriority(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := strings.Join([]string{
+		buildMetadataLine(map[string]any{"type": "user", "uuid": "u1", "message": map[string]any{"content": "CLI question"}}),
+		buildMetadataLine(map[string]any{"type": "ai-title", "aiTitle": "Generated CLI title"}),
+		buildMetadataLine(map[string]any{"type": "custom-title", "customTitle": "Custom CLI title"}),
+		buildMetadataLine(map[string]any{"type": "user", "sessionName": "Session CLI title"}),
+		buildMetadataLine(map[string]any{"type": "system", "content": "<command-name>/rename</command-name><command-args>Renamed CLI title</command-args>"}),
+		buildMetadataLine(map[string]any{"type": "assistant", "uuid": "a1", "parentUuid": "u1", "message": map[string]any{"content": []map[string]any{{"type": "text", "text": "CLI answer"}}}}),
+	}, "\n") + "\n"
+	writeSourceFile(t, path, content)
+	results, excluded, err := parseIcodemateCLISession(t.Context(), path, "project", "devbox", nil)
+	require.NoError(t, err)
+	assert.Empty(t, excluded)
+	require.Len(t, results, 1)
+	assert.Equal(t, "icodemate:session", results[0].Session.ID)
+	assert.Equal(t, "Custom CLI title", results[0].Session.SessionName)
+	require.Len(t, results[0].Messages, 2)
+	assert.Equal(t, "CLI question", results[0].Messages[0].Content)
+	assert.Equal(t, "CLI answer", results[0].Messages[1].Content)
+}
+
 // TestIcodemateCLIDiscoverParseAndFindSource builds a Claude-format projects
 // transcript under an IcodeMate CLI root and asserts the CLI source set
 // discovers it, parses it onto the icodemate agent with the icodemate: ID

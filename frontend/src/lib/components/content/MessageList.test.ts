@@ -318,6 +318,31 @@ describe("MessageList follow cancellation", () => {
     expect(document.querySelector(".system-boundary")).toBeNull();
   });
 
+  it("keeps a code-only message visible as a collapsed placeholder when Code is filtered", async () => {
+    const content = ["```latex", "\\subsection{Deployment Considerations}", "```"].join("\n");
+    messages.messages = [
+      {
+        ...makeMessage(0),
+        role: "assistant",
+        content,
+        content_length: content.length,
+      },
+    ];
+    messages.messageCount = 1;
+    ui.setBlockVisible("code", false);
+    setVirtualRows(1);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    const toggle = document.querySelector<HTMLButtonElement>(".code-fence-toggle");
+    expect(toggle).not.toBeNull();
+    expect(toggle?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "Code block collapsed · latex · Expand",
+    );
+    expect(document.querySelector(".code-content")).toBeNull();
+  });
+
   it("acknowledges traversal when a block filter hides the raw boundary", async () => {
     messages.messages = [
       { ...makeMessage(0), role: "assistant" },

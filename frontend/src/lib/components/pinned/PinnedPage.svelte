@@ -12,7 +12,7 @@
   import { router } from "../../stores/router.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { formatRelativeTime, truncate } from "../../utils/format.js";
-  import { renderMarkdown } from "../../utils/markdown.js";
+  import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
@@ -142,6 +142,7 @@
                 <div
                   class="pin-content-full markdown"
                   use:highlightCodeFences={{ content: pin.content }}
+                  use:loadAssetImages={pin.content}
                 >
                   {@html renderMarkdown(pin.content, {
                     renderUnknownXmlBlocksAsPreformatted: ui.renderUnknownXmlBlocksAsPreformatted,

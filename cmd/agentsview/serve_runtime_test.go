@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -111,15 +112,21 @@ func TestStartServerWithOptionalCaddyWaitsForBasePathBackend(t *testing.T) {
 		Host: "127.0.0.1",
 		Port: port,
 	}
-	srv := server.New(cfg, nil, nil, server.WithBasePath("/viewer"))
+	srv := server.New(cfg, nil, nil, server.WithBasePath("/viewer/"))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	runtime, err := startServerWithOptionalCaddy(
-		ctx, cfg, srv, serveRuntimeOptions{Mode: "test"},
+		ctx, cfg, srv, serveRuntimeOptions{Mode: "test", BasePath: "/viewer/"},
 	)
 	require.NoError(t, err,
 		"a server mounted below a base path must satisfy backend readiness")
+
+	require.Equal(t, fmt.Sprintf("http://127.0.0.1:%d/viewer", port), runtime.PublicURL)
+	resp, err := http.Get(runtime.PublicURL + "/api/ping")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(
 		context.Background(), time.Second,

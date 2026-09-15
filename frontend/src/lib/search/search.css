@@ -1,0 +1,14 @@
+::highlight(av-find) {
+  background-color: color-mix(in srgb, var(--accent-amber, #d29922) 36%, transparent);
+  color: var(--text-primary);
+}
+
+::highlight(av-find-current) {
+  background-color: var(--accent-amber, #d29922);
+  color: var(--bg-primary, #111827);
+}
+
+[data-search-current="true"] {
+  outline: 2px solid var(--accent-amber, #d29922);
+  outline-offset: -2px;
+}

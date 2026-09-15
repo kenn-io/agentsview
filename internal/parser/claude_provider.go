@@ -236,6 +236,7 @@ func (p *claudeProvider) Parse(
 		ctx:                         ctx,
 		siblingLineage:              claudeSourceIsProjectLevel(req.Source, path),
 		persistedOutputPathResolver: persistedOutputPathResolver,
+		aiTitleFallback:             true,
 	}
 	results, excludedIDs, err := claudeParseFile(path, project, machine, opts)
 	if err != nil {
@@ -322,6 +323,7 @@ func (p *claudeProvider) ParseIncremental(
 			},
 			storedLinearParse:         req.StoredClaudeLinearParse,
 			storedTailClaudeMessageID: req.StoredLastClaudeMessageID,
+			storedSessionName:         req.StoredSessionName,
 		},
 	)
 	if err != nil {

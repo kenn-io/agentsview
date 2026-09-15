@@ -372,7 +372,7 @@ func (p *hermesProvider) parseStateMember(
 	ctx context.Context,
 	src hermesSource, project, machine string, fingerprint SourceFingerprint,
 ) (ParseOutcome, error) {
-	conn, err := sql.Open("sqlite3", "file:"+sqliteURIPath(src.StateDB)+"?mode=ro")
+	conn, err := openSQLiteReadOnly(src.StateDB, sqliteReadOptions{})
 	if err != nil {
 		return ParseOutcome{}, fmt.Errorf("open hermes state db: %w", err)
 	}
@@ -647,7 +647,7 @@ func (s hermesSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef)
 func (s hermesSourceSet) discoverStateEach(
 	ctx context.Context, root, stateDB string, yield func(SourceRef) error,
 ) (bool, error) {
-	conn, err := sql.Open("sqlite3", "file:"+sqliteURIPath(stateDB)+"?mode=ro")
+	conn, err := openSQLiteReadOnly(stateDB, sqliteReadOptions{})
 	if err != nil {
 		return false, fmt.Errorf("open hermes state db: %w", err)
 	}
@@ -742,7 +742,7 @@ type hermesStateMembership struct {
 func openHermesStateMembership(
 	ctx context.Context, stateDB string,
 ) (*hermesStateMembership, error) {
-	conn, err := sql.Open("sqlite3", "file:"+sqliteURIPath(stateDB)+"?mode=ro")
+	conn, err := openSQLiteReadOnly(stateDB, sqliteReadOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("open hermes state db: %w", err)
 	}
@@ -1233,7 +1233,7 @@ func (e hermesStateLookupError) Unwrap() error {
 }
 
 func hermesStateDBHasSession(stateDB string, rawID string) (bool, error) {
-	conn, err := sql.Open("sqlite3", "file:"+sqliteURIPath(stateDB)+"?mode=ro")
+	conn, err := openSQLiteReadOnly(stateDB, sqliteReadOptions{})
 	if err != nil {
 		return false, fmt.Errorf("open hermes state db: %w", err)
 	}
@@ -1711,12 +1711,12 @@ func seedHermesMemberCores(ctx context.Context, stateDB string) error {
 }
 
 func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
-	idsConn, err := sql.Open("sqlite3", "file:"+sqliteURIPath(stateDB)+"?mode=ro")
+	idsConn, err := openSQLiteReadOnly(stateDB, sqliteReadOptions{})
 	if err != nil {
 		return fmt.Errorf("open hermes state db: %w", err)
 	}
 	defer idsConn.Close()
-	memberConn, err := sql.Open("sqlite3", "file:"+sqliteURIPath(stateDB)+"?mode=ro")
+	memberConn, err := openSQLiteReadOnly(stateDB, sqliteReadOptions{})
 	if err != nil {
 		return fmt.Errorf("open hermes member state db: %w", err)
 	}

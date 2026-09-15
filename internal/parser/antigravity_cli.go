@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -383,8 +382,7 @@ func normalizeAntigravityCLIWorkspace(workspace string) string {
 func loadAntigravityCLIDBSteps(
 	path string,
 ) (antigravityStepLoadResult, error) {
-	dsn := "file:" + sqliteURIPath(path) + "?mode=ro&immutable=0"
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := openSQLiteReadOnly(path, sqliteReadOptions{})
 	if err != nil {
 		return antigravityStepLoadResult{}, fmt.Errorf(
 			"open antigravity cli db %s: %w", path, err,

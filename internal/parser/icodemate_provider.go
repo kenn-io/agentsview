@@ -49,7 +49,7 @@ func (f icodemateProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	opencodeCfg := cfg
 	opencodeCfg.Roots = opencodeRoots
 	provider := &icodemateProvider{
-		opencode: &openCodeFormatProvider{
+		opencode: &SourceSetProvider{
 			sources: newOpenCodeFormatSourceSet(
 				opencodeRoots,
 				openCodeProviderSpecForAgent(AgentIcodemate),
@@ -120,7 +120,7 @@ func splitIcodemateRoots(roots []string) (opencodeRoots, cliRoots []string) {
 
 type icodemateProvider struct {
 	ProviderBase
-	opencode *openCodeFormatProvider
+	opencode *SourceSetProvider
 	cli      *icodemateCLISourceSet
 	// allRoots carries every configured root so reconciliation validates and
 	// walks the full configured scope, not just the OpenCode subset the inner
@@ -276,13 +276,13 @@ func (p *icodemateProvider) SourceForReconciliationWithState(
 func (p *icodemateProvider) ReconciliationSourceState(
 	source SourceRef,
 ) (ReconciliationSourceState, bool) {
-	return p.allSources.reconciliationSourceState(source)
+	return p.allSources.ReconciliationSourceState(source)
 }
 
 func (p *icodemateProvider) ApplyReconciliationSourceState(
 	source *SourceRef, state ReconciliationSourceState,
 ) error {
-	return p.allSources.applyReconciliationSourceState(source, state)
+	return p.allSources.ApplyReconciliationSourceState(source, state)
 }
 
 // ResolveReconciliationScopes preserves the OpenCode container topology for
@@ -300,6 +300,6 @@ func (p *icodemateProvider) ResolveReconciliationScopes(
 		return ReconciliationScopePlan{}, err
 	}
 	return containerAwareReconciliationScopePlan(
-		p.allRoots, req.Roots, p.allSources.reconciliationContainer,
+		p.allRoots, req.Roots, p.allSources.ReconciliationContainer,
 	), nil
 }

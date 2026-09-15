@@ -1,4 +1,33 @@
 {
+  "data_reclassify_session_preview_filtered_empty": "没有可预览的会话。自动会话已隐藏；使用筛选按钮可将其包含在内。",
+  "data_batch_saving_progress": [
+    {
+      "declarations": [
+        "input saved",
+        "input count",
+        "local savedNumber = saved: number",
+        "local countNumber = count: number"
+      ],
+      "match": { "*": "正在保存：{savedNumber}/{countNumber}…" }
+    }
+  ],
+  "data_candidate_worktree_prefix": "工作树前缀",
+  "data_candidate_common_parent": "共同父目录",
+  "data_candidate_paths_sample": "显示部分已记录的路径。",
+  "data_candidate_observed_paths": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} 个已记录的文件夹",
+        "countPlural=other": "{countNumber} 个已记录的文件夹"
+      }
+    }
+  ],
   "app_auth_title": "需要身份验证",
   "app_auth_description": "此服务器需要 auth token 才能访问。请输入 ~/.agentsview/config.toml 中的 auth_token 或 AGENTSVIEW_AUTH_TOKEN。",
   "app_auth_placeholder": "粘贴 auth token",
@@ -292,6 +321,10 @@
   "message_content_copy_message": "复制消息",
   "message_content_copied_message": "消息已复制",
   "message_content_copied": "已复制！",
+  "message_content_code_collapsed_with_language": "代码块已折叠 · {language} · 展开",
+  "message_content_code_collapsed": "代码块已折叠 · 展开",
+  "message_content_code_expanded_with_language": "代码块已展开 · {language} · 折叠",
+  "message_content_code_expanded": "代码块已展开 · 折叠",
   "message_content_unpin_message": "取消固定消息",
   "message_content_pin_message": "固定消息",
   "message_content_unpinned": "已取消固定",
@@ -487,6 +520,7 @@
   "sidebar_row_duplicate_title": "属于重复组：另一个存储中存在此交互的副本。用量在整个组内只计一次。",
   "sidebar_row_duplicate_canonical_title": "包含 {count} 个副本的重复组；用量只计一次。",
   "sidebar_row_delete": "删除",
+  "sidebar_row_change_project": "更改项目…",
   "shared_all_projects": "所有项目",
   "shared_project_filter_placeholder": "筛选项目...",
   "shared_select_project": "选择项目",
@@ -914,7 +948,7 @@
   "data_projects_heading": "项目",
   "data_view_toggle_label": "数据视图",
   "data_view_inventory": "清单",
-  "data_view_rules": "规则",
+  "data_view_rules": "项目映射规则",
   "data_summary_projects": [
     {
       "declarations": [
@@ -945,6 +979,28 @@
       }
     }
   ],
+  "data_summary_machines": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 台机器" }
+    }
+  ],
+  "data_summary_folder_suggestions": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 个文件夹建议" }
+    }
+  ],
   "data_summary_governed": [
     {
       "declarations": [
@@ -960,6 +1016,64 @@
       }
     }
   ],
+  "data_selection_hint": "点击一个项目，然后按住 Shift 点击以选择一个范围。",
+  "data_selection_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "已选择 {countNumber} 个项目" }
+    }
+  ],
+  "data_selection_clear": "清除",
+  "data_batch_workspace_label": "批量项目更正",
+  "data_batch_heading": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "已选择 {countNumber} 个项目" }
+    }
+  ],
+  "data_batch_label": "批量",
+  "data_batch_folders_heading": "已选择的文件夹",
+  "data_batch_folders_intro": "实际记录的文件夹先按项目、再按机器分组，每台机器内优先显示会话较多的分组。",
+  "data_batch_outside_selection": "此修正还会匹配所选项目之外的项目。确认后将为所有匹配的会话保存规则。",
+  "data_date_filter_scope": "日期筛选项目列表、文件夹建议和会话预览。文件夹修正也可能更改此日期范围之外的会话。",
+  "data_batch_correction_heading": "批量更正",
+  "data_batch_correction_intro": "将所有列出的文件夹映射到你选择的目标项目。",
+  "data_batch_folder_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countNumber} 个文件夹" }
+    }
+  ],
+  "data_batch_target_project": "将所选文件夹映射到",
+  "data_batch_saving": "正在保存批量更正…",
+  "data_batch_save": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "保存 {countNumber} 项更正" }
+    }
+  ],
+  "data_batch_partial_save": "已保存 {saved}/{count} 项。",
+  "data_batch_saved": "批量更正已保存到 {project}",
   "data_filter_projects": "筛选项目",
   "data_col_project": "项目",
   "data_col_sessions": "会话",
@@ -995,8 +1109,15 @@
   "data_reclassify_candidates_failed": "无法查找会话文件夹",
   "data_reclassify_no_candidates": "未找到此项目的会话文件夹。",
   "data_reclassify_choose_worktree": "选择文件夹",
-  "data_mapping_observed_folders": "已发现的文件夹",
-  "data_mapping_definition": "映射",
+  "data_mapping_observed_folders": "文件夹建议",
+  "data_reclassify_suggestions_intro": "根据此项目中的会话建议的路径。",
+  "data_mapping_definition": "项目更正",
+  "data_reclassify_use_for_project": "用于此项目",
+  "data_reclassify_evidence_snapshot": "快照",
+  "data_reclassify_evidence_aggregate": "汇总",
+  "data_reclassify_evidence_exact_cwd": "精确工作目录",
+  "data_reclassify_evidence_unavailable": "无可用前缀",
+  "data_reclassify_evidence_suggestion": "建议",
   "data_reclassify_candidate_sessions": [
     {
       "declarations": [
@@ -1013,7 +1134,7 @@
     }
   ],
   "data_reclassify_cwd_unavailable": "此文件夹无法安全映射，因为它不可用或表示文件系统根目录。",
-  "data_reclassify_path_prefix": "文件夹路径",
+  "data_reclassify_path_prefix": "路径前缀",
   "data_reclassify_target_project": "项目",
   "data_reclassify_use_custom_project": "使用项目“{query}”",
   "data_reclassify_path_unavailable": "路径不可用",
@@ -1082,18 +1203,64 @@
       }
     }
   ],
+  "data_reclassify_session_preview_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} 个会话预览",
+        "countPlural=other": "{countNumber} 个会话预览"
+      }
+    }
+  ],
+  "data_reclassify_session_preview_position": "第 {current} 个，共 {count} 个",
+  "data_reclassify_session_preview_previous": "上一个会话",
+  "data_reclassify_session_preview_next": "下一个会话",
+  "data_reclassify_session_preview_loading": "正在加载会话预览…",
+  "data_reclassify_session_preview_failed": "无法加载会话预览",
+  "data_reclassify_session_preview_no_message": "没有可用的会话消息",
+  "data_reclassify_session_preview_current_project": "当前项目",
+  "data_reclassify_session_preview_next_project": "更正后",
+  "data_reclassify_session_preview_folder": "会话文件夹",
+  "data_session_assignment_heading": "会话项目",
+  "data_session_assignment_intro": "仅更改此会话，其文件夹和文件夹规则保持不变。",
+  "data_session_assignment_target": "将此会话移动到",
+  "data_session_assignment_save": "分配会话",
+  "data_session_assignment_saving": "正在分配…",
+  "data_session_assignment_failed": "无法分配会话",
+  "data_session_assignment_saved": "会话已分配到 {project}",
+  "data_session_assignment_refresh_failed": "会话已分配，但无法刷新项目清单。",
+  "data_session_assignment_manual": "手动覆盖",
+  "data_session_assignment_automatic": "自动",
+  "data_session_assignment_use_automatic": "使用自动分配",
+  "data_session_assignment_clearing": "正在恢复…",
+  "data_session_assignment_cleared": "会话已恢复到 {project}",
+  "data_session_assignment_clear_failed": "无法恢复自动项目分配",
   "data_reclassify_zero_matches": "此前缀与存档中的任何会话都不匹配。",
   "data_reclassify_conflict": "映射自预览后已更改。影响已刷新；应用前请检查。",
-  "data_reclassify_apply": "保存并应用映射",
-  "data_reclassify_applying": "正在保存并应用…",
-  "data_reclassify_apply_failed": "无法保存并应用映射",
+  "data_reclassify_replaces_rule": "此更正将替换现有的项目映射规则。",
+  "data_reclassify_review_impact": "检查影响",
+  "data_reclassify_back": "返回",
+  "data_reclassify_confirm_save": "确认并保存",
+  "data_reclassify_cancel": "取消",
+  "data_reclassify_apply": "保存更正",
+  "data_reclassify_applying": "正在保存更正…",
+  "data_reclassify_apply_failed": "无法保存更正",
+  "data_reclassify_saved": "已保存 {project} 的项目更正",
+  "data_flash_success_label": "成功",
   "data_reclassify_applied_refresh_failed": "映射已保存，但无法刷新项目清单。请仅重试刷新。",
   "data_reclassify_retry_refresh": "重试刷新",
   "data_reclassify_refreshing": "正在刷新…",
-  "data_reclassify_read_only": "此存储为只读。请在收录此机器会话的可写存档中管理分类规则。",
-  "data_reclassify_managed_in_rules": "可在“规则”视图中编辑在此创建的映射。",
-  "data_reclassify_open_rules": "打开规则",
+  "data_reclassify_read_only": "此处无法进行更改。请打开源 Agents View 管理项目映射规则。",
+  "data_reclassify_managed_in_rules": "此更正将保存为项目映射规则。",
+  "data_reclassify_open_rules": "打开项目映射规则",
   "data_workspace_all_projects": "所有项目",
+  "data_workspace_map_whole_project": "所有文件夹",
+  "data_workspace_correct_one_folder": "一个文件夹",
   "data_workspace_close": "关闭项目详情",
   "data_workspace_activity": "活动",
   "data_workspace_activity_range": "{first} – {last}",
@@ -2213,7 +2380,8 @@
   "settings_tool_result_images": "工具结果图片",
   "settings_tool_result_images_keep": "保留",
   "settings_tool_result_images_drop": "丢弃",
-  "settings_tool_result_images_hint": "已存储的结果保持写入时的策略，改回「保留」也无法恢复已删除的数据。运行 agentsview db strip --images 可处理已有记录。",
+  "settings_tool_result_images_offload": "单独存储",
+  "settings_tool_result_images_hint": "已存储的结果保持写入时的策略，改回「保留」也无法恢复已删除的数据。运行 agentsview db migrate --images 可处理已有记录。",
   "settings_tool_result_images_restart_notice": "重启 AgentsView 守护进程后，此更改才会应用到新采集的会话。",
   "settings_tool_images_title": "工具结果图像",
   "settings_tool_images_description": "存储在工具结果中的内联图像。",

@@ -11,8 +11,8 @@ import (
 
 // ListArchiveWorktreeCandidates returns the machine/path groups for a
 // project selected by (display label, project key) across every visible
-// session mirrored into this PG store, with no Activity date range or
-// filter scoping. It mirrors internal/db.ListArchiveWorktreeCandidates
+// session mirrored into this PG store within the optional Data date range.
+// It mirrors internal/db.ListArchiveWorktreeCandidates
 // (SQLite): the same session-selection predicate, the same
 // BuildProjectIdentityMap-based label/key match, and the same shared
 // db.BuildWorktreeCandidates grouping pipeline.
@@ -23,7 +23,7 @@ func (s *Store) ListArchiveWorktreeCandidates(
 	if strings.TrimSpace(request.ProjectKey) == "" {
 		return nil, fmt.Errorf("project_key is required")
 	}
-	sessions, err := s.archiveWorktreeCandidateSessions(ctx)
+	sessions, err := s.archiveWorktreeCandidateSessions(ctx, request.ProjectDateFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -64,12 +64,14 @@ type archiveCandidateSessionRef struct {
 // both the project inventory and SQLite candidate selection.
 func (s *Store) archiveWorktreeCandidateSessions(
 	ctx context.Context,
+	filter db.ProjectDateFilter,
 ) ([]archiveCandidateSessionRef, error) {
+	where, args := db.BuildSessionBaseFilterSQL(filter.SessionFilter(), db.PostgresQueryDialect())
 	rows, err := s.pg.QueryContext(ctx, `
 		SELECT id, project
 		FROM sessions
-		WHERE deleted_at IS NULL
-		ORDER BY id`)
+		WHERE `+where+`
+		ORDER BY id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying pg archive worktree candidate sessions: %w", err)
 	}

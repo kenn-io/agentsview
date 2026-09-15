@@ -10,6 +10,7 @@ RESUME_AGENTS["cursor"] = (id) => `cursor agent --resume ${shellQuote(id)}`;
 RESUME_AGENTS["gemini"] = (id) => `gemini --resume ${shellQuote(id)}`;
 RESUME_AGENTS["opencode"] = (id) => `opencode --session ${shellQuote(id)}`;
 RESUME_AGENTS["amp"] = (id) => `amp --resume ${shellQuote(id)}`;
+RESUME_AGENTS["kiro"] = (id) => `kiro-cli chat --resume-id ${shellQuote(id)}`;
 
 /**
  * Agents whose resume commands require server-resolved parameters
@@ -61,6 +62,10 @@ export function stripIdPrefix(id: string, agent?: string): string {
   return id;
 }
 
+function stripHostPrefix(id: string): string {
+  return id.slice(id.indexOf("~") + 1);
+}
+
 /**
  * Returns true if the given agent supports CLI session resumption.
  */
@@ -85,7 +90,7 @@ export function buildResumeCommand(
   const builder = RESUME_AGENTS[agent];
   if (!builder) return null;
 
-  const rawId = stripIdPrefix(sessionId, agent);
+  const rawId = stripIdPrefix(stripHostPrefix(sessionId), agent);
   let cmd = builder(rawId);
 
   if (flags?.model) {

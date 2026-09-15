@@ -270,6 +270,64 @@ func TestUsageOnlyStorageClaudeUserAppendStaysIncremental(t *testing.T) {
 	assert.Nil(t, stored.FirstMessage)
 }
 
+func TestUsageOnlyStorageClaudeAITitleAppendStaysIncremental(t *testing.T) {
+	claudeRoot := t.TempDir()
+	sessionID := "usage-only-ai-title"
+	path := filepath.Join(claudeRoot, "project", sessionID+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	initial := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithSessionID(
+			"2026-08-31T10:00:00Z", "private initial prompt",
+			sessionID, "/workspace/project",
+		).
+		AddClaudeAssistantUsage(
+			"2026-08-31T10:00:01Z", "private response",
+			testjsonl.ClaudeAssistantUsage{
+				MessageID: "msg-initial", RequestID: "req-initial",
+				Model: "claude-sonnet-4-6", InputTokens: 100, OutputTokens: 10,
+			},
+		)
+	require.NoError(t, os.WriteFile(path, []byte(initial.String()), 0o600))
+
+	database := dbtest.OpenTestDB(t)
+	database.SetArchiveContent(config.ArchiveContentUsage)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {claudeRoot},
+		},
+		Machine: "local", ArchiveContent: config.ArchiveContentUsage,
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
+	appendFile, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = appendFile.WriteString(
+		`{"type":"ai-title","aiTitle":"Generated title"}` + "\n",
+	)
+	require.NoError(t, err)
+	require.NoError(t, appendFile.Close())
+	engine.SyncPathsContext(t.Context(), []string{path})
+
+	stored, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.True(t, stored.LastWriteIncremental)
+	assert.Nil(t, stored.SessionName)
+	assert.Nil(t, stored.FirstMessage)
+	assert.True(t, stored.HasTotalOutputTokens)
+	assert.Equal(t, 10, stored.TotalOutputTokens)
+	messages := fetchMessages(t, database, sessionID)
+	require.NotEmpty(t, messages)
+	for _, message := range messages {
+		assert.Empty(t, message.Content)
+		assert.Empty(t, message.ThinkingText)
+		assert.Empty(t, message.ToolCalls)
+		assert.Empty(t, message.ToolResults)
+	}
+	t.Logf("LastWriteIncremental=%t SessionName=nil FirstMessage=nil TotalOutputTokens=%d transcript_content=%q", stored.LastWriteIncremental, stored.TotalOutputTokens, messages[0].Content)
+}
+
 func TestUsageOnlyStorageSettlesLegacySignalBackfillOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy-usage.db")
 	seedDatabase, err := db.Open(path)

@@ -13,7 +13,7 @@ import (
 
 func TestNewHTTPBackendUsesLongRunningClient(t *testing.T) {
 	t.Parallel()
-	svc := NewHTTPBackend("http://example.test", "", false)
+	svc := NewHTTPBackend("http://example.test", "", false, "")
 	backend, ok := svc.(*httpBackend)
 	require.True(t, ok)
 	require.NotNil(t, backend.client)
@@ -35,7 +35,7 @@ func TestHTTPBackendRecallCapabilityRespectsReadOnlyMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			svc := NewHTTPBackend("http://example.test", "", tt.readOnly)
+			svc := NewHTTPBackend("http://example.test", "", tt.readOnly, "")
 			assert.Equal(t, tt.want, SupportsRecallQueries(svc))
 		})
 	}
@@ -64,7 +64,7 @@ func TestSearchContentUsesLongRunningClient(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	svc := NewHTTPBackend(srv.URL, "", false)
+	svc := NewHTTPBackend(srv.URL, "", false, "")
 	backend, ok := svc.(*httpBackend)
 	require.True(t, ok)
 	backend.client.Timeout = 10 * time.Millisecond
@@ -75,6 +75,39 @@ func TestSearchContentUsesLongRunningClient(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Empty(t, result.Matches)
+}
+
+func TestUsageSummaryUsesLongRunningClient(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/usage/summary", r.URL.Path)
+		time.Sleep(50 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"daily":[{"date":"2026-09-01"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
+	backend.client.Timeout = 10 * time.Millisecond
+	result, err := backend.UsageSummary(t.Context(), UsageRequest{})
+	require.NoError(t, err)
+	require.Len(t, result.Daily, 1)
+	assert.Equal(t, "2026-09-01", result.Daily[0].Date)
+}
+
+func TestUsagePairwiseComparisonUsesLongRunningClient(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/usage/pairwise-comparison", r.URL.Path)
+		time.Sleep(50 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"left":{"totalTokens":42}}`))
+	}))
+	t.Cleanup(srv.Close)
+	backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
+	backend.client.Timeout = 10 * time.Millisecond
+	result, err := backend.UsagePairwiseComparison(t.Context(), UsagePairwiseComparisonRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, 42, result.Left.TotalTokens)
 }
 
 func TestQueryRecallSemanticModesUseLongRunningClient(t *testing.T) {
@@ -96,7 +129,7 @@ func TestQueryRecallSemanticModesUseLongRunningClient(t *testing.T) {
 			}))
 			t.Cleanup(srv.Close)
 
-			svc := NewHTTPBackend(srv.URL, "", false)
+			svc := NewHTTPBackend(srv.URL, "", false, "")
 			backend, ok := svc.(*httpBackend)
 			require.True(t, ok)
 			backend.client.Timeout = 10 * time.Millisecond

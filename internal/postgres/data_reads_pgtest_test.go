@@ -44,7 +44,7 @@ func TestPGDataReadsThroughStoreInterface(t *testing.T) {
 
 	var store db.Store = &Store{pg: pg}
 
-	inventory, err := store.GetProjectInventory(ctx)
+	inventory, err := store.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, inventory.TotalProjects)
 	assert.Equal(t, 2, inventory.TotalSessions)

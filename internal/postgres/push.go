@@ -2104,6 +2104,7 @@ func sessionPushFingerprint(
 	fields := []string{
 		sess.ID,
 		sess.Project,
+		fmt.Sprintf("%t", sess.ProjectAssigned),
 		pushedMachine,
 		sourceArchiveID,
 		ownerMarker,
@@ -2358,7 +2359,7 @@ func (s *Sync) pushSession(
 			transcript_fidelity, transcript_revision,
 			agent_label, entrypoint, session_kind,
 			source_archive_id, source_database_generation, file_path,
-			prompt_evidence_discarded, updated_at
+			project_assigned, prompt_evidence_discarded, updated_at
 			)
 			SELECT
 				$1, $2, $3, $4, $5, $6, $7, $8,
@@ -2375,8 +2376,8 @@ func (s *Sync) pushSession(
 				$46, $47, $48, $49,
 				$50, $51,
 				$52, $53, $54, $55, $56, $57, $58, $59, $60, $61,
-				$62, $63, $64, $65, $66, $67,
-				$69, NOW()
+				$62, $63, $64, $65, $66, $67, $68,
+				$70, NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM excluded_sessions WHERE id = $1
 			)
@@ -2391,6 +2392,7 @@ func (s *Sync) pushSession(
 			source_archive_id = EXCLUDED.source_archive_id,
 			source_database_generation = EXCLUDED.source_database_generation,
 			file_path = EXCLUDED.file_path,
+			project_assigned = EXCLUDED.project_assigned,
 			first_message = EXCLUDED.first_message,
 			display_name = CASE
 				WHEN EXCLUDED.prompt_evidence_discarded THEN NULL
@@ -2474,7 +2476,7 @@ func (s *Sync) pushSession(
 					OR sessions.machine = 'local'
 					OR sessions.machine = ''
 					OR sessions.machine IN (
-						SELECT jsonb_array_elements_text($68::jsonb)
+						SELECT jsonb_array_elements_text($69::jsonb)
 					))
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
@@ -2494,6 +2496,7 @@ func (s *Sync) pushSession(
 			OR sessions.source_database_generation IS DISTINCT FROM
 				EXCLUDED.source_database_generation
 			OR sessions.file_path IS DISTINCT FROM EXCLUDED.file_path
+			OR sessions.project_assigned IS DISTINCT FROM EXCLUDED.project_assigned
 			OR sessions.first_message IS DISTINCT FROM EXCLUDED.first_message
 			OR (EXCLUDED.prompt_evidence_discarded AND (
 				sessions.display_name IS NOT NULL OR
@@ -2601,6 +2604,7 @@ func (s *Sync) pushSession(
 		s.archiveID,
 		s.databaseGeneration,
 		sess.FilePath,
+		sess.ProjectAssigned,
 		string(legacyMarkerMachinesJSON),
 		s.local.ArchiveContent().UsageOnly(),
 	)

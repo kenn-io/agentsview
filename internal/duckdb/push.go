@@ -1212,7 +1212,7 @@ func (s *Sync) upsertSession(
 ) error {
 	query := `
 		INSERT INTO sessions (
-			id, project, machine, agent,
+			id, project, project_assigned, machine, agent,
 			agent_label, entrypoint, session_kind,
 			first_message, display_name, session_name, started_at, ended_at,
 			message_count, user_message_count,
@@ -1236,7 +1236,7 @@ func (s *Sync) upsertSession(
 			termination_status, secret_leak_count, secrets_rules_version,
 			agentsview_push_fingerprint, source_archive_id
 		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
@@ -1244,6 +1244,7 @@ func (s *Sync) upsertSession(
 	query += `
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
+			project_assigned = excluded.project_assigned,
 			machine = excluded.machine,
 			agent = excluded.agent,
 			agent_label = excluded.agent_label,
@@ -1328,7 +1329,7 @@ func sessionInsertArgs(
 	fingerprint string,
 ) []any {
 	return []any{
-		sess.ID, sess.Project,
+		sess.ID, sess.Project, sess.ProjectAssigned,
 		mirroredSessionMachine(sess, fallbackMachine), sess.Agent,
 		sess.AgentLabel, sess.Entrypoint, sess.SessionKind,
 		nilString(sess.FirstMessage), nilString(sess.DisplayName),

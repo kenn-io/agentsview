@@ -59,6 +59,10 @@ test.describe("Settings archive content", () => {
     const dropRadio = page.getByRole("radio", { name: "Drop" });
     await expect(keepRadio).toHaveAttribute("aria-checked", "true");
     await expect(dropRadio).toHaveAttribute("aria-checked", "false");
+    await expect(page.getByRole("radio", { name: "Offload" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
     await expect(page.locator(".archive-content-settings").getByRole("status")).toHaveCount(0);
   });
 
@@ -96,15 +100,15 @@ test.describe("Settings archive content", () => {
         headers: { Origin: baseURL! },
         data: { tool_result_images: "keep" },
       });
-      // A silent restore failure would leave the daemon on drop and turn the
+      // A silent restore failure would leave the daemon on offload and turn the
       // retry into a pass that asserts nothing.
       expect(restored.ok()).toBe(true);
     });
 
-    test("Drop selection persists after page reload", async ({ page }) => {
+    test("Offload selection persists after page reload", async ({ page }) => {
       await openArchiveContent(page);
 
-      // Fails loudly if a prior restore left the daemon on drop, because
+      // Fails loudly if a prior restore left the daemon on offload, because
       // clicking an already-selected option issues no PUT at all.
       await expect(page.getByRole("radio", { name: "Keep" })).toHaveAttribute(
         "aria-checked",
@@ -116,9 +120,9 @@ test.describe("Settings archive content", () => {
           response.request().method() === "PUT" &&
           new URL(response.url()).pathname === "/api/v1/settings",
       );
-      await page.getByRole("radio", { name: "Drop" }).click();
-      expect(await (await putEcho).json()).toMatchObject({ tool_result_images: "drop" });
-      await expect(page.getByRole("radio", { name: "Drop" })).toHaveAttribute(
+      await page.getByRole("radio", { name: "Offload" }).click();
+      expect(await (await putEcho).json()).toMatchObject({ tool_result_images: "offload" });
+      await expect(page.getByRole("radio", { name: "Offload" })).toHaveAttribute(
         "aria-checked",
         "true",
       );
@@ -127,7 +131,7 @@ test.describe("Settings archive content", () => {
       const nav = page.getByRole("navigation", { name: "Settings" });
       await nav.locator("button", { hasText: "Archive content" }).click();
 
-      await expect(page.getByRole("radio", { name: "Drop" })).toHaveAttribute(
+      await expect(page.getByRole("radio", { name: "Offload" })).toHaveAttribute(
         "aria-checked",
         "true",
       );

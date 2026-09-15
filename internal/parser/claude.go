@@ -125,6 +125,7 @@ func claudeParseFile(
 		cwd              string
 		gitBranch        string
 		displayName      string
+		renameSeen       bool
 		compatibleName   string
 		compatibleAI     string
 		compatibleCustom string
@@ -186,24 +187,27 @@ func claudeParseFile(
 		}
 
 		entryType := gjson.GetBytes(lineBytes, "type").Str
-		if opts.compatibleTitleEvents {
-			if compatibleName == "" {
+		if opts.compatibleTitleEvents || opts.aiTitleFallback {
+			if opts.compatibleTitleEvents && compatibleName == "" {
 				compatibleName = strings.Clone(strings.TrimSpace(
 					gjson.GetBytes(lineBytes, "sessionName").Str,
 				))
 			}
+			if entryType == "ai-title" {
+				if value := strings.TrimSpace(
+					gjson.GetBytes(lineBytes, "aiTitle").Str,
+				); value != "" {
+					compatibleAI = strings.Clone(value)
+				}
+			}
+		}
+		if opts.compatibleTitleEvents {
 			switch entryType {
 			case "custom-title":
 				if value := strings.TrimSpace(
 					gjson.GetBytes(lineBytes, "customTitle").Str,
 				); value != "" {
 					compatibleCustom = strings.Clone(value)
-				}
-			case "ai-title":
-				if value := strings.TrimSpace(
-					gjson.GetBytes(lineBytes, "aiTitle").Str,
-				); value != "" {
-					compatibleAI = strings.Clone(value)
 				}
 			}
 		}
@@ -296,6 +300,7 @@ func claudeParseFile(
 				gjson.GetBytes(lineBytes, "content").Str,
 			); ok {
 				displayName = strings.Clone(name)
+				renameSeen = true
 			}
 			continue
 		}
@@ -420,6 +425,8 @@ func claudeParseFile(
 		displayName = firstNonEmptyJSONLString(
 			compatibleCustom, compatibleAI, compatibleName, displayName,
 		)
+	} else if opts.aiTitleFallback && !renameSeen {
+		displayName = compatibleAI
 	}
 
 	meta := claudeSessionMeta{
@@ -768,6 +775,13 @@ type claudeIncrementalScan struct {
 	// continuation, so such appends stay incremental. nil keeps the
 	// conservative fallback.
 	storedTailClaudeMessageID *string
+	// storedSessionName is the session_name already persisted for this
+	// session ("" when the row carries none), or nil when the call site
+	// cannot supply it. An appended ai-title can only change the stored
+	// session while that name is still empty, so a session that already
+	// carries its title keeps repeated title records on the incremental
+	// path. nil keeps the append incremental.
+	storedSessionName *string
 }
 
 func claudeParseSessionFrom(
@@ -788,6 +802,7 @@ func claudeParseSessionFrom(
 		// messages are found.
 		latestTS               time.Time
 		sawRename              bool
+		sawAITitle             bool
 		sawSessionIdentityEdit bool
 	)
 
@@ -802,6 +817,10 @@ func claudeParseSessionFrom(
 			entryType := gjson.Get(line, "type").Str
 			if claudeSessionIdentityUpdate(line, stored) {
 				sawSessionIdentityEdit = true
+			}
+			if entryType == "ai-title" &&
+				strings.TrimSpace(gjson.Get(line, "aiTitle").Str) != "" {
+				sawAITitle = true
 			}
 			if entryType == "system" {
 				if _, ok := extractRenameName(
@@ -891,6 +910,17 @@ func claudeParseSessionFrom(
 	// the empty-entries early return below would silently succeed. Check
 	// first and force a full parse so the display name is persisted.
 	if sawRename {
+		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+	}
+	// An appended ai-title is not an entry either, so the same
+	// empty-entries early return would consume it and silently drop the
+	// generated title. Escalate only while the title could still fill an
+	// empty stored session_name: the producer repeats the record (mean
+	// 15.96 per transcript, maximum 454 for one distinct value), so a
+	// session that already carries its title must not force a replacing
+	// full parse on every later window.
+	if sawAITitle && scan.storedSessionName != nil &&
+		*scan.storedSessionName == "" {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 	if sawSessionIdentityEdit {

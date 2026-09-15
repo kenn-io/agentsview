@@ -577,15 +577,26 @@ workflow also:
 - **Shares one database with the UI** — the same data powers
   [Analytics](/docs/usage/#dashboard) and session detail views, so there's no
   second index to keep fresh.
-- **Includes on-demand sync** — when no AgentsView server is running, `usage`
-  does a quick incremental sync scoped to files modified since the last sync
-  start time so reports always reflect current state. Skip with `--no-sync`
-  when you want to report only from the existing archive.
+- **Reads committed archive data** — daily reports can run while the daemon
+  imports new source changes. Run `agentsview sync` first when those changes
+  must be included. Session usage and statusline finish any pending startup
+  ingestion before querying, including when they reuse an existing daemon.
 
 ## `agentsview usage daily`
 
 Daily cost report. Outputs a tab-aligned table to stdout by default, or JSON
 with `--format json` (or the `--json` alias).
+
+A cold cache prepares the sessions needed for the report. Slow reports print
+preparation phases and elapsed time to stderr, including with JSON output. Usage
+reports can finish beyond the server's normal write timeout. Press Ctrl+C to
+stop waiting; shared cache preparation can continue in the daemon. Canceling
+daemon startup also leaves the detached child running.
+
+Required archive reparsing finishes before the daemon serves requests. Startup
+waits show phases and continue while progress updates arrive, including when a
+foreground server is starting in another terminal. Restart older daemons after
+upgrading to provide the usage progress endpoint.
 
 ```bash
 agentsview usage daily [flags]
@@ -600,8 +611,8 @@ agentsview usage daily [flags]
 | `--all`       | `false`       | Include all history; overrides the default 30-day window                 |
 | `--agent`     |               | Filter by agent name (e.g. `claude`, `codex`)                            |
 | `--breakdown` | `false`       | Show indented per-model sub-rows under each day                          |
-| `--offline`   | `false`       | Skip the LiteLLM fetch; use the embedded fallback pricing                |
-| `--no-sync`   | `false`       | Skip the on-demand sync pass before querying                             |
+| `--offline`   | `false`       | Read the archive directly without sync or pricing fetches                |
+| `--no-sync`   | `false`       | Skip source refresh; a new daemon starts without automatic sync          |
 | `--timezone`  | system        | IANA timezone name used for date bucketing                               |
 
 The default 30-day window only kicks in when neither `--since` nor `--until` nor
@@ -881,19 +892,20 @@ the display label or catalog key, represents project continuity.
 ## `agentsview usage statusline`
 
 One-line today's spend, designed for shell prompts, tmux status lines, and
-window titles.
+window titles. Statusline has a 30-second deadline covering startup and the
+report request; it returns an error if that deadline expires.
 
 ```bash
 agentsview usage statusline [flags]
 ```
 
-| Flag        | Default | Description                        |
-| ----------- | ------- | ---------------------------------- |
-| `--format`  | `human` | Output format: `human` or `json`   |
-| `--json`    | `false` | Alias for `--format json`          |
-| `--agent`   |         | Filter by agent name               |
-| `--offline` | `false` | Use embedded fallback pricing only |
-| `--no-sync` | `false` | Skip on-demand sync                |
+| Flag        | Default | Description                                      |
+| ----------- | ------- | ------------------------------------------------ |
+| `--format`  | `human` | Output format: `human` or `json`                 |
+| `--json`    | `false` | Alias for `--format json`                        |
+| `--agent`   |         | Filter by agent name                             |
+| `--offline` | `false` | Read the archive without sync or pricing fetches |
+| `--no-sync` | `false` | Skip source refresh                              |
 
 Output is a single line:
 
@@ -959,29 +971,29 @@ format = "[$output]($style) "
 style = "bold green"
 ```
 
-Pair with `--no-sync` so the prompt never blocks on a sync pass; a separate
-`agentsview` server (or a periodic `agentsview sync` cron) keeps the database
-fresh.
+The offline flags read the existing archive without starting a daemon or syncing
+source files. A separate `agentsview serve` process or periodic
+`agentsview sync` keeps the archive fresh. Cache preparation can still take
+time.
 
-## On-Demand Sync
+## Source Freshness
 
-When no AgentsView server is running, the `usage` commands do a quick
-incremental sync before querying so reports always include recent activity:
+`usage daily` reads committed archive data. When it starts a daemon, routine
+source ingestion runs after readiness. Run `agentsview sync` before the report
+when it must include new source changes. Required archive reparsing still
+finishes before the daemon serves requests.
 
-1. If the parser data version has changed (i.e. you just upgraded), a full
-   resync runs first.
-1. Otherwise, the sync scans only files modified since the last recorded sync
-   start time, minus a 10-second safety margin to catch files written during
-   the prior sync.
+`session usage`, `token-use`, and `usage statusline` complete pending startup
+ingestion before querying. This also applies when a previous daily report
+started the daemon. Once startup ingestion is complete, subsequent queries do
+not repeat a full sync; the daemon's file watcher handles later source changes.
 
-If an `agentsview serve` process is already running, the file watcher already
-has you covered and the on-demand sync is skipped to avoid duplicate work. A
-running `pg serve` process does not keep your local SQLite archive fresh, so the
-CLI still treats the local archive as the source of truth for command-line
-reporting.
-
-Pass `--no-sync` to skip the refresh unconditionally — useful for scripting and
-for prompt modules that must stay snappy.
+`--no-sync` skips source refresh and starts any new daemon without automatic
+sync. It does not disable sync on an already-running daemon. `--offline` reads
+the archive directly, without daemon startup, source sync, or pricing fetches. A
+direct online query, when daemon autostart is disabled, retains its incremental
+refresh before reading. Read-only mirror daemons do not refresh the local SQLite
+archive; stop them to run a local online usage report.
 
 ## Scripting Examples
 

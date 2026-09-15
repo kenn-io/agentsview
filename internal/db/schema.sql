@@ -819,6 +819,45 @@ CREATE TABLE IF NOT EXISTS duplicate_group_members (
 CREATE INDEX IF NOT EXISTS idx_duplicate_group_members_group
     ON duplicate_group_members(group_key);
 
+-- A user-selected project for one session. This is deliberately independent
+-- of folder rules: temporary working directories often belong to a real
+-- project without being useful future mapping evidence.
+CREATE TABLE IF NOT EXISTS session_project_assignments (
+    session_id       TEXT PRIMARY KEY,
+    project          TEXT NOT NULL,
+    original_project TEXT NOT NULL,
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_sessions_apply_project_assignment_insert
+AFTER INSERT ON sessions
+WHEN EXISTS (
+    SELECT 1 FROM session_project_assignments WHERE session_id = NEW.id
+)
+BEGIN
+    UPDATE sessions
+    SET project = (
+        SELECT project FROM session_project_assignments WHERE session_id = NEW.id
+    )
+    WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_sessions_apply_project_assignment_update
+AFTER UPDATE OF project ON sessions
+WHEN EXISTS (
+    SELECT 1
+    FROM session_project_assignments
+    WHERE session_id = NEW.id AND project != NEW.project
+)
+BEGIN
+    UPDATE sessions
+    SET project = (
+        SELECT project FROM session_project_assignments WHERE session_id = NEW.id
+    )
+    WHERE id = NEW.id;
+END;
+
 CREATE TABLE IF NOT EXISTS archive_metadata (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,

@@ -666,7 +666,7 @@ func TestRunUsageDailyDefaultsToMappedLocalTimezone(t *testing.T) {
 	var gotTimezone string
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotTimezone = r.URL.Query().Get("timezone")
-		writeJSONResponse(w, sampleDailyUsageJSON)
+		writeUsageStreamResponse(t, w, r, sampleDailyUsageJSON)
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
@@ -829,7 +829,7 @@ func TestRunUsageDailyUsesDiscoveredDaemon(t *testing.T) {
 		assert.Equal(t, "true", r.URL.Query().Get("no_default_range"))
 		assert.Equal(t, "false", r.URL.Query().Get("breakdowns"))
 		assert.Equal(t, "true", r.URL.Query().Get("session_counts"))
-		writeJSONResponse(w, sampleDailyUsageJSON)
+		writeUsageStreamResponse(t, w, r, sampleDailyUsageJSON)
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
@@ -842,7 +842,7 @@ func TestRunUsageDailyUsesDiscoveredDaemon(t *testing.T) {
 		})
 	})
 
-	assert.Equal(t, "/api/v1/usage/summary", gotPath)
+	assert.Equal(t, "/api/v1/usage/summary/stream", gotPath)
 	assert.Contains(t, out, `"microdollars": 420000`)
 	assertNoLocalSessionsDB(t, dataDir)
 }
@@ -857,7 +857,7 @@ func TestRunUsageDailyResolvesDurationSince(t *testing.T) {
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotFrom = r.URL.Query().Get("from")
 		assert.Equal(t, "true", r.URL.Query().Get("no_default_range"))
-		writeJSONResponse(w, sampleDailyUsageJSON)
+		writeUsageStreamResponse(t, w, r, sampleDailyUsageJSON)
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
@@ -964,7 +964,7 @@ func TestRunUsageDailyTableSkipsDaemonSessionCounts(t *testing.T) {
 	var gotSessionCounts string
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotSessionCounts = r.URL.Query().Get("session_counts")
-		writeJSONResponse(w, sampleDailyUsageJSON)
+		writeUsageStreamResponse(t, w, r, sampleDailyUsageJSON)
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
@@ -983,7 +983,7 @@ func TestRunUsageDailyBreakdownUsesDaemonBreakdowns(t *testing.T) {
 	var gotBreakdowns string
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotBreakdowns = r.URL.Query().Get("breakdowns")
-		writeJSONResponse(w, sampleDailyUsageJSON)
+		writeUsageStreamResponse(t, w, r, sampleDailyUsageJSON)
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
@@ -1005,7 +1005,7 @@ func TestRunUsageDailyDefaultRangeUsesDaemonDefaults(t *testing.T) {
 	var gotQuery url.Values
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotQuery = r.URL.Query()
-		writeJSONResponse(w, sampleDailyUsageJSON)
+		writeUsageStreamResponse(t, w, r, sampleDailyUsageJSON)
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
@@ -1029,7 +1029,7 @@ func TestRunUsageDailyAllPreservesEmptyRangeWithDiscoveredDaemon(t *testing.T) {
 	var gotQuery url.Values
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotQuery = r.URL.Query()
-		writeJSONResponse(w, totalCostOnlyUsageJSON)
+		writeUsageStreamResponse(t, w, r, totalCostOnlyUsageJSON)
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
@@ -1054,7 +1054,7 @@ func TestRunUsageDailyNoSyncUsesDiscoveredDaemon(t *testing.T) {
 	var gotPath string
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		writeJSONResponse(w, totalCostOnlyUsageJSON)
+		writeUsageStreamResponse(t, w, r, totalCostOnlyUsageJSON)
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
@@ -1068,7 +1068,7 @@ func TestRunUsageDailyNoSyncUsesDiscoveredDaemon(t *testing.T) {
 		})
 	})
 
-	assert.Equal(t, "/api/v1/usage/summary", gotPath)
+	assert.Equal(t, "/api/v1/usage/summary/stream", gotPath)
 	assert.Contains(t, out, `"microdollars": 420000`)
 	assertNoLocalSessionsDB(t, dataDir)
 }
@@ -1791,7 +1791,7 @@ const zeroTotalsCopilotUsageJSON = `{
 func TestRunUsageDailyHintsNoTokenDataForCopilot(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
-		writeJSONResponse(w, zeroTotalsCopilotUsageJSON)
+		writeUsageStreamResponse(t, w, r, zeroTotalsCopilotUsageJSON)
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
@@ -1806,7 +1806,7 @@ func TestRunUsageDailyHintsNoTokenDataForCopilot(t *testing.T) {
 func TestRunUsageDailyNoHintWithoutAgentFilter(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
-		writeJSONResponse(w, zeroTotalsCopilotUsageJSON)
+		writeUsageStreamResponse(t, w, r, zeroTotalsCopilotUsageJSON)
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
@@ -1820,7 +1820,7 @@ func TestRunUsageDailyNoHintWithoutAgentFilter(t *testing.T) {
 func TestRunUsageDailyNoHintWhenDataPresent(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
-		writeJSONResponse(w, sampleDailyUsageJSON)
+		writeUsageStreamResponse(t, w, r, sampleDailyUsageJSON)
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 

@@ -97,6 +97,9 @@ type claudeParseOptions struct {
 	// compatibleTitleEvents enables the sessionName, custom-title, and
 	// ai-title fields written by compatible transcript producers.
 	compatibleTitleEvents bool
+	// aiTitleFallback enables native Claude ai-title metadata. /rename keeps
+	// priority; sessionName and custom-title remain compatible-only fields.
+	aiTitleFallback bool
 }
 
 // claudeLineagePlan describes an established fork lineage: the leading

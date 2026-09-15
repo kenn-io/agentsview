@@ -272,7 +272,7 @@ func ForEachOpenCodeSessionMeta(
 			"FROM " + from + " s"
 		if composite {
 			openCodeContainerChildScans.Add(1)
-			v2, err := openCodeV2SupportedCached(db, dbPath)
+			v2, err := openCodeProjectionFormatCached(db, dbPath)
 			if err != nil {
 				return err
 			}
@@ -353,7 +353,7 @@ func openCodeSessionCompositeMtime(
 		"FROM " + from + " s WHERE s.id = ?"
 	if composite {
 		openCodeSessionChildLookups.Add(1)
-		v2, err := openCodeV2SupportedCached(db, dbPath)
+		v2, err := openCodeProjectionFormatCached(db, dbPath)
 		if err != nil {
 			return 0, "", false, err
 		}
@@ -409,7 +409,7 @@ func openCodeSessionWatermark(
 
 	query := "SELECT s.time_updated FROM " + from + " s WHERE s.id = ?"
 	if composite {
-		v2, err := openCodeV2SupportedCached(db, dbPath)
+		v2, err := openCodeProjectionFormatCached(db, dbPath)
 		if err != nil {
 			return 0, false, err
 		}
@@ -417,7 +417,7 @@ func openCodeSessionWatermark(
 		if table == "session_v2" {
 			watermark = openCodeSessionRowWatermarkExpr
 		}
-		if v2 {
+		if v2 != openCodeProjectionAbsent {
 			watermark = "MAX(" + watermark + ", COALESCE((SELECT MAX(time_updated) FROM session_message WHERE session_id = s.id), 0))"
 		}
 		query = "SELECT " + watermark +
@@ -527,6 +527,14 @@ func OpenCodeChildDigestMetadataWatermarkNS(hash string) (int64, bool) {
 func parseOpenCodeDBSession(
 	dbPath, sessionID, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
+	return parseOpenCodeDBSessionContext(
+		context.Background(), dbPath, sessionID, machine,
+	)
+}
+
+func parseOpenCodeDBSessionContext(
+	ctx context.Context, dbPath, sessionID, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		return nil, nil, fmt.Errorf(
 			"opencode db not found: %s", dbPath,
@@ -581,8 +589,8 @@ func parseOpenCodeDBSession(
 	if !openCodeUsableWorktree(projectWorktree) {
 		projectWorktree = cwd
 	}
-	return buildOpenCodeSession(
-		db, s, cwd, projectWorktree, dbPath, machine,
+	return buildOpenCodeSessionContext(
+		ctx, db, s, cwd, projectWorktree, dbPath, machine,
 	)
 }
 
@@ -657,11 +665,20 @@ func resolveOpenCodeStorageWorktree(
 func parseOpenCodeStorageFile(
 	sessionPath, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
+	return parseOpenCodeStorageFileContext(
+		context.Background(), sessionPath, machine,
+	)
+}
+
+func parseOpenCodeStorageFileContext(
+	ctx context.Context, sessionPath, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
 	snapshot, err := loadOpenCodeStorageSnapshot(sessionPath, true)
 	if err != nil {
 		return nil, nil, err
 	}
-	sess, parsed, err := buildOpenCodeParsedSession(
+	sess, parsed, err := buildOpenCodeParsedSessionContext(
+		ctx,
 		snapshot.session,
 		snapshot.worktree,
 		snapshot.worktree,
@@ -707,9 +724,7 @@ func openCodeStorageFingerprintFromSnapshot(
 }
 
 func openOpenCodeDB(dbPath string) (*sql.DB, error) {
-	dsn := "file:" + sqliteURIPath(dbPath) +
-		"?mode=ro&_busy_timeout=3000"
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := openSQLiteReadOnly(dbPath, sqliteReadOptions{busyTimeoutMS: 3000})
 	if err != nil {
 		return nil, fmt.Errorf(
 			"opening opencode db %s: %w", dbPath, err,
@@ -814,7 +829,7 @@ type openCodeSessionSchemaCacheEntry struct {
 	directoryColumns  map[string]bool
 	hasComposite      bool
 	compositeOnce     bool
-	hasV2             bool
+	projectionFormat  openCodeProjectionFormat
 	v2Once            bool
 	sessionTables     []string
 	hasTimeIdle       bool
@@ -1237,7 +1252,8 @@ func loadOpenCodeParts(
 	return parts, rows.Err()
 }
 
-func buildOpenCodeSession(
+func buildOpenCodeSessionContext(
+	ctx context.Context,
 	db *sql.DB,
 	s openCodeSessionRow,
 	cwd, projectWorktree, dbPath, machine string,
@@ -1263,7 +1279,7 @@ func buildOpenCodeSession(
 		fileMtime = composite
 	}
 
-	v2, err := openCodeV2SupportedCached(db, dbPath)
+	v2, err := openCodeProjectionFormatCached(db, dbPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1273,8 +1289,8 @@ func buildOpenCodeSession(
 	}
 	var projected []ParsedMessage
 	var projectionHash string
-	if v2 {
-		projected, _, projectionHash, err = loadOpenCodeV2Messages(db, s.id, cwd)
+	if v2 != openCodeProjectionAbsent {
+		projected, _, projectionHash, err = loadOpenCodeV2Messages(db, s.id, cwd, v2)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1283,7 +1299,7 @@ func buildOpenCodeSession(
 	var parts map[string][]openCodePartRow
 	parsed := projected
 	if table == "session" {
-		msgs, err = loadOpenCodeMessages(db, s.id, v2)
+		msgs, err = loadOpenCodeMessages(db, s.id, v2 != openCodeProjectionAbsent)
 		if err != nil {
 			return nil, nil, fmt.Errorf("loading messages for %s: %w", s.id, err)
 		}
@@ -1291,7 +1307,7 @@ func buildOpenCodeSession(
 		if err != nil {
 			return nil, nil, fmt.Errorf("loading parts for %s: %w", s.id, err)
 		}
-		_, legacy, err := buildOpenCodeParsedSession(s, cwd, projectWorktree, dbPath+"#"+s.id, fileMtime*1_000_000, machine, msgs, parts)
+		_, legacy, err := buildOpenCodeParsedSessionContext(ctx, s, cwd, projectWorktree, dbPath+"#"+s.id, fileMtime*1_000_000, machine, msgs, parts)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1310,19 +1326,20 @@ func buildOpenCodeSession(
 	for i := range parsed {
 		parsed[i].Ordinal = i
 	}
-	sess, parsed, err := finishOpenCodeSession(s, cwd, projectWorktree, dbPath+"#"+s.id, fileMtime*1_000_000, machine, parsed)
+	sess, parsed, err := finishOpenCodeSessionContext(ctx, s, cwd, projectWorktree, dbPath+"#"+s.id, fileMtime*1_000_000, machine, parsed)
 	if err != nil || sess == nil {
 		return sess, parsed, err
 	}
 	metadata := buildOpenCodeSessionFingerprint(s, cwd, projectWorktree, msgs, parts)
 	sess.File.Hash = metadata
-	if v2 {
+	if v2 != openCodeProjectionAbsent {
 		sess.File.Hash = fmt.Sprintf("opencode-v2:%x", sha256.Sum256([]byte(metadata+projectionHash)))
 	}
 	return sess, parsed, nil
 }
 
-func buildOpenCodeParsedSession(
+func buildOpenCodeParsedSessionContext(
+	ctx context.Context,
 	s openCodeSessionRow,
 	cwd, projectWorktree, filePath string,
 	fileMtime int64,
@@ -1375,10 +1392,11 @@ func buildOpenCodeParsedSession(
 		return nil, nil, nil
 	}
 
-	return finishOpenCodeSession(s, cwd, projectWorktree, filePath, fileMtime, machine, parsed)
+	return finishOpenCodeSessionContext(ctx, s, cwd, projectWorktree, filePath, fileMtime, machine, parsed)
 }
 
-func finishOpenCodeSession(
+func finishOpenCodeSessionContext(
+	ctx context.Context,
 	s openCodeSessionRow, cwd, projectWorktree, filePath string,
 	fileMtime int64, machine string, parsed []ParsedMessage,
 ) (*ParsedSession, []ParsedMessage, error) {
@@ -1397,7 +1415,7 @@ func finishOpenCodeSession(
 		}
 	}
 
-	project := ExtractProjectFromCwd(projectWorktree)
+	project := ExtractProjectFromCwdWithBranchContext(ctx, projectWorktree, "")
 	if project == "" {
 		project = "unknown"
 	}

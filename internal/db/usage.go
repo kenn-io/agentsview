@@ -104,6 +104,9 @@ type UsageFilter struct {
 	// TopSessionsTokenTypes selects the counters used for token ranking.
 	// The zero value means all token types.
 	TopSessionsTokenTypes UsageTokenTypes
+
+	// Progress reports the work this query is waiting for, without session data.
+	Progress func(string) `json:"-"`
 }
 
 // ProjectFilterLabels returns exact include labels when present, otherwise it

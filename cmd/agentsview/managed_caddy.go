@@ -70,7 +70,7 @@ func browserURLWithPlatform(
 			host = "127.0.0.1"
 		}
 	}
-	return fmt.Sprintf("http://%s:%d", host, cfg.Port)
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(cfg.Port))
 }
 
 func runningInWSL() bool {

@@ -22,6 +22,8 @@
   import { stripIdPrefix } from "../../utils/resume.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import SemanticSetupHelp from "./SemanticSetupHelp.svelte";
+  import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
+  import RangePicker from "../shared/RangePicker.svelte";
   import type { Session } from "../../api/types.js";
   import type {
     PaletteSearchResult,
@@ -29,6 +31,7 @@
   } from "../../stores/search.svelte.js";
 
   let inputRef: HTMLInputElement | undefined = $state(undefined);
+  let project = $state(sessions.filters.project);
   let selectedIndex: number = $state(0);
   let inputValue: string = $state(searchStore.query ?? "");
   let searchModeOptions = $derived<SegmentedControlOption[]>([
@@ -44,6 +47,7 @@
   onDestroy(() => {
     searchStore.clear();
     searchStore.resetSort();
+    searchStore.resetRange();
   });
 
   // Most Chinese, Japanese, and Korean words are one or two characters long,
@@ -91,7 +95,7 @@
     selectedIndex = 0;
 
     if (isServerSearchQuery(inputValue)) {
-      searchStore.search(inputValue, sessions.filters.project);
+      searchStore.search(inputValue, project);
     } else {
       searchStore.clear();
     }
@@ -118,7 +122,13 @@
     } else if (e.key === "Enter") {
       e.preventDefault();
       selectCurrent();
-    } else if (e.key === "Escape") {
+    }
+  }
+
+  // The range picker claims Escape at document level. Handle the outer
+  // palette at window level so one keypress dismisses only the top layer.
+  function handleEscape(e: KeyboardEvent) {
+    if (e.key === "Escape" && !e.defaultPrevented) {
       e.preventDefault();
       e.stopPropagation();
       close();
@@ -239,6 +249,8 @@
   });
 </script>
 
+<svelte:window onkeydown={handleEscape} />
+
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="palette-overlay"
@@ -275,6 +287,25 @@
         }}
         ariaLabel={m.command_palette_search_mode_label()}
       />
+      {#if showSearchResults}
+        <ProjectTypeahead
+          projects={sessions.projects}
+          value={project}
+          onselect={(value) => {
+            project = value;
+            searchStore.search(inputValue, project);
+            selectedIndex = 0;
+          }}
+        />
+        <RangePicker
+          selection={searchStore.range}
+          onSelect={(selection) => {
+            searchStore.setRange(selection);
+            selectedIndex = 0;
+          }}
+          align="right"
+        />
+      {/if}
       {#if showSearchResults && searchStore.mode === "fulltext"}
         <div class="palette-sort">
           <button
@@ -448,7 +479,10 @@
   }
 
   .palette-controls {
+    --typeahead-min-width: 120px;
+    --typeahead-max-width: 140px;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 8px;

@@ -110,6 +110,17 @@ add an archived or maintained mirror without replacing the original identity.
 - **Format:** Project-scoped JSONL transcripts, including subagent JSONL, with
   `user`, `assistant`, `system`, and progress records.
 
+- **Title evidence (2026-09-13):** A local corpus measure sampled 768 files and
+  found 12,261 `ai-title` records, with a mean of 15.96 records per file and a
+  maximum of 454. No sampled `aiTitle` value was empty. `custom-title`
+  occurred in 7 files, and `sessionName` did not occur. Native Claude parsing
+  adopts non-empty `aiTitle` when no `/rename` is present; this target leaves
+  `custom-title` and `sessionName` to compatible producer parsing. A title
+  appended after the session is stored is persisted by one escalating full
+  parse while the stored name is still empty, and repeated records stay
+  incremental after that parse. A transcript that is no longer being written
+  is not re-read, so it re-titles on its next full parse.
+
 - **Evidence:** `no-public-source`.
 
 - **Upstream:** The public
@@ -314,6 +325,12 @@ add an archived or maintained mirror without replacing the original identity.
   skill names from recorded paths without consulting worker-local `SKILL.md`
   frontmatter or the local parse cache; local parsing retains frontmatter
   lookup. `TestHostedSkillInferenceKeepsNamesLexical` covers this boundary.
+  Reverified 2026-08-22 against
+  local sessions launched from repository-local
+  `REPO/.claude/worktrees/<generated-name>` worktrees: the transcript retains
+  the generated worktree path after that checkout is deleted, so Agentsview
+  recognizes the anchored layout and attributes it to `REPO`. Evidence remains
+  `no-public-source`.
 
 ## OpenClaude (`openclaude`)
 
@@ -850,7 +867,9 @@ add an archived or maintained mirror without replacing the original identity.
 - **Format:** Workspace-scoped session directories containing `summary.json`, a
   derived `chat_history.jsonl` model-message cache, and an authoritative
   `updates.jsonl` stream of timestamped ACP and xAI session notifications.
+
 - **Evidence:** `source`.
+
 - **Upstream:** Clone `https://github.com/xai-org/grok-build.git` at
   `d71f6e0c1f5acc5469e503e192fe14824e6f8c90`. The
   [session guide](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-pager/docs/user-guide/17-sessions.md)
@@ -864,12 +883,14 @@ add an archived or maintained mirror without replacing the original identity.
   Agentsview maps timestamped `tool_call` and terminal `tool_call_update`
   records to the existing tool-result event model, so Activity can use tool
   completion time without adding derived transcript messages.
+
 - **Usage and cost:** Durable `turn_completed` updates may carry per-model
   input, output, cache-read, cache-creation, and reasoning tokens plus
   optional `costUsdTicks` (10^10 ticks per USD), as defined by the
   [notification schema](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/extensions/notification.rs).
   Agentsview emits one usage event per prompt and model, subtracts cache
   reads from the full input count, and uses reported cost ticks when present.
+
 - **Automation:** The first-party
   [headless guide](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)
   defines prompt flags as non-interactive invocation. The producer
@@ -887,6 +908,7 @@ add an archived or maintained mirror without replacing the original identity.
   supplies it. Agentsview treats only an explicit true value in a valid,
   session-associated file as durable automation evidence; file presence, a
   missing field, or a missing file does not classify a session as automated.
+
 - **Agentsview:** `internal/parser/grok.go`, `internal/parser/grok_provider.go`,
   colocated tests, and the sanitized upstream-generated fixtures in
   `internal/parser/testdata/grok-build`.
@@ -957,6 +979,28 @@ add an archived or maintained mirror without replacing the original identity.
   `internal/parser/opencodereview_provider.go`.
 
 ## OpenCode (`opencode`)
+
+**Projection detail check (2026-09-12):** Rechecked the pinned
+[beta read tool](https://github.com/anomalyco/opencode/blob/d461154a8d2b24c4ad24a89b589069cf08ab168c/packages/core/src/tool/plugin/read.ts#L169),
+[tool content schema](https://github.com/anomalyco/opencode/blob/d461154a8d2b24c4ad24a89b589069cf08ab168c/packages/schema/src/tool.ts#L73),
+and
+[message updater](https://github.com/anomalyco/opencode/blob/d461154a8d2b24c4ad24a89b589069cf08ab168c/packages/core/src/session/message-updater.ts#L322).
+The read tool puts image and PDF bytes in base64 data URIs, alongside their MIME
+type and filename. Tool success copies that content into the projection; tool
+errors may also retain content. Agentsview stores file-bearing results as
+ordered JSON blocks. Inline images use `input_image`/`image_url` so the existing
+image keep/drop policy owns their only payload copy. PDFs and other files keep
+their `file` records, including the full URI, MIME type, and optional name, in
+raw result JSON. Remote and filesystem URIs remain references and are not
+fetched. Text-only results retain their existing plain-text format.
+
+`testdata/opencode_v2/tool_files.json` is a synthetic fixture shaped from these
+producer sources, with a valid one-pixel PNG and a one-page PDF; it is not a
+captured CLI conversation. Parser tests cover successful and failed results.
+Normal sync tests use the captured beta database schema and check archived
+payloads, image keep/drop behavior, unchanged PDF/text files and references, and
+an unchanged second sync. Data version 108 makes existing imports eligible to
+recover omitted file payloads. This adds retention, not a PDF previewer.
 
 **V2 projection check (2026-09-08):** Cloned upstream at
 `dff8fbc149fb7492e4f07b713ac31ea70d9a541c` and checked the
@@ -1282,6 +1326,19 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 - **Agentsview:** `internal/parser/kilo.go` uses the OpenCode family parser.
   Kilo migrations mean the pinned current source must be compared with legacy
   fixtures when changing compatibility.
+
+**Projection ordering check (2026-09-14):** The
+[released reader](https://github.com/Kilo-Org/kilocode/blob/2266489ef8b5a0dba701bf335c7fa6406a72f6cd/packages/opencode/src/v2/session.ts)
+orders `session_message` rows by `time_created`, then `id`. The pinned
+[projection-order migration](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/packages/core/migration/20260603040000_session_message_projection_order/migration.sql)
+adds `seq` to that existing table. A `data` column alone therefore does not
+identify the sequenced format. Discovery and parsing inspect the ordering
+column, retain populated projections without `seq`, and still import unmatched
+legacy message/part rows when the projection table is empty or partially used.
+Projection fingerprints include the applicable ordering column. The regression
+`TestKiloSQLiteProjectionWithoutSequence` covers discovery, message ordering,
+legacy message retention, and detection of reordered projections. Sequenced
+schemas keep their existing ordering behavior.
 
 ## Kilo (legacy) (`kilo-legacy`)
 
@@ -1866,7 +1923,7 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 - **Evidence:** `source`.
 
 - **Upstream:** Clone `https://github.com/deepseek-ai/deepseek-harness.git` at
-  `56c4c3e47c195ff5edbfe3d307bdef81f3de348b` (reverified 2026-09-11). The
+  `56c4c3e47c195ff5edbfe3d307bdef81f3de348b` (reverified 2026-09-14). The
   [frozen version-0 codec](https://github.com/deepseek-ai/deepseek-harness/blob/56c4c3e47c195ff5edbfe3d307bdef81f3de348b/packages/session/session-format-v0-to-v1/src/codec.ts),
 
     [released event inventory](https://github.com/deepseek-ai/deepseek-harness/blob/56c4c3e47c195ff5edbfe3d307bdef81f3de348b/packages/session/session-format-v0-to-v1/src/dispositions.ts),
@@ -2120,7 +2177,11 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 
 - **Agentsview:** `internal/parser/kiro.go`, `internal/parser/kiro_sqlite.go`,
   and `internal/parser/kiro_provider.go`; both generations must remain
-  discoverable.
+  discoverable. SQLite project attribution uses `conversations_v2.key`, with
+  recorded environment metadata as the fallback when the key is empty. Bulk
+  and single-session parsing honor the caller's filesystem-discovery policy;
+  `TestKiroProviderSQLiteProjectDiscoveryPolicy` verifies project names and
+  filesystem probes with discovery enabled and disabled.
 
 ## Kiro IDE (`kiro-ide`)
 

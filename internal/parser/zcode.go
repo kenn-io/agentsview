@@ -249,12 +249,10 @@ func parseZCodeSession(
 }
 
 func openZCodeDB(dbPath string, stableSnapshot bool) (*sql.DB, error) {
-	immutable := "0"
-	if stableSnapshot {
-		immutable = "1"
-	}
-	dsn := "file:" + sqliteURIPath(dbPath) + "?mode=ro&immutable=" + immutable + "&_busy_timeout=3000"
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := openSQLiteReadOnly(dbPath, sqliteReadOptions{
+		stableSnapshot: stableSnapshot,
+		busyTimeoutMS:  3000,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("opening zcode db %s: %w", dbPath, err)
 	}
@@ -955,10 +953,8 @@ func zcodeSessionFileMtime(
 	// provider's own read connection included, so folding its mtime into the
 	// fingerprint made every scan report the whole container as changed.
 	// Content changes always touch the main file or the -wal sibling.
-	for _, path := range []string{dbPath, dbPath + "-wal"} {
-		if info, err := os.Stat(path); err == nil {
-			maxMtime = max(maxMtime, info.ModTime().UnixNano())
-		}
+	if physicalMtime, err := sqliteDBCompositeMtime(dbPath, sqliteDBJournalSuffixes); err == nil {
+		maxMtime = max(maxMtime, physicalMtime)
 	}
 	return maxMtime, nil
 }

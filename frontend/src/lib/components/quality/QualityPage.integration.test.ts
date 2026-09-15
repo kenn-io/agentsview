@@ -135,6 +135,7 @@ vi.mock("../../paraglide/messages.js", () => {
 
 vi.mock("../../utils/markdown.js", () => ({
   renderMarkdown: (content: string) => content,
+  loadAssetImages: () => ({ destroy() {} }),
 }));
 
 vi.mock("../../utils/highlight-fences.js", () => ({

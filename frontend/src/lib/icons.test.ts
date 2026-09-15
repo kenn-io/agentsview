@@ -67,6 +67,7 @@ const approvedIconNames = [
   "UploadIcon",
   "UserRoundIcon",
   "UsersRoundIcon",
+  "WholeWordIcon",
   "XIcon",
 ] as const;
 

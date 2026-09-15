@@ -11,4 +11,5 @@ export type SettingsResponseToolResultImages =
 export const SettingsResponseToolResultImages = {
   keep: "keep",
   drop: "drop",
+  offload: "offload",
 } as const;

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { onDestroy, tick, untrack } from "svelte";
+  import { onDestroy } from "svelte";
   import { copyToClipboard } from "../../utils/clipboard.js";
-  import { applyHighlight, applyMarks, clearMarks, escapeHTML } from "../../utils/highlight.js";
+  import { searchBlock } from "../../search/session-block.svelte.js";
   import { highlightToHtml } from "../../utils/syntax-highlight.js";
   import { CopyButton } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
@@ -9,67 +9,41 @@
   interface Props {
     content: string;
     language?: string;
-    highlightQuery?: string;
-    isCurrentHighlight?: boolean;
+    searchKey?: string;
   }
 
-  let { content, language, highlightQuery = "", isCurrentHighlight = false }: Props = $props();
+  let { content, language, searchKey }: Props = $props();
   let copied = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
-
   let highlighted = $state<string | null>(null);
-  let preEl = $state<HTMLElement | undefined>(undefined);
 
   $effect(() => {
+    const source = content;
+    const lang = language;
     highlighted = null;
-    if (!language) return;
-
-    const effectContent = content;
-    const effectLang = language;
+    if (!lang) return;
     let cancelled = false;
-
-    highlightToHtml(effectContent, effectLang).then(async (html) => {
-      if (cancelled) return;
-      highlighted = html;
-      // Flush the {@html} swap to the DOM before re-applying marks.
-      await tick();
-      if (cancelled) return;
-      // Read current prop values after the await — intentionally untracked
-      // because we are inside an async continuation, not during the sync
-      // reactive evaluation.
-      const q = untrack(() => highlightQuery);
-      const current = untrack(() => isCurrentHighlight);
-      const el = untrack(() => preEl);
-      if (el && q.trim()) {
-        clearMarks(el);
-        applyMarks(el, q, current);
-      }
+    void highlightToHtml(source, lang).then((html) => {
+      if (!cancelled) highlighted = html;
+    }).catch(() => {
+      // Keep the original text if the optional syntax highlighter fails.
     });
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   });
 
-  // Copy stays controlled (rather than kit-ui CopyButton's self-managed
-  // text mode) so it goes through the app's clipboard util.
+  // Keep copy controlled through the application's clipboard utility.
   async function handleCopy() {
     const ok = await copyToClipboard(content);
     if (!ok) return;
-
     clearTimeout(copyTimer);
     copied = true;
-    copyTimer = setTimeout(() => {
-      copied = false;
-    }, 1500);
+    copyTimer = setTimeout(() => { copied = false; }, 1500);
   }
 
-  onDestroy(() => {
-    clearTimeout(copyTimer);
-  });
+  onDestroy(() => { clearTimeout(copyTimer); });
 </script>
 
-<!-- kit-ui-check-ignore: deliberately not kit-ui CodeBlock — copy must stay controlled through utils/clipboard.js (kit CodeBlock hardcodes self-managed CopyButton text mode) and the pre element hosts in-session find marks -->
+<!-- kit-ui-check-ignore: controlled clipboard behavior and a search attachment on pre require the app-owned code block. -->
 <div class="code-block">
   <CopyButton
     class="code-copy"
@@ -84,15 +58,11 @@
   {#if language}
     <div class="code-lang">{language}</div>
   {/if}
-  <pre
-    class="code-content"
-    bind:this={preEl}
-    use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content }}
-  ><code>{@html highlighted ?? escapeHTML(content)}</code></pre>
+  <pre class="code-content" {@attach searchBlock(searchKey)}><code>{#if highlighted !== null}{@html highlighted}{:else}{content}{/if}</code></pre>
 </div>
 
 <style>
-  /* kit-ui-check-ignore: app-owned code block (controlled copy + search marks), see markup note above */
+  /* kit-ui-check-ignore: app-owned code block, see markup note above */
   .code-block {
     position: relative;
     background: var(--code-bg);
@@ -100,19 +70,14 @@
     margin: 4px 0;
     overflow: hidden;
   }
-
   :global(.code-copy.kit-copy-btn) {
     position: absolute;
     top: 6px;
     right: 6px;
     z-index: 1;
   }
-
-  /* kit-ui-check-ignore: app-owned code block (controlled copy + search marks), see markup note above */
-  .code-block:hover :global(.code-copy.kit-copy-btn) {
-    opacity: 1;
-  }
-
+  /* kit-ui-check-ignore: app-owned code block, see markup note above */
+  .code-block:hover :global(.code-copy.kit-copy-btn) { opacity: 1; }
   .code-lang {
     padding: 4px 12px;
     font-family: var(--font-mono);
@@ -120,11 +85,8 @@
     font-weight: 500;
     color: var(--code-text);
     opacity: 0.5;
-    /* --code-bg is dark in both themes, so derive the hairline from
-       --code-text rather than a theme-flipping border token. */
     border-bottom: 1px solid color-mix(in srgb, var(--code-text) 8%, transparent);
   }
-
   .code-content {
     padding: 12px 16px;
     font-family: var(--font-mono);
@@ -133,14 +95,8 @@
     color: var(--code-text);
     overflow-x: auto;
   }
-
-  .code-content code {
-    font-family: inherit;
-  }
-
+  .code-content code { font-family: inherit; }
   @media (max-width: 760px) {
-    .code-content {
-      max-width: calc(100vw - 32px);
-    }
+    .code-content { max-width: calc(100vw - 32px); }
   }
 </style>

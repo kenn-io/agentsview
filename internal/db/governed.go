@@ -16,6 +16,7 @@ type MappingEvaluationRow struct {
 	Cwd             string
 	FilePath        string
 	SourceArchiveID string
+	ProjectAssigned bool
 }
 
 // GovernedRuleKey identifies a rule across archives.
@@ -127,6 +128,7 @@ func evaluateGovernedGroup(
 			project:  row.Project,
 			cwd:      row.Cwd,
 			filePath: row.FilePath,
+			assigned: row.ProjectAssigned,
 		}
 	}
 	applyWorktreeMappingMatchCwdFromSiblings(sessionRows,
@@ -139,6 +141,9 @@ func evaluateGovernedGroup(
 	)
 
 	for _, row := range sessionRows {
+		if row.assigned {
+			continue
+		}
 		recordGovernedRow(archiveID, mappings, row, result)
 	}
 }

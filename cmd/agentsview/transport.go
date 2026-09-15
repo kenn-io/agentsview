@@ -67,6 +67,7 @@ func autoStartBackgroundServe(
 type transport struct {
 	Mode               transportMode
 	URL                string
+	BrowserURL         string
 	ReadOnly           bool // daemon runtime ReadOnly flag (true for pg serve)
 	DirectReadOnly     bool // writable daemon owns DB but is not reachable
 	DirectIncompatible bool // live daemon owns DB but cannot serve this client
@@ -347,10 +348,21 @@ func waitForBackgroundLaunchBeforeArchiveWrite(
 	if waitTimeout <= 0 {
 		waitTimeout = backgroundAutoStartReadyTimeout
 	}
-	deadline := time.Now().Add(waitTimeout)
+	started := time.Now()
+	deadline := started.Add(waitTimeout)
+	progress := daemonLaunchProgressWriter{w: os.Stderr}
+	var lastUpdate time.Time
 	for isBackgroundLaunchActive(dataDir) {
 		if err := ctx.Err(); err != nil {
 			return true, err
+		}
+		if IsDaemonStarting(dataDir) {
+			state := readStartupState(dataDir)
+			if state != nil && state.UpdatedAt.After(lastUpdate) {
+				lastUpdate = state.UpdatedAt
+				deadline = time.Now().Add(waitTimeout)
+			}
+			progress.progress(state, startupSnapshotElapsed(state, started, time.Now()))
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
@@ -423,10 +435,11 @@ func daemonAutostartDisabled() bool {
 // resolved daemon runtime.
 func transportFromRuntime(rt *DaemonRuntime) transport {
 	return transport{
-		Mode:     transportHTTP,
-		URL:      urlFromDaemonRuntime(rt),
-		ReadOnly: rt.ReadOnly,
-		Runtime:  rt,
+		Mode:       transportHTTP,
+		URL:        urlFromDaemonRuntime(rt),
+		BrowserURL: rt.BrowserURL,
+		ReadOnly:   rt.ReadOnly,
+		Runtime:    rt,
 	}
 }
 
@@ -453,7 +466,7 @@ func newService(
 ) (service.SessionService, func(), error) {
 	switch tr.Mode {
 	case transportHTTP:
-		return service.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly),
+		return service.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
 			func() {}, nil
 	default:
 		if err := directIncompatibleDaemonError(tr); err != nil {

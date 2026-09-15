@@ -17,19 +17,22 @@ type dbBackedSessionMeta struct {
 }
 
 type dbBackedProviderSpec struct {
-	agent        AgentType
-	dbName       string
-	findDB       func(string) string
-	streamMeta   func(context.Context, string, func(dbBackedSessionMeta) error) error
-	metaForID    func(context.Context, string, string) (dbBackedSessionMeta, bool, error)
-	parse        func(context.Context, string, string, string) ([]ParseResult, error)
-	normalizeRaw func(string) string
-	caps         Capabilities
+	agent           AgentType
+	dbName          string
+	findDB          func(string) string
+	streamMeta      func(context.Context, string, func(dbBackedSessionMeta) error) error
+	metaForID       func(context.Context, string, string) (dbBackedSessionMeta, bool, error)
+	fingerprintHash func(context.Context, string, string) (string, bool, error)
+	parse           func(context.Context, string, string, string) ([]ParseResult, error)
+	normalizeRaw    func(string) string
+	caps            Capabilities
 }
 
 type dbBackedProviderFactory struct {
-	def  AgentDef
-	spec func(bool) dbBackedProviderSpec
+	def            AgentDef
+	spec           func(bool) dbBackedProviderSpec
+	normalizeRoots func([]string) []string
+	tracker        *sqliteChangeTracker
 }
 
 func (f dbBackedProviderFactory) Definition() AgentDef {
@@ -42,13 +45,19 @@ func (f dbBackedProviderFactory) Capabilities() Capabilities {
 
 func (f dbBackedProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
+	if f.normalizeRoots != nil {
+		cfg.Roots = f.normalizeRoots(cfg.Roots)
+	}
 	spec := f.spec(cfg.StableSourceSnapshots)
+	sources := newDBBackedSourceSet(spec, cfg.Roots)
+	sources.tracker = f.tracker
+	sources.stableSnapshot = cfg.StableSourceSnapshots
 	return &dbBackedProvider{
 		Def:     cloneAgentDef(f.def),
 		Caps:    withDBBackedRawCapture(spec.caps),
 		Config:  cfg,
 		spec:    spec,
-		sources: newDBBackedSourceSet(spec, cfg.Roots),
+		sources: sources,
 	}
 }
 
@@ -363,6 +372,10 @@ type dbBackedSource struct {
 type dbBackedSourceSet struct {
 	spec  dbBackedProviderSpec
 	roots []string
+	// A tracker opts into insert-only watcher work. Edits and deletions still
+	// rely on reconciliation; providers without one keep full event listings.
+	tracker        *sqliteChangeTracker
+	stableSnapshot bool
 }
 
 func newDBBackedSourceSet(
@@ -382,6 +395,20 @@ func (s dbBackedSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 func (s dbBackedSourceSet) DiscoverEach(
 	ctx context.Context, yield func(SourceRef) error,
 ) error {
+	// Capture every root before enumeration, and publish only after the whole
+	// pass succeeds. Rows written during discovery remain visible to watchers.
+	var watermarks []sqliteDiscoveryWatermark
+	if s.tracker != nil {
+		for _, root := range s.roots {
+			if dbPath := s.spec.findDB(root); dbPath != "" {
+				state, err := s.tracker.read(ctx, dbPath, s.stableSnapshot)
+				if err != nil {
+					return err
+				}
+				watermarks = append(watermarks, sqliteDiscoveryWatermark{dbPath: dbPath, state: state})
+			}
+		}
+	}
 	for _, root := range s.roots {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -403,6 +430,9 @@ func (s dbBackedSourceSet) DiscoverEach(
 		if err != nil {
 			return err
 		}
+	}
+	if s.tracker != nil {
+		s.tracker.storeDiscoveryWatermarks(watermarks)
 	}
 	return nil
 }
@@ -438,6 +468,35 @@ func (s dbBackedSourceSet) SourcesForChangedPath(
 		if !ok {
 			continue
 		}
+		var snapshot sqliteTrackedDatabase
+		storedPaths := req.StoredSourcePaths
+		if s.tracker != nil {
+			if !IsRegularFile(dbPath) {
+				// A vanished database cannot prove that its archived members
+				// were deleted. Keep them without enumerating stored hints.
+				return nil, nil
+			}
+			ids, cold, state, err := s.tracker.changedSessionIDs(ctx, dbPath, s.stableSnapshot)
+			if err != nil {
+				return nil, err
+			}
+			if !cold {
+				sources := make([]SourceRef, 0, len(ids))
+				for _, id := range ids {
+					meta, found, err := s.spec.metaForID(ctx, dbPath, id)
+					if err != nil {
+						return nil, err
+					}
+					if found {
+						sources = append(sources, s.newSourceRef(root, dbPath, meta.SessionID, meta.VirtualPath))
+					}
+				}
+				sortJSONLSources(sources)
+				return sources, nil
+			}
+			snapshot = state
+			storedPaths = nil
+		}
 		var sources []SourceRef
 		seen := make(map[string]struct{})
 		err := s.spec.streamMeta(ctx, dbPath, func(meta dbBackedSessionMeta) error {
@@ -451,7 +510,7 @@ func (s dbBackedSourceSet) SourcesForChangedPath(
 		if err != nil {
 			return nil, err
 		}
-		for _, path := range req.StoredSourcePaths {
+		for _, path := range storedPaths {
 			ref, ok := s.sourceRef(root, path, true)
 			if !ok {
 				continue
@@ -463,6 +522,9 @@ func (s dbBackedSourceSet) SourcesForChangedPath(
 			addJSONLSource(ref, &sources, seen)
 		}
 		sortJSONLSources(sources)
+		if s.tracker != nil {
+			s.tracker.commit(dbPath, snapshot)
+		}
 		return sources, nil
 	}
 	return nil, nil
@@ -569,13 +631,20 @@ func (s dbBackedSourceSet) Fingerprint(
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
+	fingerprint := SourceFingerprint{Key: key}
 	if found {
-		return SourceFingerprint{
-			Key:     key,
-			MTimeNS: meta.FileMtime,
-		}, nil
+		fingerprint.MTimeNS = meta.FileMtime
 	}
-	return SourceFingerprint{Key: key}, nil
+	if s.spec.fingerprintHash != nil && IsRegularFile(src.DBPath) {
+		hash, found, err := s.spec.fingerprintHash(ctx, src.DBPath, src.SessionID)
+		if err != nil {
+			return SourceFingerprint{}, err
+		}
+		if found {
+			fingerprint.Hash = hash
+		}
+	}
+	return fingerprint, nil
 }
 
 func (s dbBackedSourceSet) sourceFromRef(source SourceRef) (dbBackedSource, bool) {

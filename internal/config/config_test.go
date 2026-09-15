@@ -166,6 +166,7 @@ func TestToolResultImagesConfig(t *testing.T) {
 	}{
 		{name: "missing defaults to keep", want: ToolResultImagesKeep},
 		{name: "keep trims and folds", toml: `tool_result_images = " KEEP "`, want: ToolResultImagesKeep},
+		{name: "offload", toml: `tool_result_images = "offload"`, want: ToolResultImagesOffload},
 		{name: "drop trims and folds", toml: `tool_result_images = " Drop "`, want: ToolResultImagesDrop},
 	}
 	for _, tt := range tests {
@@ -180,17 +181,17 @@ func TestToolResultImagesConfig(t *testing.T) {
 	cfg, err := Default()
 	require.NoError(t, err)
 	require.EqualError(t, cfg.applyConfigTOML(`tool_result_images = "discard"`),
-		`tool_result_images must be "keep" or "drop" (got "discard")`)
+		`tool_result_images must be "keep", "drop", or "offload" (got "discard")`)
 
 	dir := setupTestEnv(t)
 	cfg.DataDir = dir
 	require.NoError(t, cfg.SaveSettings(map[string]any{
-		"tool_result_images": ToolResultImagesDrop,
+		"tool_result_images": ToolResultImagesOffload,
 	}))
-	assert.Equal(t, ToolResultImagesDrop, cfg.ToolResultImages)
+	assert.Equal(t, ToolResultImagesOffload, cfg.ToolResultImages)
 	loaded, err := LoadMinimal()
 	require.NoError(t, err)
-	assert.Equal(t, ToolResultImagesDrop, loaded.ToolResultImages)
+	assert.Equal(t, ToolResultImagesOffload, loaded.ToolResultImages)
 }
 
 func setTestHome(t *testing.T, home string) {

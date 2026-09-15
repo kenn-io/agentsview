@@ -22,7 +22,7 @@ func (s *Store) ListArchiveWorktreeCandidates(
 	if strings.TrimSpace(request.ProjectKey) == "" {
 		return nil, fmt.Errorf("project_key is required")
 	}
-	sessions, err := s.archiveWorktreeCandidateSessions(ctx)
+	sessions, err := s.archiveWorktreeCandidateSessions(ctx, request.ProjectDateFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -63,12 +63,14 @@ type archiveCandidateSessionRef struct {
 // both the project inventory and SQLite candidate selection.
 func (s *Store) archiveWorktreeCandidateSessions(
 	ctx context.Context,
+	filter db.ProjectDateFilter,
 ) ([]archiveCandidateSessionRef, error) {
+	where, args := db.BuildSessionBaseFilterSQL(filter.SessionFilter(), db.DuckDBQueryDialect())
 	rows, err := s.queryContext(ctx, `
 		SELECT id, project
 		FROM sessions
-		WHERE deleted_at IS NULL
-		ORDER BY id`)
+		WHERE `+where+`
+		ORDER BY id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb archive worktree candidate sessions: %w", err)
 	}

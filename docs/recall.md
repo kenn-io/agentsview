@@ -1,7 +1,12 @@
 ---
 title: Recall (Experimental)
-description: Experimental, provenance-linked durable knowledge over the local session archive
+description: Find reusable lessons from past sessions, with links to the supporting messages
 ---
+
+Recall helps you reuse facts, procedures, preferences, and warnings from past
+agent sessions. It stores them as entries with links to the messages that
+support each claim. You can browse these entries, search them, or collect them
+into a task brief.
 
 !!! warning "Active research"
 
@@ -11,15 +16,9 @@ description: Experimental, provenance-linked durable knowledge over the local se
     them. The session archive remains authoritative and must not be deleted,
     truncated, or recreated to reset Recall.
 
-Recall is an experimental layer for durable, provenance-linked knowledge from
-past agent sessions. It stores compact facts, procedures, preferences, and
-warnings as entries that can be listed, queried, and packed into a task brief.
-
-This is different from [semantic search](/docs/semantic-search/). Semantic
-search finds relevant passages in the transcript archive. Recall searches a
-separate set of distilled entries and keeps the transcript region supporting
-each entry as evidence. Recall queries support lexical, vector, and hybrid
-retrieval; the default remains lexical while this feature is experimental.
+[Semantic search](/docs/semantic-search/) finds passages in transcripts. Recall
+searches the extracted entries. It can match words (`lexical`, the default),
+meaning (`vector`), or both (`hybrid`).
 
 ## Current surface
 

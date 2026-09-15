@@ -1,18 +1,21 @@
 ---
 title: AgentsView Documentation
-description: Documentation map and mental model for AgentsView, the local-first system of record for AI coding agent sessions
+description: Find the guide for browsing, searching, reporting on, and maintaining your agent session archive
 ---
 
 # AgentsView Documentation
 
-AgentsView is a local-first system of record for AI coding agent sessions. A
-background daemon syncs sessions from more than 60 agent formats into a SQLite
-archive on your machine, and serves them through a web UI, desktop app, CLI,
-REST API, and MCP server.
+AgentsView lets you browse, search, and track costs across your AI coding
+sessions. A background server imports recorded sessions into a SQLite database
+on your machine. The web interface, desktop app, command line, and APIs read
+that archive.
 
 New here? The [product overview](/) explains what AgentsView is for, and the
 [five-minute guide](/guide/) walks the whole loop with screenshots. The pages
-here go deeper: a task-oriented reference for every feature.
+here explain how to use and maintain each feature.
+
+These guides follow `main` and may include changes newer than the latest
+release. Check the [changelog](/docs/changelog/) for what each release includes.
 
 <p class="hero-actions">
   <a class="md-button md-button--primary" href="/docs/quickstart/">Quick Start</a>
@@ -35,33 +38,25 @@ here go deeper: a task-oriented reference for every feature.
 | Configure discovery, paths, and settings          | [Configuration](/docs/configuration/)                                                                                                                           |
 | Look up a command or flag                         | [CLI Reference](/docs/commands/)                                                                                                                                |
 
-## The mental model
+## How the archive fits together
 
-**The daemon owns the archive.** The desktop app and freshness-sensitive CLI
-commands share one detached local daemon that holds the writable SQLite
-connection, watches your agents' session directories, and syncs new messages as
-they are written. Read-only commands attach to a warm daemon or fall back to a
-direct read-only view, so one-off scripts stay fast. See
+**The daemon imports your sessions.** This background server owns the writable
+archive and watches your agents' directories for new messages. The desktop app
+and commands that need the server start it when required. Some diagnostic
+commands can read the archive directly. See
 [`agentsview daemon`](/docs/commands/#agentsview-daemon).
 
-**SQLite is the system of record.** Every parsed session lives in
-`~/.agentsview/` with full-text indexes. Optional backends extend it:
+**SQLite keeps your session history.** Parsed sessions live in `~/.agentsview/`
+with full-text indexes. Optional backends extend it:
 [PostgreSQL](/docs/pg-sync/) for a shared team view and [DuckDB](/docs/duckdb/)
 for analytical reads. Both are mirrors pushed from SQLite, never the source of
 truth.
 
-**Everything is an interface over the same archive.** The web UI, desktop app,
-CLI reports, REST endpoints, SSE streams, and MCP tools all read the same data,
-so people and agents see the same history.
-
-## How it works
-
 <img src="/docs/assets/static/architecture.svg" alt="AgentsView architecture: agent sessions sync into SQLite with FTS5 search, served via REST API, SSE events, and embedded Svelte SPA" style="width: 100%; max-width: 960px; margin: 1.5rem auto; display: block;" />
 
-AgentsView watches your agent session directories for changes, parses each
-agent's format, and stores structured data in SQLite with full-text search
-indexes. The embedded web frontend provides browsing, search, and analytics over
-the REST API.
+Use [Configuration](/docs/configuration/) to choose source directories and how
+much content to retain. Use [Data](/docs/data/#storage-maintenance) to manage
+archive size.
 
 ## Privacy
 

@@ -133,6 +133,16 @@ example, after a schema reset or when message content was rewritten in place.
 If any sessions fail to push, the watermark is not advanced so they are retried
 on the next run. The exit code is 1 when any errors occur, 0 otherwise.
 
+When a daemon handles an incremental push against a current archive, an
+incomplete local ingestion pass still allows committed sessions to be copied.
+The daemon logs the incomplete ingestion pass, while the command returns the
+mirror push result, including any row errors or deferred vectors. Local sync
+retries failed sources independently; a completed mirror push does not trigger
+an immediate mirror retry just because ingestion was incomplete. A failed full
+resync still blocks the push. Watcher batches keep their acknowledgement rules;
+the startup and periodic unscoped pushes allow healthy archived sessions to
+catch up.
+
 #### Automatic Push Watcher
 
 As of 0.32.0, `agentsview pg push --watch` runs a long-lived auto-push daemon in

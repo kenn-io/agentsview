@@ -1,82 +1,50 @@
 import { highlightToHtml } from "./syntax-highlight.js";
-import { applyMarks } from "./highlight.js";
 
 export interface HighlightCodeFencesParams {
-  /** Markdown source rendered via {@html}; passing it makes Svelte call
-   * update() when {@html} replaces the DOM children. */
-  q?: string;
+  /** Markdown source: changes cause Svelte to update the action after rendering. */
   content: string;
-  current?: boolean;
 }
 
-/**
- * Svelte action that applies Shiki highlighting to labeled fenced code
- * blocks in rendered markdown, after DOMPurify sanitization. Unlabeled or
- * unsupported fences are left as plain escaped text. Re-applies search
- * <mark> nodes after each swap since innerHTML replacement wipes them.
- */
-export function highlightCodeFences(node: HTMLElement, params: HighlightCodeFencesParams) {
-  // Per-element cancel functions that mark in-flight highlights as stale.
+/** Apply optional syntax coloring without owning search state or rewriting text. */
+export function highlightCodeFences(node: HTMLElement, _params: HighlightCodeFencesParams) {
   const cancels = new Map<HTMLElement, () => void>();
-
   function cancelAll() {
     for (const cancel of cancels.values()) cancel();
     cancels.clear();
   }
-
-  function highlightNode(codeEl: HTMLElement, lang: string, q: string, isCurrent: boolean) {
+  function highlightNode(codeEl: HTMLElement, lang: string) {
     cancels.get(codeEl)?.();
-
     let stale = false;
     cancels.set(codeEl, () => {
       stale = true;
     });
-
-    // Read plain text BEFORE any innerHTML swap so we capture the
-    // DOMPurify-sanitized text content, not previous Shiki spans.
     const code = codeEl.textContent ?? "";
-
-    highlightToHtml(code, lang)
+    void highlightToHtml(code, lang)
       .then((html) => {
         if (stale) return;
         cancels.delete(codeEl);
-        if (html === null) return;
-
-        codeEl.innerHTML = html;
-
-        // Re-apply search marks to this code element after the innerHTML swap
-        // wiped any <mark> nodes that applyHighlight had placed inside it.
-        if (q.trim()) applyMarks(codeEl, q, isCurrent);
+        if (html !== null) codeEl.innerHTML = html;
+        // The block attachment observes this DOM replacement independently.
       })
       .catch(() => {
-        // Any error: leave the plain escaped text as-is.
-        cancels.delete(codeEl);
+        if (!stale) cancels.delete(codeEl);
       });
   }
-
-  function run(p: HighlightCodeFencesParams) {
+  function run() {
     cancelAll();
-
-    const q = p.q ?? "";
-    const isCurrent = p.current ?? false;
-
+    // HTML parsing splits large text into adjacent nodes. Merging them avoids
+    // slow WebKit line wrapping for large tool-image fallback payloads.
+    node.normalize();
     node.querySelectorAll<HTMLElement>("pre > code[class*='language-']").forEach((codeEl) => {
-      const cls = codeEl.className;
-      const match = /\blanguage-(\S+)/.exec(cls);
-      const lang = match?.[1] ?? "";
-      if (!lang) return;
-      highlightNode(codeEl, lang, q, isCurrent);
+      const lang = /\blanguage-(\S+)/.exec(codeEl.className)?.[1];
+      if (lang) highlightNode(codeEl, lang);
     });
   }
-
-  run(params);
-
+  run();
   return {
-    update(p: HighlightCodeFencesParams) {
-      run(p);
+    update(_next: HighlightCodeFencesParams) {
+      run();
     },
-    destroy() {
-      cancelAll();
-    },
+    destroy: cancelAll,
   };
 }

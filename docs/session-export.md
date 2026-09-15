@@ -3,10 +3,9 @@ title: Session Export
 description: Content-free session summary exports for scripting and analytics
 ---
 
-`agentsview export sessions` emits versioned, content-free session summaries
-from the local archive. It is intended for scripts, BI pipelines, and archive
-handoffs that need session metadata, usage totals, pricing provenance, and
-project identity without transcript text.
+Export session metadata and token and cost totals without transcript text. Use
+`agentsview export sessions` for reporting scripts that need pricing and project
+identity. JSON produces one document; NDJSON writes one JSON object per line.
 
 ## Commands
 
@@ -227,11 +226,10 @@ all corrections to old sessions.
 
 ## Content Boundary
 
-Session summary export does not include message content. V1 intentionally omits
-transcript text, first-message text, thinking text, tool input, tool output, and
-raw transcript bytes. It may include metadata that came from sessions, such as
-sanitized project labels, branch names, model names, token totals, and cost
-totals. It does not emit raw working-directory paths.
+Session summary export omits transcript text, first-message text, thinking text,
+tool input, tool output, and raw transcript bytes. It may include metadata that
+came from sessions, such as sanitized project labels, branch names, model names,
+token totals, and cost totals. It does not emit raw working-directory paths.
 
 ## Project Evidence
 
@@ -355,7 +353,7 @@ exact microdollar money objects, and version 4 adds explicit
 reported-to-priced-model resolutions with complete request-pricing bands and
 application counts. Version 5 selects complete Claude snapshots before generic
 deduplication across pagination and session filters, retains earliest-session
-attribution, and includes the maximum observed web-search count in pricing. The
+attribution, and includes the maximum observed web-search count in pricing.
 Version 6 applies provider-specific billing identity to computed usage and
 preserves reported cost rows and custom pricing overrides. Costs from v5 and v6
 must not be compared as the same billing semantics. Publishing `archive_id` is

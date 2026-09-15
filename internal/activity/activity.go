@@ -35,6 +35,7 @@ type SessionMeta struct {
 	SessionID   string
 	Title       string
 	Project     string
+	ProjectKey  string // optional canonical key for joint export grouping
 	Agent       string
 	Machine     string
 	StartedAt   string // RFC3339 or ""
@@ -77,6 +78,7 @@ type UsageRow struct {
 	Cost              money.Money
 	CostSource        export.CostSource
 	SessionCost       *money.Money
+	CostAllocated     bool // an authoritative session total was apportioned
 	Priced            bool
 	Contributes       bool
 	Agent             string
@@ -246,6 +248,7 @@ type Report struct {
 	SessionsNextCursor string                            `json:"sessions_next_cursor,omitempty"`
 	SessionsTotal      int                               `json:"sessions_total"`
 	Intervals          []ReportInterval                  `json:"-"`
+	JointActivity      []JointActivityCell               `json:"-"`
 }
 
 func SanitizeProjectLabels(
@@ -498,6 +501,19 @@ func (s SessionMeta) kind() sessionKind {
 		return automatedSession
 	}
 	return interactiveSession
+}
+
+// ActivityCategory names the session's disjoint activity category for exports.
+// Delegation takes precedence over the independent automation flag.
+func (s SessionMeta) ActivityCategory() string {
+	switch s.kind() {
+	case subagentSession:
+		return "subagent"
+	case automatedSession:
+		return "automated"
+	default:
+		return "interactive"
+	}
 }
 
 // Sessions absent from the map are treated as interactive.

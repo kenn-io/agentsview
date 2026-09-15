@@ -159,6 +159,10 @@ func (e *Engine) computeSignalsAndSecretsForStorage(
 ) (db.SessionSignalUpdate, []db.SecretFinding) {
 	if e.db.ArchiveContent().OmitsToolContent() {
 		s, msgs = e.db.ProjectSessionForStorage(s, msgs)
+	} else {
+		msgs, _ = e.db.ProjectToolResultImagesWithPolicy(
+			msgs, e.toolResultImages,
+		)
 	}
 	return computeSignalsAndSecrets(s, msgs)
 }
@@ -171,6 +175,10 @@ func (e *Engine) computeFullSignalsAndSecretsForStorage(
 	if e.db.ArchiveContent().OmitsToolContent() {
 		s, msgs = e.db.ProjectSessionForStorage(s, msgs)
 		failures = nil
+	} else {
+		msgs, _ = e.db.ProjectToolResultImagesWithPolicy(
+			msgs, e.toolResultImages,
+		)
 	}
 	return computeFullSignalsAndSecrets(s, msgs, failures)
 }

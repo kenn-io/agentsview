@@ -262,6 +262,61 @@ export const postApiV1SettingsDuplicateGroupsRebuild = async (
   });
 };
 
+export const getDeleteApiV1SettingsSessionProjectAssignmentsBySessionIdUrl = ({
+  sessionId,
+}: DeleteApiV1SettingsSessionProjectAssignmentsBySessionIdPathParameters) => {
+  return `/api/v1/settings/session-project-assignments/${encodeURIComponent(String(sessionId))}`;
+};
+
+/**
+ * @summary Use automatic project assignment for one session
+ */
+export const deleteApiV1SettingsSessionProjectAssignmentsBySessionId = async (
+  { sessionId }: DeleteApiV1SettingsSessionProjectAssignmentsBySessionIdPathParameters,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<DbClearedSessionProjectAssignment> => {
+  return orvalFetch<DbClearedSessionProjectAssignment>(
+    getDeleteApiV1SettingsSessionProjectAssignmentsBySessionIdUrl({ sessionId }),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getPutApiV1SettingsSessionProjectAssignmentsBySessionIdUrl = ({
+  sessionId,
+}: PutApiV1SettingsSessionProjectAssignmentsBySessionIdPathParameters) => {
+  return `/api/v1/settings/session-project-assignments/${encodeURIComponent(String(sessionId))}`;
+};
+
+/**
+ * @summary Assign one session to a project
+ */
+export const putApiV1SettingsSessionProjectAssignmentsBySessionId = async (
+  { sessionId }: PutApiV1SettingsSessionProjectAssignmentsBySessionIdPathParameters,
+  sessionProjectAssignmentRequest: SessionProjectAssignmentRequest,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<DbSessionProjectAssignment> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    return h;
+  };
+  return orvalFetch<DbSessionProjectAssignment>(
+    getPutApiV1SettingsSessionProjectAssignmentsBySessionIdUrl({ sessionId }),
+    {
+      ...options,
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
+      body: JSON.stringify(sessionProjectAssignmentRequest),
+    },
+  );
+};
+
 export const getGetApiV1SettingsWorktreeMappingsUrl = (
   params?: GetApiV1SettingsWorktreeMappingsParams,
 ) => {

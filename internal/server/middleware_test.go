@@ -189,7 +189,7 @@ func TestCSPMiddlewareSetsHeaderOnNonAPIRoutes(t *testing.T) {
 				"default-src":     "'self' http://127.0.0.1:8081",
 				"script-src":      "'self' http://127.0.0.1:8081",
 				"connect-src":     "'self' http: https: ws: wss:",
-				"img-src":         "'self' http://127.0.0.1:8081 data:",
+				"img-src":         "'self' http://127.0.0.1:8081 data: blob:",
 				"style-src":       "'self' http://127.0.0.1:8081 'unsafe-inline' https://fonts.googleapis.com",
 				"font-src":        "'self' http://127.0.0.1:8081 data: https://fonts.gstatic.com",
 				"object-src":      "'none'",
@@ -311,7 +311,7 @@ func TestBuildCSPPolicyPinsPublicURLOrigin(t *testing.T) {
 		directives["script-src"],
 	)
 	assert.Equal(t,
-		"'self' https://agentsview.example.com data:",
+		"'self' https://agentsview.example.com data: blob:",
 		directives["img-src"],
 	)
 	assert.NotContains(t, directives["default-src"], "0.0.0.0")

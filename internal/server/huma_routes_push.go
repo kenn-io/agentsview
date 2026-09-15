@@ -431,11 +431,33 @@ func (s *Server) syncThenRunForPush(
 		return err
 	}
 	if s.localResyncRunner == nil || (!full && !local.NeedsResync()) {
+		currentArchive := !full && !local.NeedsResync()
 		stats, err := engine.SyncThenRun(ctx, full, nil, work)
-		if err == nil {
-			err = requireProcessingComplete(stats)
+		if err != nil || stats.ProcessingComplete() {
+			return err
 		}
-		return err
+		incomplete := requireProcessingComplete(stats)
+		if !currentArchive {
+			return incomplete
+		}
+		// Local sync owns retries for failed sources. An unscoped mirror push
+		// must report its own outcome so the client does not repeat a completed
+		// copy or lose row-level errors from its result. SyncThenRun skips work
+		// on incomplete processing, so copy the archive under its lock here.
+		pushErr := engine.RunExclusiveFlushed(func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if local.NeedsResync() {
+				return incomplete
+			}
+			return work(false)
+		})
+		if pushErr != nil {
+			return errors.Join(incomplete, pushErr)
+		}
+		log.Printf("local ingestion warning during archive push: %v", incomplete)
+		return nil
 	}
 	if _, err := s.runResyncWithFallback(ctx, engine, nil); err != nil {
 		return err

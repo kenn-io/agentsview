@@ -748,6 +748,62 @@ func TestEnsureBackgroundServeExistingDaemon(t *testing.T) {
 	assert.Equal(t, port, rt.Port)
 }
 
+func TestEnsureBackgroundServeCancellationLeavesChildRunning(t *testing.T) {
+	dir := testDataDir(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	oldStart := startServeBackgroundProcessForEnsure
+	var child *exec.Cmd
+	startServeBackgroundProcessForEnsure = func(config.Config, []string) (*exec.Cmd, string, error) {
+		child = exec.Command("sleep", "60")
+		configureServeBackgroundCommand(child)
+		require.NoError(t, child.Start())
+		cancel()
+		return child, "test.log", nil
+	}
+	t.Cleanup(func() {
+		startServeBackgroundProcessForEnsure = oldStart
+		if child != nil && child.Process != nil {
+			_ = child.Process.Kill()
+		}
+	})
+	_, err := ensureBackgroundServe(ctx, &config.Config{DataDir: dir}, time.Second)
+	require.ErrorContains(t, err, "wait canceled")
+	assert.Contains(t, err.Error(), "child continues running")
+	assert.True(t, daemon.ProcessAlive(child.Process.Pid))
+}
+
+func TestExternalServeStartupWaitReportsContinuingWork(t *testing.T) {
+	dir := runtimeTestDir(t)
+	holdExternalDaemonStartLock(t, dir)
+	setStartProbeTickForTest(t, 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	writer := newStartupStateWriter(dir, time.Now)
+	writer.SetPhase("initial sync")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				writer.SetPhase("initial sync " + now.String())
+			}
+		}
+	}()
+	defer func() { cancel(); <-done }()
+	output := captureStderr(t, func() {
+		_, waited, err := waitForExternalServeStartup(ctx, dir, "", 500*time.Millisecond)
+		assert.True(t, waited)
+		assert.ErrorIs(t, err, context.DeadlineExceeded, "active work must outlive the inactivity limit")
+	})
+	assert.Contains(t, output, "initial sync")
+}
+
 func TestEnsureBackgroundServeGeneratesAuthTokenForRemoteSync(t *testing.T) {
 	dir := testDataDir(t)
 	host, port := testPingServer(t)
@@ -1828,7 +1884,7 @@ func TestEnsureBackgroundServePreservesNoSyncWhenReplacingOlderDaemon(
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "1.0.0", false, false, true,
+		dir, host, port, "1.0.0", "", false, false, true,
 	)
 	require.NoError(t, err)
 
@@ -1890,7 +1946,7 @@ func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(
 			writeRuntime: func(t *testing.T, dir, host string, port int) {
 				t.Helper()
 				_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-					dir, host, port, "1.0.0", false, false, true,
+					dir, host, port, "1.0.0", "", false, false, true,
 				)
 				require.NoError(t, err)
 			},
@@ -1978,7 +2034,7 @@ func TestRunServeBackgroundConfigOnlyDoesNotAdoptReplacedDaemonNoSync(
 			writeRuntime: func(t *testing.T, dir, host string, port int) {
 				t.Helper()
 				_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-					dir, host, port, "1.0.0", false, false, true,
+					dir, host, port, "1.0.0", "", false, false, true,
 				)
 				require.NoError(t, err)
 			},
@@ -2406,7 +2462,7 @@ func TestRunServeBackgroundKeepsInvocationNoSyncWhenReplacingSyncingDaemon(
 	dir := runtimeTestDir(t)
 	oldHost, oldPort := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, oldHost, oldPort, "1.0.0", false, false, false,
+		dir, oldHost, oldPort, "1.0.0", "", false, false, false,
 	)
 	require.NoError(t, err)
 	setTestVersion(t, "1.1.0")

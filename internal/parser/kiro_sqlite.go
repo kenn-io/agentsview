@@ -314,20 +314,20 @@ func KiroSQLiteSourceMtime(path string) (int64, error) {
 // parseKiroSQLiteSession parses one current-store Kiro CLI conversation
 // into normal AgentsView session/message records.
 func parseKiroSQLiteSession(
-	dbPath, sessionID, machine string,
+	ctx context.Context, dbPath, sessionID, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	store, err := OpenKiroSQLiteStore(dbPath)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer store.Close()
-	return store.ParseSession(sessionID, machine)
+	return store.ParseSession(ctx, sessionID, machine)
 }
 
 // ParseSession parses one current-store Kiro CLI conversation using
 // the store's existing SQLite handle.
 func (s *KiroSQLiteStore) ParseSession(
-	sessionID, machine string,
+	ctx context.Context, sessionID, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	row, err := s.loadRow(sessionID)
 	if err != nil {
@@ -400,7 +400,7 @@ func (s *KiroSQLiteStore) ParseSession(
 	if row.key != "" {
 		cwd = row.key
 	}
-	project := ExtractProjectFromCwd(cwd)
+	project := ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 	if project == "" {
 		project = "unknown"
 	}
@@ -433,9 +433,7 @@ func (s *KiroSQLiteStore) ParseSession(
 }
 
 func openKiroSQLiteDB(dbPath string) (*sql.DB, error) {
-	dsn := "file:" + sqliteURIPath(dbPath) +
-		"?mode=ro&_busy_timeout=3000"
-	db, err := sql.Open("sqlite3", dsn)
+	db, err := openSQLiteReadOnly(dbPath, sqliteReadOptions{busyTimeoutMS: 3000})
 	if err != nil {
 		return nil, fmt.Errorf(
 			"opening kiro sqlite db %s: %w", dbPath, err,

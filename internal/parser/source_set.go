@@ -98,6 +98,16 @@ func (p *SourceSetProvider) SourcesForChangedPath(
 	return p.sources.SourcesForChangedPath(ctx, req)
 }
 
+func (p *SourceSetProvider) ChangedPathRelevance(
+	ctx context.Context, req ChangedPathRequest,
+) (ChangedPathRelevance, error) {
+	resolver, ok := p.sources.(ChangedPathRelevanceProvider)
+	if !ok {
+		return ChangedPathUnclassified, nil
+	}
+	return resolver.ChangedPathRelevance(ctx, req)
+}
+
 // reconciliationContainerTopologyProvider is implemented by source sets whose
 // members are virtual children of a physical container. The provider-level
 // scope resolver widens a request naming the container, a sidecar, or one
@@ -170,6 +180,41 @@ func (p *SourceSetProvider) SourceForReconciliation(
 		return SourceRef{}, false, nil
 	}
 	return resolver.SourceForReconciliation(ctx, path, project)
+}
+
+func (p *SourceSetProvider) SourceForReconciliationWithState(
+	ctx context.Context, path, project string, state ReconciliationSourceState,
+) (SourceRef, bool, error) {
+	resolver, ok := p.sources.(ReconciliationSourceStateResolver)
+	if !ok {
+		return p.SourceForReconciliation(ctx, path, project)
+	}
+	return resolver.SourceForReconciliationWithState(ctx, path, project, state)
+}
+
+func (p *SourceSetProvider) ReconciliationSourceState(
+	source SourceRef,
+) (ReconciliationSourceState, bool) {
+	provider, ok := p.sources.(ReconciliationSourceStateProvider)
+	if !ok {
+		return ReconciliationSourceState{}, false
+	}
+	return provider.ReconciliationSourceState(source)
+}
+
+func (p *SourceSetProvider) ApplyReconciliationSourceState(
+	source *SourceRef, state ReconciliationSourceState,
+) error {
+	provider, ok := p.sources.(ReconciliationSourceStateProvider)
+	if !ok {
+		if state.Version == 0 {
+			return nil
+		}
+		return UnsupportedProviderFeatureError{
+			Provider: p.Def.Type, Feature: "reconciliation source state",
+		}
+	}
+	return provider.ApplyReconciliationSourceState(source, state)
 }
 
 func (p *SourceSetProvider) ReconciliationMemberIdentity(

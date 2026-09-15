@@ -45,6 +45,9 @@ type UsageRequest struct {
 	// never parsed as comma-separated transport input.
 	ProjectLabels        []string `json:"-"`
 	ExcludeProjectLabels []string `json:"-"`
+
+	// Progress is local to a streaming request and is never serialized.
+	Progress func(string) `json:"-"`
 }
 
 // ResolveUsageProjectKeys translates opaque project-label keys back to the
@@ -208,6 +211,7 @@ func BuildUsageFilter(req UsageRequest) (db.UsageFilter, error) {
 		Termination:       req.Termination,
 		Breakdowns:        breakdowns,
 		SkipSessionCounts: !sessionCounts,
+		Progress:          req.Progress,
 	}, nil
 }
 

@@ -1,9 +1,17 @@
-// kit-ui-check-ignore: app renderer adds agent-specific XML escaping and shell wrapper tags on top of marked; migrating to kit-ui createMarkdownRenderer needs a dedicated behavior-preserving pass.
-import { Lexer, Marked, Tokenizer, type Links, type Token, type TokenizerExtension, type TokenizerAndRendererExtension } from "marked";
+import {
+  Lexer,
+  Marked,
+  Tokenizer,
+  type Links,
+  type Token,
+  type TokenizerExtension,
+  type TokenizerAndRendererExtension,
+} from "marked"; // kit-ui-check-ignore: app renderer preserves agent XML and shell wrappers; migration needs a behavior-preserving pass.
 // kit-ui-check-ignore: app renderer sanitizes the custom marked output above; migrating to kit-ui createMarkdownRenderer needs a dedicated behavior-preserving pass.
 import DOMPurify from "dompurify";
 import { LRUCache } from "./cache.js";
-import { escapeHTML } from "./highlight.js";
+import { escapeHtml as escapeHTML } from "@kenn-io/kit-ui";
+import { authHeaders, getBase } from "../api/runtime.js";
 
 const KNOWN_HTML_TAGS = new Set([
   "a",
@@ -193,9 +201,7 @@ function tagAtLineStart(
   if (src[tagOffset] !== "<") return undefined;
 
   const tagEnd = tagInputEnd(src, tagOffset, end);
-  const match = new RegExp(`^ {0,3}${XML_TAG_ESCAPE_RE.source}`).exec(
-    src.slice(offset, tagEnd),
-  );
+  const match = new RegExp(`^ {0,3}${XML_TAG_ESCAPE_RE.source}`).exec(src.slice(offset, tagEnd));
   return match ?? undefined;
 }
 
@@ -283,9 +289,7 @@ function getLexerLinks(value: unknown, src?: string): Links | undefined {
     if (context) return context.links;
   }
 
-  const cached = (lexer as { [UNKNOWN_XML_LEXER_LINKS]?: Links })[
-    UNKNOWN_XML_LEXER_LINKS
-  ];
+  const cached = (lexer as { [UNKNOWN_XML_LEXER_LINKS]?: Links })[UNKNOWN_XML_LEXER_LINKS];
   if (cached) return cached;
   if (src === undefined) {
     if (!Array.isArray(tokens)) return undefined;
@@ -380,12 +384,7 @@ function nextScannerToken(
   const atLineStart = offset === 0 || src[offset - 1] === "\n";
 
   if (atLineStart) {
-    if (
-      src[offset] === " " ||
-      src[offset] === "\t" ||
-      src[offset] === "`" ||
-      src[offset] === "~"
-    ) {
+    if (src[offset] === " " || src[offset] === "\t" || src[offset] === "`" || src[offset] === "~") {
       const rest = src.slice(offset, end);
       const blockCode = scanner.tokenizer.code(rest) ?? scanner.tokenizer.fences(rest);
       if (blockCode) {
@@ -454,11 +453,7 @@ function nextScannerToken(
 
   if (src[offset] === "*" || src[offset] === "_") {
     const rest = src.slice(offset, end);
-    const emphasis = scanner.tokenizer.emStrong(
-      rest,
-      rest,
-      offset > 0 ? src[offset - 1] : "",
-    );
+    const emphasis = scanner.tokenizer.emStrong(rest, rest, offset > 0 ? src[offset - 1] : "");
     if (emphasis) {
       return { kind: "protected", start: offset, end: offset + emphasis.raw.length };
     }
@@ -466,11 +461,7 @@ function nextScannerToken(
 
   if (src[offset] === "~") {
     const rest = src.slice(offset, end);
-    const strikethrough = scanner.tokenizer.del(
-      rest,
-      rest,
-      offset > 0 ? src[offset - 1] : "",
-    );
+    const strikethrough = scanner.tokenizer.del(rest, rest, offset > 0 ? src[offset - 1] : "");
     if (strikethrough) {
       return {
         kind: "protected",
@@ -739,11 +730,7 @@ function unknownXmlBlockExtension(): TokenizerAndRendererExtension {
 function unknownXmlParagraphBoundary() {
   return {
     paragraph(src: string) {
-      const scan = getUnknownXmlScanContext(
-        getLexerTokens(this),
-        src,
-        getLexerLinks(this, src),
-      );
+      const scan = getUnknownXmlScanContext(getLexerTokens(this), src, getLexerLinks(this, src));
       const candidate = findUnknownXmlCandidate(src, scan?.context.links, scan);
       if (candidate === undefined || candidate === 0) return false;
       return Tokenizer.prototype.paragraph.call(this, src.slice(0, candidate)) ?? false;
@@ -755,11 +742,7 @@ function unknownXmlHtmlBoundary() {
   return {
     html(src: string) {
       if (/^<(?:!|\?|script\b|pre\b|style\b|textarea\b)/i.test(src)) return false;
-      const scan = getUnknownXmlScanContext(
-        getLexerTokens(this),
-        src,
-        getLexerLinks(this, src),
-      );
+      const scan = getUnknownXmlScanContext(getLexerTokens(this), src, getLexerLinks(this, src));
       const candidate = findUnknownXmlCandidate(src, scan?.context.links, scan);
       if (candidate === undefined || candidate === 0) return false;
 
@@ -771,9 +754,7 @@ function unknownXmlHtmlBoundary() {
   };
 }
 
-function createParser(
-  renderUnknownXmlBlocksAsPreformatted: boolean,
-): Marked {
+function createParser(renderUnknownXmlBlocksAsPreformatted: boolean): Marked {
   const instance = new Marked({
     gfm: true,
     breaks: true,
@@ -781,9 +762,7 @@ function createParser(
 
   instance.use({
     extensions: [
-      ...(renderUnknownXmlBlocksAsPreformatted
-        ? [unknownXmlBlockExtension()]
-        : []),
+      ...(renderUnknownXmlBlocksAsPreformatted ? [unknownXmlBlockExtension()] : []),
       bashWrapperExtension("bashInput", "bash-input", "!", "shell"),
       bashWrapperExtension("bashStdout", "bash-stdout", "", ""),
       bashWrapperExtension("bashStderr", "bash-stderr", "", ""),
@@ -803,17 +782,71 @@ type RenderCacheEntry = [string | undefined, string | undefined];
 
 const cache = new LRUCache<string, RenderCacheEntry>(6000);
 
-function getApiBase(): string {
-  const baseEl = document.querySelector("base[href]");
-  if (baseEl) {
-    const base = new URL(document.baseURI).pathname.replace(/\/$/, "");
-    return `${base}/api/v1`;
-  }
-  return "/api/v1";
-}
+const ASSET_PLACEHOLDER_PREFIX = "/__agentsview_asset__/";
 
 function resolveAssetURLs(text: string): string {
-  return text.replace(/asset:\/\/([^\s)]+)/g, `${getApiBase()}/assets/$1`);
+  return text.replace(/asset:\/\/([^\s)]+)/g, (_match, reference: string) =>
+    `${ASSET_PLACEHOLDER_PREFIX}${encodeURIComponent(reference)}`,
+  );
+}
+
+function getAssetReference(src: string | null): string | undefined {
+  if (!src?.startsWith(ASSET_PLACEHOLDER_PREFIX)) return undefined;
+  try {
+    return decodeURIComponent(src.slice(ASSET_PLACEHOLDER_PREFIX.length));
+  } catch {
+    return undefined;
+  }
+}
+
+function getAssetURL(reference: string): string {
+  const filename = reference.startsWith("asset://")
+    ? reference.slice("asset://".length)
+    : reference;
+  return `${getBase().replace(/\/$/, "")}/assets/${encodeURIComponent(filename)}`;
+}
+
+export function loadAssetImages(node: HTMLElement, _content = "") {
+  let destroyed = false;
+  const blobURLs = new Set<string>();
+
+  async function load(): Promise<void> {
+    const images = [...node.querySelectorAll<HTMLImageElement>("img")];
+    await Promise.all(
+      images.map(async (image) => {
+        const reference = getAssetReference(image.getAttribute("src"));
+        if (!reference || image.dataset.agentsviewAsset === reference) return;
+        image.dataset.agentsviewAsset = reference;
+
+        try {
+          const response = await fetch(getAssetURL(reference), authHeaders());
+          if (!response.ok) throw new Error(`asset request failed: ${response.status}`);
+          const blobURL = URL.createObjectURL(await response.blob());
+          if (destroyed || !node.contains(image)) {
+            URL.revokeObjectURL(blobURL);
+            return;
+          }
+          image.src = blobURL;
+          blobURLs.add(blobURL);
+        } catch {
+          delete image.dataset.agentsviewAsset;
+        }
+      }),
+    );
+  }
+
+  void load();
+
+  return {
+    update() {
+      void load();
+    },
+    destroy() {
+      destroyed = true;
+      for (const blobURL of blobURLs) URL.revokeObjectURL(blobURL);
+      blobURLs.clear();
+    },
+  };
 }
 
 function isPreservedHtmlTag(name: string): boolean {

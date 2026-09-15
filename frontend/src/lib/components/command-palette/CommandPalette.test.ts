@@ -33,6 +33,7 @@ const {
       created_at: string;
     }>,
     filters: { project: "" },
+    projects: [{ name: "proj-a", session_count: 2 }],
     deselectSession: vi.fn(),
   },
   mockSearchStore: {
@@ -50,6 +51,9 @@ const {
     retry: vi.fn(),
     setMode: vi.fn(),
     setSort: vi.fn(),
+    range: { mode: "relative" as const, days: 0 },
+    setRange: vi.fn(),
+    resetRange: vi.fn(),
   },
   mockRouter: {
     navigateToSession: vi.fn(),
@@ -597,6 +601,76 @@ describe("CommandPalette", () => {
     expect(error?.querySelector("span")?.textContent).toBe("Search failed. Please try again.");
 
     unmount(component);
+  });
+
+  it("shows the inherited project and can search all projects without changing the sidebar", async () => {
+    mockSessions.filters.project = "proj-a";
+    const component = mount(CommandPalette, { target: document.body });
+    try {
+      await enterSearchQuery("configuration");
+      expect(mockSearchStore.search).toHaveBeenLastCalledWith("configuration", "proj-a");
+      const trigger = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(".palette-controls button"),
+      ).find((button) => button.textContent?.trim() === "proj-a")!;
+      expect(trigger).toBeDefined();
+      trigger.click();
+      await tick();
+      const all = Array.from(document.querySelectorAll<HTMLElement>("[role='option']")).find(
+        (option) => option.textContent?.trim() === "All Projects",
+      )!;
+      all.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      await tick();
+      expect(mockSearchStore.search).toHaveBeenLastCalledWith("configuration", "");
+      expect(mockSessions.filters.project).toBe("proj-a");
+      await enterSearchQuery("configuration details");
+      expect(mockSearchStore.search).toHaveBeenLastCalledWith("configuration details", "");
+      expect(document.querySelector(".palette-controls")?.textContent).toContain("All Projects");
+    } finally {
+      await unmount(component);
+    }
+  });
+
+  it("lets a search choose a date range without navigating or closing the palette", async () => {
+    mockSearchStore.mode = "semantic";
+    const cleanupShortcuts = registerShortcuts({
+      navigateMessage: vi.fn(),
+      navigateUserPrompt: vi.fn(),
+    });
+    const component = mount(CommandPalette, { target: document.body });
+    try {
+      await enterSearchQuery();
+
+      const trigger = document.querySelector<HTMLButtonElement>(
+        ".palette-controls button[aria-haspopup='dialog']",
+      )!;
+      expect(trigger.textContent).toContain("All time");
+      trigger.click();
+      await tick();
+      const preset = Array.from(
+        document.querySelectorAll<HTMLButtonElement>("[role='dialog'] button"),
+      ).find((button) => button.textContent?.trim() === "7d")!;
+      expect(preset).toBeDefined();
+      preset.click();
+      await tick();
+      expect(mockSearchStore.setRange).toHaveBeenCalledWith({ mode: "relative", days: 7 });
+      expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
+      expect(mockUi.activeModal).toBe("commandPalette");
+
+      trigger.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+      await tick();
+      expect(document.querySelector("[role='dialog']")).toBeNull();
+      expect(mockUi.activeModal).toBe("commandPalette");
+      trigger.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+      expect(mockUi.activeModal).toBeNull();
+    } finally {
+      cleanupShortcuts();
+      await unmount(component);
+    }
+    expect(mockSearchStore.resetRange).toHaveBeenCalledOnce();
   });
 
   it("explains a semantic timeout and offers an explicit retry", async () => {

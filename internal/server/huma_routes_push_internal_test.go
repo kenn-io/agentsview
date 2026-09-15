@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -561,6 +563,63 @@ func TestSyncThenRunForPushRunnerErrorSkipsPush(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resync build reported failed")
+}
+
+func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T) {
+	root := t.TempDir()
+	f := newSyncRouteFixture(t, withDisabledAgents(nil, map[parser.AgentType][]string{
+		parser.AgentDeepSeekHarness: {root},
+	}))
+	f.writeClaudeSession(t, "proj/healthy.jsonl", "keep replicating this session")
+	dir := filepath.Join(root, "--workspace-example--", "broken")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "session.jsonl"), []byte(`{"type":"session","version":0,"id":"broken","createdAt":1700000000000,"cwd":"/workspace/example","delegationDepth":0,"agentPreset":"coding"}
+{"type":"turn/start","seq":0,"time":1700000000001,"data":{"turn":1}}
+{"type":"user/message","seq":2,"time":1700000000003,"data":{"id":"user","role":"user","source":{"kind":"user"},"content":[{"type":"text","text":"missing event"}]},"surfaceOp":"append"}
+{"type":"turn/end","seq":3,"time":1700000000004,"data":{"turn":1,"status":"completed"}}
+`), 0o600))
+	engine := f.srv.syncEngineForLocal(f.db)
+	t.Cleanup(engine.Close)
+	for _, accept := range []string{"application/json", "text/event-stream"} {
+		t.Run(accept, func(t *testing.T) {
+			var copied []string
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/push/pg", nil)
+			request.Header.Set("Accept", accept)
+			hctx := humago.NewContext(&huma.Operation{}, request, recorder)
+			runPushStream(hctx, func(_ func(postgres.PushProgress)) (any, error) {
+				var result postgres.PushResult
+				err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil,
+					func(forceFull bool) error {
+						assert.False(t, forceFull)
+						session, err := f.db.GetSession(t.Context(), "healthy")
+						require.NoError(t, err)
+						require.NotNil(t, session)
+						copied = append(copied, session.ID)
+						result = postgres.PushResult{SessionsPushed: 1, Errors: 2,
+							Vectors: postgres.VectorPushResult{SessionsDeferred: 3}}
+						return nil
+					})
+				return result, err
+			})
+			assert.Equal(t, []string{"healthy"}, copied)
+			require.Equal(t, http.StatusOK, recorder.Code)
+			payload := recorder.Body.String()
+			if accept == "text/event-stream" {
+				require.Contains(t, payload, "event: done\n")
+				_, payload, _ = strings.Cut(payload, "data: ")
+			}
+			var result postgres.PushResult
+			require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(payload)), &result))
+			assert.Equal(t, 1, result.SessionsPushed)
+			assert.Equal(t, 2, result.Errors, "row failures must reach the push client")
+			assert.Equal(t, 3, result.Vectors.SessionsDeferred)
+		})
+	}
+	pushFailure := errors.New("mirror write failed")
+	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil,
+		func(bool) error { return pushFailure })
+	require.ErrorIs(t, err, pushFailure)
 }
 
 func TestSyncThenRunForPushDeferredWorkerSkipsPush(t *testing.T) {

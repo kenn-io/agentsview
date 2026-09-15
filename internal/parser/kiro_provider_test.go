@@ -149,6 +149,67 @@ func TestKiroProviderParsePhysicalVirtualAndLegacySources(t *testing.T) {
 	assert.Equal(t, SkipNoSession, missingOutcome.SkipReason)
 }
 
+func TestKiroProviderSQLiteProjectDiscoveryPolicy(t *testing.T) {
+	root := t.TempDir()
+	_, db := newKiroProviderSQLiteDBAt(t, root)
+	repo := filepath.Join(t.TempDir(), "local-repository")
+	cwd := filepath.Join(repo, "recorded-project")
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(cwd, 0o755))
+	seedKiroSQLiteSession(t, db, cwd, "sqlite-session",
+		readKiroFixture(t, "standard_payload.json"), 1779012000000, 1779012030000)
+
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	member, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
+		RawSessionID: "sqlite-session",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	origStat, origLstat := osStat, osLstat
+	t.Cleanup(func() { osStat, osLstat = origStat, origLstat })
+	var probes int
+	osStat = func(path string) (os.FileInfo, error) {
+		probes++
+		return origStat(path)
+	}
+	osLstat = func(path string) (os.FileInfo, error) {
+		probes++
+		return origLstat(path)
+	}
+	for _, route := range []struct {
+		name   string
+		source SourceRef
+	}{
+		{"bulk", sources[0]},
+		{"session", member},
+	} {
+		for _, disabled := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/disabled=%t", route.name, disabled), func(t *testing.T) {
+				ctx := WithProjectRootMemo(t.Context())
+				if disabled {
+					ctx = WithoutFilesystemProjectDiscovery(ctx)
+				}
+				probes = 0
+				outcome, err := provider.Parse(ctx, ParseRequest{Source: route.source, Machine: "remote"})
+				require.NoError(t, err)
+				require.Len(t, outcome.Results, 1)
+				if disabled {
+					assert.Equal(t, "recorded_project", outcome.Results[0].Result.Session.Project)
+					assert.Zero(t, probes)
+				} else {
+					assert.Equal(t, "local_repository", outcome.Results[0].Result.Session.Project)
+					assert.Positive(t, probes)
+				}
+			})
+		}
+	}
+}
+
 func TestKiroProviderSkipsShadowedLegacySource(t *testing.T) {
 	root := t.TempDir()
 	dbPath, db := newKiroProviderSQLiteDBAt(t, root)

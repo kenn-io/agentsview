@@ -1417,7 +1417,7 @@ func (db *DB) insertMessages(
 	if err := db.requireWritable(); err != nil {
 		return err
 	}
-	msgs, _ = ProjectToolResultImages(msgs, policy)
+	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
 	rawMessages := msgs
 	msgs = db.messagesForStorage(msgs)
 	if len(rawMessages) == 0 {
@@ -1646,22 +1646,14 @@ func (db *DB) writeSessionIncremental(
 	if err := db.requireWritable(); err != nil {
 		return false, err
 	}
-	msgs, _ = ProjectToolResultImages(msgs, policy)
-	if policy == config.ToolResultImagesDrop {
-		update.SubagentLinks = append([]ToolCallSubagentLink(nil), update.SubagentLinks...)
-		for i := range update.SubagentLinks {
-			content, _ := StripToolResultImages(update.SubagentLinks[i].ResultContent)
-			update.SubagentLinks[i].ResultContent = content
-			update.SubagentLinks[i].ResultContentLen = ResolveResultContentLength(
-				content, update.SubagentLinks[i].ResultContentLen,
-			)
-		}
-	}
+	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
+
 	rawMessages := msgs
 	msgs = db.messagesForStorage(msgs)
 	update.SubagentLinks = db.subagentLinksForStorage(update.SubagentLinks)
 	update.ToolCallResultUpdates = db.toolCallResultUpdatesForStorage(update.ToolCallResultUpdates)
 	if db.ArchiveContent().OmitsToolContent() {
+		policy = config.ToolResultImagesKeep
 		update.Checkpoint, update.CheckpointBlobs = nil, nil
 	}
 
@@ -1706,7 +1698,7 @@ func (db *DB) writeSessionIncremental(
 	}
 	for _, link := range update.SubagentLinks {
 		changed, err := applyToolCallSubagentLinkTx(
-			tx, sessionID, link, update.BlockedResultCategories, policy,
+			tx, sessionID, link, update.BlockedResultCategories, policy, db.AssetsDir(),
 		)
 		if err != nil {
 			return false, err
@@ -1717,7 +1709,7 @@ func (db *DB) writeSessionIncremental(
 	for _, resultUpdate := range update.ToolCallResultUpdates {
 		changed, inserted, err := applyToolCallResultUpdateTx(
 			tx, sessionID, resultUpdate,
-			update.BlockedResultCategories, policy,
+			update.BlockedResultCategories, policy, db.AssetsDir(),
 		)
 		if err != nil {
 			return false, err
@@ -1891,7 +1883,7 @@ func (db *DB) ReplaceSessionMessagesWithToolResultImages(
 func (db *DB) replaceSessionMessages(
 	sessionID string, msgs []Message, policy config.ToolResultImages,
 ) error {
-	msgs, _ = ProjectToolResultImages(msgs, policy)
+	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
 	msgs = append([]Message(nil), msgs...)
 	_ = ValidateAndSanitize(nil, msgs, nil)
 	rawMessages := msgs
@@ -2282,7 +2274,7 @@ func (db *DB) replaceSessionContent(
 	cp *ParserCheckpoint, blobs *ParserCheckpointBlobs,
 	policy config.ToolResultImages,
 ) error {
-	msgs, _ = ProjectToolResultImages(msgs, policy)
+	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
 	if len(msgs) > 0 {
 		msgs = append([]Message(nil), msgs...)
 		_ = ValidateAndSanitize(nil, msgs, nil)
@@ -3326,7 +3318,7 @@ func (db *DB) SetToolCallSubagentSession(
 		tx, sessionID, ToolCallSubagentLink{
 			ToolUseID:         toolUseID,
 			SubagentSessionID: subagentSessionID,
-		}, nil, db.ToolResultImages(),
+		}, nil, db.ToolResultImages(), db.AssetsDir(),
 	)
 	if err != nil {
 		return err
@@ -3354,7 +3346,7 @@ func (db *DB) SetToolCallSubagentSession(
 // loading content so repeated appends do not rescan the event history.
 func soleToolResultEventTx(
 	tx *sql.Tx, sessionID string, messageOrdinal, callIndex int,
-	imagePolicy config.ToolResultImages, summary string,
+	imagePolicy config.ToolResultImages,
 ) ([]ToolResultEvent, error) {
 	var count int
 	var content sql.NullString
@@ -3386,15 +3378,18 @@ func soleToolResultEventTx(
 			sessionID, messageOrdinal, callIndex, err,
 		)
 	}
-	return []ToolResultEvent{{Content: projectToolResultEventForDedup(
-		content.String, summary, imagePolicy,
-	)}}, nil
+	stored := content.String
+	if imagePolicy == config.ToolResultImagesDrop {
+		stored, _ = StripToolResultImages(stored)
+	}
+	// Offload dedup must compare stored bytes because readers hydrate the original event.
+	return []ToolResultEvent{{Content: stored}}, nil
 }
 
 func applyToolCallSubagentLinkTx(
 	tx *sql.Tx, sessionID string, link ToolCallSubagentLink,
 	blockedResultCategories map[string]bool,
-	imagePolicy config.ToolResultImages,
+	imagePolicy config.ToolResultImages, assetsDir string,
 ) (bool, error) {
 	var toolName, category, currentSubagent, currentResultContent string
 	var currentResultContentLen, messageOrdinal, callIndex int
@@ -3445,7 +3440,7 @@ func applyToolCallSubagentLinkTx(
 	if blockedResultCategories[category] {
 		resultContent = ""
 	} else {
-		resultContent = projectToolResultImageContent(resultContent, imagePolicy)
+		resultContent = ProjectToolResultImageContent(resultContent, imagePolicy, assetsDir)
 		resultContentLen = ResolveResultContentLength(
 			resultContent, resultContentLen,
 		)
@@ -3453,7 +3448,7 @@ func applyToolCallSubagentLinkTx(
 		// targets may already have one stored. Re-storing a summary the
 		// event repeats would undo the dedup on every incremental pass.
 		sole, err := soleToolResultEventTx(
-			tx, sessionID, messageOrdinal, callIndex, imagePolicy, resultContent,
+			tx, sessionID, messageOrdinal, callIndex, imagePolicy,
 		)
 		if err != nil {
 			return false, err
@@ -3479,7 +3474,7 @@ func applyToolCallSubagentLinkTx(
 func applyToolCallResultUpdateTx(
 	tx *sql.Tx, sessionID string, update ToolCallResultUpdate,
 	blockedResultCategories map[string]bool,
-	imagePolicy config.ToolResultImages,
+	imagePolicy config.ToolResultImages, assetsDir string,
 ) (bool, []ToolResultEvent, error) {
 	if strings.TrimSpace(update.ToolUseID) == "" || len(update.Events) == 0 {
 		return false, nil, nil
@@ -3564,9 +3559,9 @@ func applyToolCallResultUpdateTx(
 	// stripped-byte count before the blank overwrites Content, losing the
 	// original result length the full and staged paths both preserve.
 	if !blocked {
-		if imagePolicy == config.ToolResultImagesDrop {
+		if imagePolicy != config.ToolResultImagesKeep {
 			for i := range incoming {
-				incoming[i].Content, _ = StripToolResultImages(incoming[i].Content)
+				incoming[i].Content = ProjectToolResultImageContent(incoming[i].Content, imagePolicy, assetsDir)
 				incoming[i].ContentLength = ResolveResultContentLength(
 					incoming[i].Content, incoming[i].ContentLength,
 				)
@@ -3640,9 +3635,9 @@ func applyToolCallResultUpdateTx(
 		// Existing events can predate a switch from keep to drop. Project the
 		// assembled summary too, so a late update cannot store their raw images
 		// again. Blocked results retain their original accounting length.
-		if imagePolicy == config.ToolResultImagesDrop {
-			projected, stats := StripToolResultImages(summary)
-			if stats.Payloads > 0 {
+		if imagePolicy != config.ToolResultImagesKeep {
+			projected := ProjectToolResultImageContent(summary, imagePolicy, assetsDir)
+			if projected != summary {
 				summary = projected
 				resultLength = len(summary)
 			}
@@ -3650,7 +3645,7 @@ func applyToolCallResultUpdateTx(
 
 		sole, err := soleToolResultEventTx(
 			tx, sessionID, position.MessageOrdinal, position.CallIndex,
-			imagePolicy, summary,
+			imagePolicy,
 		)
 		if err != nil {
 			return false, nil, err

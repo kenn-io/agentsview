@@ -91,6 +91,47 @@ func TestBuildWorktreeCandidatesDoesNotSuggestFilesystemRoots(t *testing.T) {
 	}
 }
 
+func TestBuildWorktreeCandidatesCollapsesObservedPaths(t *testing.T) {
+	fixtures := []struct{ id, cwd string }{
+		{"claude-a", "/srv/repo/.claude/worktrees/run-a/src"},
+		{"claude-b", "/srv/repo/.claude/worktrees/run-b"},
+		{"t3-a", "/srv/.t3/worktrees/repo/run-a"},
+		{"t3-b", "/srv/.t3/worktrees/repo/run-b"},
+		{"drive-d-a", `D:\Repos\repo-feature-a`},
+		{"drive-d-b", `D:\Repos\repo-feature-b`},
+		{"drive-d-c", `D:\Repos\repo-feature-b`},
+		{"drive-c", `C:\Apps\repo`},
+		{"other", "/opt/single-checkout"},
+	}
+	sessions := make([]WorktreeCandidateSession, 0, len(fixtures))
+	for _, fixture := range fixtures {
+		sessions = append(sessions, WorktreeCandidateSession{
+			ID: fixture.id, Project: "selected", Machine: "host.example", Cwd: fixture.cwd,
+		})
+	}
+	// An unrelated observation is not another folder to suggest.
+	got := BuildWorktreeCandidates(sessions, []export.ProjectIdentityObservation{{
+		Project: "selected", Machine: "host.example", RootPath: "/invented/sibling",
+	}})
+	require.Len(t, got, 5)
+	assert.Equal(t, "D:/Repos", got[0].SuggestedPrefix,
+		"the largest observed session group is first, not drive C")
+	assert.Equal(t, 3, got[0].ContributingSessions)
+	assert.Equal(t, 2, got[0].DistinctCwds)
+	byPrefix := make(map[string]WorktreeReclassificationCandidate)
+	for _, candidate := range got {
+		byPrefix[candidate.SuggestedPrefix] = candidate
+		for _, example := range candidate.Examples {
+			assert.True(t, worktreePathMatches(candidate.SuggestedPrefix, example.Cwd),
+				"a suggested prefix must contain its actual recorded paths")
+		}
+	}
+	assert.Equal(t, "worktree", byPrefix["/srv/repo/.claude/worktrees"].EvidenceKind)
+	assert.Equal(t, 2, byPrefix["/srv/.t3/worktrees/repo"].ContributingSessions)
+	assert.Equal(t, 1, byPrefix["C:/Apps/repo"].ContributingSessions)
+	assert.Equal(t, 1, byPrefix["/opt/single-checkout"].ContributingSessions)
+}
+
 func TestListArchiveWorktreeCandidatesSelectsByProjectIdentity(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -131,7 +172,7 @@ func TestListArchiveWorktreeCandidatesSelectsByProjectIdentity(t *testing.T) {
 	assert.Equal(t, "clicked", candidates[0].Examples[0].SessionID)
 }
 
-func TestListArchiveWorktreeCandidatesIncludesResolvedProjectAliases(
+func TestListArchiveWorktreeCandidatesExcludesDifferentProjectKeys(
 	t *testing.T,
 ) {
 	d := testDB(t)
@@ -183,8 +224,10 @@ func TestListArchiveWorktreeCandidatesIncludesResolvedProjectAliases(
 	)
 	require.NoError(t, err)
 	require.Len(t, candidates, 1)
-	assert.Equal(t, 2, candidates[0].ContributingSessions)
-	assert.Equal(t, "/srv/worktrees/repo/feature",
+	assert.Equal(t, 1, candidates[0].ContributingSessions)
+	require.Len(t, candidates[0].Examples, 1)
+	assert.Equal(t, "primary-session", candidates[0].Examples[0].SessionID)
+	assert.Equal(t, "/srv/worktrees/repo/feature/cmd",
 		candidates[0].SuggestedPrefix)
 }
 

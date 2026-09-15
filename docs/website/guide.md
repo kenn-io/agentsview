@@ -13,10 +13,10 @@ archive stays current while you work. [Quick start](/docs/quickstart/).
 
 ## 02. Browse the full conversation
 
-Every session renders as a complete transcript: user prompts, assistant
-responses, thinking blocks, and tool calls, with filters by project, agent,
-date, and message count. Subagent trees, resume chains, and edited files stay
-connected to their parent session. [Usage guide](/docs/usage/).
+Read the prompts, responses, reasoning, and tool calls recorded by each agent
+and retained in your archive. Filter sessions by project, agent, date, and
+message count. Subagent trees, resume chains, and edited files stay connected to
+their parent session. [Usage guide](/docs/usage/).
 
 ## 03. Monitor the fleet
 
@@ -27,11 +27,12 @@ which sessions were running in that slot. [Activity reference](/docs/activity/).
 
 ## 04. Meter tokens and cost
 
-Usage reports over the whole archive come back in under a second, priced from
-LiteLLM and OpenRouter rates with cache-aware accounting. The CLI answers in the
+Usage reports show recorded tokens and estimated costs, including prompt-cache
+writes and reads. Reports reuse saved archive data; the first request after an
+upgrade or sync may need time to prepare its cache. The CLI answers in the
 terminal (`agentsview usage daily`), the statusline shows today's spend inside
-your editor, and one-shot capture meters a single CI run exactly.
-[Token usage and costs](/docs/token-usage/).
+your editor, and one-shot capture reports recorded usage for a single Claude or
+Codex CI run. [Token usage and costs](/docs/token-usage/).
 
 ## 05. Search by words or by meaning
 
@@ -49,10 +50,10 @@ sessions that triggered it. [Session intelligence](/docs/session-intelligence/).
 
 ## 07. Keep what the sessions learned
 
-Recall (experimental) extracts durable, provenance-linked knowledge from the
-archive and keeps it browsable: every entry carries evidence links back to its
-source transcripts. Generated Insights add model-written reports over an
-explicit session scope. [Recall reference](/docs/recall/).
+Recall (experimental) collects reusable lessons from your archive. Browse each
+entry and follow its evidence links to the source messages. Generated Insights
+add model-written reports over an explicit session scope.
+[Recall reference](/docs/recall/).
 
 ## 08. Give your agents the archive
 
@@ -66,12 +67,11 @@ tried before repeating it. [MCP server](/docs/mcp/) ·
 
 Push each machine's archive to PostgreSQL for a merged team view, mirror into
 DuckDB for analytical queries, read source files through the filesystem or S3,
-or keep original files in hosted raw custody. SQLite on your disk remains the
-local archive of record. [PostgreSQL sync](/docs/pg-sync/) ·
+or keep original files in hosted storage. SQLite on your disk remains the local
+archive of record. [PostgreSQL sync](/docs/pg-sync/) ·
 [DuckDB mirror](/docs/duckdb/) · [Hosted raw sync](/docs/hosted-raw-sync/).
 
 ## Next
 
-Installation takes under a minute and the first sync uses the sessions already
-on your machine. [Run the quickstart](/docs/quickstart/) or
-[open the docs](/docs/).
+Install AgentsView and import the sessions already on your machine.
+[Run the quickstart](/docs/quickstart/) or [open the docs](/docs/).

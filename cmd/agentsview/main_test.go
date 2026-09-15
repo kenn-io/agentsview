@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log"
@@ -157,6 +158,40 @@ func TestServeRuntimeRecordWriteSuccessDoesNotWarnVisible(t *testing.T) {
 	assert.NotContains(t, string(out), "could not write daemon runtime record")
 }
 
+func TestServeSkipInitialSyncStillReparsesStaleArchive(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	database, err := db.Open(cfg.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	markArchiveStale(t, cfg.DBPath)
+	data, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	out, err := runRuntimeWarningHelperProcess(t, "serve", "TestServeStaleArchiveHelperProcess",
+		[]string{
+			"AGENTSVIEW_STALE_SERVE_CONFIG=" + string(data),
+			"AGENTSVIEW_STALE_SERVE_SOURCES=" + cfg.AgentDirs[parser.AgentClaude][0],
+		}, "listening at")
+	require.NoError(t, err, string(out))
+	stale, err := db.ArchiveNeedsResync(cfg.DBPath)
+	require.NoError(t, err)
+	assert.False(t, stale, "a direct serve must complete required reparse before publishing readiness")
+}
+
+func TestServeStaleArchiveHelperProcess(t *testing.T) {
+	data := os.Getenv("AGENTSVIEW_STALE_SERVE_CONFIG")
+	if data == "" {
+		return
+	}
+	var cfg config.Config
+	require.NoError(t, json.Unmarshal([]byte(data), &cfg))
+	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
+	cfg.AgentDirs = map[parser.AgentType][]string{
+		parser.AgentClaude: {os.Getenv("AGENTSVIEW_STALE_SERVE_SOURCES")},
+	}
+	runServe(cfg, serveOptions{SkipInitialSync: true})
+}
+
 func TestPGServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
 	out, err := runPGRuntimeWarningHelper(t)
 	require.NoError(t, err, string(out))
@@ -279,18 +314,18 @@ func TestRunServeRuntimeWarningHelperProcess(t *testing.T) {
 	}
 	if os.Getenv("AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_FAIL") == "true" {
 		writeDaemonRuntimeWithAuthAndNoSync = func(
-			string, string, int, string, bool, bool, bool, ...int,
+			string, string, int, string, string, bool, bool, bool, ...int,
 		) (string, error) {
 			return "", errors.New("forced runtime-record write failure")
 		}
 	} else {
 		original := writeDaemonRuntimeWithAuthAndNoSync
 		writeDaemonRuntimeWithAuthAndNoSync = func(
-			dataDir, host string, port int, version string, readOnly,
+			dataDir, host string, port int, version, browserURL string, readOnly,
 			requireAuth, noSync bool, caddyPID ...int,
 		) (string, error) {
 			path, err := original(
-				dataDir, host, port, version, readOnly, requireAuth, noSync,
+				dataDir, host, port, version, browserURL, readOnly, requireAuth, noSync,
 				caddyPID...,
 			)
 			fmt.Println("runtime record write reached")
@@ -364,7 +399,7 @@ func TestRunPGRuntimeWarningHelperProcess(t *testing.T) {
 		return
 	}
 	writeDaemonRuntimeWithAuth = func(
-		string, string, int, string, bool, bool, ...int,
+		string, string, int, string, string, bool, bool, ...int,
 	) (string, error) {
 		return "", errors.New("forced runtime-record write failure")
 	}
@@ -406,7 +441,7 @@ func TestRunDuckDBRuntimeWarningHelperProcess(t *testing.T) {
 		return
 	}
 	writeDaemonRuntimeWithAuth = func(
-		string, string, int, string, bool, bool, ...int,
+		string, string, int, string, string, bool, bool, ...int,
 	) (string, error) {
 		return "", errors.New("forced runtime-record write failure")
 	}
@@ -482,8 +517,10 @@ func TestMustLoadConfig(t *testing.T) {
 
 func TestPrepareServeRuntimeConfigPortZeroUsesAssignedPort(t *testing.T) {
 	cfg := config.Config{
-		Host: "127.0.0.1",
-		Port: 0,
+		DataDir:   t.TempDir(),
+		Host:      "127.0.0.1",
+		Port:      0,
+		PublicURL: "http://viewer.example:0",
 	}
 
 	var err error
@@ -502,6 +539,15 @@ func TestPrepareServeRuntimeConfigPortZeroUsesAssignedPort(t *testing.T) {
 		"unexpected literal port 0 fallback message")
 	assert.Contains(t, out, "Using available port",
 		"missing ephemeral port message")
+	wantURL := fmt.Sprintf("http://viewer.example:%d", cfg.Port)
+	assert.Equal(t, wantURL, cfg.PublicURL)
+	require.True(t, writePGServeRuntimeRecord(&serveRuntime{
+		Cfg: cfg, PublicURL: browserURL(cfg),
+	}))
+	recordPath, err := runtimeStore(cfg.DataDir).Path(os.Getpid())
+	require.NoError(t, err)
+	rt := daemonRuntimeFromRecord(readRuntimeRecord(t, recordPath))
+	assert.Equal(t, wantURL, rt.BrowserURL)
 }
 
 func TestSetupLogFile(t *testing.T) {

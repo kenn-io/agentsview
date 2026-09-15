@@ -34,6 +34,11 @@ func TestImporterUsesRecordedProjectWithoutLocalGitDiscovery(t *testing.T) {
 `,
 		},
 		{
+			agent: parser.AgentCommandCode, filename: "project/demo.jsonl", id: "commandcode:demo",
+			body: `{"id":"m1","timestamp":"2026-09-01T10:00:00Z","sessionId":"demo","role":"user","content":[{"type":"text","text":"Remote session content"}],"metadata":{"cwd":%s}}
+`,
+		},
+		{
 			agent:    parser.AgentOpenHands,
 			filename: "086c7ecf6cb746b69fbcb900358d1247/events/event-00000.json",
 			id:       "openhands:086c7ecf-6cb7-46b6-9fbc-b900358d1247",
@@ -43,7 +48,6 @@ func TestImporterUsesRecordedProjectWithoutLocalGitDiscovery(t *testing.T) {
 		},
 	} {
 		t.Run(string(tc.agent), func(t *testing.T) {
-			database := dbtest.OpenTestDB(t)
 			repo := filepath.Join(t.TempDir(), "local-repository")
 			cwd := filepath.Join(repo, "recorded-project")
 			// Plain directories exercise project discovery without invoking Git.
@@ -58,20 +62,43 @@ func TestImporterUsesRecordedProjectWithoutLocalGitDiscovery(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(sessions, tc.filename),
 				[]byte(fmt.Sprintf(tc.body, cwdJSON)), 0o600))
 
-			stats, err := (Importer{Host: "source-host", DB: database}).ImportExtracted(
-				t.Context(), TargetSet{Dirs: map[parser.AgentType][]string{tc.agent: {remoteDir}}}, extracted,
-			)
-			require.NoError(t, err)
-			require.Zero(t, stats.Failed)
-			require.Equal(t, 1, stats.SessionsSynced)
-			session, err := database.GetSessionFull(t.Context(), "source-host~"+tc.id)
-			require.NoError(t, err)
-			require.NotNil(t, session)
-			assert.Equal(t, "recorded_project", session.Project)
-			messages, err := database.GetMessages(t.Context(), session.ID, 0, 100, true)
-			require.NoError(t, err)
-			require.Len(t, messages, 1)
-			assert.Equal(t, "Remote session content", messages[0].Content)
+			for _, mode := range []string{"full", "delta"} {
+				t.Run(mode, func(t *testing.T) {
+					database := dbtest.OpenTestDB(t)
+					importer := Importer{
+						Host: "source-host", DB: database, Root: extracted,
+						Targets: TargetSet{Dirs: map[parser.AgentType][]string{tc.agent: {remoteDir}}},
+					}
+					var stats SyncStats
+					var err error
+					if mode == "full" {
+						stats, err = importer.ImportExtracted(t.Context(), importer.Targets, extracted)
+					} else {
+						journalPath, pathErr := mirrorRelativeLocalChangePath(extracted, filepath.Join(sessions, tc.filename))
+						require.NoError(t, pathErr)
+						pending, prepareErr := importer.PreparePending(t.Context(), DeltaImportRequest{
+							Journal: MirrorChangeJournal{
+								Version: mirrorJournalVersion,
+								Entries: []MirrorChangeEntry{{Path: journalPath}},
+							},
+						})
+						require.NoError(t, prepareErr)
+						stats, err = pending.Execute(t.Context())
+					}
+
+					require.NoError(t, err)
+					require.Zero(t, stats.Failed)
+					require.Equal(t, 1, stats.SessionsSynced)
+					session, err := database.GetSessionFull(t.Context(), "source-host~"+tc.id)
+					require.NoError(t, err)
+					require.NotNil(t, session)
+					assert.Equal(t, "recorded_project", session.Project)
+					messages, err := database.GetMessages(t.Context(), session.ID, 0, 100, true)
+					require.NoError(t, err)
+					require.Len(t, messages, 1)
+					assert.Equal(t, "Remote session content", messages[0].Content)
+				})
+			}
 		})
 	}
 }

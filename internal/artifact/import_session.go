@@ -143,6 +143,7 @@ func loadImportedSession(
 				ctx, store, segmentRef, "invalid import segment",
 			)
 		}
+		downgradeImportedAssetReferences(segmentMessages)
 		messages = append(messages, segmentMessages...)
 		decodedBytes += int64(len(segmentData))
 		nested.toolCalls += preflight.nested.toolCalls
@@ -154,6 +155,32 @@ func loadImportedSession(
 		)
 	}
 	return rewriteManifestForImport(m, messages), importClosureComplete, nil
+}
+
+// Artifact transport carries transcript rows but no local asset files, so
+// imported asset references become readable image placeholders.
+func downgradeImportedAssetReferences(messages []db.Message) {
+	for i := range messages {
+		for j := range messages[i].ToolCalls {
+			call := &messages[i].ToolCalls[j]
+			call.ResultContent = downgradeImportedAssetContent(call.ResultContent)
+			call.ResultContentLength = db.ResolveResultContentLength(
+				call.ResultContent, call.ResultContentLength,
+			)
+			for k := range call.ResultEvents {
+				event := &call.ResultEvents[k]
+				event.Content = downgradeImportedAssetContent(event.Content)
+				event.ContentLength = db.ResolveResultContentLength(
+					event.Content, event.ContentLength,
+				)
+			}
+		}
+	}
+}
+
+func downgradeImportedAssetContent(content string) string {
+	projected, _ := db.DowngradeOffloadedToolResultImages(content)
+	return projected
 }
 
 func validateImportedManifest(

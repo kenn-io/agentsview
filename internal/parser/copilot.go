@@ -487,10 +487,7 @@ func loadCopilotStoreUsage(
 		}
 		return nil, fmt.Errorf("stat copilot session store %s: %w", storePath, err)
 	}
-	store, err := sql.Open(
-		"sqlite3",
-		"file:"+sqliteURIPath(storePath)+"?mode=ro&_busy_timeout=3000",
-	)
+	store, err := openSQLiteReadOnly(storePath, sqliteReadOptions{busyTimeoutMS: 3000})
 	if err != nil {
 		return nil, fmt.Errorf("opening copilot session store %s: %w", storePath, err)
 	}

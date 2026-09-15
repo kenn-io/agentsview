@@ -66,7 +66,7 @@ func syncService(
 	cfg config.Config, tr transport,
 ) (service.SessionService, func(), error) {
 	if tr.Mode == transportHTTP {
-		return service.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly),
+		return service.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
 			func() {}, nil
 	}
 	d, lock, err := openWriteDB(context.Background(), cfg)
