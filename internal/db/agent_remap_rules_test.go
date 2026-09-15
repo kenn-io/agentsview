@@ -65,8 +65,10 @@ func TestAgentRemapGlobSemantics(t *testing.T) {
 		{glob: "ossington-?", models: []string{"ossington-55"}, want: false},
 		{glob: "rosedale-[0-9]", models: []string{"rosedale-1"}, want: true},
 		{glob: "rosedale-[0-9]", models: []string{"rosedale-x"}, want: false},
-		{glob: "a[!b]c", models: []string{"abc"}, want: false},
-		{glob: "a[!b]c", models: []string{"axc"}, want: true},
+		{glob: "a[!b]c", models: []string{"abc"}, want: true},
+		{glob: "a[!b]c", models: []string{"axc"}, want: false},
+		{glob: "a[^b]c", models: []string{"abc"}, want: false},
+		{glob: "a[^b]c", models: []string{"axc"}, want: true},
 		{glob: "ossington-*|rosedale-*", models: []string{"ossington-5"}, want: true},
 		{glob: "ossington-*|rosedale-*", models: []string{"rosedale-1"}, want: true},
 		{glob: "ossington-*|rosedale-*", models: []string{"mistral"}, want: false},
@@ -96,7 +98,8 @@ func TestAgentRemapGlobSQLAgreement(t *testing.T) {
 	globs := []string{"ossington-*", "Ossington-*", "rosedale-*",
 		"ossington-?", "tofino-*", "gpt-*", "",
 		"ossington-*|rosedale-*", "ossington-*|Ossington-*",
-		"zzz-* | ossington-?"}
+		"zzz-* | ossington-?", "ossington-[^0]",
+		"ossington-[!0]", "ossington-[!5]"}
 	for _, glob := range globs {
 		tx, err := d.getWriter().BeginTx(ctx, nil)
 		require.NoError(t, err)

@@ -175,3 +175,34 @@ func TestDuplicateGroupsSecondPassIsStable(t *testing.T) {
 	assert.Equal(t, 0, second.NotifiedIDs,
 		"unchanged membership must not re-notify the usage cache")
 }
+
+func TestDuplicateGroupsBootstrapBackfillsOnce(t *testing.T) {
+	d := testDB(t)
+	seedDuplicateTwinPair(t, d, "goose:old", "augure-desktop:new",
+		"I need you to research and create a comprehensive plan.", 5, 4)
+
+	// A migrated archive has never had a rebuild; the bootstrap runs once
+	// and populates membership.
+	ran, err := d.EnsureDuplicateGroupsBootstrapped(context.Background())
+	require.NoError(t, err)
+	assert.True(t, ran)
+	member, ok := duplicateMembership(t, d, "goose:old")
+	require.True(t, ok, "bootstrap must populate membership")
+	assert.Equal(t, DuplicateRoleCanonical, member.Role)
+
+	// The marker makes every later call a no-op, including after a second
+	// rebuild keeps membership fresh through the normal paths.
+	ran, err = d.EnsureDuplicateGroupsBootstrapped(context.Background())
+	require.NoError(t, err)
+	assert.False(t, ran)
+	_, ok = duplicateMembership(t, d, "goose:old")
+	assert.True(t, ok, "no-op bootstrap must not clear membership")
+
+	result, err := d.RebuildDuplicateGroups(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Groups)
+
+	ran, err = d.EnsureDuplicateGroupsBootstrapped(context.Background())
+	require.NoError(t, err)
+	assert.False(t, ran, "a rebuilt archive never bootstraps again")
+}

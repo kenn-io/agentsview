@@ -4745,6 +4745,27 @@ func (e *Engine) RebuildDuplicateGroups(
 	return result, err
 }
 
+// EnsureDuplicateGroupsBootstrapped backfills duplicate-group membership
+// on an archive that has never had a rebuild (see
+// db.EnsureDuplicateGroupsBootstrapped). The daemon runs it once per
+// archive during startup maintenance so migrated archives that see no
+// sync activity still get badges and usage suppression. Emits "sessions"
+// when the bootstrap populated membership for the first time.
+func (e *Engine) EnsureDuplicateGroupsBootstrapped(
+	ctx context.Context,
+) (bool, error) {
+	ran := false
+	err := e.RunExclusive(func() error {
+		var err error
+		ran, err = e.db.EnsureDuplicateGroupsBootstrapped(ctx)
+		return err
+	})
+	if err == nil && ran {
+		e.emit("sessions")
+	}
+	return ran, err
+}
+
 // scheduleDuplicateGroupRebuild queues one background duplicate-group
 // membership rebuild after a sync pass changed sessions. Concurrent callers
 // coalesce: a running rebuild leaves a pending marker and re-runs itself so

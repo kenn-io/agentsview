@@ -444,6 +444,16 @@ func runServe(cfg config.Config, opts serveOptions) {
 			log.Printf("project identity backfill: %v", err)
 		}
 	})
+	if engine != nil {
+		// Archives migrated before duplicate-group detection existed have an
+		// empty membership table; sources that are all skipped on startup
+		// would never schedule a rebuild. Backfill once per archive.
+		go func() {
+			if _, err := engine.EnsureDuplicateGroupsBootstrapped(ctx); err != nil {
+				log.Printf("duplicate group bootstrap: %v", err)
+			}
+		}()
+	}
 
 	// Seed model_pricing so a fresh database (first run, or a
 	// resync whose pricing copy failed) is populated before

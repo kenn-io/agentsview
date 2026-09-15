@@ -225,6 +225,13 @@ func runSyncWorkerStartup(
 		result = workerResultFromStats(ctx, engine.SyncAll(ctx, onProgress))
 	}
 
+	// SyncAll schedules duplicate-group rebuilding on a background
+	// goroutine. The worker is one-shot: after the terminal result is
+	// emitted, the deferred engine and database closes run, and a rebuild
+	// still in flight would either be cut short or race the closed handle.
+	// Drain it so membership is complete and persisted before exit.
+	engine.WaitDuplicateGroupRebuildDrained()
+
 	emit(workerLine{Result: &result})
 	if result.Status != "ok" || !result.DiscoveryComplete {
 		return fmt.Errorf("sync worker %s: %s", mode, result.Status)
