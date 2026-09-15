@@ -419,13 +419,19 @@ func ClampModel(p *string) bool {
 	if len(*p) <= MaxModelLen {
 		return false
 	}
-	cut := MaxModelLen
-	// Back up to a rune boundary so we never split a multibyte rune.
-	for cut > 0 && !utf8RuneStart((*p)[cut]) {
+	*p = (*p)[:runeBoundaryAtOrBefore(*p, MaxModelLen)]
+	return true
+}
+
+// runeBoundaryAtOrBefore returns the largest offset at or before cut
+// that starts a rune, so slicing at a byte budget never splits a
+// multibyte character and the result stays valid UTF-8. cut must be
+// less than len(s); both callers check the budget before calling.
+func runeBoundaryAtOrBefore(s string, cut int) int {
+	for cut > 0 && !utf8RuneStart(s[cut]) {
 		cut--
 	}
-	*p = (*p)[:cut]
-	return true
+	return cut
 }
 
 // utf8RuneStart reports whether b is the first byte of a UTF-8

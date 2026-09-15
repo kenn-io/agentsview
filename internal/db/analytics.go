@@ -4921,9 +4921,9 @@ func truncateExcerpt(s string, max int) string {
 		return s
 	}
 	if max <= 3 {
-		return s[:max]
+		return s[:runeBoundaryAtOrBefore(s, max)]
 	}
-	return s[:max-3] + "..."
+	return s[:runeBoundaryAtOrBefore(s, max-3)] + "..."
 }
 
 func spaceReplacer(s string) string {
