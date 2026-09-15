@@ -1076,8 +1076,8 @@ func TestCurrentDataVersionPositAssistantProviderIdentity(t *testing.T) {
 }
 
 func TestCurrentDataVersionClaudeRepoLocalWorktrees(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 96,
-		"Claude repository-local worktrees require a sequential backfill")
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 109,
+		"Claude repository-local worktrees must reparse archives from v0.43.0 at data version 108")
 }
 
 func TestCurrentDataVersionAntigravityCLICwdAndWorktreeProject(t *testing.T) {

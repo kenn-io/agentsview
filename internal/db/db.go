@@ -450,9 +450,6 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // cache/last_conversations.json workspace mapping. Existing rows need
 // re-parsing to receive the exact approved workspace and prefer linked Git
 // identity when normalizing worktree project labels.)
-// (96: Claude repository-local worktrees. Existing sessions launched under
-// REPO/.claude/worktrees/<generated-name> need re-parsing so their project is
-// the owning repository rather than the generated worktree name.)
 // (97: Tool-result summaries a single result event already stores are no
 // longer written to tool_calls.result_content; result_content_length still
 // records the summary size and readers re-derive the text from the event.
@@ -492,7 +489,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // new sources and need no re-parse.)
 // (108: OpenCode v2 tool results retain embedded file payloads. Existing
 // sessions need re-parsing to recover files omitted from stored results.)
-const dataVersion = 108
+// (109: Claude repository-local worktrees. Re-parse existing sessions from
+// REPO/.claude/worktrees/<generated-name> so they use the owning repository
+// rather than the generated worktree name, including unchanged sources
+// already parsed at version 108 by v0.43.0.)
+const dataVersion = 109
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
