@@ -19,6 +19,7 @@ class DataStore {
   error: string = $state("");
   view: DataView = $state("inventory");
   selectedProjectKey: string = $state("");
+  includeAutomatedPreviews: boolean = $state(false);
   rulesMachine: string = $state("");
   rulesRefreshVersion: number = $state(0);
 

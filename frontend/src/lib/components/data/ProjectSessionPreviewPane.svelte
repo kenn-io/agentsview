@@ -10,6 +10,7 @@
   import { callGenerated, isAbortError } from "../../api/runtime.js";
   import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, FunnelIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
+  import { data } from "../../stores/data.svelte.js";
   import type { Message } from "../../api/types.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import MessageContent from "../content/MessageContent.svelte";
@@ -27,7 +28,6 @@
 
   let sessions = $state<DbSession[]>([]);
   let expanded = $state(true);
-  let includeAutomated = $state(false);
   let total = $state(0);
   let nextCursor = $state<string | undefined>();
   let loadingMore = $state(false);
@@ -64,7 +64,7 @@
       const response = await callGenerated(
         (options) => DataService.getApiV1DataProjectsByProjectKeySessions({
           projectKey,
-        }, { cursor: append ? nextCursor : undefined, limit: 20, include_automated: includeAutomated }, options),
+        }, { cursor: append ? nextCursor : undefined, limit: 20, include_automated: data.includeAutomatedPreviews }, options),
         signal,
       );
       if (!sessionsRead.isCurrent(signal)) return false;
@@ -254,11 +254,11 @@
       size="sm"
       ariaLabel={m.sidebar_filters_include_automated()}
       title={m.sidebar_filters_include_automated()}
-      ariaPressed={includeAutomated}
-      tone={includeAutomated ? "info" : "neutral"}
+      ariaPressed={data.includeAutomatedPreviews}
+      tone={data.includeAutomatedPreviews ? "info" : "neutral"}
       disabled={assigning || loading || loadingMore}
       onclick={() => {
-        includeAutomated = !includeAutomated;
+        data.includeAutomatedPreviews = !data.includeAutomatedPreviews;
         void loadSessions();
       }}
     >
@@ -271,7 +271,7 @@
   {:else if loadError}
     <p class="preview-status error-text">{loadError}</p>
   {:else if expanded && !activeSession}
-    <p class="preview-status">{includeAutomated
+    <p class="preview-status">{data.includeAutomatedPreviews
       ? m.data_reclassify_session_preview_no_message()
       : m.data_reclassify_session_preview_filtered_empty()}</p>
   {:else if expanded && activeSession}

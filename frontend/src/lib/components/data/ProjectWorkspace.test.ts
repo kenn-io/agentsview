@@ -5,6 +5,7 @@ import { mount, tick, unmount } from "svelte";
 import type { DbProjectInventoryRow } from "../../api/generated/index";
 import ProjectWorkspace from "./ProjectWorkspace.svelte";
 import { m } from "../../i18n/index.js";
+import { data } from "../../stores/data.svelte.js";
 
 const api = vi.hoisted(() => ({
   candidates: vi.fn(),
@@ -85,6 +86,7 @@ describe("ProjectWorkspace", () => {
   let component: ReturnType<typeof mount> | undefined;
 
   beforeEach(() => {
+    data.includeAutomatedPreviews = false;
     api.candidates.mockReset();
     api.listSessions.mockReset();
     api.listMessages.mockReset();

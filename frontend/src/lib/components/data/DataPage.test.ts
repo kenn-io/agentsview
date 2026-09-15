@@ -24,6 +24,7 @@ vi.mock("../../api/generated/index", () => ({
     getApiV1DataProjects: api.getApiV1DataProjects,
     getApiV1DataProjectRules: api.getApiV1DataProjectRules,
     getApiV1DataProjectReclassificationCandidates: api.candidates,
+    getApiV1DataProjectsByProjectKeySessions: api.listSessions,
   },
   SessionsService: {
     getApiV1Sessions: api.listSessions,
@@ -98,6 +99,7 @@ beforeEach(() => {
   data.error = "";
   data.view = "inventory";
   data.selectedProjectKey = "";
+  data.includeAutomatedPreviews = false;
   data.rulesMachine = "";
   data.rulesRefreshVersion = 0;
   sessions.machineLabels = {};
@@ -244,6 +246,52 @@ describe("DataPage", () => {
       "true",
     );
     expect(screen.getByRole("heading", { name: "second" })).toBeTruthy();
+  });
+
+  it("keeps the automated preview filter when switching projects and correction modes", async () => {
+    api.getApiV1DataProjects.mockResolvedValue(
+      makeInventory([
+        makeRow({ project_key: "k1", label: "first" }),
+        makeRow({ project_key: "k2", label: "second" }),
+      ]),
+    );
+    component = mount(DataPage, { target: document.body });
+    await flush();
+    await fireEvent.click(document.querySelector('[data-project-key="k1"]') as Element);
+    await flush();
+    const filterName = m.sidebar_filters_include_automated();
+    expect(screen.getByRole("button", { name: filterName }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+    await fireEvent.click(screen.getByRole("button", { name: filterName }));
+    await flush();
+    expect(api.listSessions.mock.lastCall?.[1].include_automated).toBe(true);
+
+    await fireEvent.click(document.querySelector('[data-project-key="k2"]') as Element);
+    await flush();
+    expect(screen.getByRole("button", { name: filterName }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(api.listSessions.mock.lastCall?.slice(0, 2)).toEqual([
+      { projectKey: "k2" },
+      { cursor: undefined, limit: 20, include_automated: true },
+    ]);
+
+    await fireEvent.click(
+      screen.getByRole("radio", { name: m.data_workspace_map_whole_project() }),
+    );
+    await flush();
+    expect(screen.getByRole("button", { name: filterName }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    await fireEvent.click(screen.getByRole("button", { name: filterName }));
+    await flush();
+    await fireEvent.click(document.querySelector('[data-project-key="k1"]') as Element);
+    await flush();
+    expect(screen.getByRole("button", { name: filterName }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+    expect(api.listSessions.mock.lastCall?.[1].include_automated).toBe(false);
   });
 
   const candidate = {
