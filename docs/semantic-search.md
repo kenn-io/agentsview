@@ -528,6 +528,18 @@ and FTS5 rankings. Both present the highest-ranked match from each session, with
 at most one result per session, and remember the selected mode across palette
 openings and browser sessions.
 
+After entering a query, the project selector shows the current project scope. It
+starts with the sidebar project filter; choose **All Projects** to search across
+projects without changing the sidebar.
+
+Use the date-range picker beside the search modes to limit the search to
+sessions active during a relative, calendar, or custom range. The default is
+**All time**. Changing the range reruns the query, and the range stays selected
+when switching search modes. Closing the palette resets it to All time. Semantic
+and Hybrid interpret dates in your browser's timezone; Full text uses UTC. Dates
+filter session activity, not individual message timestamps, so a match from a
+session that overlaps the range can contain an earlier or later message.
+
 Semantic and Hybrid depend on the same enabled `[vector]` configuration and
 active embeddings index described above. If `[vector]` is not configured, the
 palette shows a copyable configuration example plus the build and restart steps.
