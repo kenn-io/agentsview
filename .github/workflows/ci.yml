@@ -43,6 +43,10 @@ jobs:
       - name: Run Go linters
         run: make lint-ci
 
+      # kata 58fz: remove the client exclusion after the upstream route-group fix.
+      - name: Check Huma API contract
+        run: go run go.kenn.io/kit/cmd/huma-check@3e1f59e9011e878ec595aa04aebc8a77c5292c4d -fix=false -disable client ./...
+
   frontend:
     runs-on: namespace-profile-linux-8cpu
     steps:
