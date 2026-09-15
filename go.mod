@@ -6,14 +6,14 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/ccoveille/go-safecast/v2 v2.0.1
 	github.com/danielgtaylor/huma/v2 v2.39.1
-	github.com/dlclark/regexp2/v2 v2.7.2
+	github.com/dlclark/regexp2/v2 v2.8.0
 	github.com/dmarkham/enumer v1.6.3
 	github.com/duckdb/duckdb-go/v2 v2.10505.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gofrs/flock v0.13.1
 	github.com/google/go-cmp v0.7.0
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/klauspost/compress v1.20.0
 	github.com/mattn/go-runewidth v0.0.29
 	github.com/mattn/go-sqlite3 v1.14.52
@@ -31,12 +31,12 @@ require (
 	go.kenn.io/docbank v0.14.0
 	go.kenn.io/kit v0.24.2-0.20260908151812-b9d6bb63077d
 	golang.org/x/mod v0.41.0
-	golang.org/x/net v0.58.0
-	golang.org/x/perf v0.0.0-20260615155930-9e4b9ddef5b6
+	golang.org/x/net v0.59.0
+	golang.org/x/perf v0.0.0-20260908200009-22c9c6c9d4da
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
-	golang.org/x/term v0.45.0
-	modernc.org/libc v1.75.6
+	golang.org/x/term v0.46.0
+	modernc.org/libc v1.75.7
 	modernc.org/sqlite v1.58.0
 )
 
@@ -176,11 +176,11 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
-	golang.org/x/exp v0.0.0-20260603202125-055de637280b // indirect
-	golang.org/x/oauth2 v0.36.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/exp v0.0.0-20260824195058-e88cd73687aa // indirect
+	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260811182544-a038080d80e5 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.49.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
