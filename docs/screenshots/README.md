@@ -83,6 +83,6 @@ bash docs/screenshots/update-generated-assets-branch.sh --skip-generate
 
 The capture uses a 1440×900 viewport, dark mode, and the `America/Chicago`
 timezone. Some captures use fixed response fixtures to illustrate states such as
-image-cleanup totals. Captures hide session IDs because imported IDs can contain
-original machine names. See `playwright.config.ts` and
+image-cleanup totals and token usage. Captures hide session IDs because imported
+IDs can contain original machine names. See `playwright.config.ts` and
 `tests/screenshots.spec.ts` for the exact setup.

@@ -1687,16 +1687,38 @@ test.describe('Token usage', () => {
   });
 
   test('token usage in session header', async ({ page }) => {
-    // A fixed recorded effort illustrates the badge even with older source transcripts.
-    await page.route('**/api/v1/sessions/*/messages*', async (route) => {
-      const response = await route.fetch();
-      const body = await response.json();
-      for (const message of body.messages ?? []) {
-        if (message.role === 'assistant') message.reasoning_effort = 'high';
-      }
-      await route.fulfill({ response, json: body });
-    });
-    await page.locator('.session-item:has(.agent-tag:text-is("Codex"))').first().click();
+    // The archive may have no Codex assistant/model messages or recorded tokens.
+    const session = {
+      id: 'screenshot-token-usage', agent: 'codex', project: 'agentsview', machine: 'local',
+      first_message: 'Review the changes.',
+      started_at: '2026-09-01T15:00:00Z', ended_at: '2026-09-01T15:02:00Z',
+      created_at: '2026-09-01T15:00:00Z', message_count: 2, user_message_count: 1,
+      peak_context_tokens: 32000, total_output_tokens: 1200,
+      has_peak_context_tokens: true, has_total_output_tokens: true, is_automated: false,
+    };
+    const messages = [
+      {
+        id: 1, session_id: session.id, ordinal: 0, role: 'user',
+        content: session.first_message, content_length: session.first_message.length,
+        timestamp: session.started_at, model: '', thinking_text: '',
+        has_thinking: false, has_tool_use: false, is_system: false,
+        context_tokens: 0, output_tokens: 0, has_context_tokens: false, has_output_tokens: false,
+      },
+      {
+        id: 2, session_id: session.id, ordinal: 1, role: 'assistant',
+        content: 'The changes are ready.', content_length: 22,
+        timestamp: session.ended_at, model: 'gpt-5.4', reasoning_effort: 'high', thinking_text: '',
+        has_thinking: false, has_tool_use: false, is_system: false,
+        context_tokens: 32000, output_tokens: 1200, has_context_tokens: true, has_output_tokens: true,
+      },
+    ];
+    const sessionPath = `/api/v1/sessions/${session.id}`;
+    await page.route(`**${sessionPath}`, (route) => route.fulfill({ json: session }));
+    await page.route(`**${sessionPath}/messages*`, (route) => route.fulfill({
+      json: { messages, count: messages.length },
+    }));
+    await page.goto(`/sessions/${session.id}`);
+    await expect(page.locator('.model-badge__model')).toHaveText('gpt-5.4');
     await expect(page.locator('.model-badge .model-badge__effort')).toHaveText('high');
     await expect(page.getByRole('button', { name: 'Copy link to session', exact: true })).toBeVisible();
     await page.waitForTimeout(500);
