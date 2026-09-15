@@ -146,10 +146,10 @@ func applyConfigTOMLMirrorKeys(t *testing.T) map[string]bool {
 // accepts. Fields tagged `toml:"-"`, and fields with no toml tag at all, are not
 // file-settable and are skipped.
 func configTOMLKeys() map[string]bool {
-	typ := reflect.TypeOf(Config{})
+	typ := reflect.TypeFor[Config]()
 	keys := make(map[string]bool, typ.NumField())
-	for i := range typ.NumField() {
-		if key := tomlTagKey(typ.Field(i).Tag.Get("toml")); key != "" {
+	for field := range typ.Fields() {
+		if key := tomlTagKey(field.Tag.Get("toml")); key != "" {
 			keys[key] = true
 		}
 	}
