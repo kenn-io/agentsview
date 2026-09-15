@@ -351,7 +351,7 @@ func parsePiLikeSession(
 			Mtime: info.ModTime().UnixNano(),
 		},
 	}
-	if agent == AgentPrimeAgent && parentSessionID != "" {
+	if (agent == AgentPrimeAgent || agent == AgentPi) && parentSessionID != "" {
 		sess.RelationshipType = RelFork
 	}
 	if isOMPSubagent {

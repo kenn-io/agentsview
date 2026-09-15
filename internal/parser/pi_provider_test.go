@@ -371,6 +371,43 @@ func TestPiProviderDiscoversAndParsesNativeParentSession(t *testing.T) {
 	child := byPath[childPath]
 	assert.Equal(t, "pi:actual-parent-header", parent.ID)
 	assert.Equal(t, parent.ID, child.ParentSessionID)
+
+	// No-hint FindSource (no stored path or fingerprint) must fall back to
+	// scanning session headers: native filenames are timestamp-prefixed and do
+	// not contain the header UUID.
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "actual-parent-header",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, parentPath, found.DisplayPath)
+	assert.NotEqual(t, childPath, found.DisplayPath)
+
+	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "child-uuid",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, childPath, found.DisplayPath)
+	assert.NotEqual(t, parentPath, found.DisplayPath)
+
+	// A stored path hint is still honored ahead of header scanning.
+	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath: childPath,
+		RawSessionID:   "actual-parent-header",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, childPath, found.DisplayPath,
+		"stored path hints are preserved ahead of header lookup")
+
+	// An unknown header UUID yields not-found rather than a wrong source.
+	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "missing-header-id",
+	})
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Empty(t, found.DisplayPath)
 }
 
 // TestOMPProviderDiscoversNestedSubagents verifies that OMP subagent

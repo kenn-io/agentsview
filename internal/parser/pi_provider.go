@@ -125,6 +125,13 @@ func (p *piProvider) FindSource(
 			return source, ok, err
 		}
 	}
+	// Native Pi default filenames are timestamp-prefixed, so a bare header
+	// UUID lookup finds nothing by filename. Fall back to scanning session
+	// headers only after the filename/directory lookup misses, so files with
+	// no header still resolve by their filename-derived identity.
+	if p.Def.Type == AgentPi {
+		return p.sourceForHeaderSessionID(ctx, req.RawSessionID)
+	}
 	return SourceRef{}, false, nil
 }
 

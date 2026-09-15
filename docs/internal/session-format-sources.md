@@ -1701,9 +1701,13 @@ schemas keep their existing ordering behavior.
   the parent transcript, whose header UUID is authoritative even where the
   filename stem diverges (explicit `--session` paths skip the default
   `timestamp_session-id` naming). Agentsview resolves that path against the
-  referenced sibling's header UUID and falls back to the filename stem when
-  the referenced file is unavailable. Data version 109 reparses stored native
-  Pi sessions to repair lineage edges.
+  referenced sibling's header UUID, falls back to the filename stem when the
+  referenced file is unavailable, and classifies native Pi sessions with a
+  parent as forks. Because the default filename does not contain the header
+  UUID, identity lookup that arrives with only a bare header UUID and no
+  stored path or fingerprint hint scans discovered session headers after the
+  filename and directory lookups miss. Data version 109 reparses stored
+  native Pi sessions to repair lineage edges and fork classification.
 
 ## Prime Agent (`prime-agent`)
 

@@ -449,6 +449,8 @@ func TestPiProviderParsesBranchedFrom(t *testing.T) {
 			sess.ParentSessionID,
 			"PRSR-10: basename of branchedFrom without .jsonl extension, prefixed",
 		)
+		assert.Equal(t, RelFork, sess.RelationshipType,
+			"legacy branchedFrom lineage is classified as a fork")
 	})
 }
 
@@ -579,6 +581,10 @@ func TestPiProviderNativeParentSessionUsesHeaderIdentity(t *testing.T) {
 	assert.Equal(t, "pi:header-id-does-not-match-filename", parent.ID)
 	assert.Equal(t, parent.ID, child.ParentSessionID,
 		"native parentSession must resolve to the parent's stored header ID")
+	assert.Empty(t, parent.RelationshipType,
+		"native Pi parent session has no relationship")
+	assert.Equal(t, RelFork, child.RelationshipType,
+		"native Pi parented session is classified as a fork")
 }
 
 // TestPiProviderOMPParentSessionMatchesParentID proves the mapped
