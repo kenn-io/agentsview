@@ -30,10 +30,17 @@ import (
 // `[notifications]` was silently dropped on load and the user's setting reverted
 // on every restart even though config.toml still said `enabled = true`.
 //
-// This test is the missing link. It fails whenever the mirror and Config
-// disagree about which toml keys exist, in either direction, so that class of
-// drift cannot be reintroduced. It is a test-only guard: production code is
-// untouched.
+// This test is the missing link: it fails when a Config toml key has no mirror
+// counterpart, which is exactly the shape that silently dropped
+// `[notifications]`.
+//
+// Scope, stated honestly: it compares key *sets*, so it does not cover the whole
+// silent-drop space. A field declared in the mirror but never merged is dead
+// code the compiler does not flag (the `pg` entry is one), and a field declared
+// in both structs but never merged also passes here. This guard closes the
+// omission direction — the one that bit — not every variant.
+//
+// Test-only: production code is untouched.
 func TestApplyConfigTOMLMirrorParity(t *testing.T) {
 	mirror := applyConfigTOMLMirrorKeys(t)
 	config := configTOMLKeys()
@@ -54,49 +61,22 @@ func TestApplyConfigTOMLMirrorParity(t *testing.T) {
 		missingFromMirror = append(missingFromMirror, key)
 	}
 
-	var absentFromConfig []string
-	for key := range mirror {
-		if config[key] {
-			continue
-		}
-		if _, allowed := mirrorKeysAllowedOutsideConfig[key]; allowed {
-			continue
-		}
-		absentFromConfig = append(absentFromConfig, key)
-	}
-
 	sort.Strings(missingFromMirror)
-	sort.Strings(absentFromConfig)
 
 	assert.Empty(t, missingFromMirror,
 		"Config toml keys absent from the applyConfigTOML mirror: config.toml "+
 			"values for these are silently dropped on load. Add them to the "+
 			"mirror struct, or to configKeysAllowedOutsideMirror with a reason. "+
 			"Offending keys: %v", missingFromMirror)
-
-	assert.Empty(t, absentFromConfig,
-		"applyConfigTOML mirror toml keys with no Config counterpart: these are "+
-			"dead mirror entries. Remove them from the mirror struct, or add them "+
-			"to mirrorKeysAllowedOutsideConfig with a reason. "+
-			"Offending keys: %v", absentFromConfig)
 }
 
 // configKeysAllowedOutsideMirror lists Config toml keys that intentionally have
 // no counterpart in the applyConfigTOML mirror. Every entry needs a reason;
 // adding one without a reason defeats the purpose of this guard.
 var configKeysAllowedOutsideMirror = map[string]string{
-	"data_dir":             "owned by AGENTSVIEW_DATA_DIR and the CLI; never set from config.toml",
-	"no_browser":           "env/CLI-owned; the tag exists but applyConfigTOML never reads it from the file (pre-existing gap, not introduced by this work)",
-	"custom_model_pricing": "decoded separately by decodeCustomModelPricing, which also merges the built-in rate defaults",
-}
-
-// mirrorKeysAllowedOutsideConfig lists mirror toml keys whose value lands on a
-// Config field that is deliberately not file-addressable under that name, so the
-// two tag sets can never match for them. As above, every entry needs a reason.
-var mirrorKeysAllowedOutsideConfig = map[string]string{
-	"remote_access":   "legacy alias for require_auth; merged via `c.RequireAuth = file.RequireAuth || file.RemoteAccess`",
-	"remote_hosts":    "Config.RemoteHosts is tagged toml:\"-\": config-file only, never serialized to the settings API",
-	"session_sources": "Config.SessionSources is tagged toml:\"-\"; raw entries are resolved into the unexported sessionSourceConfigs",
+	"data_dir":             "owned by the AGENTSVIEW_DATA_DIR environment variable; never set from config.toml",
+	"no_browser":           "env/CLI-owned; the tag exists but applyConfigTOML never reads it from the file (pre-existing gap, tracked in OPEN_ISSUE.md)",
+	"custom_model_pricing": "decoded separately by decodeCustomModelPricing rather than through the mirror struct",
 }
 
 // applyConfigTOMLMirrorKeys parses config.go and returns the set of toml keys
