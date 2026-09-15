@@ -51,6 +51,8 @@ var resumeAgents = map[string]string{
 	"opencode": "opencode --session %s",
 	"amp":      "amp --resume %s",
 	"kiro":     "kiro-cli chat --resume-id %s",
+	// Augure CLI (plan 007) mirrors the Codex resume shape.
+	"augure": "augure resume %s",
 }
 
 const syntheticModel = "<synthetic>"
@@ -66,14 +68,15 @@ func resumeCommand(agent, tmpl, rawID, model string) string {
 	switch agent {
 	case "claude":
 		cmd += " --model " + shellQuote(model)
-	case "codex", "traex":
+	case "codex", "traex", "augure":
 		cmd += " -m " + shellQuote(model)
 	}
 	return cmd
 }
 
 func resumeAgentNeedsModel(agent string) bool {
-	return agent == "claude" || agent == "codex" || agent == "traex"
+	return agent == "claude" || agent == "codex" || agent == "traex" ||
+		agent == "augure"
 }
 
 func primaryResumeModel(counts []db.ModelCount) string {

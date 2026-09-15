@@ -60,6 +60,18 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
+func TestResumeCommandAugure(t *testing.T) {
+	assert.True(t, resumeAgentNeedsModel("augure"))
+
+	// Model selection mirrors the frontend: codex-shaped -m flag,
+	// omitted when the session has no eligible model usage.
+	cmd := resumeCommand("augure", resumeAgents["augure"], "sess-1", "")
+	assert.Equal(t, "augure resume sess-1", cmd)
+
+	cmd = resumeCommand("augure", resumeAgents["augure"], "run-1", "ossington-5")
+	assert.Equal(t, "augure resume run-1 -m ossington-5", cmd)
+}
+
 func TestCommandWithCleanup(t *testing.T) {
 	assert.Equal(t,
 		"claude < prompt.txt; rm -f -- 'prompt.txt'",
