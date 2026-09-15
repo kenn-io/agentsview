@@ -1,4 +1,21 @@
 {
+  "data_candidate_worktree_prefix": "워크트리 접두 경로",
+  "data_candidate_common_parent": "공통 상위 폴더",
+  "data_candidate_paths_sample": "기록된 경로의 일부를 표시합니다.",
+  "data_candidate_observed_paths": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "관찰된 폴더 {countNumber}개",
+        "countPlural=other": "관찰된 폴더 {countNumber}개"
+      }
+    }
+  ],
   "app_auth_title": "인증 필요",
   "app_auth_description": "이 서버는 접근하려면 인증 토큰이 필요합니다. ~/.agentsview/config.toml 또는 AGENTSVIEW_AUTH_TOKEN의 auth_token 값을 입력하세요.",
   "app_auth_placeholder": "인증 토큰 붙여넣기",
@@ -852,7 +869,11 @@
   "data_selection_hint": "프로젝트를 클릭한 다음 Shift-클릭하여 범위를 선택하세요.",
   "data_selection_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": { "countPlural=other": "프로젝트 {countNumber}개 선택됨" }
     }
@@ -861,19 +882,27 @@
   "data_batch_workspace_label": "프로젝트 일괄 수정",
   "data_batch_heading": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": { "countPlural=other": "프로젝트 {countNumber}개 선택됨" }
     }
   ],
   "data_batch_label": "일괄",
   "data_batch_folders_heading": "선택한 폴더",
-  "data_batch_folders_intro": "선택한 프로젝트의 폴더 제안입니다.",
+  "data_batch_folders_intro": "선택한 프로젝트에서 관찰된 폴더를 공통 경로로 묶습니다. 각 머신에서 세션 수가 많은 그룹을 먼저 표시합니다.",
   "data_batch_correction_heading": "일괄 수정",
-  "data_batch_correction_intro": "아래의 사용 가능한 모든 폴더를 하나의 프로젝트에 매핑합니다.",
+  "data_batch_correction_intro": "목록의 모든 폴더에 선택한 대상을 적용합니다.",
   "data_batch_folder_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": { "countPlural=other": "폴더 {countNumber}개" }
     }
@@ -882,7 +911,11 @@
   "data_batch_saving": "일괄 수정 저장 중…",
   "data_batch_save": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": { "countPlural=other": "수정 {countNumber}개 저장" }
     }
@@ -1050,8 +1083,8 @@
   "data_reclassify_managed_in_rules": "이 수정은 프로젝트 매핑 규칙으로 저장됩니다.",
   "data_reclassify_open_rules": "프로젝트 매핑 규칙 열기",
   "data_workspace_all_projects": "모든 프로젝트",
-  "data_workspace_map_whole_project": "전체 프로젝트 매핑",
-  "data_workspace_correct_one_folder": "폴더 하나 수정",
+  "data_workspace_map_whole_project": "모든 폴더",
+  "data_workspace_correct_one_folder": "폴더 하나",
   "data_workspace_close": "프로젝트 세부 정보 닫기",
   "data_workspace_activity": "활동",
   "data_workspace_activity_range": "{first} – {last}",

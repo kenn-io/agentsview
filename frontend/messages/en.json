@@ -1,4 +1,21 @@
 {
+  "data_candidate_worktree_prefix": "Worktree prefix",
+  "data_candidate_common_parent": "Common parent",
+  "data_candidate_paths_sample": "Showing a sample of the recorded paths.",
+  "data_candidate_observed_paths": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} observed folder",
+        "countPlural=other": "{countNumber} observed folders"
+      }
+    }
+  ],
   "app_auth_title": "Authentication Required",
   "app_auth_description": "This server requires an auth token to access. Enter the auth_token from ~/.agentsview/config.toml or AGENTSVIEW_AUTH_TOKEN.",
   "app_auth_placeholder": "Paste auth token",
@@ -892,7 +909,11 @@
   "data_selection_hint": "Click a project, then Shift-click to select a range.",
   "data_selection_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "{countNumber} project selected",
@@ -904,7 +925,11 @@
   "data_batch_workspace_label": "Bulk project correction",
   "data_batch_heading": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "{countNumber} project selected",
@@ -914,12 +939,16 @@
   ],
   "data_batch_label": "Bulk",
   "data_batch_folders_heading": "Selected folders",
-  "data_batch_folders_intro": "Folder suggestions from the selected projects.",
+  "data_batch_folders_intro": "Observed folders from the selected projects, grouped by shared paths. Larger session groups appear first on each machine.",
   "data_batch_correction_heading": "Bulk correction",
-  "data_batch_correction_intro": "Map every available folder below to one project.",
+  "data_batch_correction_intro": "All listed folders will receive the destination you choose.",
   "data_batch_folder_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "{countNumber} folder",
@@ -931,7 +960,11 @@
   "data_batch_saving": "Saving bulk correction…",
   "data_batch_save": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "Save {countNumber} correction",
@@ -1120,8 +1153,8 @@
   "data_reclassify_managed_in_rules": "This correction will be saved as a project mapping rule.",
   "data_reclassify_open_rules": "Open project mapping rules",
   "data_workspace_all_projects": "All projects",
-  "data_workspace_map_whole_project": "Map whole project",
-  "data_workspace_correct_one_folder": "Correct one folder",
+  "data_workspace_map_whole_project": "All folders",
+  "data_workspace_correct_one_folder": "One folder",
   "data_workspace_close": "Close project details",
   "data_workspace_activity": "Activity",
   "data_workspace_activity_range": "{first} – {last}",

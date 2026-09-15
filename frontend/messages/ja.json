@@ -1,4 +1,21 @@
 {
+  "data_candidate_worktree_prefix": "ワークツリープレフィックス",
+  "data_candidate_common_parent": "共通の親フォルダー",
+  "data_candidate_paths_sample": "記録されたパスの一部を表示しています。",
+  "data_candidate_observed_paths": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "記録されたフォルダー {countNumber} 件",
+        "countPlural=other": "記録されたフォルダー {countNumber} 件"
+      }
+    }
+  ],
   "app_auth_title": "認証が必要です",
   "app_auth_description": "このサーバーにアクセスするには認証トークンが必要です。 ~/.agentsview/config.toml または AGENTSVIEW_AUTH_TOKEN から auth_token を入力します。",
   "app_auth_placeholder": "認証トークンを貼り付けます",
@@ -892,7 +909,11 @@
   "data_selection_hint": "プロジェクトをクリックし、Shift キーを押しながらクリックして範囲を選択します。",
   "data_selection_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": { "countPlural=other": "{countNumber} 件のプロジェクトを選択中" }
     }
@@ -901,19 +922,27 @@
   "data_batch_workspace_label": "プロジェクトの一括修正",
   "data_batch_heading": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": { "countPlural=other": "{countNumber} 件のプロジェクトを選択中" }
     }
   ],
   "data_batch_label": "一括",
   "data_batch_folders_heading": "選択したフォルダー",
-  "data_batch_folders_intro": "選択したプロジェクトからのフォルダー候補です。",
+  "data_batch_folders_intro": "選択したプロジェクトで記録されたフォルダーを共通パスでまとめています。マシンごとにセッション数の多いグループから表示します。",
   "data_batch_correction_heading": "一括修正",
-  "data_batch_correction_intro": "以下の使用可能なフォルダーをすべて 1 つのプロジェクトに割り当てます。",
+  "data_batch_correction_intro": "一覧のすべてのフォルダーを、選択した移動先に割り当てます。",
   "data_batch_folder_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": { "countPlural=other": "{countNumber} 個のフォルダー" }
     }
@@ -922,7 +951,11 @@
   "data_batch_saving": "一括修正を保存しています…",
   "data_batch_save": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": { "countPlural=other": "{countNumber} 件の修正を保存" }
     }
@@ -1108,8 +1141,8 @@
   "data_reclassify_managed_in_rules": "この修正はプロジェクトマッピングルールとして保存されます。",
   "data_reclassify_open_rules": "プロジェクトマッピングルールを開く",
   "data_workspace_all_projects": "すべてのプロジェクト",
-  "data_workspace_map_whole_project": "プロジェクト全体をマッピング",
-  "data_workspace_correct_one_folder": "1つのフォルダーを修正",
+  "data_workspace_map_whole_project": "すべてのフォルダー",
+  "data_workspace_correct_one_folder": "1つのフォルダー",
   "data_workspace_close": "プロジェクトの詳細を閉じる",
   "data_workspace_activity": "活動",
   "data_workspace_activity_range": "{first} – {last}",

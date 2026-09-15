@@ -145,6 +145,35 @@ func TestPGWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 	assert.Equal(t, "fallback", localCandidates[4].EvidenceKind)
 }
 
+func TestPGWorktreeCandidatesCollapseObservedParents(t *testing.T) {
+	push, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_candidate_parents_test")
+	for id, cwd := range map[string]string{
+		"worktree-a": "/srv/repo/.claude/worktrees/run-a",
+		"worktree-b": "/srv/repo/.claude/worktrees/run-b/src",
+		"checkout-a": "D:/Repos/repo-feature-a",
+		"checkout-b": "D:/Repos/repo-feature-b",
+	} {
+		seedPGCandidateSession(t, local, id, "selected", "host.example", cwd, "2025-06-02T10:00:00Z")
+	}
+	_, err := push.Push(ctx, false, nil)
+	require.NoError(t, err)
+	projects, err := local.BuildProjectIdentityMap(ctx, []string{"selected"})
+	require.NoError(t, err)
+	request := db.ArchiveWorktreeCandidateRequest{
+		ProjectLabel: "selected", ProjectKey: projects["selected"].ProjectKey,
+	}
+	want, err := local.ListArchiveWorktreeCandidates(ctx, request)
+	require.NoError(t, err)
+	got, err := (&Store{pg: pg}).ListArchiveWorktreeCandidates(ctx, request)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+	require.Len(t, got, 2)
+	assert.ElementsMatch(t, []string{"/srv/repo/.claude/worktrees", "D:/Repos"},
+		[]string{got[0].SuggestedPrefix, got[1].SuggestedPrefix})
+	assert.Equal(t, 2, got[0].ContributingSessions)
+	assert.Equal(t, 2, got[1].ContributingSessions)
+}
+
 func TestPGWorktreeCandidatesExcludeDifferentProjectKeys(t *testing.T) {
 	const schema = "agentsview_worktree_candidates_alias_test"
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)

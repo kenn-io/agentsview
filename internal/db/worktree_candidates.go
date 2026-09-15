@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -202,7 +203,10 @@ func BuildWorktreeCandidates(
 	groups := make(map[worktreeCandidateGroupKey]*worktreeCandidateGroup)
 	for _, session := range sessions {
 		key := worktreeCandidateGroupKey{machine: session.Machine}
-		if root := candidateSnapshotRoot(session); root != "" {
+		if prefix := observedWorktreePrefix(session.Cwd); prefix != "" {
+			key.kind, key.root = "worktree", prefix
+		} else if root := candidateSnapshotRoot(session); root != "" &&
+			worktreePathMatches(root, normalizedMappingPath(session.Cwd)) {
 			key.kind, key.root = "snapshot", root
 		} else if root := compatibleAggregateRoot(session, observations); root != "" {
 			key.kind, key.root = "aggregate", root
@@ -218,6 +222,7 @@ func BuildWorktreeCandidates(
 		}
 		group.sessions = append(group.sessions, session)
 	}
+	groups = collapseObservedParents(groups)
 
 	result := make([]WorktreeReclassificationCandidate, 0, len(groups))
 	for _, group := range groups {
@@ -228,6 +233,12 @@ func BuildWorktreeCandidates(
 		if left.Machine != right.Machine {
 			return left.Machine < right.Machine
 		}
+		if left.Available != right.Available {
+			return left.Available
+		}
+		if left.ContributingSessions != right.ContributingSessions {
+			return left.ContributingSessions > right.ContributingSessions
+		}
 		if candidateKindOrder(left.EvidenceKind) != candidateKindOrder(right.EvidenceKind) {
 			return candidateKindOrder(left.EvidenceKind) < candidateKindOrder(right.EvidenceKind)
 		}
@@ -237,6 +248,74 @@ func BuildWorktreeCandidates(
 		return left.ID < right.ID
 	})
 	return result
+}
+
+// observedWorktreePrefix only truncates a recorded cwd. It never constructs
+// a sibling checkout or guesses a repository from a similar folder name.
+func observedWorktreePrefix(cwd string) string {
+	cwd = normalizedMappingPath(cwd)
+	for _, marker := range []string{"/.claude/worktrees/", "/.worktrees/"} {
+		if before, _, ok := strings.Cut(cwd, marker); ok {
+			return before + strings.TrimSuffix(marker, "/")
+		}
+	}
+	for _, marker := range []string{"/.t3/worktrees/", "/.superset/worktrees/", "/conductor/workspaces/", "/.roborev/ci-worktrees/"} {
+		if before, after, ok := strings.Cut(cwd, marker); ok {
+			repo, _, _ := strings.Cut(after, "/")
+			return before + marker + repo
+		}
+	}
+	parts := strings.Split(cwd, "/")
+	for i, part := range parts {
+		if strings.HasSuffix(part, ".worktrees") && part != ".worktrees" {
+			return strings.Join(parts[:i+1], "/")
+		}
+	}
+	return ""
+}
+
+// Collapse sibling observations once, at their nearest shared parent. Do not
+// repeatedly climb toward a home directory or drive root, and do not broaden
+// a known worktree container. Each group retains its actual session examples.
+func collapseObservedParents(
+	groups map[worktreeCandidateGroupKey]*worktreeCandidateGroup,
+) map[worktreeCandidateGroupKey]*worktreeCandidateGroup {
+	parents := make(map[worktreeCandidateGroupKey][]*worktreeCandidateGroup)
+	for _, group := range groups {
+		if group.key.kind == "worktree" || group.key.kind == "unavailable" {
+			continue
+		}
+		candidate := candidateFromGroup(group)
+		if !candidate.Available {
+			continue
+		}
+		parent := path.Dir(candidate.SuggestedPrefix)
+		if strings.HasPrefix(candidate.SuggestedPrefix, "//") {
+			parent = "/" + parent // path.Dir cleans the UNC double slash.
+		}
+		if parent == "." || isFilesystemRootMappingPath(parent) ||
+			(len(parent) == 2 && parent[1] == ':') {
+			continue
+		}
+		key := worktreeCandidateGroupKey{machine: group.key.machine, kind: "parent", root: parent}
+		parents[key] = append(parents[key], group)
+	}
+	for key, children := range parents {
+		paths := make(map[string]struct{})
+		for _, child := range children {
+			paths[candidateFromGroup(child).SuggestedPrefix] = struct{}{}
+		}
+		if len(paths) < 2 {
+			continue
+		}
+		merged := &worktreeCandidateGroup{key: key}
+		for _, child := range children {
+			merged.sessions = append(merged.sessions, child.sessions...)
+			delete(groups, child.key)
+		}
+		groups[key] = merged
+	}
+	return groups
 }
 
 func (db *DB) loadWorktreeCandidateSessions(
@@ -351,9 +430,12 @@ func candidateFromGroup(group *worktreeCandidateGroup) WorktreeReclassificationC
 	}
 	suggestedPrefix := ""
 	if len(paths) > 0 {
-		if group.key.kind == "fallback" {
+		switch group.key.kind {
+		case "worktree", "parent":
+			suggestedPrefix = group.key.root
+		case "fallback":
 			suggestedPrefix = group.key.fallbackCwd
-		} else {
+		default:
 			suggestedPrefix = longestCommonDirectoryPrefix(paths)
 		}
 	}

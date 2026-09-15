@@ -13,6 +13,7 @@
   import { m } from "../../i18n/index.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
+  import CandidateEvidence from "./CandidateEvidence.svelte";
   import { displayProjectLabel } from "./project-label.js";
 
   interface Props {
@@ -137,6 +138,10 @@
 
   function evidenceLabel(kind: string): string {
     switch (kind) {
+      case "worktree":
+        return m.data_candidate_worktree_prefix();
+      case "parent":
+        return m.data_candidate_common_parent();
       case "snapshot":
         return m.data_reclassify_evidence_snapshot();
       case "aggregate":
@@ -149,7 +154,7 @@
   }
 
   function selectTarget(value: string) {
-    if (readOnly) return;
+    if (readOnly || applying || applied) return;
     targetProject = value.trim();
     clearPreview();
     schedulePreview();
@@ -208,8 +213,8 @@
     savedCount = 0;
     const target = previews[0]?.preview.normalized_project || targetProject.trim();
     try {
-      for (const entry of usableCandidates) {
-        const requestBody = draft(entry);
+      const requests = usableCandidates.map(draft);
+      for (const requestBody of requests) {
         const current = await callGenerated(() =>
           SettingsService.postApiV1SettingsWorktreeMappingsPreview(requestBody),
         );
@@ -244,43 +249,6 @@
 </script>
 
 <div class="editor">
-  <section class="suggestions">
-    <div class="section-heading">
-      <div>
-        <h4>{m.data_batch_folders_heading()}</h4>
-        <p>{m.data_batch_folders_intro()}</p>
-      </div>
-    </div>
-
-    {#if candidatesLoading}
-      <p class="muted">{m.data_reclassify_candidates_loading()}</p>
-    {:else if candidatesError}
-      <p class="error-text">{candidatesError}</p>
-    {:else if candidates.length === 0}
-      <p class="muted">{m.data_reclassify_no_candidates()}</p>
-    {:else}
-      <div class="folder-list">
-        {#each candidates as entry (`${entry.sourceKey}:${entry.candidate.id}`)}
-          <article class="folder-row" class:unavailable={!entry.candidate.available}>
-            <div class="folder-source">{displayProjectLabel(entry.sourceLabel)}</div>
-            <div class="folder-path" title={entry.candidate.suggested_prefix}>
-              {entry.candidate.suggested_prefix || m.data_reclassify_path_unavailable()}
-            </div>
-            <div class="folder-meta">
-              <span>{entry.candidate.machine}</span>
-              <span>{m.data_reclassify_candidate_sessions({ count: entry.candidate.contributing_sessions })}</span>
-              <Chip size="xs" tone={entry.candidate.available ? "muted" : "warning"} uppercase={false}>
-                {entry.candidate.available
-                  ? evidenceLabel(entry.candidate.evidence_kind)
-                  : m.data_reclassify_evidence_unavailable()}
-              </Chip>
-            </div>
-          </article>
-        {/each}
-      </div>
-    {/if}
-  </section>
-
   <section class="composer">
     <div class="composer-heading">
       <div>
@@ -295,19 +263,34 @@
     {#if readOnly}
       <p class="warning" role="note">{m.data_reclassify_read_only()}</p>
     {:else}
-      <div class="target-field">
-        <span>{m.data_batch_target_project()}</span>
-        <ProjectTypeahead
-          {projects}
-          value={targetProject}
-          onselect={selectTarget}
-          onquery={editTargetQuery}
-          includeAll={false}
-          allowCustom={true}
-          customLabel={m.data_reclassify_use_custom_project({ query: "{query}" })}
-          placeholder={m.data_reclassify_target_project()}
-          title={m.data_reclassify_target_project()}
-        />
+      <span class="destination-label">{m.data_batch_target_project()}</span>
+      <div class="destination-actions">
+        <div class="target-field">
+          <ProjectTypeahead
+            {projects}
+            disabled={applying || refreshing || applied}
+            value={targetProject}
+            onselect={selectTarget}
+            onquery={editTargetQuery}
+            includeAll={false}
+            allowCustom={true}
+            customLabel={m.data_reclassify_use_custom_project({ query: "{query}" })}
+            placeholder={m.data_reclassify_target_project()}
+            title={m.data_reclassify_target_project()}
+          />
+        </div>
+
+        <div class="action-row">
+          <Button
+            label={applying || refreshing
+              ? m.data_batch_saving()
+              : m.data_batch_save({ count: usableCandidates.length })}
+            disabled={!canApply || applying || refreshing}
+            tone="info"
+            surface="solid"
+            onclick={applyAll}
+          />
+        </div>
       </div>
 
       {#if previewLoading}
@@ -331,7 +314,47 @@
       {#if applied && !refreshing}
         <p class="warning" role="status">{m.data_reclassify_applied_refresh_failed()}</p>
       {/if}
+    {/if}
+  </section>
+  <section class="suggestions">
+    <div class="section-heading">
+      <div>
+        <h4>{m.data_batch_folders_heading()}</h4>
+        <p>{m.data_batch_folders_intro()}</p>
+      </div>
+    </div>
 
+    {#if candidatesLoading}
+      <p class="muted">{m.data_reclassify_candidates_loading()}</p>
+    {:else if candidatesError}
+      <p class="error-text">{candidatesError}</p>
+    {:else if candidates.length === 0}
+      <p class="muted">{m.data_reclassify_no_candidates()}</p>
+    {:else}
+      <div class="folder-list">
+        {#each candidates as entry (`${entry.sourceKey}:${entry.candidate.id}`)}
+          <article class="folder-row" class:unavailable={!entry.candidate.available}>
+            {#if rows.length > 1}
+              <div class="folder-source">{displayProjectLabel(entry.sourceLabel)}</div>
+            {/if}
+            <div class="folder-path" title={entry.candidate.suggested_prefix}>
+              {entry.candidate.suggested_prefix || m.data_reclassify_path_unavailable()}
+            </div>
+            <div class="folder-meta">
+              <span>{entry.candidate.machine}</span>
+              <span>{m.data_reclassify_candidate_sessions({ count: entry.candidate.contributing_sessions })}</span>
+              <Chip size="xs" tone={entry.candidate.available ? "muted" : "warning"} uppercase={false}>
+                {entry.candidate.available
+                  ? evidenceLabel(entry.candidate.evidence_kind)
+                  : m.data_reclassify_evidence_unavailable()}
+              </Chip>
+            </div>
+            <CandidateEvidence candidate={entry.candidate} />
+          </article>
+        {/each}
+      </div>
+    {/if}
+    <div class="secondary-actions">
       {#if onOpenRules && usableCandidates[0]}
         <p class="rules-note">
           {m.data_reclassify_managed_in_rules()}
@@ -340,20 +363,10 @@
           </button>
         </p>
       {/if}
-
-      <div class="action-row">
-        <Button label={m.data_reclassify_cancel()} disabled={applying} onclick={cancel} />
-        <Button
-          label={applying || refreshing
-            ? m.data_batch_saving()
-            : m.data_batch_save({ count: usableCandidates.length })}
-          disabled={!canApply || applying || refreshing}
-          tone="info"
-          surface="solid"
-          onclick={applyAll}
-        />
-      </div>
-    {/if}
+      {#if !readOnly}
+        <Button label={m.data_reclassify_cancel()} disabled={applying || refreshing || applied} onclick={cancel} />
+      {/if}
+    </div>
   </section>
 </div>
 
@@ -363,7 +376,7 @@
     min-height: 0;
     flex: 1;
     flex-direction: column;
-    overflow-y: auto;
+    overflow: hidden;
   }
 
   .suggestions,
@@ -374,8 +387,8 @@
     padding: 12px 14px;
   }
 
-  .suggestions { border-bottom: 1px solid var(--border-muted); }
-  .composer { background: var(--bg-inset); }
+  .suggestions { min-height: 0; overflow-y: auto; }
+  .composer { flex: none; background: var(--bg-inset); border-bottom: 1px solid var(--border-muted); }
 
   .section-heading,
   .composer-heading,
@@ -401,10 +414,8 @@
   }
 
   .folder-list {
-    max-height: min(390px, 45vh);
-    overflow-y: auto;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
+    flex: none;
+    min-height: 0;
   }
 
   .folder-row {
@@ -438,9 +449,10 @@
   }
 
   .target-field {
-    display: grid;
-    grid-template-columns: minmax(110px, 0.45fr) minmax(0, 1fr);
-    align-items: center;
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
     gap: var(--space-5);
     font-size: 12px;
     --typeahead-min-width: 100%;
@@ -453,7 +465,10 @@
     font-size: 10px;
   }
 
-  .action-row { justify-content: flex-end; gap: 8px; }
+  .destination-label { font-size: var(--font-size-sm); }
+  .secondary-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+  .destination-actions { display: flex; align-items: flex-end; flex-wrap: wrap; gap: var(--space-5); }
+  .action-row { flex: none; justify-content: flex-end; gap: var(--space-4); }
   .muted,
   .rules-note { color: var(--text-muted); font-size: 11px; }
   .warning { color: var(--accent-orange); font-size: 11px; }
@@ -470,7 +485,5 @@
     cursor: pointer;
   }
 
-  @media (max-width: 760px) {
-    .target-field { grid-template-columns: 1fr; }
-  }
+
 </style>

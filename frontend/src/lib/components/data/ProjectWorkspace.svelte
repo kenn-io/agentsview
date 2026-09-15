@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, Chip, IconButton } from "@kenn-io/kit-ui";
+  import { Button, Chip, IconButton, SegmentedControl } from "@kenn-io/kit-ui";
   import { XIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
   import type { DbProjectInventoryRow } from "../../api/generated/index";
@@ -71,12 +71,13 @@
       </div>
     </div>
     <div class="workspace-actions">
-      <Button
-        size="sm"
-        label={wholeProjectMode
-          ? m.data_workspace_correct_one_folder()
-          : m.data_workspace_map_whole_project()}
-        onclick={() => (wholeProjectMode = !wholeProjectMode)}
+      <SegmentedControl
+        options={[
+          { value: "one", label: m.data_workspace_correct_one_folder() },
+          { value: "all", label: m.data_workspace_map_whole_project() },
+        ]}
+        value={wholeProjectMode ? "all" : "one"}
+        onchange={(value) => (wholeProjectMode = value === "all")}
       />
       <IconButton size="sm" ariaLabel={m.data_workspace_close()} onclick={onClose}>
         <XIcon size="14" aria-hidden="true" />
@@ -127,6 +128,7 @@
 
   .workspace-header {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
@@ -175,14 +177,14 @@
 
   .correction-pane {
     display: flex;
-    flex: 0 1 auto;
+    flex: 0 1 60%;
     min-height: 0;
     overflow: hidden;
   }
 
   .project-session-pane {
-    flex: 1 0 180px;
-    min-height: 180px;
+    flex: 1 1 180px;
+    min-height: 120px;
     overflow-y: auto;
     padding: 10px 12px;
     border-top: 1px solid var(--border-muted);

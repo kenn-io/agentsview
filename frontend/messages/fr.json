@@ -1,4 +1,21 @@
 {
+  "data_candidate_worktree_prefix": "Préfixe de worktree",
+  "data_candidate_common_parent": "Dossier parent commun",
+  "data_candidate_paths_sample": "Extrait des chemins enregistrés.",
+  "data_candidate_observed_paths": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} dossier observé",
+        "countPlural=other": "{countNumber} dossiers observés"
+      }
+    }
+  ],
   "app_auth_title": "Authentification requise",
   "app_auth_description": "Ce serveur exige un token d'authentification. Saisissez l'auth_token depuis ~/.agentsview/config.toml ou AGENTSVIEW_AUTH_TOKEN.",
   "app_auth_placeholder": "Collez le token d'authentification",
@@ -892,7 +909,11 @@
   "data_selection_hint": "Cliquez sur un projet, puis Maj-cliquez pour sélectionner une plage.",
   "data_selection_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "{countNumber} projet sélectionné",
@@ -904,7 +925,11 @@
   "data_batch_workspace_label": "Correction groupée de projets",
   "data_batch_heading": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "{countNumber} projet sélectionné",
@@ -914,12 +939,16 @@
   ],
   "data_batch_label": "Groupé",
   "data_batch_folders_heading": "Dossiers sélectionnés",
-  "data_batch_folders_intro": "Suggestions de dossiers pour les projets sélectionnés.",
+  "data_batch_folders_intro": "Dossiers observés dans les projets sélectionnés, regroupés par chemin commun. Les groupes avec le plus de sessions apparaissent en premier sur chaque machine.",
   "data_batch_correction_heading": "Correction groupée",
-  "data_batch_correction_intro": "Associez tous les dossiers disponibles ci-dessous à un seul projet.",
+  "data_batch_correction_intro": "Tous les dossiers répertoriés recevront la destination choisie.",
   "data_batch_folder_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "{countNumber} dossier",
@@ -931,7 +960,11 @@
   "data_batch_saving": "Enregistrement de la correction groupée…",
   "data_batch_save": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": {
         "countPlural=one": "Enregistrer {countNumber} correction",
@@ -1120,8 +1153,8 @@
   "data_reclassify_managed_in_rules": "Cette correction sera enregistrée comme règle de correspondance de projet.",
   "data_reclassify_open_rules": "Ouvrir les règles de correspondance",
   "data_workspace_all_projects": "Tous les projets",
-  "data_workspace_map_whole_project": "Mapper tout le projet",
-  "data_workspace_correct_one_folder": "Corriger un dossier",
+  "data_workspace_map_whole_project": "Tous les dossiers",
+  "data_workspace_correct_one_folder": "Un dossier",
   "data_workspace_close": "Fermer les détails du projet",
   "data_workspace_activity": "Activité",
   "data_workspace_activity_range": "{first} – {last}",

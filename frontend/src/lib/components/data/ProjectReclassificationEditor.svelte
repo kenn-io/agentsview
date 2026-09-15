@@ -16,6 +16,7 @@
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import ProjectSessionPreviewCarousel from "./ProjectSessionPreviewCarousel.svelte";
   import { ChevronDownIcon, ChevronRightIcon } from "../../icons.js";
+  import CandidateEvidence from "./CandidateEvidence.svelte";
 
   // Candidates load once on mount; there is no reactive reload when the
   // project identity changes. Hosts MUST remount this component whenever
@@ -134,7 +135,7 @@
     const candidate = candidates.find((item) => item.id === id);
     machine = candidate?.machine ?? "";
     pathPrefix = candidate?.suggested_prefix ?? "";
-    targetProject = candidate?.available ? projectLabel : "";
+    targetProject = "";
     schedulePreview();
   }
 
@@ -156,6 +157,10 @@
 
   function evidenceLabel(kind: string): string {
     switch (kind) {
+      case "worktree":
+        return m.data_candidate_worktree_prefix();
+      case "parent":
+        return m.data_candidate_common_parent();
       case "snapshot":
         return m.data_reclassify_evidence_snapshot();
       case "aggregate":
@@ -362,6 +367,7 @@
                   </span>
                 {/snippet}
               </Button>
+              <CandidateEvidence {candidate} />
             </div>
           {/each}
         </div>

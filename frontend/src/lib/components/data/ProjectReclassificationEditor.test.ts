@@ -119,6 +119,12 @@ describe("ProjectReclassificationEditor", () => {
     expect(screen.getByDisplayValue(candidate.suggested_prefix)).toBeTruthy();
     expect(screen.getAllByText("remote.example")).toHaveLength(2);
 
+    await vi.advanceTimersByTimeAsync(300);
+    expect(api.preview).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: m.data_reclassify_apply() }).hasAttribute("disabled"),
+    ).toBe(true);
+
     await chooseTarget();
 
     expect(api.preview.mock.lastCall?.[0]).toEqual({

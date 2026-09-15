@@ -35,6 +35,76 @@ test.describe("Data mode project reclassification", () => {
     "the workflow mutates the shared fixture once",
   );
 
+  test("keeps the bulk destination and Save visible while observed folders scroll", async ({
+    page,
+  }) => {
+    test.skip(isDuckDBBackend, "requires correction controls");
+    const project = {
+      project_key: "layout-fixture",
+      label: "project-a",
+      sessions: 80,
+      machines: 1,
+      agents: 1,
+      distinct_cwds: 80,
+      enabled_rules_targeting: 0,
+      recorded_as_original: false,
+    };
+    await page.route("**/api/v1/data/projects", (route) =>
+      route.fulfill({
+        json: { projects: [project], total_projects: 1, total_sessions: 80, governed_sessions: 0 },
+      }),
+    );
+    await page.route("**/api/v1/data/projects/layout-fixture/sessions", (route) =>
+      route.fulfill({
+        json: { sessions: [], total: 0 },
+      }),
+    );
+    await page.route("**/api/v1/data/project-reclassification/candidates?*", (route) =>
+      route.fulfill({
+        json: {
+          candidates: Array.from({ length: 40 }, (_, i) => ({
+            id: `folder-${i}`,
+            machine: "host.example",
+            suggested_prefix: `/srv/checkouts/project-${i}`,
+            contributing_sessions: 2,
+            distinct_cwds: 2,
+            evidence_kind: "parent",
+            available: true,
+            examples: [],
+          })),
+        },
+      }),
+    );
+    for (const viewport of [
+      { width: 1440, height: 900 },
+      { width: 980, height: 650 },
+      { width: 600, height: 700 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/data?project_key=layout-fixture");
+      await page.getByRole("radio", { name: "All folders", exact: true }).click();
+      const ws = workspace(page);
+      const save = ws.getByRole("button", { name: "Save 40 corrections" });
+      const target = ws.getByTitle("Project", { exact: true });
+      await expect(save).toBeVisible();
+      await expect(target).toBeVisible();
+      const before = await save.boundingBox();
+      expect(before).not.toBeNull();
+      expect(before!.y + before!.height).toBeLessThan(viewport.height);
+      const targetBox = await target.boundingBox();
+      expect(targetBox!.x + targetBox!.width).toBeLessThanOrEqual(before!.x);
+      const list = ws.locator(".editor > .suggestions");
+      const scrolled = await list.evaluate((el) => {
+        el.scrollTop = el.scrollHeight;
+        return { top: el.scrollTop, height: el.clientHeight };
+      });
+      expect(scrolled.top).toBeGreaterThan(0);
+      expect(scrolled.height).toBeGreaterThan(80);
+      expect(await save.boundingBox()).toEqual(before);
+      await expect(save).toBeDisabled();
+    }
+  });
+
   test("reclassifies a worktree from Activity through Data and persists a rule", async ({
     page,
   }) => {

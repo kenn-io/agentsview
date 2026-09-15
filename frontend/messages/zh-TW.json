@@ -1,4 +1,21 @@
 {
+  "data_candidate_worktree_prefix": "工作樹前綴",
+  "data_candidate_common_parent": "共同父目錄",
+  "data_candidate_paths_sample": "顯示部分已記錄的路徑。",
+  "data_candidate_observed_paths": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} 個已記錄的資料夾",
+        "countPlural=other": "{countNumber} 個已記錄的資料夾"
+      }
+    }
+  ],
   "app_auth_title": "需要身分驗證",
   "app_auth_description": "此伺服器需要 auth token 才能存取。請輸入伺服器控制臺或設定頁顯示的 token。",
   "app_auth_placeholder": "貼上 auth token",
@@ -850,7 +867,11 @@
   "data_selection_hint": "點選一個專案，然後按住 Shift 點選以選取一個範圍。",
   "data_selection_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": { "countPlural=other": "已選取 {countNumber} 個專案" }
     }
@@ -859,19 +880,27 @@
   "data_batch_workspace_label": "批次專案更正",
   "data_batch_heading": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": { "countPlural=other": "已選取 {countNumber} 個專案" }
     }
   ],
   "data_batch_label": "批次",
   "data_batch_folders_heading": "已選取的資料夾",
-  "data_batch_folders_intro": "來自所選專案的資料夾建議。",
+  "data_batch_folders_intro": "依共同路徑分組所選專案中實際記錄的資料夾。每台機器優先顯示工作階段較多的群組。",
   "data_batch_correction_heading": "批次更正",
-  "data_batch_correction_intro": "將下方所有可用資料夾對應到同一個專案。",
+  "data_batch_correction_intro": "將所有列出的資料夾對應到你選擇的目標專案。",
   "data_batch_folder_count": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": { "countPlural=other": "{countNumber} 個資料夾" }
     }
@@ -880,7 +909,11 @@
   "data_batch_saving": "正在儲存批次更正…",
   "data_batch_save": [
     {
-      "declarations": ["input count", "local countPlural = count: plural", "local countNumber = count: number"],
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
       "selectors": ["countPlural"],
       "match": { "countPlural=other": "儲存 {countNumber} 項更正" }
     }
@@ -1048,8 +1081,8 @@
   "data_reclassify_managed_in_rules": "此更正將儲存為專案對應規則。",
   "data_reclassify_open_rules": "開啟專案對應規則",
   "data_workspace_all_projects": "所有專案",
-  "data_workspace_map_whole_project": "對應整個專案",
-  "data_workspace_correct_one_folder": "修正單一資料夾",
+  "data_workspace_map_whole_project": "所有資料夾",
+  "data_workspace_correct_one_folder": "一個資料夾",
   "data_workspace_close": "關閉專案詳細資訊",
   "data_workspace_activity": "活動",
   "data_workspace_activity_range": "{first} – {last}",

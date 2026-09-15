@@ -503,14 +503,12 @@ describe("ProjectWorkspace", () => {
     await flush();
 
     await fireEvent.click(
-      screen.getByRole("button", { name: m.data_workspace_map_whole_project() }),
+      screen.getByRole("radio", { name: m.data_workspace_map_whole_project() }),
     );
     await flush();
 
     expect(screen.getByRole("heading", { name: m.data_batch_correction_heading() })).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: m.data_workspace_correct_one_folder() }),
-    ).toBeTruthy();
+    expect(screen.getByRole("radio", { name: m.data_workspace_correct_one_folder() })).toBeTruthy();
     expect(api.candidates.mock.lastCall?.[0]).toEqual({
       project_label: "wrong-project",
       project_key: "pl1:sha256:wrong",
