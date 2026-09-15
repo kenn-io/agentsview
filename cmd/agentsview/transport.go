@@ -455,7 +455,7 @@ func urlFromDaemonRuntime(rt *DaemonRuntime) string {
 	case "::":
 		host = "::1"
 	}
-	return "http://" + net.JoinHostPort(host, strconv.Itoa(rt.Port))
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(rt.Port)) + rt.BasePath
 }
 
 // newService builds the SessionService matching the detected

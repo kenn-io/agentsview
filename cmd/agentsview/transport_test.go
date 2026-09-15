@@ -1255,7 +1255,7 @@ func TestUrlFromDaemonRuntime_BindAllMapsToLoopback(t *testing.T) {
 
 func TestServicesUseRunningDaemonBrowserURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/sessions/codex:session:42", r.URL.Path)
+		assert.Equal(t, "/base/api/v1/sessions/codex:session:42", r.URL.Path)
 		fmt.Fprint(w, `{"id":"codex:session:42"}`)
 	}))
 	defer server.Close()
