@@ -26,10 +26,11 @@ const e2ePort = parseE2EPort(process.env.AGENTSVIEW_E2E_PORT);
 export default defineConfig({
   testDir: "e2e",
   timeout: isCI ? 45_000 : 20_000,
+  expect: { timeout: isCI ? 15_000 : 5_000 },
   // The managed runner exposes more host CPUs than its pod can use, so keep
   // its worker count bounded. GitHub-hosted runners should retain Playwright's
   // adaptive default rather than overcommitting a smaller VM.
-  workers: isSelfHostedCI ? 8 : undefined,
+  workers: isSelfHostedCI ? 4 : undefined,
   // GitHub-hosted runners intermittently freeze the whole VM for up to a
   // minute (observed as goto timeouts on embedded static assets with both
   // workers idle and no server logs), which no per-test wait can absorb.

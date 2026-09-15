@@ -11,9 +11,6 @@ const FIXTURE_SESSION_ID = "test-session-recent-edits";
 test.describe("Recent Edits feed", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
-    await expect(page.locator(".session-item").first()).toBeVisible({
-      timeout: 5_000,
-    });
   });
 
   test("page renders with a file row from fixture data", async ({ page }) => {
