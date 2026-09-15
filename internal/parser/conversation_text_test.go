@@ -115,35 +115,86 @@ func TestClaudeVisibleConversationTextSafetyBoundaries(t *testing.T) {
 		},
 	}
 
-	messages, _, _, err := extractMessagesContext(context.Background(), entries)
+	incremental, _, _ := extractMessagesFrom(entries, 0)
+	full, _, _, err := extractMessagesContext(context.Background(), entries)
 	require.NoError(t, err)
-	require.Len(t, messages, 6)
+	for name, messages := range map[string][]ParsedMessage{"incremental": incremental, "full": full} {
+		t.Run(name, func(t *testing.T) {
+			require.Len(t, messages, 6)
 
-	assert.True(t, messages[0].IsSystem)
-	assertVisibleText(t, messages[0].VisibleText, "")
-	assert.Empty(t, messages[0].ConversationSourceID,
-		"a split source identity must not identify both derived rows")
-	assertVisibleText(t, messages[1].VisibleText, "Explain this file.")
-	assert.Equal(t, "ide-native", messages[1].ConversationSourceID)
+			assert.True(t, messages[0].IsSystem)
+			assertVisibleText(t, messages[0].VisibleText, "")
+			assert.Empty(t, messages[0].ConversationSourceID,
+				"a split source identity must not identify both derived rows")
+			assertVisibleText(t, messages[1].VisibleText, "Explain this file.")
+			assert.Equal(t, "ide-native", messages[1].ConversationSourceID)
 
-	assert.True(t, messages[2].IsSystem)
-	assertVisibleText(t, messages[2].VisibleText, "")
-	assert.Equal(t, "notice-native", messages[2].ConversationSourceID)
+			assert.True(t, messages[2].IsSystem)
+			assertVisibleText(t, messages[2].VisibleText, "")
+			assert.Equal(t, "notice-native", messages[2].ConversationSourceID)
 
-	assert.Equal(t, "ordinary prose", messages[3].Content)
-	assert.Nil(t, messages[3].VisibleText)
-	assert.Equal(t, "unknown-native", messages[3].ConversationSourceID)
+			assert.Equal(t, "ordinary prose", messages[3].Content)
+			assert.Nil(t, messages[3].VisibleText)
+			assert.Equal(t, "unknown-native", messages[3].ConversationSourceID)
 
-	assert.Contains(t, messages[4].Content, "private IDE reasoning")
-	assert.Contains(t, messages[4].Content, "private IDE path")
-	assertVisibleText(t, messages[4].VisibleText, "Review it.")
-	assert.Equal(t, "mixed-ide-native", messages[4].ConversationSourceID)
+			assert.Contains(t, messages[4].Content, "private IDE reasoning")
+			assert.Contains(t, messages[4].Content, "private IDE path")
+			assertVisibleText(t, messages[4].VisibleText, "Review it.")
+			assert.Equal(t, "mixed-ide-native", messages[4].ConversationSourceID)
 
-	assert.False(t, messages[5].IsSystem,
-		"conversation projection must not change existing UI classification")
-	assert.Contains(t, messages[5].Content, "private notice reasoning")
-	assertVisibleText(t, messages[5].VisibleText, "")
-	assert.Equal(t, "mixed-notice-native", messages[5].ConversationSourceID)
+			assert.False(t, messages[5].IsSystem,
+				"conversation projection must not change existing UI classification")
+			assert.Contains(t, messages[5].Content, "private notice reasoning")
+			assertVisibleText(t, messages[5].VisibleText, "")
+			assert.Equal(t, "mixed-notice-native", messages[5].ConversationSourceID)
+		})
+	}
+}
+
+func TestClaudeVisibleConversationTextNonProseBlocks(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct{ name, line, want string }{
+		{
+			name: "image with prompt",
+			line: `{"type":"user","message":{"content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}},{"type":"text","text":"Fix this"}]}}`,
+			want: "Fix this",
+		},
+		{
+			name: "document with prompt",
+			line: `{"type":"user","message":{"content":[{"type":"document","source":{"type":"text","media_type":"text/plain","data":"Excluded document"}},{"type":"text","text":"Summarize this"}]}}`,
+			want: "Summarize this",
+		},
+		{
+			name: "redacted thinking with response",
+			line: `{"type":"assistant","message":{"content":[{"type":"redacted_thinking","data":"opaque"},{"type":"text","text":"The answer"}]}}`,
+			want: "The answer",
+		},
+		{
+			name: "API error notice",
+			line: `{"type":"assistant","isApiErrorMessage":true,"message":{"content":[{"type":"text","text":"API Error: request failed"}]}}`,
+		},
+		{
+			name: "tool result only",
+			line: `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"Excluded result"}]}}`,
+		},
+		{
+			name: "thinking only",
+			line: `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Excluded reasoning"}]}}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			entries := []dagEntry{{entryType: gjson.Get(tt.line, "type").Str, line: tt.line}}
+			incremental, _, _ := extractMessagesFrom(entries, 0)
+			full, _, _, err := extractMessagesContext(t.Context(), entries)
+			require.NoError(t, err)
+			for name, messages := range map[string][]ParsedMessage{"incremental": incremental, "full": full} {
+				t.Run(name, func(t *testing.T) {
+					require.Len(t, messages, 1)
+					assertVisibleText(t, messages[0].VisibleText, tt.want)
+				})
+			}
+		})
+	}
 }
 
 func TestClaudeQueuedConversationTextHasNoInventedIdentity(t *testing.T) {

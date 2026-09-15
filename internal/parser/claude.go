@@ -566,6 +566,7 @@ func compactClaudeEntry(line []byte) string {
 	topFields := []claudeCompactField{
 		{name: "uuid"}, {name: "parentUuid"}, {name: "timestamp"},
 		{name: "isCompactSummary"}, {name: "isSidechain"},
+		{name: "isApiErrorMessage"},
 		{name: "isMeta"}, {name: "requestId"}, {name: "promptSource"},
 		{name: "effort"},
 	}
@@ -1289,7 +1290,7 @@ func extractMessagesFrom(
 		}
 
 		content := gjson.Get(e.line, "message.content")
-		visibleText := extractClaudeVisibleText(content)
+		visibleText := extractClaudeVisibleText(e)
 		conversationSourceID := claudeConversationSourceID(e)
 		text, thinkingText, hasThinking, hasToolUse, tcs, trs :=
 			ExtractTextContent(context.Background(), content)
@@ -2610,7 +2611,7 @@ func extractMessagesContext(
 		}
 
 		content := gjson.Get(e.line, "message.content")
-		visibleText := extractClaudeVisibleText(content)
+		visibleText := extractClaudeVisibleText(e)
 		conversationSourceID := claudeConversationSourceID(e)
 		text, thinkingText, hasThinking, hasToolUse, tcs, trs :=
 			ExtractTextContent(ctx, content)
@@ -3285,7 +3286,11 @@ func claudeIDEEnvelopeMessage(
 // shape is understood. It deliberately runs beside, not through,
 // ExtractTextContent so thinking and tool renderings cannot become exportable
 // conversation text.
-func extractClaudeVisibleText(content gjson.Result) *string {
+func extractClaudeVisibleText(entry dagEntry) *string {
+	if entry.entryType == "assistant" && gjson.Get(entry.line, "isApiErrorMessage").Bool() {
+		return visibleTextValue("")
+	}
+	content := gjson.Get(entry.line, "message.content")
 	if content.Type == gjson.String {
 		return visibleTextValue(content.Str)
 	}
@@ -3312,7 +3317,7 @@ func extractClaudeVisibleText(content gjson.Result) *string {
 			if text.Str != "" {
 				parts = append(parts, text.Str)
 			}
-		case "thinking", "tool_use", "toolCall", "tool_result":
+		case "thinking", "redacted_thinking", "tool_use", "toolCall", "tool_result", "image", "document":
 			// Recognized non-conversation blocks contribute no prose.
 		default:
 			safe = false

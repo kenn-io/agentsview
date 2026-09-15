@@ -28,6 +28,11 @@ Changed no-ID replacements must report identity ambiguity. Rebuilds retain these
 IDs and tombstones but use the new database generation for revisions and
 cursors.
 
+When a legacy archive needs a rebuild, defer conversation backfill until source
+reparsing finishes. Only copied orphan or trashed sessions need legacy gap rows.
+Publishing placeholder IDs before the rebuild creates needless permanent
+tombstones for every successfully reparsed message.
+
 Keep only current bodies and compact latest changes, not a body event log.
 Project-only changes publish session invalidations without changing message
 revisions. Manifest and bounded body reads resolve project evidence in their own

@@ -8,7 +8,8 @@ import (
 )
 
 // This additive migration owns only local conversation export state. Historical
-// rows start as explicit prose gaps; writable reparsing supplies the evidence.
+// rows become explicit prose gaps only when writable reparsing cannot supply
+// evidence. A pending rebuild must not publish temporary message identities.
 const conversationSchemaSQL = `
 CREATE TRIGGER IF NOT EXISTS conversation_messages_insert AFTER INSERT ON conversation_messages
 BEGIN
@@ -78,7 +79,7 @@ BEGIN
  ON CONFLICT(session_id) DO UPDATE SET revision=excluded.revision,deleted=excluded.deleted;
 END;`
 
-func ensureConversationSchemaLocked(ctx context.Context, w *writerHandle) error {
+func ensureConversationSchemaLocked(ctx context.Context, w *writerHandle, rebuildPending bool) error {
 	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -91,7 +92,7 @@ func ensureConversationSchemaLocked(ctx context.Context, w *writerHandle) error 
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key='conversation_export_initialized')`).Scan(&initialized); err != nil {
 		return err
 	}
-	if !initialized {
+	if !initialized && !rebuildPending {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO conversation_messages(session_id,message_id,ordinal,role,timestamp,gap,deleted)
 		 SELECT m.session_id,lower(hex(randomblob(16))),m.ordinal,m.role,COALESCE(m.timestamp,''),'visible_text_unavailable',s.deleted_at IS NOT NULL
 		 FROM messages m JOIN sessions s ON s.id=m.session_id WHERE m.role IN ('user','assistant') AND m.is_system=0 AND COALESCE(m.source_subtype,'')!='tool_result'`); err != nil {
@@ -107,7 +108,13 @@ func ensureConversationSchemaLocked(ctx context.Context, w *writerHandle) error 
 const conversationCopyColumns = `session_id,message_id,ordinal,role,timestamp,source_id,body,digest,text_bytes,gap,deleted,removed`
 
 func copyConversationRowsTx(ctx context.Context, tx *sql.Tx, where string) error {
-	if !oldDBHasTable(ctx, tx, "conversation_messages") {
+	var initialized bool
+	if oldDBHasTable(ctx, tx, "conversation_messages") {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.archive_metadata WHERE key='conversation_export_initialized')`).Scan(&initialized); err != nil {
+			return err
+		}
+	}
+	if !initialized {
 		_, err := tx.ExecContext(ctx, `INSERT INTO main.conversation_messages(session_id,message_id,ordinal,role,timestamp,gap,deleted)
 		 SELECT session_id,lower(hex(randomblob(16))),ordinal,role,COALESCE(timestamp,''),'visible_text_unavailable',
 		 COALESCE((SELECT deleted_at IS NOT NULL FROM main.sessions WHERE id=m.session_id),0)

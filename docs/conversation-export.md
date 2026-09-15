@@ -16,6 +16,8 @@ archive needs the matching writable version before these exports can use the new
 state. Run `agentsview sync` with the new version first. Its normal data-version
 upgrade reparses available sources and preserves orphaned sessions; it does not
 discard the existing archive. Orphans without extraction evidence remain gaps.
+The upgrade does not assign temporary message IDs before reparsing: consumers
+receive the real projection or an orphan gap, not deletions of placeholders.
 
 ## Source coverage
 
@@ -96,6 +98,11 @@ display transcript is flattened. It excludes structured tool calls, arguments
 and results; system/developer instructions; synthetic notices; and hidden
 reasoning. Selecting rows by role alone does not provide this boundary.
 
+Claude image and document blocks contribute no text, but do not suppress prose
+in neighboring `text` blocks. Redacted thinking contributes no text either.
+Assistant records flagged `isApiErrorMessage` are synthetic notices, not
+replies.
+
 Ordinary prose may contain pasted code, logs or quoted tool output. Those
 passages remain text. The exporter does not remove strings merely because they
 look like a tool label or a reasoning marker.
@@ -119,6 +126,12 @@ IDs. Proven append operations and unchanged replacement snapshots can preserve
 their assigned identities; an arbitrary rewrite cannot be identified reliably by
 matching positions, timestamps or repeated text. Such ambiguity is a coverage
 gap, not proof that a previous citation still identifies the same utterance.
+
+A full resync is a replacement too. If a session's complete projection changes,
+messages without native IDs can become `identity_ambiguous` even when their own
+text is unchanged. An identical complete projection preserves those IDs. Claude
+assistant chunks share identity only within a consecutive run; non-consecutive
+reuse of `message.id` is ambiguous rather than proof of one continuing reply.
 
 Missing parser provenance and content unavailable under archive policy are
 explicit gaps. They are not empty successful conversations. Do not recover text

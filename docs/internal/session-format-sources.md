@@ -257,18 +257,28 @@ add an archived or maintained mirror without replacing the original identity.
   2026-09-15 with synthetic parser fixtures that the conversation-text
   projection reads the original content shape separately from the existing UI
   flattening. String content and ordered `text` blocks contribute prose;
-  thinking, tool-call, and tool-result blocks do not. Recognized system
-  records produce an explicit empty projection, while an unfamiliar block
-  makes the projection unproven. User records use their entry `uuid` as native
-  source identity. Assistant streaming chunks use their shared `message.id`,
-  not the last chunk's `uuid`; uuid-less queued commands have no invented
-  identity. These are local format observations because Claude Code does not
-  publish its transcript schema. The queued-command behavior was reverified
-  2026-07-22 against local CLI transcripts: `type=attachment` records with
-  `attachment.type=queued_command` are written mid-stream, in file order between
-  consecutive `assistant` records that share one `message.id`, so a queued
-  command can fall inside a streaming run that straddles an incremental sync
-  boundary. Reverified 2026-07-23 against the transcript shape reported in
+  thinking, redacted-thinking, image, document, tool-call, and tool-result
+  blocks do not. The non-text block types are defined by the
+  [Messages API](https://platform.claude.com/docs/en/api/go/messages). A mixed
+  image/text prompt retains its text. Recognized system records produce an
+  explicit empty projection, while an unfamiliar block makes the projection
+  unproven. User records use their entry `uuid` as native source identity.
+  Assistant streaming chunks use their shared `message.id`, not the last
+  chunk's `uuid`; non-consecutive reuse is identity-ambiguous. Queued commands
+  without a `uuid` have no invented identity. Assistant records flagged
+  `isApiErrorMessage` produce no conversation prose. This source flag appears
+  in the public transcript reproduction in
+  [Claude Code #40305](https://github.com/anthropics/claude-code/issues/40305);
+  the compacted parser record must retain it. Synthetic fixtures exercise
+  both extraction paths and the normal parser-to-export path, including
+  content gaps. These are local format observations because Claude Code does
+  not publish its transcript schema. The queued-command behavior was
+  reverified 2026-07-22 against local CLI transcripts: `type=attachment`
+  records with `attachment.type=queued_command` are written mid-stream, in
+  file order between consecutive `assistant` records that share one
+  `message.id`, so a queued command can fall inside a streaming run that
+  straddles an incremental sync boundary. Reverified 2026-07-23 against the
+  transcript shape reported in
   [#1238](https://github.com/kenn-io/agentsview/issues/1238): Claude Code for
   VS Code writes standalone `user` records wrapped in `ide_opened_file` or
   `ide_selection` tags for editor context rather than operator prompts.
@@ -360,8 +370,7 @@ add an archived or maintained mirror without replacing the original identity.
   skill names from recorded paths without consulting worker-local `SKILL.md`
   frontmatter or the local parse cache; local parsing retains frontmatter
   lookup. `TestHostedSkillInferenceKeepsNamesLexical` covers this boundary.
-  Reverified 2026-08-22 against
-  local sessions launched from repository-local
+  Reverified 2026-08-22 against local sessions launched from repository-local
   `REPO/.claude/worktrees/<generated-name>` worktrees: the transcript retains
   the generated worktree path after that checkout is deleted, so Agentsview
   recognizes the anchored layout and attributes it to `REPO`. Evidence remains

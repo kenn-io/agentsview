@@ -21,8 +21,10 @@ func TestConversationExportUsesParserProseThroughNormalSync(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	// Literal source blocks make this fail if the archive converter drops
 	// provenance or the exporter falls back to the flattened display content.
-	source := fmt.Sprintf(`{"type":"user","uuid":"user-a","sessionId":"conversation-a","cwd":%q,"timestamp":"2026-08-01T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Please check α"},{"type":"tool_result","tool_use_id":"call-a","content":"Excluded result"}]}}
+	source := fmt.Sprintf(`{"type":"user","uuid":"user-a","sessionId":"conversation-a","cwd":%q,"timestamp":"2026-08-01T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"Please check α"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}},{"type":"tool_result","tool_use_id":"call-a","content":"Excluded result"}]}}
 {"type":"assistant","uuid":"entry-a","sessionId":"conversation-a","parentUuid":"user-a","timestamp":"2026-08-01T10:00:01Z","message":{"id":"response-a","role":"assistant","model":"model-a","content":[{"type":"thinking","thinking":"Excluded reasoning"},{"type":"text","text":"Working on it."},{"type":"tool_use","id":"call-b","name":"Read","input":{"path":"excluded-argument"}}]}}
+{"type":"assistant","uuid":"entry-b","sessionId":"conversation-a","parentUuid":"entry-a","timestamp":"2026-08-01T10:00:02Z","message":{"id":"response-b","role":"assistant","content":[{"type":"future_private_block","text":"Unknown content"},{"type":"text","text":"Unproven text"}]}}
+{"type":"assistant","uuid":"entry-c","sessionId":"conversation-a","parentUuid":"entry-b","isApiErrorMessage":true,"timestamp":"2026-08-01T10:00:03Z","message":{"id":"response-c","role":"assistant","content":[{"type":"text","text":"API Error: request failed"}]}}
 `, root)
 	require.NoError(t, os.WriteFile(path, []byte(source), 0o600))
 	database := dbtest.OpenTestDB(t)
@@ -35,20 +37,28 @@ func TestConversationExportUsesParserProseThroughNormalSync(t *testing.T) {
 	initial, err := database.ExportConversationChanges(t.Context(), db.ConversationExportOptions{})
 	require.NoError(t, err)
 	texts := make(map[string]string)
+	gaps := 0
 	for _, change := range initial.Changes {
 		if change.Type == "session" {
 			continue
 		}
-		assert.Empty(t, change.Gap)
 		body, err := database.GetConversationMessage(t.Context(), db.ConversationMessageOptions{
 			SessionID: change.SessionID, MessageID: change.MessageID, Revision: change.Revision,
 			DatabaseID: initial.DatabaseID,
 		})
 		require.NoError(t, err)
+		if change.Gap != "" {
+			assert.Equal(t, "visible_text_unavailable", change.Gap)
+			assert.Equal(t, "visible_text_unavailable", body.Gap)
+			assert.Nil(t, body.Text, "parser uncertainty must survive the archive-to-export boundary")
+			gaps++
+			continue
+		}
 		require.NotNil(t, body.Text)
 		texts[change.Role] = *body.Text
 	}
 	assert.Equal(t, map[string]string{"user": "Please check α", "assistant": "Working on it."}, texts)
+	assert.Equal(t, 1, gaps)
 	engine.SyncAll(t.Context(), nil)
 	unchanged, err := database.ExportConversationChanges(t.Context(), db.ConversationExportOptions{Checkpoint: initial.Checkpoint})
 	require.NoError(t, err)

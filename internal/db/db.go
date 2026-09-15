@@ -1251,7 +1251,7 @@ func open(
 	if err := ctx.Err(); err != nil {
 		return closeOnError(err)
 	}
-	if err := d.migrateColumns(ctx); err != nil {
+	if err := d.migrateColumns(ctx, dataStale || schemaRepairNeeded); err != nil {
 		return closeOnError(fmt.Errorf("migrating columns: %w", err))
 	}
 	if err := ctx.Err(); err != nil {
@@ -2850,7 +2850,7 @@ END;
 // migrateColumns adds columns introduced by this branch to databases created
 // by older releases, then runs the data repairs required by a normal writable
 // startup. Schema-only callers use applySchemaColumnMigrations directly.
-func (db *DB) migrateColumns(ctx context.Context) error {
+func (db *DB) migrateColumns(ctx context.Context, rebuildPending bool) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
@@ -2875,7 +2875,7 @@ func (db *DB) migrateColumns(ctx context.Context) error {
 	if err := applySchemaColumnMigrations(w); err != nil {
 		return err
 	}
-	if err := ensureConversationSchemaLocked(ctx, w); err != nil {
+	if err := ensureConversationSchemaLocked(ctx, w, rebuildPending); err != nil {
 		return err
 	}
 	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerCreatesSQL); err != nil {

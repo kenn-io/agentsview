@@ -450,6 +450,9 @@ func TestConversationExportLegacyArchiveGaps(t *testing.T) {
 			d := testDB(t)
 			require.NoError(t, d.UpsertSession(Session{ID: "legacy", Project: "sample", Machine: "local", Agent: "codex"}))
 			require.NoError(t, d.InsertMessages([]Message{{SessionID: "legacy", Role: "assistant", Content: "raw flattened tool content"}}))
+			reparsed := Session{ID: "reparsed", Project: "sample", Machine: "local", Agent: "claude"}
+			require.NoError(t, d.UpsertSession(reparsed))
+			require.NoError(t, d.InsertMessages([]Message{{SessionID: "reparsed", Role: "user", Content: "Please check this"}}))
 			// Model the pre-projection archive, without running a historical binary.
 			require.NoError(t, d.Update(func(tx *sql.Tx) error {
 				rows, err := tx.Query(`SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'conversation_%'`)
@@ -481,20 +484,34 @@ func TestConversationExportLegacyArchiveGaps(t *testing.T) {
 				require.NoError(t, openErr)
 				t.Cleanup(func() { require.NoError(t, d.Close()) })
 				assert.True(t, d.NeedsResync())
-			} else {
-				d = testDB(t)
-				_, err := d.CopyOrphanedDataFrom(path)
+				pending, err := d.ExportConversationChanges(t.Context(), ConversationExportOptions{})
 				require.NoError(t, err)
+				assert.Empty(t, pending.Changes, "do not publish placeholder IDs before the required rebuild")
+				require.NoError(t, d.Close())
 			}
+			d = testDB(t)
+			require.NoError(t, d.UpsertSession(reparsed))
+			require.NoError(t, d.InsertMessages([]Message{{SessionID: "reparsed", Role: "user", Content: "Please check this", VisibleText: new("Please check this"), ConversationSourceID: "user-native"}}))
+			_, err := d.CopyOrphanedDataFrom(path)
+			require.NoError(t, err)
 			page, err := d.ExportConversationChanges(t.Context(), ConversationExportOptions{})
 			require.NoError(t, err)
-			require.Len(t, page.Changes, 1)
-			ref := page.Changes[0]
-			assert.Equal(t, "visible_text_unavailable", ref.Gap)
-			assert.Nil(t, ref.Timestamp)
-			body, err := d.GetConversationMessage(t.Context(), ConversationMessageOptions{DatabaseID: page.DatabaseID, SessionID: "legacy", MessageID: ref.MessageID, Revision: ref.Revision})
-			require.NoError(t, err)
-			assert.Nil(t, body.Text)
+			require.Len(t, page.Changes, 2, "only reparsed prose and the orphan gap, never placeholder tombstones")
+			for _, ref := range page.Changes {
+				assert.False(t, ref.Deleted)
+				assert.Nil(t, ref.Timestamp)
+				body, err := d.GetConversationMessage(t.Context(), ConversationMessageOptions{DatabaseID: page.DatabaseID, SessionID: ref.SessionID, MessageID: ref.MessageID, Revision: ref.Revision})
+				require.NoError(t, err)
+				if ref.SessionID == "legacy" {
+					assert.Equal(t, "visible_text_unavailable", ref.Gap)
+					assert.Nil(t, body.Text)
+				} else {
+					assert.Equal(t, "reparsed", ref.SessionID)
+					assert.Empty(t, ref.Gap)
+					require.NotNil(t, body.Text)
+					assert.Equal(t, "Please check this", *body.Text)
+				}
+			}
 		})
 	}
 }
