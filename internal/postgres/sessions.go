@@ -913,7 +913,7 @@ func (s *Store) GetSession(
 
 // FindSessionIDsByRawSuffix returns up to limit session IDs whose
 // stored id is either the exact raw input or the raw input preceded
-// by an agent prefix. The suffix comparison is literal and results
+// by an agent or host prefix. The suffix comparison is literal and results
 // match SQLite ordering: exact match first, then most recent session.
 func (s *Store) FindSessionIDsByRawSuffix(
 	ctx context.Context, raw string, limit int,
@@ -927,7 +927,7 @@ func (s *Store) FindSessionIDsByRawSuffix(
 	rows, err := s.pg.QueryContext(ctx,
 		`SELECT id FROM sessions
 		 WHERE (id = $1
-		        OR RIGHT(id, LENGTH($1) + 1) = ':' || $1)
+		        OR RIGHT(id, LENGTH($1) + 1) IN (':' || $1, '~' || $1))
 		   AND deleted_at IS NULL
 		 ORDER BY (id = $1) DESC,
 		          COALESCE(ended_at, started_at, created_at) DESC

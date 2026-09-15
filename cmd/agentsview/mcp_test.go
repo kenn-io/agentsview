@@ -239,6 +239,36 @@ func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {
 	assert.NoFileExists(t, cfg.DBPath)
 }
 
+func TestMCPDaemonServiceRawSuffixResolvesDaemonPerCall(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db")}
+	var starts, requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/session-ids/resolve", r.URL.Path)
+		assert.Equal(t, fmt.Sprintf("uuid-%d", requests), r.URL.Query().Get("partial"))
+		assert.Equal(t, "2", r.URL.Query().Get("limit"))
+		assert.Equal(t, "true", r.URL.Query().Get("raw_suffix"))
+		requests++
+		_ = json.MarshalWrite(w, map[string]any{"ids": []string{"codex:from-daemon"}, "raw_suffix": true})
+	}))
+	t.Cleanup(srv.Close)
+	host, port := splitTestServerURL(t, srv.URL)
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration) (*DaemonRuntime, error) {
+		starts++
+		return &DaemonRuntime{Host: host, Port: port}, nil
+	})
+	svc := newMCPDaemonService(cfg)
+	for i := range 2 {
+		ids, err := svc.FindSessionIDsByRawSuffix(context.Background(), fmt.Sprintf("uuid-%d", i), 2)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"codex:from-daemon"}, ids)
+	}
+	assert.Equal(t, 2, starts)
+	assert.Equal(t, 2, requests)
+	assert.NoFileExists(t, cfg.DBPath)
+	t.Logf("daemon_starts=%d requests=%d ids=[codex:from-daemon] archive_opened=false", starts, requests)
+}
+
 func TestMCPDaemonServiceRecallCapabilityFollowsResolvedRuntime(t *testing.T) {
 	tests := []struct {
 		name     string
