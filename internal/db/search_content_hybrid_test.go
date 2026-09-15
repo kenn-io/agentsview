@@ -664,3 +664,23 @@ func TestSearchContentHybridVectorOnlyMatchCarriesUnitRange(t *testing.T) {
 	assert.Equal(t, [2]int{1, 2}, m.OrdinalRange)
 	assert.False(t, m.Subordinate)
 }
+
+func TestSearchContentHybridDateFilterUsesAliasedSessionScope(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS() {
+		t.Skip("fts5 not available")
+	}
+	seedSearchSession(t, d, "hybrid-date", "alpha", [][2]string{
+		{"user", "zebra in date scope"},
+	})
+	d.SetVectorSearcher(&fakeVectorSearcher{})
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "zebra", Mode: "hybrid", Project: "alpha",
+		DateFrom: "2026-05-20", IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "hybrid-date", page.Matches[0].SessionID)
+}

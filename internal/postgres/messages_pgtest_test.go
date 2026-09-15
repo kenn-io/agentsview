@@ -33,6 +33,108 @@ func TestStoreSearchILIKE(t *testing.T) {
 	}
 }
 
+func TestPGBunStoreSearchUsesFullTextCapability(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err)
+	defer store.Close()
+
+	common := store.BunStore
+	page, err := common.Search(t.Context(), db.SearchFilter{
+		Query: "hello", Project: "test-project", Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, "store-test-001", page.Results[0].SessionID)
+}
+
+func TestPGBunStoreSearchContentUsesCanonicalRows(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err)
+	defer store.Close()
+	common := store.BunStore
+
+	page, err := common.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "hello", Project: "test-project", Sources: []string{"messages"},
+		IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "store-test-001", page.Matches[0].SessionID)
+}
+
+func TestPGBunStoreSearchContentUsesPortableFTS(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err)
+	defer store.Close()
+	common := store.BunStore
+
+	page, err := common.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "hello world", Mode: "fts", Project: "test-project",
+		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "store-test-001", page.Matches[0].SessionID)
+}
+
+func TestPGBunStoreSearchContentFTSOrdersByCanonicalRecency(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+	writer, err := Open(pgURL, testSchema, false)
+	require.NoError(t, err)
+	defer writer.Close()
+	for _, fixture := range []struct {
+		id      string
+		endedAt string
+	}{
+		{id: "pg-fts-older", endedAt: "2026-01-01T00:00:00Z"},
+		{id: "pg-fts-newer", endedAt: "2026-02-01T00:00:00Z"},
+	} {
+		_, err = writer.Exec(`
+			INSERT INTO sessions (
+				id, project, machine, agent, message_count,
+				user_message_count, ended_at, created_at
+			) VALUES ($1, 'parity', 'local', 'claude', 1, 2,
+				$2::timestamptz, $2::timestamptz)`,
+			fixture.id, fixture.endedAt,
+		)
+		require.NoError(t, err)
+		_, err = writer.Exec(`
+			INSERT INTO messages (
+				session_id, ordinal, role, content, timestamp, content_length
+			) VALUES ($1, 0, 'user', 'parityorderterm',
+				$2::timestamptz, 15)`,
+			fixture.id, fixture.endedAt,
+		)
+		require.NoError(t, err)
+	}
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err)
+	defer store.Close()
+
+	page, err := store.BunStore.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "parityorderterm", Mode: "fts", Sources: []string{"messages"},
+		IncludeOneShot: true, Limit: 1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "pg-fts-newer", page.Matches[0].SessionID)
+	assert.Equal(t, 1, page.NextCursor)
+}
+
 func TestPGSearchDeduplication(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)

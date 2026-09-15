@@ -24,6 +24,11 @@ type bunRecentEditProjection struct {
 	Timestamp     *bunmodel.Timestamp `bun:"timestamp"`
 }
 
+type bunRecentEditKey struct {
+	Project  string `bun:"project"`
+	FilePath string `bun:"file_path"`
+}
+
 func (s *BunStore) RecentEdits(
 	ctx context.Context, params RecentEditsParams,
 ) (RecentEditsResult, error) {
@@ -43,11 +48,11 @@ func (s *BunStore) RecentEdits(
 func (s *BunStore) recentEditsFrom(
 	ctx context.Context, store bun.IDB, params RecentEditsParams,
 ) (RecentEditsResult, error) {
+	dialect := s.backend.SessionQueryDialect()
 	timestampExpr := "m.timestamp"
-	sortExpr := timestampExpr
-	if s.backend.SessionQueryDialect().timestampOrderExpr != nil {
+	sortExpr := dialect.TimestampOrderExpr(timestampExpr)
+	if sortExpr != timestampExpr {
 		timestampExpr = "NULLIF(m.timestamp, '')"
-		sortExpr = "julianday(" + timestampExpr + ")"
 	}
 	predicates := []string{
 		"s.deleted_at IS NULL",
@@ -60,11 +65,33 @@ func (s *BunStore) recentEditsFrom(
 		predicates = append(predicates, "s.project = ?")
 		args = append(args, params.Project)
 	}
+	queryOffset := params.Offset
 	if params.Search != "" {
-		predicates = append(predicates,
-			"LOWER(tc.file_path) LIKE ? ESCAPE '\\'")
-		args = append(args,
-			"%"+EscapeLikePattern(strings.ToLower(params.Search))+"%")
+		if s.backend.Capabilities().SearchDialect.unicodeRecentEdits &&
+			hasNonASCII(params.Search) {
+			keys, err := s.unicodeRecentEditKeys(
+				ctx, store, params, sortExpr,
+			)
+			if err != nil {
+				return RecentEditsResult{}, err
+			}
+			if len(keys) == 0 {
+				return RecentEditsResult{}, nil
+			}
+			keyPredicates := make([]string, len(keys))
+			for i, key := range keys {
+				keyPredicates[i] = "(s.project = ? AND tc.file_path = ?)"
+				args = append(args, key.Project, key.FilePath)
+			}
+			predicates = append(predicates,
+				"("+strings.Join(keyPredicates, " OR ")+")")
+			queryOffset = 0
+		} else {
+			predicates = append(predicates,
+				"LOWER(tc.file_path) LIKE ? ESCAPE '\\'")
+			args = append(args,
+				"%"+EscapeLikePattern(strings.ToLower(params.Search))+"%")
+		}
 	}
 	query := fmt.Sprintf(`
 		WITH edit_rows AS (
@@ -114,12 +141,94 @@ func (s *BunStore) recentEditsFrom(
 			page.file_path DESC, edit.edit_rank ASC`,
 		timestampExpr, sortExpr, strings.Join(predicates, " AND "),
 	)
-	args = append(args, params.Limit+1, params.Offset, params.MaxEditsPerFile)
+	args = append(args, params.Limit+1, queryOffset, params.MaxEditsPerFile)
 	var rows []bunRecentEditProjection
 	if err := store.NewRaw(query, args...).Scan(ctx, &rows); err != nil {
 		return RecentEditsResult{}, fmt.Errorf("querying Bun recent edits: %w", err)
 	}
 	return buildBunRecentEditPage(rows, params), nil
+}
+
+func hasNonASCII(value string) bool {
+	for _, char := range value {
+		if char > 127 {
+			return true
+		}
+	}
+	return false
+}
+
+// unicodeRecentEditKeys preserves the original Unicode-aware path search on
+// SQLite, whose built-in LOWER only folds ASCII. It streams narrow, ordered
+// keys, discards matches before Offset, and stops after the requested page plus
+// lookahead; the main query still hydrates a bounded number of edit rows.
+func (s *BunStore) unicodeRecentEditKeys(
+	ctx context.Context, store bun.IDB, params RecentEditsParams,
+	sortExpr string,
+) ([]bunRecentEditKey, error) {
+	predicates := []string{
+		"s.deleted_at IS NULL",
+		"tc.category IN ('Edit', 'Write')",
+		"tc.file_path IS NOT NULL",
+		"TRIM(tc.file_path) != ''",
+	}
+	var args []any
+	if params.Project != "" {
+		predicates = append(predicates, "s.project = ?")
+		args = append(args, params.Project)
+	}
+	query := fmt.Sprintf(`
+		WITH edit_keys AS (
+			SELECT s.project, tc.file_path,
+				%[1]s AS edit_sort,
+				s.id AS session_id, tc.message_ordinal AS ordinal,
+				tc.call_index,
+				ROW_NUMBER() OVER (
+					PARTITION BY s.project, tc.file_path
+					ORDER BY %[2]s DESC NULLS LAST, s.id DESC,
+						tc.message_ordinal DESC, tc.call_index DESC
+				) AS edit_rank
+			FROM tool_calls AS tc
+			JOIN sessions AS s ON s.id = tc.session_id
+			LEFT JOIN messages AS m
+				ON m.session_id = tc.session_id
+				AND m.ordinal = tc.message_ordinal
+			WHERE %[3]s
+		)
+		SELECT project, file_path
+		FROM edit_keys
+		WHERE edit_rank = 1
+		ORDER BY edit_sort DESC NULLS LAST, session_id DESC,
+			ordinal DESC, call_index DESC, file_path DESC`,
+		sortExpr, sortExpr, strings.Join(predicates, " AND "),
+	)
+	formatted := store.NewRaw(query, args...).String()
+	rows, err := store.QueryContext(ctx, formatted)
+	if err != nil {
+		return nil, fmt.Errorf("querying Unicode recent-edit keys: %w", err)
+	}
+	defer rows.Close()
+	needle := strings.ToLower(params.Search)
+	matched := make([]bunRecentEditKey, 0, params.Limit+1)
+	skipped := 0
+	for rows.Next() && len(matched) < params.Limit+1 {
+		var key bunRecentEditKey
+		if err := rows.Scan(&key.Project, &key.FilePath); err != nil {
+			return nil, fmt.Errorf("scanning Unicode recent-edit key: %w", err)
+		}
+		if !strings.Contains(strings.ToLower(key.FilePath), needle) {
+			continue
+		}
+		if skipped < params.Offset {
+			skipped++
+			continue
+		}
+		matched = append(matched, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating Unicode recent-edit keys: %w", err)
+	}
+	return matched, nil
 }
 
 func buildBunRecentEditPage(

@@ -304,3 +304,42 @@ func hybridSessionIDs(page db.ContentSearchPage) []string {
 	}
 	return out
 }
+
+func TestPGHybridDateFilterUsesAliasedSessionScope(t *testing.T) {
+	store := wireHybrid(t, &hybridFakeSearcher{})
+	insertCSSession(t, store, "hybrid-date", "alpha", "claude", hybridStart, hybridEnd)
+	insertCSUnitMessage(t, store, "hybrid-date", 0, "user", "zebra in date scope", false, false)
+
+	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+		Pattern: "zebra", Mode: "hybrid", Project: "alpha",
+		DateFrom: "2026-05-01", IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "hybrid-date", page.Matches[0].SessionID)
+}
+
+func TestPGSemanticSearchDropsMissingAnchorAndPreservesSingletonRange(t *testing.T) {
+	searcher := &hybridFakeSearcher{hits: []db.VectorHit{
+		{SessionID: "semantic-shape", Ordinal: 99, OrdinalStart: 99, OrdinalEnd: 99,
+			Score: 0.9, Snippet: "stale"},
+		{SessionID: "semantic-shape", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 1,
+			Score: 0.8, Snippet: "singleton anchor"},
+	}}
+	store := wireHybrid(t, searcher)
+	insertCSSession(t, store, "semantic-shape", "alpha", "claude", hybridStart, hybridEnd)
+	insertCSUnitMessage(t, store, "semantic-shape", 0, "user", "question", false, false)
+	insertCSUnitMessage(t, store, "semantic-shape", 1, "assistant", "singleton anchor", false, false)
+	insertCSUnitMessage(t, store, "semantic-shape", 2, "assistant", "adjacent answer", false, false)
+
+	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+		Pattern: "semantic", Mode: "semantic", Project: "alpha",
+		IncludeOneShot: true, Limit: 10,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, 1, page.Matches[0].Ordinal)
+	assert.Equal(t, [2]int{1, 1}, page.Matches[0].OrdinalRange)
+}

@@ -248,6 +248,7 @@ func TestPGRecentEditsSearchFilter(t *testing.T) {
 	reSeedEdit(t, pg, "proj", "s3", 1, 0, "x/a_b.go", "2026-06-24T08:00:00Z")
 	reSeedEdit(t, pg, "proj", "s4", 1, 0, "x/axb.go", "2026-06-24T07:00:00Z")
 	reSeedEdit(t, pg, "other", "s5", 1, 0, "internal/db/Recent.go", "2026-06-24T06:00:00Z")
+	reSeedEdit(t, pg, "proj", "s6", 1, 0, "src/ÜBER.go", "2026-06-24T05:00:00Z")
 
 	store := reNewStore(t, pgURL)
 	defer store.Close()
@@ -274,6 +275,11 @@ func TestPGRecentEditsSearchFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, res.Files, 1, "project and search both apply")
 	assert.Equal(t, "proj", res.Files[0].Project)
+
+	res, err = store.RecentEdits(ctx, db.RecentEditsParams{Search: "über"})
+	require.NoError(t, err)
+	require.Len(t, res.Files, 1, "search case-folds non-ASCII paths")
+	assert.Equal(t, "src/ÜBER.go", res.Files[0].FilePath)
 }
 
 // TestPGRecentEditsTruncationAndHasMore mirrors TestRecentEditsTruncationAndHasMore.
