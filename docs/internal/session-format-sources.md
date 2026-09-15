@@ -1587,7 +1587,9 @@ schemas keep their existing ordering behavior.
   `toolSpecificData.commandLine.original`, and ordered `inlineReference`
   response items. Agentsview consumes the final response array, which also
   preserves display order, rather than the duplicate tool calls under
-  `result.metadata.toolCallRounds`.
+  `result.metadata.toolCallRounds`. Each assistant message records the model
+  that served its turn (`result.metadata.resolvedModel`, falling back to the
+  request's prefixed `modelId`).
 
 ## Windsurf (`windsurf`)
 
