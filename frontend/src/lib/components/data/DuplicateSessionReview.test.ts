@@ -84,19 +84,29 @@ async function render(props: Record<string, unknown> = {}) {
     props,
   });
   mounted.instance = instance;
-  await waitFor(() => {
-    expect(
-      settingsService.getApiV1SettingsDuplicateGroups,
-    ).toHaveBeenCalled();
-  });
-  await waitFor(() => {
-    // Settled: either groups render or the empty state appears.
-    expect(
-      screen.queryByText(textOf("duplicate_review_rebuilding")) === null ||
-        (settingsService.postApiV1SettingsDuplicateGroupsRebuild as ReturnType<typeof vi.fn>)
-          .mock.calls.length === 0,
-    ).toBe(true);
-  });
+  if (props.readOnly !== true) {
+    await waitFor(() => {
+      expect(
+        settingsService.getApiV1SettingsDuplicateGroups,
+      ).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      // Settled: either groups render or the empty state appears.
+      expect(
+        screen.queryByText(textOf("duplicate_review_rebuilding")) === null ||
+          (settingsService.postApiV1SettingsDuplicateGroupsRebuild as ReturnType<typeof vi.fn>)
+            .mock.calls.length === 0,
+      ).toBe(true);
+    });
+  } else {
+    // Read-only mode skips the local-only listing endpoint entirely; wait
+    // for the unavailable state it renders instead.
+    await waitFor(() => {
+      expect(
+        screen.getByText(textOf("duplicate_review_local_only")),
+      ).toBeTruthy();
+    });
+  }
 }
 
 afterEach(async () => {
@@ -166,11 +176,15 @@ describe("DuplicateSessionReview", () => {
     });
   });
 
-  it("hides the recheck control in read-only mode", async () => {
+  it("read-only mode shows the local-only state without calling the API", async () => {
     await render({ readOnly: true });
-    await waitFor(() => {
-      expect(screen.getByText(textOf("duplicate_review_empty"))).toBeTruthy();
-    });
+    // The listing endpoint is local-only; in read-only mode the load must
+    // be skipped entirely instead of surfacing a 501 error.
+    expect(settingsService.getApiV1SettingsDuplicateGroups).not
+      .toHaveBeenCalled();
+    expect(
+      screen.getByText(textOf("duplicate_review_local_only")),
+    ).toBeTruthy();
     expect(
       screen.queryByText(textOf("duplicate_review_recheck")),
     ).toBeNull();

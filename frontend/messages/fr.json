@@ -2584,6 +2584,7 @@
   "duplicate_review_recheck": "Revérifier les doublons",
   "duplicate_review_rebuilding": "Reconstruction des groupes de doublons…",
   "duplicate_review_empty": "Aucune session en double détectée.",
+  "duplicate_review_local_only": "La révision des sessions en double n'est disponible que sur l'archive locale.",
   "duplicate_review_group_heading": "{count} copies",
   "duplicate_review_role_canonical": "canonique",
   "duplicate_review_role_duplicate": "doublon",

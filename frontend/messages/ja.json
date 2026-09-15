@@ -2573,6 +2573,7 @@
   "duplicate_review_recheck": "重複を再チェック",
   "duplicate_review_rebuilding": "重複グループを再構築中…",
   "duplicate_review_empty": "重複セッションは検出されませんでした。",
+  "duplicate_review_local_only": "重複セッションのレビューはローカルアーカイブでのみ利用できます。",
   "duplicate_review_group_heading": "{count} 件のコピー",
   "duplicate_review_role_canonical": "正本",
   "duplicate_review_role_duplicate": "重複",

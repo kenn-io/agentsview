@@ -17129,8 +17129,18 @@ func (e *Engine) writeBatchWithOutcomeContext(
 	}
 	// Sessions written by the loop below bypass the incremental path's
 	// per-session remap and the bulk batch's post-commit remap, so their IDs
-	// are collected here and rules are applied once after the loop.
+	// are collected here and rules are applied once after the loop. The
+	// defer covers every return path — the len(writes)==0 staged-only
+	// return, the batch-error return, and the ctx-cancel returns mid-loop
+	// all leave successfully written sessions committed, and those must not
+	// keep the parser agent until a later write. WithoutCancel lets the
+	// apply finish after a cancelled batch.
 	var remapIDs []string
+	defer func() {
+		e.applyAgentRemapRulesToWritten(
+			context.WithoutCancel(ctx), remapIDs,
+		)
+	}()
 	if ctx.Err() != nil {
 		return outcome
 	}
@@ -17388,7 +17398,6 @@ func (e *Engine) writeBatchWithOutcomeContext(
 		outcome.resolved[i] = true
 		remapIDs = append(remapIDs, s.ID)
 	}
-	e.applyAgentRemapRulesToWritten(ctx, remapIDs)
 	return outcome
 }
 
@@ -18437,8 +18446,17 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 		resolved: make([]bool, len(batch)),
 	}
 	// Staged writes and post-commit batch writes both collect their IDs for
-	// the shared post-batch remap at the function's single return.
+	// the shared post-batch remap. The deferred apply covers every return
+	// path: the len(writes)==0 staged-only return, the batch-error return
+	// (which drops collected staged IDs if not merged), and ctx-cancel
+	// returns mid-loop. WithoutCancel lets the apply finish after a
+	// cancelled batch.
 	var remapIDs []string
+	defer func() {
+		e.applyAgentRemapRulesToWritten(
+			context.WithoutCancel(ctx), remapIDs,
+		)
+	}()
 	writes := make([]db.SessionBatchWrite, 0, len(batch))
 	pendingIndexes := make([]int, 0, len(batch))
 	sources := make(map[string]batchSourceFile, len(batch))
@@ -18628,7 +18646,9 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 				writtenIDs = append(writtenIDs, writes[writtenIndex].Session.ID)
 			}
 		}
-		e.applyAgentRemapRulesToWritten(ctx, writtenIDs)
+		// Merge into the deferred post-batch remap so a single apply covers
+		// both bulk-written and staged-written sessions.
+		remapIDs = append(remapIDs, writtenIDs...)
 	}
 	e.phaseStats.Batches.Add(1)
 	e.phaseStats.WriteBatchSize.Add(int64(len(writes)))
@@ -18670,7 +18690,6 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 	outcome.writtenSessions = result.WrittenSessions
 	outcome.writtenMessages = result.WrittenMessages
 	outcome.failedSessions += result.FailedSessions
-	e.applyAgentRemapRulesToWritten(ctx, remapIDs)
 	return outcome
 }
 
