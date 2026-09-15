@@ -1160,7 +1160,12 @@ func pathWithinRoot(path, root string) bool {
 // the scheduler. Call once when the engine's owner shuts down;
 // safe to call repeatedly.
 func (e *Engine) Close() {
-
+	// Drain any in-flight or pending duplicate-group rebuild before the
+	// caller closes the database: the worker runs on context.Background()
+	// inside its own transaction, so shutdown must not race an active
+	// pass. The worker coalesces concurrent schedule requests into the
+	// same run loop, so one wait covers every request made so far.
+	e.WaitDuplicateGroupRebuildDrained()
 	e.signalSched.stop()
 }
 

@@ -42,6 +42,11 @@ func pgUsageDuplicateSuppression(sessionCol string) string {
 			SELECT 1 FROM duplicate_group_members probe
 			WHERE probe.session_id = ` + sessionCol + `
 				AND probe.role = 'duplicate' AND probe.canonical_id <> ''
+				AND EXISTS (
+					SELECT 1 FROM sessions cs
+					WHERE cs.id = probe.canonical_id
+						AND cs.deleted_at IS NULL
+				)
 				AND (
 					EXISTS (
 						SELECT 1 FROM messages cv

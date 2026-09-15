@@ -1171,7 +1171,12 @@ func (db *DB) GetSessionFull(
 	if s.DisplayName == nil {
 		s.DisplayName = s.SessionName
 	}
-	db.decorateSessionsWithDuplicateRoles([]Session{*s})
+	decorated := []Session{*s}
+	db.decorateSessionsWithDuplicateRoles(decorated)
+	// decorateSessionsWithDuplicateRoles mutates slice elements, and the
+	// single-element literal above is a copy; write the decorated fields
+	// back so full-session callers actually see them.
+	*s = decorated[0]
 	return s, nil
 }
 
