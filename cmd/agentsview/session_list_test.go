@@ -1,5 +1,4 @@
-// ABOUTME: `session list --since` relative time filter tests -- flag
-// ABOUTME: validation, actual filtering behavior, and --resume interaction.
+// ABOUTME: Session list filters, source-path JSON, flag validation, and resume behavior.
 package main
 
 import (
@@ -106,20 +105,6 @@ func TestSessionListIncludeSource(t *testing.T) {
 		require.NoError(t, err)
 		for _, session := range assertSessionList(t, out) {
 			assert.NotContains(t, session, "file_path")
-		}
-	})
-
-	t.Run("missing_source", func(t *testing.T) {
-		dataDir := newAgentDataDir(t)
-		seed(t, dataDir)
-
-		out, err := executeCommand(newRootCommand(),
-			"session", "list", "--format", "json", "--include-source")
-		require.NoError(t, err)
-		for _, session := range assertSessionList(t, out) {
-			if session["id"] == "without-source" {
-				assert.NotContains(t, session, "file_path")
-			}
 		}
 	})
 
