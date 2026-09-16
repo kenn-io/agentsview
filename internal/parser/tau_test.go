@@ -365,5 +365,5 @@ func TestTauUsageJSONIsStable(t *testing.T) {
 		`{"id":"u","type":"message","message":{"role":"assistant","content":"ok","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}}`,
 	))
 	require.Len(t, result.Messages, 1)
-	assert.JSONEq(t, `{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":0,"output_tokens":0}`, string(result.Messages[0].TokenUsage))
+	assert.Equal(t, `{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":0,"output_tokens":0}`, string(result.Messages[0].TokenUsage))
 }

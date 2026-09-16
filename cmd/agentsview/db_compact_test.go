@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"encoding/json/v2"
+	"go.kenn.io/agentsview/internal/db"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -70,4 +72,12 @@ func TestDBCompactJSONRequiresYes(t *testing.T) {
 	err := cmd.Execute()
 	require.EqualError(t, err, "--format json requires --yes for db compact")
 	require.Empty(t, stdout.String(), "JSON mode must not mix a prompt into stdout")
+}
+
+func TestDBCompactResultJSONNewline(t *testing.T) {
+	var output bytes.Buffer
+	require.NoError(t, writeDBCompactResult(&output, db.CompactResult{}, true))
+	var result db.CompactResult
+	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
+	require.Equal(t, byte('\n'), output.Bytes()[output.Len()-1])
 }

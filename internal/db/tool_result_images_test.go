@@ -748,3 +748,22 @@ func TestOffloadOmittedLateResultDoesNotPublishOlderImages(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, objects)
 }
+
+func TestToolImageDelimiterVariantsRemovePayload(t *testing.T) {
+	for _, field := range []string{"image-url", "imageurl", "IMAGE_URL"} {
+		t.Run(field, func(t *testing.T) {
+			content := `[{"type":"input_image","` + field + `":"data:image/png;base64,AAEC"}]`
+			stripped, stats := StripToolResultImages(content)
+			assert.Equal(t, int64(1), stats.Payloads)
+			assert.NotContains(t, stripped, "base64")
+			migrated, err := migrateToolResultImages(content, fakePut)
+			require.NoError(t, err)
+			assert.Contains(t, migrated, "asset://fake.png")
+			assert.NotContains(t, migrated, "base64")
+		})
+	}
+	content := `[{"type":"agentsview_image","image-ref":"asset://abc.png","media_type":"image/png","byte_size":3}]`
+	stripped, stats := DowngradeOffloadedToolResultImages(content)
+	assert.Equal(t, int64(1), stats.Payloads)
+	assert.NotContains(t, stripped, "asset://")
+}

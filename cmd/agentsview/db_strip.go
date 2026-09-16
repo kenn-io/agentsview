@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"io"
@@ -136,7 +137,7 @@ func writeDBImageReport(
 	out io.Writer, report db.StripImagesReport, jsonOutput bool, heading string,
 ) error {
 	if jsonOutput {
-		return json.MarshalWrite(out, report)
+		return json.MarshalEncode(jsontext.NewEncoder(out), report)
 	}
 	fmt.Fprintln(out, heading)
 	fmt.Fprintf(out, "  Sessions: %d\n", report.Sessions)

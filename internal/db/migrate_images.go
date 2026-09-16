@@ -76,7 +76,7 @@ func countMigratableBlocks(blocks []jsontext.Value, stats *ToolImageStats) {
 			continue
 		}
 		var block toolImageBlock
-		if err := json.Unmarshal(raw, &block); err != nil {
+		if err := json.Unmarshal(raw, &block, json.MatchCaseInsensitiveNames(true)); err != nil {
 			continue
 		}
 		_, decoded, stored, ok := decodeInlineImageURL(block.ImageURL)

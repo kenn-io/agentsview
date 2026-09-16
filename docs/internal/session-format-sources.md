@@ -874,6 +874,10 @@ add an archived or maintained mirror without replacing the original identity.
   [session history](https://github.com/alibaba/open-code-review/blob/966f976e24b09e2a3691d3919c9833adcd03642f/internal/session/history.go).
   The public issue sample was also preserved as a sanitized fixture in the
   AgentsView parser tests.
+- **Usage encoding reverified (2026-09-16):** The pinned session history
+  declares prompt, completion, cache-read, and cache-write token fields.
+  AgentsView serializes their normalized map with sorted keys so reparsing
+  unchanged usage preserves the bytes used by message comparison.
 - **Reverified (2026-09-10):** Checked the pinned writer and history code plus
   [tool execution](https://github.com/alibaba/open-code-review/blob/966f976e24b09e2a3691d3919c9833adcd03642f/internal/llmloop/loop.go)
   and
@@ -3036,6 +3040,10 @@ schemas keep their existing ordering behavior.
   contained `reasoning`, `totalTokens`, and cost objects, which AgentsView
   ignores. A producer-derived test covers 25 total cache-write tokens and a
   10-token one-hour subset.
+- **Usage encoding reverified (2026-09-16):** The pinned message model still
+  exposes input, output, cache-read, and cache-write usage. AgentsView keeps
+  its normalized JSON keys sorted so unchanged usage compares byte-for-byte
+  equal after reparsing.
 - **Agentsview:** `internal/parser/tau.go` and `internal/parser/tau_provider.go`
   read each transcript once, exclude the exact `index.jsonl` basename, use the
   filename for ordinary session identity, and encode the project directory

@@ -1,14 +1,17 @@
 package server_test
 
 import (
+	"encoding/json/v2"
 	"net/http"
 	"testing"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/server"
 )
 
 func TestHandleSessionTiming_OK(t *testing.T) {
@@ -88,4 +91,20 @@ func seedTimingFixture(t *testing.T, d *db.DB, sessionID string) {
 		},
 	}
 	require.NoError(t, d.ReplaceSessionMessages(sessionID, msgs))
+}
+
+func TestHandleSessionTimingWithoutCallsMatchesContract(t *testing.T) {
+	te := setup(t)
+	dbtest.SeedSession(t, te.db, "timing-no-calls", "timing-test")
+	w := te.get(t, "/api/v1/sessions/timing-no-calls/timing")
+	assertStatus(t, w, http.StatusOK)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.Contains(t, body, "slowest_call")
+	assert.Nil(t, body["slowest_call"])
+	spec := server.OpenAPISpec(server.VersionInfo{})
+	schema := spec.Paths["/api/v1/sessions/{id}/timing"].Get.Responses["200"].Content["application/json"].Schema
+	result := &huma.ValidateResult{}
+	huma.Validate(spec.Components.Schemas, schema, &huma.PathBuffer{}, huma.ModeReadFromServer, body, result)
+	assert.Empty(t, result.Errors)
 }

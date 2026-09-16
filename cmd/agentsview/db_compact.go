@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"io"
@@ -105,7 +106,7 @@ func runDBCompactDryRun(
 		return err
 	}
 	if jsonOutput {
-		return json.MarshalWrite(out, estimate)
+		return json.MarshalEncode(jsontext.NewEncoder(out), estimate)
 	}
 	fmt.Fprintln(out, "Archive compaction estimate.")
 	fmt.Fprintf(out, "  Database: %s\n", formatBytes(estimate.DatabaseBytes))
@@ -240,7 +241,7 @@ func requestDBCompact(
 
 func writeDBCompactResult(out io.Writer, result db.CompactResult, jsonOutput bool) error {
 	if jsonOutput {
-		return json.MarshalWrite(out, result)
+		return json.MarshalEncode(jsontext.NewEncoder(out), result)
 	}
 	fmt.Fprintln(out, "Archive compaction completed.")
 	fmt.Fprintln(out, "Before:")

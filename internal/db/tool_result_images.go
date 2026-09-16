@@ -88,8 +88,10 @@ func stripToolResultImageArrayWithInline(
 		}
 		placeholderFields := make(map[string]jsontext.Value, len(fields)+6)
 		for key, value := range fields {
-			if !strings.EqualFold(key, "type") &&
-				!strings.EqualFold(key, "image_url") {
+			// Match the case and delimiter folding used by the JSON decoder.
+			name := strings.ReplaceAll(strings.ReplaceAll(key, "_", ""), "-", "")
+			if !strings.EqualFold(name, "type") &&
+				!strings.EqualFold(name, "imageurl") {
 				placeholderFields[key] = value
 			}
 		}
@@ -154,8 +156,9 @@ func stripOffloadedImagePlaceholder(raw jsontext.Value) (jsontext.Value, bool) {
 		return nil, false
 	}
 	for key := range fields {
-		if strings.EqualFold(key, "image_ref") ||
-			strings.EqualFold(key, "text") {
+		name := strings.ReplaceAll(strings.ReplaceAll(key, "_", ""), "-", "")
+		if strings.EqualFold(name, "imageref") ||
+			strings.EqualFold(name, "text") {
 			delete(fields, key)
 		}
 	}
@@ -374,8 +377,10 @@ func migrateToolResultImageArray(content string, put imagePutFunc) (string, erro
 
 		placeholderFields := make(map[string]jsontext.Value, len(fields)+7)
 		for key, value := range fields {
-			if !strings.EqualFold(key, "type") &&
-				!strings.EqualFold(key, "image_url") {
+			// Match the case and delimiter folding used by the JSON decoder.
+			name := strings.ReplaceAll(strings.ReplaceAll(key, "_", ""), "-", "")
+			if !strings.EqualFold(name, "type") &&
+				!strings.EqualFold(name, "imageurl") {
 				placeholderFields[key] = value
 			}
 		}

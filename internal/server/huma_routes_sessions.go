@@ -35,6 +35,10 @@ func (s *Server) registerSessionRoutes() {
 	s.get(group, "/sessions/{id}/children", "List child sessions", s.humaGetChildSessions)
 	s.get(group, "/sessions/{id}/activity", "Get session activity", s.humaGetSessionActivity)
 	s.get(group, "/sessions/{id}/timing", "Get session timing", s.humaSessionTiming)
+	// Huma does not infer nullability for pointers to object schemas.
+	slowestCall := s.api.OpenAPI().Components.Schemas.Map()["DbSessionTiming"].Properties["slowest_call"]
+	slowestCall.AnyOf = []*huma.Schema{{Ref: slowestCall.Ref}, {Type: "null"}}
+	slowestCall.Ref = ""
 	s.get(group, "/sessions/{id}/usage", "Get session usage", s.humaSessionUsage)
 	s.stream(group, http.MethodGet, "/sessions/{id}/watch", "Watch session events", s.humaWatchSession)
 	s.stream(group, http.MethodGet, "/events", "Watch server events", s.humaEvents)

@@ -2400,7 +2400,9 @@ components:
         session_id:
           type: string
         slowest_call:
-          $ref: "#/components/schemas/DbCallTiming"
+          anyOf:
+            - $ref: "#/components/schemas/DbCallTiming"
+            - type: "null"
         subagent_count:
           format: int64
           type: integer

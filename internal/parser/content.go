@@ -631,7 +631,7 @@ func reduceToolInputToPaths(inputJSON string) string {
 			kept[key] = value
 		}
 	}
-	reduced, err := json.Marshal(kept)
+	reduced, err := json.Marshal(kept, json.Deterministic(true))
 	if err != nil {
 		return "{}"
 	}

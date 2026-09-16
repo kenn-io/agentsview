@@ -537,7 +537,7 @@ func TestMigratePreviewAndApplyAgreeOnUnsupportedType(t *testing.T) {
 	assetsDir := t.TempDir()
 	insertSession(t, d, "mixed-media", "project")
 
-	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},` +
+	content := `[{"TYPE":"input_image","IMAGE_URL":"data:image/png;base64,AAEC"},` +
 		`{"type":"input_image","image_url":"data:image/bmp;base64,AAEC"}]`
 	_, err := d.getWriter().Exec(`
 		INSERT INTO tool_result_events

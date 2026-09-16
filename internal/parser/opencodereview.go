@@ -478,7 +478,7 @@ func openCodeReviewApplyUsage(message *ParsedMessage, usage *openCodeReviewUsage
 		return
 	}
 	message.ContextTokens = contextTokens
-	raw, err := json.Marshal(values)
+	raw, err := json.Marshal(values, json.Deterministic(true))
 	if err == nil {
 		message.TokenUsage = jsontext.Value(raw)
 	}

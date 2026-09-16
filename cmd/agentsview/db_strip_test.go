@@ -97,6 +97,7 @@ func TestDBStripCommandJSONApply(t *testing.T) {
 	cmd.SetOut(&output)
 	require.NoError(t, cmd.Execute())
 
+	assert.True(t, strings.HasSuffix(output.String(), "\n"), "JSON output must end with a newline")
 	var report db.StripImagesReport
 	require.NoError(t, json.Unmarshal(output.Bytes(), &report))
 	assert.Equal(t, 1, report.Sessions)
