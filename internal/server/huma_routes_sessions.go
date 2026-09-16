@@ -1319,6 +1319,9 @@ func (s *Server) humaResumeSession(
 	if session.Agent == string(parser.AgentPi) && session.FilePath != nil &&
 		*session.FilePath != "" {
 		resumeTarget = *session.FilePath
+		if host != "" {
+			resumeTarget = strings.TrimPrefix(resumeTarget, host+":")
+		}
 	}
 	cmd := resumeCommand(string(session.Agent), tmpl, resumeTarget, model)
 	if string(session.Agent) == "claude" {
