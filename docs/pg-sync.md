@@ -338,7 +338,7 @@ agentsview pg serve [flags]
 | Flag                | Default     | Description                                         |
 | ------------------- | ----------- | --------------------------------------------------- |
 | `--host`            | `127.0.0.1` | Bind address                                        |
-| `--port`            | `8080`      | Port                                                |
+| `--port`            | `8080`      | Explicit nonzero port must be free; `0` selects any |
 | `--base-path`       |             | URL prefix for reverse-proxy subpath                |
 | `--public-url`      |             | Browser URL, also added to trusted origins                  |
 | `--public-origin`   |             | Trusted browser origin (repeatable/comma-separated) |

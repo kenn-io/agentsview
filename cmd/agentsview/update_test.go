@@ -151,7 +151,7 @@ func TestRestartDaemonAfterUpdateArgsPreserveRuntimeBind(t *testing.T) {
 	})
 
 	assert.Equal(t, []string{
-		"serve", "--background", "--host", "0.0.0.0", "--port", "18080",
+		"serve", "--background", "--host", "0.0.0.0",
 		"--require-auth", "--no-sync",
 	}, args)
 }
@@ -163,7 +163,7 @@ func TestRestartDaemonAfterUpdateArgsDropsLegacyNonLoopbackWithoutAuthConfig(t *
 	})
 
 	assert.Equal(t, []string{
-		"serve", "--background", "--host", "127.0.0.1", "--port", "18080",
+		"serve", "--background", "--host", "127.0.0.1",
 	}, args)
 }
 
@@ -176,7 +176,7 @@ func TestRestartDaemonAfterUpdateArgsDropsKnownUnauthenticatedNonLoopback(t *tes
 	})
 
 	assert.Equal(t, []string{
-		"serve", "--background", "--host", "127.0.0.1", "--port", "18080",
+		"serve", "--background", "--host", "127.0.0.1",
 	}, args)
 }
 
@@ -187,7 +187,7 @@ func TestRestartDaemonAfterUpdateArgsKeepsLegacyNonLoopbackWithAuthConfig(t *tes
 	)
 
 	assert.Equal(t, []string{
-		"serve", "--background", "--host", "0.0.0.0", "--port", "18080",
+		"serve", "--background", "--host", "0.0.0.0",
 		"--require-auth",
 	}, args)
 }

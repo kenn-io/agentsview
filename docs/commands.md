@@ -146,7 +146,7 @@ Running plain `agentsview` shows help instead of starting the web UI.
 | Flag                | Default     | Description                                              |
 | ------------------- | ----------- | -------------------------------------------------------- |
 | `--host`            | `127.0.0.1` | Host to bind to                                          |
-| `--port`            | `8080`      | Port to listen on                                        |
+| `--port`            | `8080`      | Explicit nonzero port must be free; `0` selects any      |
 | `--no-browser`      | `false`     | Don't open browser on startup                            |
 | `--no-sync`         | `false`     | Disable initial, watched, and periodic sync              |
 | `--no-update-check` | `false`     | Disable automatic update checks                          |

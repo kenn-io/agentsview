@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -23,11 +24,6 @@ func testBackendReadyConfig(ts *httptest.Server, token string) config.Config {
 	}
 }
 
-const issue1793Reproduction = `agentsview serve --host 127.0.0.1 --port 8080
-
-Port 8080 in use, using 8081
-agentsview v0.43.0 listening at http://127.0.0.1:8081 (started in 1.2s)`
-
 func heldLoopbackPort(t *testing.T) (net.Listener, int) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -37,25 +33,17 @@ func heldLoopbackPort(t *testing.T) (net.Listener, int) {
 }
 
 func TestPrepareServeRuntimeConfigExplicitPortCollision(t *testing.T) {
-	require.Contains(t,
-		issue1793Reproduction,
-		"agentsview serve --host 127.0.0.1 --port 8080",
-	)
-	require.Contains(t,
-		issue1793Reproduction,
-		"Port 8080 in use, using 8081",
-	)
-
 	listener, port := heldLoopbackPort(t)
 	defer listener.Close()
+	_ = testDataDir(t)
+	cmd := newServeCommand()
+	require.NoError(t, cmd.Flags().Parse([]string{
+		"--host", "127.0.0.1", "--port", strconv.Itoa(port),
+	}))
 	publicURL := fmt.Sprintf("https://viewer.example.test:%d/archive/", port)
-	cfg := config.Config{
-		Host:          "127.0.0.1",
-		Port:          port,
-		PortExplicit:  true,
-		PublicURL:     publicURL,
-		PublicOrigins: []string{publicURL},
-	}
+	cfg := mustLoadConfig(cmd)
+	cfg.PublicURL = publicURL
+	cfg.PublicOrigins = []string{publicURL}
 
 	var got config.Config
 	var err error
