@@ -1,9 +1,9 @@
-// ABOUTME: `session list --since` relative time filter tests -- flag
-// ABOUTME: validation, actual filtering behavior, and --resume interaction.
+// ABOUTME: Session list filters, source-path JSON, flag validation, and resume behavior.
 package main
 
 import (
 	"bytes"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,6 +11,115 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 )
+
+func TestSessionListIncludeSource(t *testing.T) {
+	seed := func(t *testing.T, dataDir string) {
+		sourcePath := filepath.Join(
+			dataDir, ".claude", "projects", "agentsview", "session-source.jsonl",
+		)
+		oddPath := filepath.Join(dataDir, "odd path", "session [special].jsonl")
+		stableActivity := func(s *db.Session) {
+			activity := "2024-01-01T00:00:00Z"
+			s.StartedAt = &activity
+			s.EndedAt = &activity
+		}
+		seedSessionsWithOpts(t, dataDir,
+			sessionSeed{
+				id: "with-source", project: "proj",
+				mut: func(s *db.Session) {
+					stableActivity(s)
+					s.FilePath = &sourcePath
+				},
+			},
+			sessionSeed{
+				id: "without-source", project: "proj",
+				mut: stableActivity,
+			},
+			sessionSeed{
+				id: "odd-source", project: "proj",
+				mut: func(s *db.Session) {
+					stableActivity(s)
+					s.FilePath = &oddPath
+				},
+			},
+		)
+	}
+	assertSessionList := func(t *testing.T, out string) []map[string]any {
+		t.Helper()
+		got := decodeCLIJSON[cliSessionList](t, out)
+		require.Equal(t, 3, got.Total)
+		require.Len(t, got.Sessions, 3)
+		ids := make([]string, 0, len(got.Sessions))
+		for _, session := range got.Sessions {
+			id, ok := session["id"].(string)
+			require.True(t, ok)
+			ids = append(ids, id)
+		}
+		assert.ElementsMatch(t,
+			[]string{"with-source", "without-source", "odd-source"}, ids)
+		return got.Sessions
+	}
+
+	t.Run("enabled", func(t *testing.T) {
+		dataDir := newAgentDataDir(t)
+		seed(t, dataDir)
+
+		out, err := executeCommand(newRootCommand(),
+			"session", "list", "--format", "json", "--include-source")
+		require.NoError(t, err)
+		sessions := assertSessionList(t, out)
+		for _, session := range sessions {
+			switch session["id"] {
+			case "with-source":
+				assert.Equal(t, filepath.Join(
+					dataDir, ".claude", "projects", "agentsview", "session-source.jsonl",
+				), session["file_path"])
+			case "odd-source":
+				assert.Equal(t, filepath.Join(
+					dataDir, "odd path", "session [special].jsonl",
+				), session["file_path"])
+			case "without-source":
+				assert.NotContains(t, session, "file_path")
+			}
+		}
+	})
+
+	t.Run("default", func(t *testing.T) {
+		dataDir := newAgentDataDir(t)
+		seed(t, dataDir)
+
+		out, err := executeCommand(newRootCommand(),
+			"session", "list", "--format", "json")
+		require.NoError(t, err)
+		for _, session := range assertSessionList(t, out) {
+			assert.NotContains(t, session, "file_path")
+		}
+	})
+
+	t.Run("explicit_false", func(t *testing.T) {
+		dataDir := newAgentDataDir(t)
+		seed(t, dataDir)
+
+		out, err := executeCommand(newRootCommand(),
+			"session", "list", "--format", "json", "--include-source=false")
+		require.NoError(t, err)
+		for _, session := range assertSessionList(t, out) {
+			assert.NotContains(t, session, "file_path")
+		}
+	})
+
+	t.Run("human", func(t *testing.T) {
+		dataDir := newAgentDataDir(t)
+		seed(t, dataDir)
+
+		without, err := executeCommand(newRootCommand(), "session", "list")
+		require.NoError(t, err)
+		with, err := executeCommand(newRootCommand(),
+			"session", "list", "--include-source")
+		require.NoError(t, err)
+		assert.Equal(t, without, with)
+	})
+}
 
 // TestSessionListSinceMutuallyExclusiveWithActiveSince verifies the error is
 // returned before any service/DB access is attempted (no data dir is set up

@@ -2527,4 +2527,16 @@
   "duplicate_review_agent": "에이전트",
   "duplicate_review_started": "시작",
   "duplicate_review_messages": "메시지"
+  "go_to_session_title": "세션으로 이동",
+  "go_to_session_input_label": "세션 ID 또는 UUID",
+  "go_to_session_placeholder": "세션 ID 또는 UUID 붙여넣기",
+  "go_to_session_submit": "세션 열기",
+  "go_to_session_close": "세션으로 이동 닫기",
+  "go_to_session_empty": "세션 ID 또는 UUID를 입력하세요.",
+  "go_to_session_invalid": "세션 ID 또는 UUID를 입력하세요.",
+  "go_to_session_not_found": "일치하는 세션 ID 또는 UUID가 없습니다.",
+  "go_to_session_ambiguous": "여러 세션 ID 또는 UUID가 일치합니다. 기존 링크에서 원하는 세션을 여세요.",
+  "go_to_session_capped": "일치하는 세션 ID 또는 UUID가 너무 많습니다. 기존 링크에서 원하는 세션을 여세요.",
+  "go_to_session_failed": "세션을 조회하지 못했습니다. 다시 시도하세요.",
+  "shortcuts_go_to_session": "찾기를 닫았을 때 세션으로 이동"
 }

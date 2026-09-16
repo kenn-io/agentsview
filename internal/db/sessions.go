@@ -2528,7 +2528,8 @@ func (db *DB) FindSessionIDsByPartial(
 
 // FindSessionIDsByRawSuffix returns up to limit session IDs whose
 // stored id is either the exact raw input or the raw input
-// preceded by an agent prefix (e.g. "codex:<uuid>"). The suffix
+// preceded by an agent or host prefix (e.g. "codex:<uuid>" or
+// "host~<uuid>"). The suffix
 // comparison uses SUBSTR rather than LIKE so that SQL wildcard
 // characters ('_' and '%') present in session IDs (which permit
 // underscores) are compared literally instead of matching any
@@ -2546,7 +2547,7 @@ func (db *DB) FindSessionIDsByRawSuffix(
 	rows, err := db.getReader().QueryContext(ctx,
 		`SELECT id FROM sessions
 		 WHERE (id = ?1
-		        OR SUBSTR(id, -(LENGTH(?1) + 1)) = ':' || ?1)
+		        OR SUBSTR(id, -(LENGTH(?1) + 1)) IN (':' || ?1, '~' || ?1))
 		   AND deleted_at IS NULL
 		 ORDER BY (id = ?1) DESC,
 		          COALESCE(

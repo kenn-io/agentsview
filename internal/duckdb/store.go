@@ -414,6 +414,52 @@ func (s *Store) FindSessionIDsByPartial(
 	return ids, rows.Err()
 }
 
+// FindSessionIDsByRawSuffix returns IDs that equal raw or end with a
+// literal colon/tilde delimiter followed by raw.
+func (s *Store) FindSessionIDsByRawSuffix(
+	ctx context.Context, raw string, limit int,
+) ([]string, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	rows, err := s.queryContext(ctx,
+		`SELECT id FROM sessions
+		 WHERE (id = ?
+		        OR RIGHT(id, LENGTH(?) + 1) IN (':' || ?, '~' || ?))
+		   AND deleted_at IS NULL
+		 ORDER BY (id = ?) DESC,
+		          COALESCE(ended_at, started_at, created_at) DESC
+		 LIMIT ?`,
+		raw, raw, raw, raw, raw, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"finding duckdb sessions by raw suffix %q: %w",
+			raw, err,
+		)
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf(
+				"scanning duckdb session id: %w", err,
+			)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf(
+			"iterating duckdb raw suffix session ids: %w", err,
+		)
+	}
+	return ids, nil
+}
+
 func formatDBTime(v any) string {
 	switch t := v.(type) {
 	case nil:

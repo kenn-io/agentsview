@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -78,6 +80,54 @@ func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
 	}
 	require.NoError(t, ct.Close())
 	require.NoError(t, st.Wait())
+}
+
+func TestServer_SearchSessionsBySessionID(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	rootID := "remote~U"
+	dbtest.SeedSession(t, d, rootID, "root-project", func(s *db.Session) {
+		s.SessionName = new("Root session")
+		s.EndedAt = new("2024-01-01T00:00:00Z")
+	})
+	for i := range 1000 {
+		dbtest.SeedSession(t, d, fmt.Sprintf("remote~U-E%04d", i), "fork-project", func(s *db.Session) {
+			s.EndedAt = new("2025-01-01T00:00:00Z")
+		})
+	}
+
+	srv := newServer(ServeOptions{
+		Service: service.NewDirectBackend(d, nil),
+		Now:     func() time.Time { return fixedNow },
+	})
+	st, ct := newInMemoryPair(t, srv)
+	defer func() {
+		require.NoError(t, ct.Close())
+		require.NoError(t, st.Wait())
+	}()
+
+	res, err := ct.CallTool(context.Background(), callParams(ToolSearchSessions, map[string]any{
+		"session_id": "U",
+		"query":      "does-not-exist",
+		"project":    "does-not-exist",
+		"date_from":  "not-a-date",
+		"cursor":     99,
+		"limit":      1,
+	}))
+	require.NoError(t, err)
+	require.False(t, res.IsError, "%+v", res.Content)
+
+	var out searchSessionsOut
+	raw, err := json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	t.Logf("head: fixture_sessions=%d response=%s", 1001, raw)
+	require.NoError(t, json.Unmarshal(raw, &out))
+	require.Len(t, out.Results, 1)
+	assert.Equal(t, rootID, out.Results[0].SessionID)
+	assert.Equal(t, "root-project", out.Results[0].Project)
+	assert.Equal(t, "Root session", out.Results[0].Name)
+	assert.Empty(t, out.Results[0].Snippet)
+	assert.Zero(t, out.Results[0].MatchOrdinal)
+	assert.Nil(t, out.NextCursor)
 }
 
 func TestIsCleanStdioShutdown(t *testing.T) {

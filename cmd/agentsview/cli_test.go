@@ -391,3 +391,11 @@ func TestSyncHelpMentionsConfiguredHosts(t *testing.T) {
 		assert.Contains(t, help, want, "sync help missing %q", want)
 	}
 }
+
+func TestSyncHelpHostFlagDescribesBothTransports(t *testing.T) {
+	help, err := executeCommand(newRootCommand(), "sync", "--help")
+	require.NoError(t, err, "Execute")
+	assert.Contains(t, help, "Configured HTTP host name")
+	assert.Contains(t, help, "deprecated SSH hostname")
+	assert.NotContains(t, help, "SSH hostname for deprecated remote sync")
+}

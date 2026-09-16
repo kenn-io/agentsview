@@ -2527,4 +2527,16 @@
   "duplicate_review_agent": "Agent",
   "duplicate_review_started": "开始时间",
   "duplicate_review_messages": "消息数"
+  "go_to_session_title": "跳转到会话",
+  "go_to_session_input_label": "会话 ID 或 UUID",
+  "go_to_session_placeholder": "粘贴会话 ID 或 UUID",
+  "go_to_session_submit": "打开会话",
+  "go_to_session_close": "关闭跳转到会话",
+  "go_to_session_empty": "请输入会话 ID 或 UUID。",
+  "go_to_session_invalid": "请输入会话 ID 或 UUID。",
+  "go_to_session_not_found": "没有匹配此 ID 或 UUID 的会话。",
+  "go_to_session_ambiguous": "有多个会话匹配此 ID 或 UUID。请通过现有链接打开目标会话。",
+  "go_to_session_capped": "匹配此 ID 或 UUID 的会话太多。请通过现有链接打开目标会话。",
+  "go_to_session_failed": "无法查找该会话。请重试。",
+  "shortcuts_go_to_session": "关闭查找后跳转到会话"
 }

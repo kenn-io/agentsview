@@ -27,7 +27,7 @@ func TestPGFindSessionIDsByRawSuffixUsesExactFirstSuffixQuery(t *testing.T) {
 	query := strings.ToLower(state.queries[len(state.queries)-1])
 	state.mu.Unlock()
 
-	assert.Contains(t, query, "right(id, length($1) + 1) = ':' || $1")
+	assert.Contains(t, query, "right(id, length($1) + 1) in (':' || $1, '~' || $1)")
 	assert.Contains(t, query, "deleted_at is null")
 	assert.Contains(t, query, "order by (id = $1) desc")
 	assert.Contains(t, query, "coalesce(ended_at, started_at, created_at) desc")

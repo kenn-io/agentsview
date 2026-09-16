@@ -13,6 +13,7 @@ describe("supportsResume", () => {
     expect(supportsResume("opencode")).toBe(true);
     expect(supportsResume("amp")).toBe(true);
     expect(supportsResume("kiro")).toBe(true);
+    expect(supportsResume("pi")).toBe(true);
   });
 
   it("returns false for unsupported agents", () => {
@@ -36,6 +37,7 @@ describe("buildResumeCommand", () => {
     ["claude", "devbox1~claude:it's a test", "claude --resume 'it'\"'\"'s a test'"],
     ["claude", "devbox1~claude:a~b", "claude --resume 'a~b'"],
     ["cursor", "devbox1~cursor:abc-123", null],
+    ["pi", "devbox1~pi:abc-123", null],
     ["unknown", "devbox1~unknown:abc-123", null],
   ])("remote fallback %s %s is ID-only", (agent, id, command) => {
     expect(buildResumeCommand(agent, id)).toBe(command);
@@ -119,6 +121,10 @@ describe("buildResumeCommand", () => {
     expect(
       buildResumeCommand("kiro", "kiro:session-1"),
     ).toBe("kiro-cli chat --resume-id session-1");
+  });
+
+  it("returns null for pi (server-only resume)", () => {
+    expect(buildResumeCommand("pi", "pi:session-1")).toBeNull();
   });
 
   it("strips agent prefix from compound IDs", () => {
@@ -215,6 +221,7 @@ describe("formatResumeResponseCommand", () => {
   it.each([
     ["claude", "cd '/remote/project' && claude --resume abc-123", "cd '/remote/project' && claude --resume abc-123"],
     ["kiro", "cd '/remote/project' && kiro-cli chat --resume-id abc-123", "cd '/remote/project' && kiro-cli chat --resume-id abc-123"],
+    ["pi", "cd '/project' && pi --session session-1", "cd '/project' && pi --session session-1"],
     ["cursor", "cursor agent --resume abc-123", "cd '/remote/project' && cursor agent --resume abc-123"],
     ["codex", "codex resume abc-123", "codex resume abc-123"],
   ])("remote cwd formatting for %s", (agent, command, expected) => {

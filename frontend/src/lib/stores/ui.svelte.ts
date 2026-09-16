@@ -26,6 +26,7 @@ export type PublishTarget =
 type ModalType =
   | "about"
   | "commandPalette"
+  | "goToSession"
   | "shortcuts"
   | "publish"
   | "resync"
