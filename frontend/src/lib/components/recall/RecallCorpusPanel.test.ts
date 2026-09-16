@@ -3,9 +3,38 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { mount, tick, unmount } from "svelte";
 import { setLocale } from "../../i18n/index.js";
 import { router } from "../../stores/router.svelte.js";
+import type { RecallEntry } from "../../api/types/recall.js";
 
 // @ts-ignore
 import RecallCorpusPanel from "./RecallCorpusPanel.svelte";
+
+function requestURL(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
+}
+
+function reviewFixture(overrides: Partial<RecallEntry> = {}): RecallEntry {
+  return {
+    id: "reviewable",
+    type: "fact",
+    scope: "project",
+    status: "accepted",
+    review_state: "unreviewed_auto",
+    title: "Reviewable Recall entry",
+    body: "This fact is ready for a human decision.",
+    project: "agentsview",
+    source_session_id: "session-review",
+    source_run_id: "generation-active",
+    extractor_method: "turns-v1",
+    transferable: false,
+    provenance_ok: true,
+    created_at: "2026-07-23T10:00:00Z",
+    updated_at: "2026-07-23T11:00:00Z",
+    evidence: [],
+    ...overrides,
+  };
+}
 
 describe("RecallCorpusPanel", () => {
   let component: ReturnType<typeof mount> | undefined;
@@ -721,5 +750,383 @@ describe("RecallCorpusPanel", () => {
     expect(document.body.textContent).not.toContain("generation-building");
     expect(document.body.textContent).toContain("generation-retired");
     expect(document.body.textContent).toContain("reconcile-only");
+  });
+
+  it("offers review actions only for automatic entries and gates revoked approval", async () => {
+    const defaultFetch = fetchMock as unknown as (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestURL(input).includes("/recall/entries?")) {
+        return new Response(
+          JSON.stringify({
+            entries: [
+              reviewFixture(),
+              reviewFixture({
+                id: "revoked",
+                title: "Revoked Recall entry",
+                provenance_ok: false,
+              }),
+              reviewFixture({
+                id: "reviewed",
+                title: "Reviewed Recall entry",
+                review_state: "human_reviewed",
+              }),
+            ],
+            trusted_only: false,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return defaultFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    component = mount(RecallCorpusPanel, { target: document.body });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Reviewed Recall entry");
+    });
+
+    for (const title of [
+      "Reviewable Recall entry",
+      "Revoked Recall entry",
+      "Reviewed Recall entry",
+    ]) {
+      document.querySelector<HTMLButtonElement>(`button[aria-label="Expand ${title}"]`)!.click();
+    }
+    await tick();
+
+    const approve = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).filter(
+      (button) => button.textContent?.trim() === "Approve",
+    );
+    const archive = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).filter(
+      (button) => button.textContent?.trim() === "Archive",
+    );
+    expect(approve).toHaveLength(2);
+    expect(approve.map((button) => button.disabled)).toEqual([false, true]);
+    expect(archive).toHaveLength(2);
+    expect(archive.every((button) => !button.disabled)).toBe(true);
+    expect(document.body.textContent).toContain(
+      "Approval is unavailable because the source evidence was revoked.",
+    );
+    expect(document.body.textContent).toContain("Human approved");
+  });
+
+  it("approves one expanded row in place without refetching or scrolling", async () => {
+    const defaultFetch = fetchMock as unknown as (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    let entryRequests = 0;
+    fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestURL(input);
+      if (url.includes("/recall/entries?")) entryRequests++;
+      if (url.endsWith("/recall/entries/recall-1/review")) {
+        return new Response(
+          JSON.stringify(
+            reviewFixture({
+              id: "recall-1",
+              title: "Keep extraction passes bounded",
+              body: "Limit model-backed passes to an explicit session count.",
+              review_state: "human_reviewed",
+            }),
+          ),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return defaultFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    component = mount(RecallCorpusPanel, { target: document.body });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Keep extraction passes bounded");
+    });
+    document.documentElement.scrollTop = 240;
+    document
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="Expand Keep extraction passes bounded"]',
+      )!
+      .click();
+    await tick();
+
+    Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Approve")!
+      .click();
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Human approved");
+    });
+    expect(document.body.textContent).toContain(
+      "Limit model-backed passes to an explicit session count.",
+    );
+    expect(document.documentElement.scrollTop).toBe(240);
+    expect(entryRequests).toBe(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/recall/entries/recall-1/review",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ action: "approve" }),
+      }),
+    );
+  });
+
+  it("removes an approved row that no longer matches the review filter", async () => {
+    const defaultFetch = fetchMock as unknown as (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    let entryRequests = 0;
+    fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestURL(input);
+      if (url.includes("/recall/entries?")) entryRequests++;
+      if (url.endsWith("/recall/entries/recall-1/review")) {
+        return new Response(
+          JSON.stringify(
+            reviewFixture({
+              id: "recall-1",
+              title: "Keep extraction passes bounded",
+              review_state: "human_reviewed",
+            }),
+          ),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return defaultFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    component = mount(RecallCorpusPanel, { target: document.body });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Keep extraction passes bounded");
+    });
+
+    document.querySelector<HTMLButtonElement>('button[title="Review state"]')!.click();
+    await tick();
+    const unreviewedOption = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ).find((option) => option.textContent?.trim() === "Unreviewed automatic")!;
+    unreviewedOption.dispatchEvent(
+      new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("review_state=unreviewed_auto"),
+        expect.anything(),
+      );
+    });
+    const requestsBeforeReview = entryRequests;
+    document
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="Expand Keep extraction passes bounded"]',
+      )!
+      .click();
+    await tick();
+    Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Approve")!
+      .click();
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).not.toContain("Keep extraction passes bounded");
+    });
+    expect(entryRequests).toBe(requestsBeforeReview);
+  });
+
+  it("requests archived entries for the human-rejected review filter", async () => {
+    const defaultFetch = fetchMock as unknown as (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestURL(input);
+      if (url.includes("review_state=human_rejected") && url.includes("status=archived")) {
+        return new Response(
+          JSON.stringify({
+            entries: [
+              reviewFixture({
+                id: "rejected-entry",
+                title: "Rejected Recall entry",
+                status: "archived",
+                review_state: "human_rejected",
+              }),
+            ],
+            trusted_only: false,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return defaultFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    component = mount(RecallCorpusPanel, { target: document.body });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Keep extraction passes bounded");
+    });
+
+    document.querySelector<HTMLButtonElement>('button[title="Review state"]')!.click();
+    await tick();
+    const rejectedOption = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="option"]'),
+    ).find((option) => option.textContent?.trim() === "Human rejected")!;
+    rejectedOption.dispatchEvent(
+      new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Rejected Recall entry");
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("review_state=human_rejected"),
+      expect.anything(),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("status=archived"),
+      expect.anything(),
+    );
+  });
+
+  it("archives only after confirmation and removes the accepted row", async () => {
+    const defaultFetch = fetchMock as unknown as (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestURL(input).endsWith("/recall/entries/recall-1/review")) {
+        return new Response(
+          JSON.stringify(
+            reviewFixture({
+              id: "recall-1",
+              title: "Keep extraction passes bounded",
+              status: "archived",
+              review_state: "human_rejected",
+            }),
+          ),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      return defaultFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    component = mount(RecallCorpusPanel, { target: document.body });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Keep extraction passes bounded");
+    });
+    document
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="Expand Keep extraction passes bounded"]',
+      )!
+      .click();
+    await tick();
+    const archive = () =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent?.trim() === "Archive",
+      )!;
+
+    archive().click();
+    await tick();
+    expect(document.body.textContent).toContain("Archive Recall entry");
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/v1/recall/entries/recall-1/review",
+      expect.anything(),
+    );
+    Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Cancel")!
+      .click();
+    await tick();
+    expect(document.body.textContent).not.toContain("Archive Recall entry");
+
+    archive().click();
+    await tick();
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    Array.from(dialog.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Archive")!
+      .click();
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).not.toContain("Keep extraction passes bounded");
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/recall/entries/recall-1/review",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ action: "archive" }),
+      }),
+    );
+  });
+
+  it("keeps a failed decision local and restores both row actions", async () => {
+    const defaultFetch = fetchMock as unknown as (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => Promise<Response>;
+    let resolveReview!: (response: Response) => void;
+    fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestURL(input).endsWith("/recall/entries/recall-1/review")) {
+        return await new Promise<Response>((resolve) => {
+          resolveReview = resolve;
+        });
+      }
+      return defaultFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    component = mount(RecallCorpusPanel, { target: document.body });
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Keep extraction passes bounded");
+    });
+    document
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="Expand Keep extraction passes bounded"]',
+      )!
+      .click();
+    await tick();
+    const rowActions = () =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>("button")).filter((button) =>
+        ["Approve", "Archive"].includes(button.textContent?.trim() ?? ""),
+      );
+    rowActions()
+      .find((button) => button.textContent?.trim() === "Approve")!
+      .click();
+    await vi.waitFor(() => {
+      expect(rowActions().every((button) => button.disabled)).toBe(true);
+    });
+
+    resolveReview(
+      new Response(
+        JSON.stringify({
+          error: "recall review conflict",
+        }),
+        {
+          status: 409,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain(
+        "Could not review this Recall entry: recall review conflict",
+      );
+      expect(rowActions().every((button) => !button.disabled)).toBe(true);
+    });
+    expect(document.body.textContent).toContain("Keep extraction passes bounded");
   });
 });

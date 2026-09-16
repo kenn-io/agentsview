@@ -14,14 +14,12 @@ import (
 )
 
 const (
-	DefaultRecallEntryLimit          = 50
-	MaxRecallEntryLimit              = 500
-	MaxRecallSearchTerms             = corerecall.MaxScoringQueryTerms
-	recallFTS4PreselectLimit         = 50000
-	recallEvidenceFTS4PreselectLimit = 50000
-	RecallQueryModeLexical           = "lexical"
-	RecallQueryModeVector            = "vector"
-	RecallQueryModeHybrid            = "hybrid"
+	DefaultRecallEntryLimit = 50
+	MaxRecallEntryLimit     = 500
+	MaxRecallSearchTerms    = corerecall.MaxScoringQueryTerms
+	RecallQueryModeLexical  = "lexical"
+	RecallQueryModeVector   = "vector"
+	RecallQueryModeHybrid   = "hybrid"
 )
 
 type RecallEntry struct {
@@ -139,8 +137,6 @@ const recallBaseColsQualified = `recall_entries.id, recall_entries.type,
 
 // ErrInvalidRecallQuery identifies contradictory or unsupported recall filters.
 var ErrInvalidRecallQuery = errors.New("invalid recall query")
-
-var errRecallFTSCandidateQueryUnavailable = errors.New("recall fts candidate query unavailable")
 
 func scanRecallEntryRow(rs rowScanner) (RecallEntry, error) {
 	var m RecallEntry
@@ -841,20 +837,6 @@ func (db *DB) listRecallEntriesForTemporalRanking(
 func (db *DB) listRecallFTSCandidates(
 	ctx context.Context, q RecallQuery, terms []string,
 ) ([]RecallEntry, error) {
-	kind := db.recallFTSKind(ctx)
-	switch kind {
-	case "fts5":
-		return db.listRecallFTS5Candidates(ctx, q, terms)
-	case "fts4":
-		return db.listRecallFTS4RowIDCandidates(ctx, q, terms)
-	default:
-		return nil, errRecallFTSCandidateQueryUnavailable
-	}
-}
-
-func (db *DB) listRecallFTS5Candidates(
-	ctx context.Context, q RecallQuery, terms []string,
-) ([]RecallEntry, error) {
 	where, args := buildRecallEntryWhere(q, false)
 	limit := recallLimit(q.Limit)
 	query := "SELECT " + recallBaseColsQualified +
@@ -880,34 +862,6 @@ func (db *DB) listRecallFTS5Candidates(
 	return candidates, nil
 }
 
-func (db *DB) listRecallFTS4RowIDCandidates(
-	ctx context.Context, q RecallQuery, terms []string,
-) ([]RecallEntry, error) {
-	where, args := buildRecallEntryWhere(q, false)
-	limit := recallLimit(q.Limit)
-	query := "SELECT " + recallBaseCols +
-		" FROM recall_entries" +
-		" WHERE rowid IN (" +
-		"SELECT rowid FROM recall_entries_fts" +
-		" WHERE recall_entries_fts MATCH ? LIMIT ?" +
-		") AND " + where +
-		" ORDER BY " + recallStableSQLTieOrder("") +
-		", updated_at DESC, id ASC LIMIT ?"
-	args = append(
-		[]any{recallFTSQuery(terms), recallFTS4PreselectLimit},
-		args...,
-	)
-	args = append(args, limit)
-
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("querying recall fts4 candidates: %w", err)
-	}
-	defer rows.Close()
-
-	return scanRecallEntryRowsWithEvidence(ctx, db, rows)
-}
-
 func (db *DB) listRecallEntryLikeCandidates(
 	ctx context.Context, q RecallQuery, terms []string,
 ) ([]RecallEntry, error) {
@@ -929,44 +883,6 @@ func (db *DB) listRecallEntryLikeCandidates(
 	defer rows.Close()
 
 	return scanRecallEntryRowsWithEvidence(ctx, db, rows)
-}
-
-func (db *DB) recallFTSKind(ctx context.Context) string {
-	var ddl string
-	err := db.getReader().QueryRowContext(
-		ctx,
-		`SELECT lower(sql) FROM sqlite_master
-		 WHERE type = 'table' AND name = 'recall_entries_fts'`,
-	).Scan(&ddl)
-	if err != nil {
-		return ""
-	}
-	if strings.Contains(ddl, "using fts5") {
-		return "fts5"
-	}
-	if strings.Contains(ddl, "using fts4") {
-		return "fts4"
-	}
-	return ""
-}
-
-func (db *DB) recallEvidenceFTSKind(ctx context.Context) string {
-	var ddl string
-	err := db.getReader().QueryRowContext(
-		ctx,
-		`SELECT lower(sql) FROM sqlite_master
-		 WHERE type = 'table' AND name = 'recall_evidence_fts'`,
-	).Scan(&ddl)
-	if err != nil {
-		return ""
-	}
-	if strings.Contains(ddl, "using fts5") {
-		return "fts5"
-	}
-	if strings.Contains(ddl, "using fts4") {
-		return "fts4"
-	}
-	return ""
 }
 
 func scanRecallEntryRowsWithEvidence(
@@ -1035,20 +951,6 @@ func (db *DB) listRecallEvidenceTextCandidates(
 func (db *DB) listRecallEvidenceFTSCandidates(
 	ctx context.Context, q RecallQuery, terms []string,
 ) ([]RecallEntry, error) {
-	kind := db.recallEvidenceFTSKind(ctx)
-	switch kind {
-	case "fts4":
-		return db.listRecallEvidenceFTS4PreselectedCandidates(ctx, q, terms)
-	case "fts5":
-		return db.listRecallEvidenceFTSScoredCandidates(ctx, q, terms)
-	default:
-		return nil, errRecallFTSCandidateQueryUnavailable
-	}
-}
-
-func (db *DB) listRecallEvidenceFTSScoredCandidates(
-	ctx context.Context, q RecallQuery, terms []string,
-) ([]RecallEntry, error) {
 	where, args := buildRecallEntryWhere(q, false)
 	scoreExpr, scoreArgs := buildRecallEvidenceMatchScoreExpr(terms)
 	limit := recallLimit(q.Limit)
@@ -1069,42 +971,6 @@ func (db *DB) listRecallEvidenceFTSScoredCandidates(
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying recall evidence fts candidates: %w", err)
-	}
-	defer rows.Close()
-
-	return scanRecallEntryRowsWithEvidence(ctx, db, rows)
-}
-
-func (db *DB) listRecallEvidenceFTS4PreselectedCandidates(
-	ctx context.Context, q RecallQuery, terms []string,
-) ([]RecallEntry, error) {
-	where, args := buildRecallEntryWhere(q, false)
-	scoreExpr, scoreArgs := buildRecallEvidenceMatchScoreExpr(terms)
-	limit := recallLimit(q.Limit)
-	query := "WITH matched_evidence(rowid) AS (" +
-		"SELECT rowid FROM recall_evidence_fts" +
-		" WHERE recall_evidence_fts MATCH ? LIMIT ?" +
-		") SELECT " + recallBaseColsQualified +
-		" FROM matched_evidence" +
-		" JOIN recall_evidence ON recall_evidence.id = matched_evidence.rowid" +
-		" JOIN recall_entries ON recall_entries.id = recall_evidence.entry_id" +
-		" WHERE " + where +
-		" GROUP BY recall_entries.id" +
-		" ORDER BY " + scoreExpr + " DESC, " +
-		recallStableSQLTieOrder("recall_entries") +
-		", recall_entries.updated_at DESC, recall_entries.id ASC LIMIT ?"
-	args = append(
-		[]any{recallFTSQuery(terms), recallEvidenceFTS4PreselectLimit},
-		args...,
-	)
-	args = append(args, scoreArgs...)
-	args = append(args, limit)
-
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"querying recall evidence fts4 candidates: %w", err,
-		)
 	}
 	defer rows.Close()
 
@@ -1781,9 +1647,6 @@ func recallFTSQuery(terms []string) string {
 func recallFTSUnavailable(err error) bool {
 	if err == nil {
 		return false
-	}
-	if errors.Is(err, errRecallFTSCandidateQueryUnavailable) {
-		return true
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "no such table: recall_entries_fts") ||

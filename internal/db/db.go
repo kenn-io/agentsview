@@ -673,28 +673,6 @@ CREATE TRIGGER IF NOT EXISTS recall_entries_au AFTER UPDATE ON recall_entries BE
 END;
 `
 
-const recallEntriesFTS4 = `
-CREATE VIRTUAL TABLE IF NOT EXISTS recall_entries_fts USING fts4(
-    title,
-    body,
-    trigger,
-    tokenize=porter
-);
-
-CREATE TRIGGER IF NOT EXISTS recall_entries_ai AFTER INSERT ON recall_entries BEGIN
-    INSERT INTO recall_entries_fts(rowid, title, body, trigger)
-        VALUES (new.rowid, new.title, new.body, new.trigger);
-END;
-CREATE TRIGGER IF NOT EXISTS recall_entries_ad AFTER DELETE ON recall_entries BEGIN
-    DELETE FROM recall_entries_fts WHERE rowid = old.rowid;
-END;
-CREATE TRIGGER IF NOT EXISTS recall_entries_au AFTER UPDATE ON recall_entries BEGIN
-    DELETE FROM recall_entries_fts WHERE rowid = old.rowid;
-    INSERT INTO recall_entries_fts(rowid, title, body, trigger)
-        VALUES (new.rowid, new.title, new.body, new.trigger);
-END;
-`
-
 const recallEvidenceFTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS recall_evidence_fts USING fts5(
     snippet,
@@ -714,26 +692,6 @@ END;
 CREATE TRIGGER IF NOT EXISTS recall_evidence_au AFTER UPDATE ON recall_evidence BEGIN
     INSERT INTO recall_evidence_fts(recall_evidence_fts, rowid, snippet)
         VALUES('delete', old.id, old.snippet);
-    INSERT INTO recall_evidence_fts(rowid, snippet)
-        VALUES (new.id, new.snippet);
-END;
-`
-
-const recallEvidenceFTS4 = `
-CREATE VIRTUAL TABLE IF NOT EXISTS recall_evidence_fts USING fts4(
-    snippet,
-    tokenize=porter
-);
-
-CREATE TRIGGER IF NOT EXISTS recall_evidence_ai AFTER INSERT ON recall_evidence BEGIN
-    INSERT INTO recall_evidence_fts(rowid, snippet)
-        VALUES (new.id, new.snippet);
-END;
-CREATE TRIGGER IF NOT EXISTS recall_evidence_ad AFTER DELETE ON recall_evidence BEGIN
-    DELETE FROM recall_evidence_fts WHERE rowid = old.id;
-END;
-CREATE TRIGGER IF NOT EXISTS recall_evidence_au AFTER UPDATE ON recall_evidence BEGIN
-    DELETE FROM recall_evidence_fts WHERE rowid = old.id;
     INSERT INTO recall_evidence_fts(rowid, snippet)
         VALUES (new.id, new.snippet);
 END;
@@ -4389,6 +4347,16 @@ func openAndInit(
 		_ = db.CloseContext(ctx)
 		return nil, err
 	}
+	db.mu.Lock()
+	err = migrateRecallReviewStateConstraintLocked(ctx, db.getWriter())
+	db.mu.Unlock()
+	if err != nil {
+		_ = db.CloseContext(ctx)
+		return nil, fmt.Errorf(
+			"migrating recall review state: %w", err,
+		)
+	}
+
 	if err := db.init(ctx, progress); err != nil {
 		_ = db.CloseContext(ctx)
 		return nil, fmt.Errorf("initializing schema: %w", err)
@@ -4769,25 +4737,7 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 	}
 	hadRecallFTS := recallFTSCount > 0
 	if _, err := w.ExecContext(ctx, recallEntriesFTS); err != nil {
-		if !strings.Contains(
-			err.Error(), "no such module",
-		) {
-			return fmt.Errorf("initializing recall entries FTS: %w", err)
-		}
-		if _, err := w.ExecContext(ctx, recallEntriesFTS4); err != nil {
-			if !strings.Contains(
-				err.Error(), "no such module",
-			) {
-				return fmt.Errorf("initializing recall entries FTS4: %w", err)
-			}
-		} else if !hadRecallFTS {
-			if _, err := w.ExecContext(ctx,
-				"INSERT INTO recall_entries_fts(rowid, title, body, trigger)"+
-					" SELECT rowid, title, body, trigger FROM recall_entries",
-			); err != nil {
-				return fmt.Errorf("backfilling recall entries FTS4: %w", err)
-			}
-		}
+		return fmt.Errorf("initializing recall entries FTS5 (build with -tags fts5): %w", err)
 	} else if !hadRecallFTS {
 		if _, err := w.ExecContext(ctx,
 			"INSERT INTO recall_entries_fts(recall_entries_fts)"+
@@ -4806,29 +4756,7 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 	}
 	hadRecallEvidenceFTS := recallEvidenceFTSCount > 0
 	if _, err := w.ExecContext(ctx, recallEvidenceFTS); err != nil {
-		if !strings.Contains(
-			err.Error(), "no such module",
-		) {
-			return fmt.Errorf("initializing recall evidence FTS: %w", err)
-		}
-		if _, err := w.ExecContext(ctx, recallEvidenceFTS4); err != nil {
-			if !strings.Contains(
-				err.Error(), "no such module",
-			) {
-				return fmt.Errorf(
-					"initializing recall evidence FTS4: %w", err,
-				)
-			}
-		} else if !hadRecallEvidenceFTS {
-			if _, err := w.ExecContext(ctx,
-				"INSERT INTO recall_evidence_fts(rowid, snippet)"+
-					" SELECT id, snippet FROM recall_evidence",
-			); err != nil {
-				return fmt.Errorf(
-					"backfilling recall evidence FTS4: %w", err,
-				)
-			}
-		}
+		return fmt.Errorf("initializing recall evidence FTS5 (build with -tags fts5): %w", err)
 	} else if !hadRecallEvidenceFTS {
 		if _, err := w.ExecContext(ctx,
 			"INSERT INTO recall_evidence_fts(recall_evidence_fts)"+
