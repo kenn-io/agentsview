@@ -61,10 +61,9 @@ describe("TrendsStore.fetchTerms", () => {
     await Promise.resolve();
     await trends.setGranularity("month");
 
-    expect(
-      vi.mocked(TrendsService.getApiV1TrendsTerms).mock.calls[0]?.[1]?.signal
-        ?.aborted,
-    ).toBe(true);
+    expect(vi.mocked(TrendsService.getApiV1TrendsTerms).mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      true,
+    );
   });
 
   it("aborts the visible terms read on teardown", async () => {
@@ -74,10 +73,9 @@ describe("TrendsStore.fetchTerms", () => {
     await Promise.resolve();
     trends.cancelInFlightReads();
 
-    expect(
-      vi.mocked(TrendsService.getApiV1TrendsTerms).mock.calls[0]?.[1]?.signal
-        ?.aborted,
-    ).toBe(true);
+    expect(vi.mocked(TrendsService.getApiV1TrendsTerms).mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      true,
+    );
   });
 
   it("fetches default terms with timezone and date range", async () => {

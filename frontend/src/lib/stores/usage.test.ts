@@ -617,15 +617,13 @@ describe("UsageStore session filter params", () => {
     void usage.fetchTopSessions();
     await Promise.resolve();
     expect(
-      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal
-        ?.aborted,
+      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
     ).toBe(false);
 
     usage.setMode("token");
 
     expect(
-      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal
-        ?.aborted,
+      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
     ).toBe(true);
     expect(usage.topSessions).toBeNull();
   });
@@ -1012,16 +1010,14 @@ describe("UsageStore session filter params", () => {
     void usage.fetchTopSessions();
     await Promise.resolve();
     expect(
-      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal
-        ?.aborted,
+      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
     ).toBe(false);
 
     void usage.fetchAll();
     await Promise.resolve();
 
     expect(
-      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal
-        ?.aborted,
+      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal?.aborted,
     ).toBe(true);
   });
 
@@ -1033,10 +1029,9 @@ describe("UsageStore session filter params", () => {
     await Promise.resolve();
     usage.cancelInFlightReads();
 
-    expect(
-      vi.mocked(UsageService.getApiV1UsageSummary).mock.calls[0]?.[1]?.signal
-        ?.aborted,
-    ).toBe(true);
+    expect(vi.mocked(UsageService.getApiV1UsageSummary).mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      true,
+    );
   });
 
   it("reuses summary params for top sessions during full refresh", async () => {
@@ -1279,13 +1274,10 @@ describe("UsageStore session filter params", () => {
     void usage.fetchSummary();
     await Promise.resolve();
 
-    expect(
-      vi.mocked(UsageService.getApiV1UsageSummary).mock.calls[0]?.[1]?.signal,
-    ).toBeDefined();
-    expect(
-      vi.mocked(UsageService.getApiV1UsageSummary).mock.calls[0]?.[1]?.signal
-        ?.aborted,
-    ).toBe(true);
+    expect(vi.mocked(UsageService.getApiV1UsageSummary).mock.calls[0]?.[1]?.signal).toBeDefined();
+    expect(vi.mocked(UsageService.getApiV1UsageSummary).mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      true,
+    );
   });
 });
 

@@ -26,7 +26,6 @@ vi.mock("../api/activity-report.js", () => ({
   fetchActivitySessions: api.getActivitySessions,
 }));
 vi.mock("../api/runtime.js", () => ({
-
   isAbortError: vi.fn(() => false),
 }));
 vi.mock("./sync.svelte.js", () => ({ sync: { onSyncComplete: vi.fn() } }));

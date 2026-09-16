@@ -650,18 +650,14 @@ describe("SessionsStore", () => {
       void sessions.load();
       await Promise.resolve();
       expect(
-        vi
-          .mocked(SessionsService.getApiV1SessionsSidebarIndex)
-          .mock.calls[0]?.[1]?.signal?.aborted,
+        vi.mocked(SessionsService.getApiV1SessionsSidebarIndex).mock.calls[0]?.[1]?.signal?.aborted,
       ).toBe(false);
 
       sessions.filters.project = "changed";
       await sessions.load();
 
       expect(
-        vi
-          .mocked(SessionsService.getApiV1SessionsSidebarIndex)
-          .mock.calls[0]?.[1]?.signal?.aborted,
+        vi.mocked(SessionsService.getApiV1SessionsSidebarIndex).mock.calls[0]?.[1]?.signal?.aborted,
       ).toBe(true);
       expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
       detach();
@@ -2819,9 +2815,7 @@ describe("SessionsStore", () => {
           .mock.calls.map((call) => call[1]?.signal),
       ).toHaveLength(1);
       expect(
-        vi
-          .mocked(SessionsService.getApiV1SessionsSidebarIndex)
-          .mock.calls[0]?.[1]?.signal?.aborted,
+        vi.mocked(SessionsService.getApiV1SessionsSidebarIndex).mock.calls[0]?.[1]?.signal?.aborted,
       ).toBe(true);
       await expect(load).resolves.toBeUndefined();
     });

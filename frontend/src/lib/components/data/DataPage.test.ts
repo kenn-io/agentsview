@@ -37,7 +37,6 @@ vi.mock("../../api/generated/index", () => ({
   },
 }));
 vi.mock("../../api/runtime.js", () => ({
-
   isAbortError: () => false,
 }));
 vi.mock("../../stores/router.svelte.js", () => ({

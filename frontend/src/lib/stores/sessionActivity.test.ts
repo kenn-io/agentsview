@@ -74,9 +74,7 @@ describe("SessionActivityStore", () => {
     await sessionActivity.load("s2");
 
     expect(
-      vi
-        .mocked(SessionsService.getApiV1SessionsByIdActivity)
-        .mock.calls[0]?.[1]?.signal?.aborted,
+      vi.mocked(SessionsService.getApiV1SessionsByIdActivity).mock.calls[0]?.[1]?.signal?.aborted,
     ).toBe(true);
   });
 

@@ -1123,14 +1123,10 @@ describe("executeFetch concurrency and error handling", () => {
     await Promise.resolve();
 
     expect(
-      vi
-        .mocked(AnalyticsService.getApiV1AnalyticsSummary)
-        .mock.calls[0]?.[1]?.signal,
+      vi.mocked(AnalyticsService.getApiV1AnalyticsSummary).mock.calls[0]?.[1]?.signal,
     ).toBeDefined();
     expect(
-      vi
-        .mocked(AnalyticsService.getApiV1AnalyticsSummary)
-        .mock.calls[0]?.[1]?.signal?.aborted,
+      vi.mocked(AnalyticsService.getApiV1AnalyticsSummary).mock.calls[0]?.[1]?.signal?.aborted,
     ).toBe(true);
   });
 
@@ -1144,9 +1140,7 @@ describe("executeFetch concurrency and error handling", () => {
     analytics.cancelInFlightReads();
 
     expect(
-      vi
-        .mocked(AnalyticsService.getApiV1AnalyticsSummary)
-        .mock.calls[0]?.[1]?.signal?.aborted,
+      vi.mocked(AnalyticsService.getApiV1AnalyticsSummary).mock.calls[0]?.[1]?.signal?.aborted,
     ).toBe(true);
   });
 });

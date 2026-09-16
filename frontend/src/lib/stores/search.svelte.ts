@@ -269,7 +269,7 @@ export class SearchStore {
             ...(range ? { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone } : {}),
           },
           {
-            ...{ signal },
+            signal,
             headers: { "X-AgentsView-Search-Intent": "semantic" },
           },
         );

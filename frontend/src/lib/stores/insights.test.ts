@@ -118,10 +118,9 @@ describe("load", () => {
     await Promise.resolve();
     await insights.load();
 
-    expect(
-      vi.mocked(InsightsService.getApiV1Insights).mock.calls[0]?.[1]?.signal
-        ?.aborted,
-    ).toBe(true);
+    expect(vi.mocked(InsightsService.getApiV1Insights).mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      true,
+    );
     expect(api.generateInsight).not.toHaveBeenCalled();
   });
 
@@ -132,10 +131,9 @@ describe("load", () => {
     await Promise.resolve();
     insights.cancelInFlightReads();
 
-    expect(
-      vi.mocked(InsightsService.getApiV1Insights).mock.calls[0]?.[1]?.signal
-        ?.aborted,
-    ).toBe(true);
+    expect(vi.mocked(InsightsService.getApiV1Insights).mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      true,
+    );
   });
 
   it("fetches insights and updates state", async () => {

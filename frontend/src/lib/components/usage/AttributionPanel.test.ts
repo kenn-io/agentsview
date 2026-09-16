@@ -11,7 +11,6 @@ const usageServiceMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../api/runtime.js", () => ({
-
   isAbortError: vi.fn(() => false),
 }));
 

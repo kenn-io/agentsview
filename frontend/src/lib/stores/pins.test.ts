@@ -67,9 +67,7 @@ describe("PinsStore.loadAll project filtering", () => {
     await Promise.resolve();
     await store.loadAll("beta");
 
-    expect(
-      vi.mocked(PinsService.getApiV1Pins).mock.calls[0]?.[1]?.signal?.aborted,
-    ).toBe(true);
+    expect(vi.mocked(PinsService.getApiV1Pins).mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
   });
 
   it("keeps all-pins and session-pins cancellation independent", async () => {

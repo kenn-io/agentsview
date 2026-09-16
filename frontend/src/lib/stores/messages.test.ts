@@ -16,7 +16,6 @@ const runtimeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../api/runtime.js", () => ({
-
   isAbortError: (err: unknown) => {
     if (err instanceof DOMException && err.name === "AbortError") {
       return true;
