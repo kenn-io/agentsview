@@ -463,6 +463,67 @@ func TestResumeSession(t *testing.T) {
 		assertSamePath(t, "cwd", resp.Cwd, projectDir)
 	})
 
+	t.Run("pi_command_only", func(t *testing.T) {
+		projectDir := t.TempDir()
+		te.seedSession(t, "pi:session-1", "pi-project", 3, func(s *db.Session) {
+			s.Agent = "pi"
+			s.Cwd = projectDir
+		})
+		te.seedSession(t, "pi:$(whoami)", "pi-project", 3, func(s *db.Session) {
+			s.Agent = "pi"
+			s.Cwd = projectDir
+		})
+		te.seedSession(t, "devbox1~pi:session-1", "remote-project", 3, func(s *db.Session) {
+			s.Agent = "pi"
+			s.Cwd = "/home/user/project"
+		})
+
+		for _, tt := range []struct {
+			name       string
+			id         string
+			wantCwd    string
+			wantSuffix string
+		}{
+			{
+				name:       "local session",
+				id:         "pi:session-1",
+				wantCwd:    projectDir,
+				wantSuffix: "pi --session session-1",
+			},
+			{
+				name:       "local shell metacharacter",
+				id:         "pi:$(whoami)",
+				wantCwd:    projectDir,
+				wantSuffix: "pi --session '$(whoami)'",
+			},
+			{
+				name:       "remote session",
+				id:         "devbox1~pi:session-1",
+				wantCwd:    "/home/user/project",
+				wantSuffix: "pi --session session-1",
+			},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				w := te.post(t,
+					"/api/v1/sessions/"+tt.id+"/resume",
+					`{"command_only":true}`,
+				)
+				t.Logf("id=%s command=%s", tt.id, w.Body.String())
+				assertStatus(t, w, http.StatusOK)
+				var resp struct {
+					Launched bool   `json:"launched"`
+					Command  string `json:"command"`
+					Cwd      string `json:"cwd"`
+				}
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+				assert.False(t, resp.Launched, "expected launched=false for command_only")
+				assert.Equal(t, "cd '"+tt.wantCwd+"' && "+tt.wantSuffix, resp.Command)
+				assert.Equal(t, tt.wantCwd, resp.Cwd)
+				assert.NotContains(t, resp.Command, "~")
+			})
+		}
+	})
+
 	t.Run("claude desktop rejects non-claude agent", func(t *testing.T) {
 		te.seedSession(t, "codex-desk", t.TempDir(), 3, func(s *db.Session) {
 			s.Agent = "codex"

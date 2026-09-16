@@ -1335,7 +1335,7 @@ func (s *Server) humaResumeSession(
 	}
 	responseCmd := cmd
 	switch string(session.Agent) {
-	case "claude", "kiro":
+	case "claude", "kiro", "pi":
 		if host != "" {
 			responseCmd = commandWithDir(cmd, launchDir)
 		} else {

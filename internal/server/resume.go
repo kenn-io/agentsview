@@ -51,6 +51,7 @@ var resumeAgents = map[string]string{
 	"opencode": "opencode --session %s",
 	"amp":      "amp --resume %s",
 	"kiro":     "kiro-cli chat --resume-id %s",
+	"pi":       "pi --session %s",
 }
 
 const syntheticModel = "<synthetic>"
