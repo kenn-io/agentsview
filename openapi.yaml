@@ -7112,6 +7112,27 @@ info:
   version: dev
 openapi: 3.1.0
 paths:
+  /_agentsview/startup:
+    get:
+      operationId: get-startup-probe
+      parameters:
+        - in: header
+          name: X-AgentsView-Startup-Challenge
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Startup proof
+          headers:
+            X-AgentsView-Startup-Proof:
+              schema:
+                type: string
+        "404":
+          description: Startup probe disabled or challenge invalid
+      summary: Prove daemon startup readiness
+      tags:
+        - Startup
   /api/ping:
     get:
       operationId: get-api-ping

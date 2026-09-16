@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/server"
 )
@@ -82,7 +83,7 @@ func startServerWithOptionalCaddy(
 	}()
 
 	if err := waitForBackendReady(
-		ctx, cfg, srv, 5*time.Second, serveErrCh,
+		ctx, cfg, srv, opts.BasePath, 5*time.Second, serveErrCh,
 	); err != nil {
 		shutdownCtx, cancel := context.WithTimeout(
 			context.Background(), 5*time.Second,
@@ -157,6 +158,7 @@ func waitForBackendReady(
 	ctx context.Context,
 	cfg config.Config,
 	srv *server.Server,
+	basePath string,
 	timeout time.Duration,
 	errCh <-chan error,
 ) error {
@@ -169,7 +171,6 @@ func waitForBackendReady(
 	address := net.JoinHostPort(
 		probeHostForDial(cfg.Host), strconv.Itoa(cfg.Port),
 	)
-	probeURL := "http://" + address + srv.StartupProbePath()
 	transport := &http.Transport{}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{
@@ -178,6 +179,10 @@ func waitForBackendReady(
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
+	}
+	api, err := apiclient.NewHTTPClient("http://"+address+strings.TrimRight(basePath, "/"), "", client)
+	if err != nil {
+		return err
 	}
 	var lastErr error
 	for time.Now().Before(deadline) {
@@ -204,14 +209,11 @@ func waitForBackendReady(
 		if err != nil {
 			return err
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
-		if err != nil {
-			return fmt.Errorf("create startup probe request: %w", err)
-		}
-		server.SetStartupProbeChallenge(req, challenge)
-		resp, err := client.Do(req)
-		if err == nil {
-			_ = resp.Body.Close()
+		response, err := api.GetStartupProbeWithResponse(ctx, &apiclient.GetStartupProbeRequestOptions{
+			Header: &apiclient.GetStartupProbeHeaders{XAgentsViewStartupChallenge: challenge},
+		})
+		if response != nil {
+			resp := response.HTTPResponse
 			if resp.StatusCode != http.StatusNoContent {
 				err = fmt.Errorf(
 					"startup probe on %s returned status %d",

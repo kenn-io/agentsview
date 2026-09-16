@@ -20,6 +20,50 @@ import (
 	vector "go.kenn.io/agentsview/internal/vector"
 )
 
+// GetStartupProbeRequestOptions is the options needed to make a request to GetStartupProbe.
+type GetStartupProbeRequestOptions struct {
+	Header *GetStartupProbeHeaders
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *GetStartupProbeRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Header != nil {
+		if v, ok := any(o.Header).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Header", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *GetStartupProbeRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *GetStartupProbeRequestOptions) GetQuery() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *GetStartupProbeRequestOptions) GetBody() any {
+	return nil
+}
+
+// GetHeader returns the headers as a map.
+func (o *GetStartupProbeRequestOptions) GetHeader() (map[string]string, error) {
+	return runtime.AsMap[string](o.Header)
+}
+
 // GetAPIV1ActivityReportRequestOptions is the options needed to make a request to GetAPIV1ActivityReport.
 type GetAPIV1ActivityReportRequestOptions struct {
 	Query *GetAPIV1ActivityReportQuery
@@ -4125,6 +4169,7 @@ func NewDefaultClient(baseURL string, opts ...runtime.APIClientOption) (*Client,
 // ClientInterface is the interface for the API client. With
 // envelope-only generation it lists the WithResponse methods.
 type ClientInterface interface {
+	GetStartupProbeWithResponse(ctx context.Context, options *GetStartupProbeRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetStartupProbeResp, error)
 	GetAPIV1ActivityReportWithResponse(ctx context.Context, options *GetAPIV1ActivityReportRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ActivityReportResp, error)
 	GetAPIV1ActivityReportStreamWithResponse(ctx context.Context, options *GetAPIV1ActivityReportRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ActivityReportResp, error)
 	GetAPIV1ActivityReportReportIDSessionsWithResponse(ctx context.Context, options *GetAPIV1ActivityReportReportIDSessionsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ActivityReportReportIDSessionsResp, error)
@@ -4179,6 +4224,42 @@ type ClientInterface interface {
 	GetAPIV1UsageSummaryStreamWithResponse(ctx context.Context, options *GetAPIV1UsageSummaryStreamRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1UsageSummaryStreamResp, error)
 	GetAPIV1UsageSummaryStreamStreamWithResponse(ctx context.Context, options *GetAPIV1UsageSummaryStreamRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1UsageSummaryStreamResp, error)
 	GetAPIV1VersionWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1VersionResp, error)
+}
+
+// GetStartupProbe Prove daemon startup readiness
+func (c *Client) GetStartupProbeWithResponse(ctx context.Context, options *GetStartupProbeRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetStartupProbeResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/_agentsview/startup",
+		Method:     "GET",
+		Options:    options,
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/_agentsview/startup")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetStartupProbeResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 204:
+		out.Headers204 = &GetStartupProbeResp204Headers{
+			XAgentsViewStartupProof: resp.Headers.Get("X-AgentsView-Startup-Proof"),
+		}
+		return out, nil
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
 }
 
 // GetAPIV1ActivityReport Get activity report
@@ -13730,6 +13811,14 @@ func (g GetAPIV1SessionsIDMessagesQueryDirection) Validate() error {
 	}
 }
 
+type GetStartupProbeHeaders struct {
+	XAgentsViewStartupChallenge string `json:"X-AgentsView-Startup-Challenge" validate:"required"`
+}
+
+func (g GetStartupProbeHeaders) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(g))
+}
+
 type PostAPIV1RawSyncManifestsHeaders struct {
 	Authorization *string `json:"Authorization,omitempty"`
 }
@@ -15993,6 +16082,17 @@ type GetAPIV1VersionErrorResponseJSON502 = APIErrorResponse
 type GetAPIV1VersionErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1VersionErrorResponseJSON504 = APIErrorResponse
+
+type GetStartupProbeResp204Headers struct {
+	XAgentsViewStartupProof string `header:"X-AgentsView-Startup-Proof"`
+}
+
+type GetStartupProbeResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	Headers204   *GetStartupProbeResp204Headers
+}
 
 type GetAPIV1ActivityReportResp struct {
 	HTTPResponse *http.Response

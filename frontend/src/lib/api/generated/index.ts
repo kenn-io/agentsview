@@ -21,6 +21,7 @@ export * as SecretsService from "./secrets/secrets.ts";
 export * as SessionsService from "./sessions/sessions.ts";
 export * as SettingsService from "./settings/settings.ts";
 export * as StarredService from "./starred/starred.ts";
+export * as StartupService from "./startup/startup.ts";
 export * as SyncService from "./sync/sync.ts";
 export * as TrendsService from "./trends/trends.ts";
 export * as UsageService from "./usage/usage.ts";

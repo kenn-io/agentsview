@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 const (
@@ -41,12 +43,6 @@ func (s *Server) DisableStartupProbe() {
 	clear(s.startupProbeKey)
 	s.startupProbeKey = nil
 	s.mu.Unlock()
-}
-
-// StartupProbePath returns the mounted path of the temporary startup proof
-// endpoint.
-func (s *Server) StartupProbePath() string {
-	return s.basePath + startupProbePath
 }
 
 // StartupProbeChallenge creates a fresh challenge and the proof that only this
@@ -98,7 +94,15 @@ func ValidStartupProbeResponse(resp *http.Response, expected string) bool {
 	)
 }
 
-// SetStartupProbeChallenge adds a startup challenge to req.
-func SetStartupProbeChallenge(req *http.Request, challenge string) {
-	req.Header.Set(startupProbeChallengeHeader, challenge)
+// describeStartupProbe keeps the temporary native route in the generated client.
+func (s *Server) describeStartupProbe() {
+	s.api.OpenAPI().AddOperation(&huma.Operation{
+		OperationID: "get-startup-probe", Method: http.MethodGet, Path: startupProbePath,
+		Summary: "Prove daemon startup readiness", Tags: []string{"Startup"},
+		Parameters: []*huma.Param{{Name: startupProbeChallengeHeader, In: "header", Required: true, Schema: &huma.Schema{Type: "string"}}},
+		Responses: map[string]*huma.Response{
+			"204": {Description: "Startup proof", Headers: map[string]*huma.Param{startupProbeProofHeader: {Schema: &huma.Schema{Type: "string"}}}},
+			"404": {Description: "Startup probe disabled or challenge invalid"},
+		},
+	})
 }

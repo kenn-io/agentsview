@@ -37,7 +37,7 @@ func TestWaitForBackendReadyRejectsUnrelatedHTTPListener(t *testing.T) {
 
 	err := waitForBackendReady(
 		context.Background(), testBackendReadyConfig(ts, "persistent-token"),
-		server.New(config.Config{}, nil, nil), 300*time.Millisecond, nil,
+		server.New(config.Config{}, nil, nil), "", 300*time.Millisecond, nil,
 	)
 	require.Error(t, err,
 		"an unrelated HTTP listener must not satisfy backend readiness")
@@ -60,7 +60,7 @@ func TestWaitForBackendReadyRejectsCounterfeitStartupProof(t *testing.T) {
 
 	err := waitForBackendReady(
 		context.Background(), testBackendReadyConfig(ts, ""),
-		server.New(config.Config{}, nil, nil), 300*time.Millisecond, nil,
+		server.New(config.Config{}, nil, nil), "", 300*time.Millisecond, nil,
 	)
 	require.Error(t, err,
 		"a listener without the server-held proof must not satisfy readiness")
@@ -71,13 +71,13 @@ func TestWaitForBackendReadyRejectsRedirectToServingServer(t *testing.T) {
 	target := httptest.NewServer(srv.Handler())
 	defer target.Close()
 	redirector := httptest.NewServer(http.RedirectHandler(
-		target.URL+srv.StartupProbePath(), http.StatusTemporaryRedirect,
+		target.URL+"/_agentsview/startup", http.StatusTemporaryRedirect,
 	))
 	defer redirector.Close()
 
 	err := waitForBackendReady(
 		context.Background(), testBackendReadyConfig(redirector, ""),
-		srv, 300*time.Millisecond, nil,
+		srv, "", 300*time.Millisecond, nil,
 	)
 	require.Error(t, err,
 		"a foreign first-hop listener must not relay readiness to the serving server")
@@ -94,11 +94,11 @@ func TestWaitForBackendReadyAcceptsAuthenticatedServerStartupProof(t *testing.T)
 
 	err := waitForBackendReady(
 		context.Background(), testBackendReadyConfig(ts, token),
-		srv, 2*time.Second, nil,
+		srv, "", 2*time.Second, nil,
 	)
 	require.NoError(t, err,
 		"the started server must satisfy readiness without bearer authentication")
-	resp, err := http.Get(ts.URL + srv.StartupProbePath())
+	resp, err := http.Get(ts.URL + "/_agentsview/startup")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusNotFound, resp.StatusCode,
