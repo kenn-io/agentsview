@@ -1315,7 +1315,12 @@ func (s *Server) humaResumeSession(
 		}
 		model = primaryResumeModel(counts)
 	}
-	cmd := resumeCommand(string(session.Agent), tmpl, rawID, model)
+	resumeTarget := rawID
+	if session.Agent == string(parser.AgentPi) && session.FilePath != nil &&
+		*session.FilePath != "" {
+		resumeTarget = *session.FilePath
+	}
+	cmd := resumeCommand(string(session.Agent), tmpl, resumeTarget, model)
 	if string(session.Agent) == "claude" {
 		if req.SkipPermissions {
 			cmd += " --dangerously-skip-permissions"

@@ -465,6 +465,7 @@ func TestResumeSession(t *testing.T) {
 
 	t.Run("pi_command_only", func(t *testing.T) {
 		projectDir := t.TempDir()
+		v1Path := filepath.Join(projectDir, "2025-01-01T09-00-00-000Z_parent-uuid.jsonl")
 		te.seedSession(t, "pi:session-1", "pi-project", 3, func(s *db.Session) {
 			s.Agent = "pi"
 			s.Cwd = projectDir
@@ -476,6 +477,11 @@ func TestResumeSession(t *testing.T) {
 		te.seedSession(t, "devbox1~pi:session-1", "remote-project", 3, func(s *db.Session) {
 			s.Agent = "pi"
 			s.Cwd = "/home/user/project"
+		})
+		te.seedSession(t, "pi:2025-01-01T09-00-00-000Z_parent-uuid", "pi-project", 3, func(s *db.Session) {
+			s.Agent = "pi"
+			s.Cwd = projectDir
+			s.FilePath = &v1Path
 		})
 
 		for _, tt := range []struct {
@@ -501,6 +507,12 @@ func TestResumeSession(t *testing.T) {
 				id:         "devbox1~pi:session-1",
 				wantCwd:    "/home/user/project",
 				wantSuffix: "pi --session session-1",
+			},
+			{
+				name:       "v1 session uses file path",
+				id:         "pi:2025-01-01T09-00-00-000Z_parent-uuid",
+				wantCwd:    projectDir,
+				wantSuffix: "pi --session '" + v1Path + "'",
 			},
 		} {
 			t.Run(tt.name, func(t *testing.T) {
