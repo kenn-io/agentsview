@@ -2235,6 +2235,42 @@ func TestSearch_WithResults(t *testing.T) {
 	}
 }
 
+func TestSearch_MatchesSessionIdentifiers(t *testing.T) {
+	te := setup(t)
+	te.requireFTS(t)
+	const sessionID = "deepseek-harness:session-4f0f03f9"
+	te.seedSession(t, sessionID, "my-app", 1, func(s *db.Session) {
+		s.SourceSessionID = "session-4f0f03f9"
+	})
+	te.seedMessages(t, sessionID, 1, func(_ int, m *db.Message) {
+		m.Role = "user"
+		m.Content = "unrelated content"
+		m.ContentLength = len("unrelated content")
+	})
+
+	for _, query := range []string{
+		sessionID,
+		"session-4f0f03f9",
+		"4f0f03f9",
+	} {
+		t.Run(query, func(t *testing.T) {
+			w := te.get(t, "/api/v1/search?q="+url.QueryEscape(query))
+			assertStatus(t, w, http.StatusOK)
+			resp := decode[searchResponse](t, w)
+			require.NotEmpty(t, resp.Results, "search results")
+			var found bool
+			for _, result := range resp.Results {
+				if result.SessionID == sessionID {
+					found = true
+					assert.Equal(t, -1, result.Ordinal,
+						"identifier match should not point at a message")
+				}
+			}
+			assert.True(t, found, "result for %s", sessionID)
+		})
+	}
+}
+
 func TestSearch_Limits(t *testing.T) {
 	te := setup(t)
 	te.requireFTS(t)

@@ -944,7 +944,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 		nameProject += " AND " + pred
 	}
 	args = append(args, dateBuilder.Args()...)
-	args = append(args, namePattern, namePattern, namePattern, namePattern)
+	args = append(args, namePattern, namePattern, namePattern, namePattern, namePattern, namePattern, namePattern, namePattern)
 	if f.Project != "" {
 		args = append(args, f.Project)
 	}
@@ -987,6 +987,10 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
 				-1 AS ordinal,
 				CASE
+					WHEN COALESCE(s.source_session_id, '') ILIKE ? ESCAPE '\'
+						THEN s.source_session_id
+					WHEN s.id ILIKE ? ESCAPE '\'
+						THEN s.id
 					WHEN COALESCE(s.display_name, s.session_name) ILIKE ? ESCAPE '\'
 						THEN COALESCE(s.display_name, s.session_name, '')
 					WHEN s.first_message ILIKE ? ESCAPE '\'
@@ -995,7 +999,9 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				END AS snippet,
 				1.0 AS rank, 2 AS match_priority, 0 AS match_pos
 			FROM sessions s
-			WHERE (COALESCE(s.display_name, s.session_name) ILIKE ? ESCAPE '\'
+			WHERE (COALESCE(s.source_session_id, '') ILIKE ? ESCAPE '\'
+				OR s.id ILIKE ? ESCAPE '\'
+				OR COALESCE(s.display_name, s.session_name) ILIKE ? ESCAPE '\'
 				OR s.first_message ILIKE ? ESCAPE '\')
 				AND s.deleted_at IS NULL
 				AND EXISTS (

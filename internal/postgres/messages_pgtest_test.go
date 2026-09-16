@@ -407,6 +407,65 @@ func TestPGSearchNameBranchExcludesSystemOnlySessions(t *testing.T) {
 	})
 }
 
+func TestPGSearchMatchesSessionIdentifiers(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	pg, err := Open(pgURL, testSchema, false)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	_, err = pg.Exec(`
+INSERT INTO sessions
+(id, machine, project, agent, first_message, display_name,
+ source_session_id, started_at, ended_at,
+ message_count, user_message_count)
+VALUES
+('deepseek-harness:session-4f0f03f9', 'test-machine',
+ 'test-project', 'deepseek-harness',
+ 'unrelated first message', 'unrelated display name',
+ 'session-4f0f03f9',
+ '2026-03-12T10:00:00Z'::timestamptz,
+ '2026-03-12T10:30:00Z'::timestamptz,
+ 1, 0)
+ON CONFLICT (id) DO NOTHING
+`)
+	require.NoError(t, err, "inserting identifier session")
+	_, err = pg.Exec(`
+INSERT INTO messages
+(session_id, ordinal, role, content,
+ timestamp, content_length, is_system)
+VALUES
+('deepseek-harness:session-4f0f03f9', 0, 'user',
+ 'unrelated content',
+ '2026-03-12T10:00:00Z'::timestamptz, 17, FALSE)
+ON CONFLICT DO NOTHING
+`)
+	require.NoError(t, err, "inserting identifier message")
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	for _, q := range []string{
+		"deepseek-harness:session-4f0f03f9",
+		"session-4f0f03f9",
+		"4f0f03f9",
+	} {
+		t.Run(q, func(t *testing.T) {
+			page, err := store.Search(context.Background(), db.SearchFilter{
+				Query: q,
+				Limit: 10,
+			})
+			require.NoError(t, err, "Search")
+			require.Len(t, page.Results, 1, "Search results")
+			assert.Equal(t, "deepseek-harness:session-4f0f03f9", page.Results[0].SessionID)
+			assert.Equal(t, -1, page.Results[0].Ordinal,
+				"identifier match should not point at a message")
+		})
+	}
+}
+
 // TestPGSearchSessionExcludesSystemMessages verifies that SearchSession
 // (the in-session Cmd+F find-bar) excludes system messages since the
 // frontend hides them and matching would produce phantom highlights.

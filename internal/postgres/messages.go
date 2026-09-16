@@ -338,8 +338,8 @@ func (s *Store) Search(
 	}
 
 	// plainTerm is the de-quoted query joined back into one string. It feeds
-	// the name-branch ILIKE (matching the typed text against the short session
-	// name) and centers the message snippet, mirroring SQLite's plainQuery.
+	// the name-branch ILIKE (matching the typed text against session
+	// identifiers or the short session name) and centers the message snippet,
 	// terms is the per-term decomposition: every term must appear in the
 	// message content (AND), matching SQLite FTS5's implicit AND so the same
 	// user query behaves identically across backends. An explicit exact phrase
@@ -447,6 +447,10 @@ func (s *Store) Search(
 				-1 AS ordinal,
 				0 AS match_pos,
 				CASE
+					WHEN COALESCE(s.source_session_id, '') ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+						THEN s.source_session_id
+					WHEN s.id ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+						THEN s.id
 					WHEN COALESCE(s.display_name, s.session_name) ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
 						THEN COALESCE(s.display_name, s.session_name, '')
 					WHEN s.first_message ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
@@ -454,7 +458,9 @@ func (s *Store) Search(
 					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
 				END AS snippet
 			FROM sessions s
-			WHERE (COALESCE(s.display_name, s.session_name) ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+			WHERE (COALESCE(s.source_session_id, '') ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+				OR s.id ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+				OR COALESCE(s.display_name, s.session_name) ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
 				OR s.first_message ILIKE '%%' || $1 || '%%' ESCAPE E'\\')
 				AND s.deleted_at IS NULL
 				AND EXISTS (

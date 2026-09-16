@@ -395,6 +395,30 @@ func TestSearch(t *testing.T) {
 		assert.Equal(t, -1, page.Results[0].Ordinal, "ordinal (name-only match)")
 	})
 
+	t.Run("session id and source session id match", func(t *testing.T) {
+		insertSession(t, d, "deepseek-harness:session-4f0f03f9", "proj-id", func(s *Session) {
+			s.Agent = "deepseek-harness"
+			s.SourceSessionID = "session-4f0f03f9"
+			s.FirstMessage = new("identifier match only")
+			s.StartedAt = new("2024-01-09T10:00:00Z")
+			s.EndedAt = new("2024-01-09T11:00:00Z")
+		})
+		insertMessages(t, d, userMsg("deepseek-harness:session-4f0f03f9", 0, "unrelated content"))
+
+		for _, q := range []string{
+			"deepseek-harness:session-4f0f03f9",
+			"session-4f0f03f9",
+			"4f0f03f9",
+		} {
+			page, err := d.Search(context.Background(), SearchFilter{Query: q, Limit: 10})
+			require.NoError(t, err, "Search(%q)", q)
+			require.Len(t, page.Results, 1, "Search(%q) results", q)
+			assert.Equal(t, "deepseek-harness:session-4f0f03f9", page.Results[0].SessionID)
+			assert.Equal(t, -1, page.Results[0].Ordinal, "identifier match is name-only")
+			assert.Contains(t, page.Results[0].Snippet, q, "snippet shows the matched identifier")
+		}
+	})
+
 	t.Run("name field populated on message-content match", func(t *testing.T) {
 		page, err := d.Search(context.Background(), SearchFilter{
 			Query: "alpha", Limit: 10,

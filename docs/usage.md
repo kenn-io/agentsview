@@ -919,7 +919,7 @@ most recent sessions. Type to filter by project name or first message.
 Type 3 or more characters to search in one of three modes:
 
 - **Full text** searches indexed message content with FTS5. It also matches
-  session display names and first messages.
+  session IDs, source session IDs, display names, and first messages.
 - **Semantic** ranks message content by meaning using the active embeddings
   index.
 - **Hybrid** combines semantic and full-text rankings so that both conceptual
@@ -941,8 +941,9 @@ sessions. Results update after a 300ms typing pause.
 
 Results are grouped by session — each session shows its best matching result.
 This prevents a single long session from dominating the results list. Full text
-also matches against session display names and first messages, so you can find
-sessions by title.
+also matches against session IDs, source session IDs, display names, and first
+messages, so you can find a session by pasting either its AgentsView ID or the
+provider's original session ID.
 
 In Full text mode, use the sort toggle in the palette header to switch between
 **Relevance** (best matches first) and **Recency** (newest sessions first).

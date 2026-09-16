@@ -415,6 +415,45 @@ func TestStoreSearchesMessagesContentAndSecrets(t *testing.T) {
 	assert.Equal(t, "secret token sk-duckdb", source)
 }
 
+func TestDuckStoreSearchMatchesSessionIdentifiers(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	session := syncSession(
+		"deepseek-harness:session-4f0f03f9", "id-project",
+		"unrelated first message", "2026-03-12T10:00:00.000Z", 1,
+	)
+	session.SourceSessionID = "session-4f0f03f9"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: session,
+		Messages: []db.Message{syncMessage(
+			session.ID, 0, "user", "unrelated content",
+			"2026-03-12T10:00:00.000Z",
+		)},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	_, err = syncer.pushEverything(ctx, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	for _, q := range []string{
+		"deepseek-harness:session-4f0f03f9",
+		"session-4f0f03f9",
+		"4f0f03f9",
+	} {
+		page, err := store.Search(ctx, db.SearchFilter{Query: q, Limit: 10})
+		require.NoError(t, err, "Search(%q)", q)
+		require.Len(t, page.Results, 1, "Search(%q) results", q)
+		assert.Equal(t, session.ID, page.Results[0].SessionID)
+		assert.Equal(t, -1, page.Results[0].Ordinal,
+			"identifier match should not point at a message")
+	}
+}
+
 func TestSearchContentFTSSingleTermFallback(t *testing.T) {
 	ctx := context.Background()
 	store, fixture := newSyncedStore(t)
