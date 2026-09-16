@@ -29,6 +29,21 @@ type serveRuntime struct {
 	Caddy      *managedCaddy
 }
 
+func prepareRunServeRuntimeConfig(
+	cfg config.Config,
+	restartPort int,
+	onCaddyStarted func(int),
+) (config.Config, serveRuntimeOptions, error) {
+	cfg, requestedPort := applyServeRestartPort(cfg, restartPort)
+	opts := serveRuntimeOptions{
+		Mode:           "serve",
+		RequestedPort:  requestedPort,
+		OnCaddyStarted: onCaddyStarted,
+	}
+	prepared, err := prepareServeRuntimeConfig(cfg, opts)
+	return prepared, opts, err
+}
+
 func prepareServeRuntimeConfig(
 	cfg config.Config,
 	opts serveRuntimeOptions,

@@ -186,15 +186,12 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 				)
 				return nil
 			}
-			cfg, requestedPort := applyServeRestartPort(
-				mustLoadConfig(cmd), restartPort,
-			)
-			runServe(cfg, serveOptions{
+			runServe(mustLoadConfig(cmd), serveOptions{
 				ReplaceDaemon:   replace,
 				NoSyncExplicit:  cmd.Flags().Changed("no-sync"),
 				SkipInitialSync: skipInitialSync,
 				Pprof:           pprofEnabled,
-			}, requestedPort)
+			}, restartPort)
 			return nil
 		},
 	}

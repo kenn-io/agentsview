@@ -131,7 +131,7 @@ func applyServeMemoryLimit() {
 	debug.SetMemoryLimit(serveMemoryLimitBytes)
 }
 
-func runServe(cfg config.Config, opts serveOptions, requestedPort int) {
+func runServe(cfg config.Config, opts serveOptions, restartPort int) {
 	start := time.Now()
 	setupLogFile(cfg.DataDir)
 	applyServeMemoryLimit()
@@ -483,12 +483,9 @@ func runServe(cfg config.Config, opts serveOptions, requestedPort int) {
 	seedPricing(database, pricingRefreshRunner)
 	go startPeriodicPricingRefresh(ctx, database, pricingRefreshRunner)
 
-	rtOpts := serveRuntimeOptions{
-		Mode:           "serve",
-		RequestedPort:  requestedPort,
-		OnCaddyStarted: startupProgress.SetCaddyProcess,
-	}
-	preparedCfg, prepErr := prepareServeRuntimeConfig(cfg, rtOpts)
+	preparedCfg, rtOpts, prepErr := prepareRunServeRuntimeConfig(
+		cfg, restartPort, startupProgress.SetCaddyProcess,
+	)
 	if prepErr != nil {
 		fatal("%v", prepErr)
 	}

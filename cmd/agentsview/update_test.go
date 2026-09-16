@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/update"
 )
 
@@ -199,24 +203,28 @@ func TestApplyServeRestartPortPreservesConfiguredURLRewrite(t *testing.T) {
 	configuredPort := runtimePort - 1
 	publicURL := fmt.Sprintf("https://viewer.example.test:%d", configuredPort)
 
-	cfg, requestedPort := applyServeRestartPort(config.Config{
+	got, rtOpts, err := prepareRunServeRuntimeConfig(config.Config{
 		Host:          "127.0.0.1",
 		Port:          configuredPort,
 		PortExplicit:  true,
 		PublicURL:     publicURL,
 		PublicOrigins: []string{publicURL},
-	}, runtimePort)
-	assert.Equal(t, runtimePort, cfg.Port)
-	assert.False(t, cfg.PortExplicit)
-	assert.Equal(t, configuredPort, requestedPort)
-
-	got, err := prepareServeRuntimeConfig(cfg, serveRuntimeOptions{
-		RequestedPort: requestedPort,
-	})
+	}, runtimePort, nil)
 	require.NoError(t, err)
 	assert.NotEqual(t, runtimePort, got.Port)
+	assert.False(t, got.PortExplicit)
+	assert.Equal(t, configuredPort, rtOpts.RequestedPort)
 	assert.Equal(t, fmt.Sprintf(
 		"https://viewer.example.test:%d", got.Port,
 	), got.PublicURL)
 	assert.Equal(t, []string{got.PublicURL}, got.PublicOrigins)
+
+	srv := server.New(got, nil, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	runtime, err := startServerWithOptionalCaddy(ctx, got, srv, rtOpts)
+	require.NoError(t, err)
+	assert.Equal(t, got.PublicURL, runtime.PublicURL)
+	require.NoError(t, srv.Shutdown(context.Background()))
+	require.ErrorIs(t, <-runtime.ServeErrCh, http.ErrServerClosed)
 }

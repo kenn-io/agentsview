@@ -189,7 +189,7 @@ func TestServeStaleArchiveHelperProcess(t *testing.T) {
 	cfg.AgentDirs = map[parser.AgentType][]string{
 		parser.AgentClaude: {os.Getenv("AGENTSVIEW_STALE_SERVE_SOURCES")},
 	}
-	runServe(cfg, serveOptions{SkipInitialSync: true}, cfg.Port)
+	runServe(cfg, serveOptions{SkipInitialSync: true}, 0)
 }
 
 func TestPGServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
@@ -350,7 +350,7 @@ func TestRunServeRuntimeWarningHelperProcess(t *testing.T) {
 		DBPath:  filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "sessions.db"),
 		NoSync:  true,
 	}
-	runServe(cfg, serveOptions{}, cfg.Port)
+	runServe(cfg, serveOptions{}, 0)
 }
 
 func runDuckDBRuntimeWarningHelper(t *testing.T) ([]byte, error) {
