@@ -14,7 +14,7 @@
     type DbProjectRule,
     type WorktreeMappingRequest,
   } from "../../api/generated/index";
-  import { callGenerated, isAbortError } from "../../api/runtime.js";
+  import { isAbortError } from "../../api/runtime.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -115,13 +115,9 @@
     loading = true;
     error = "";
     try {
-      const res = await callGenerated(
-        (options) =>
-          DataService.getApiV1DataProjectRules({
+      const res = await DataService.getApiV1DataProjectRules({
             machine: requestedMachine || undefined,
-          }, options),
-        signal,
-      );
+          }, { signal });
       if (!mappingsRead.isCurrent(signal)) return;
       localMachine = res.local_machine;
       machine = res.machine;
@@ -217,13 +213,9 @@
     applyMessage = "";
     try {
       if (id == null) {
-        await callGenerated(() =>
-          SettingsService.postApiV1SettingsWorktreeMappings(input),
-        );
+        await SettingsService.postApiV1SettingsWorktreeMappings(input);
       } else {
-        await callGenerated(() =>
-          SettingsService.putApiV1SettingsWorktreeMappingsById({ id: String(id) }, input),
-        );
+        await SettingsService.putApiV1SettingsWorktreeMappingsById({ id: String(id) }, input);
       }
       // The mutation committed even if the machine selection has since
       // changed, so the host's cached inventory is stale either way.
@@ -250,11 +242,9 @@
     error = "";
     applyMessage = "";
     try {
-      await callGenerated(() =>
-        SettingsService.deleteApiV1SettingsWorktreeMappingsById({
+      await SettingsService.deleteApiV1SettingsWorktreeMappingsById({
           id: String(mapping.id),
-        }),
-      );
+        });
       onMutated?.();
       if (!isCurrentMachine(initiatingMachine, generation)) return;
       if (editingId === mapping.id) resetForm();
@@ -285,9 +275,7 @@
     error = "";
     applyMessage = "";
     try {
-      const res = await callGenerated(() =>
-        SettingsService.postApiV1SettingsWorktreeMappingsApply({ machine: initiatingMachine }),
-      );
+      const res = await SettingsService.postApiV1SettingsWorktreeMappingsApply({ machine: initiatingMachine });
       onMutated?.();
       if (!isCurrentMachine(initiatingMachine, generation)) return;
       applyMessage = m.worktree_apply_result({

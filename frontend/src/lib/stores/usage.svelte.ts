@@ -5,7 +5,7 @@ import {
   type ServiceUsagePairwiseComparisonResponse,
   type UsageSummaryResponse,
 } from "../api/generated/index";
-import { ApiError, callGenerated, isAbortError } from "../api/runtime.js";
+import { ApiError, isAbortError } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
@@ -914,17 +914,11 @@ class UsageStore {
       let contextData: UsageSummaryResponse | null = null;
       if (contextParams) {
         [data, contextData] = await Promise.all([
-          callGenerated((options) => UsageService.getApiV1UsageSummary(params, options), signal),
-          callGenerated(
-            (options) => UsageService.getApiV1UsageSummary(contextParams, options),
-            signal,
-          ),
+          UsageService.getApiV1UsageSummary(params, { signal }),
+          UsageService.getApiV1UsageSummary(contextParams, { signal }),
         ]);
       } else {
-        data = await callGenerated(
-          (options) => UsageService.getApiV1UsageSummary(params, options),
-          signal,
-        );
+        data = await UsageService.getApiV1UsageSummary(params, { signal });
       }
       if (this.versions.summary === v) {
         this.summary = data;
@@ -1025,16 +1019,12 @@ class UsageStore {
     const started = performance.now();
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const comparison = await callGenerated(
-        (options) =>
-          UsageService.getApiV1UsageComparison(
-            {
-              ...params,
-              current_microdollars: summary.totals.totalCost.microdollars,
-            },
-            options,
-          ),
-        signal,
+      const comparison = await UsageService.getApiV1UsageComparison(
+        {
+          ...params,
+          current_microdollars: summary.totals.totalCost.microdollars,
+        },
+        { signal },
       );
       if (this.versions.summary === summaryVersion) {
         this.summary = { ...summary, comparison };
@@ -1094,10 +1084,7 @@ class UsageStore {
     const started = performance.now();
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const comparison = await callGenerated(
-        (options) => UsageService.getApiV1UsagePairwiseComparison(request, options),
-        signal,
-      );
+      const comparison = await UsageService.getApiV1UsagePairwiseComparison(request, { signal });
       if (this.versions.summary === summaryVersion && this.versions.pairwise === pairwiseVersion) {
         this.pairwiseComparison = comparison;
         this.errors.pairwise = null;
@@ -1141,20 +1128,16 @@ class UsageStore {
     const started = performance.now();
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const data = await callGenerated(
-        (options) =>
-          UsageService.getApiV1UsageTopSessions(
-            {
-              ...(params ?? this.baseParams()),
-              sort: this.mode === "token" ? "tokens" : "cost",
-              token_types:
-                this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
-                  ? this.selectedTokenTypes.join(",")
-                  : undefined,
-            },
-            options,
-          ),
-        signal,
+      const data = await UsageService.getApiV1UsageTopSessions(
+        {
+          ...(params ?? this.baseParams()),
+          sort: this.mode === "token" ? "tokens" : "cost",
+          token_types:
+            this.mode === "token" && this.selectedTokenTypes.length < ALL_TOKEN_TYPES.length
+              ? this.selectedTokenTypes.join(",")
+              : undefined,
+        },
+        { signal },
       );
       if (this.versions.topSessions === v) {
         this.topSessions = data;

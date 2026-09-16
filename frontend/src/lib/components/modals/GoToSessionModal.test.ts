@@ -22,12 +22,7 @@ vi.mock("../../api/generated/index", () => ({
 }));
 
 vi.mock("../../api/runtime.js", () => ({
-  callGenerated: vi.fn(
-    (
-      request: (options?: { signal?: AbortSignal }) => Promise<unknown>,
-      signal?: AbortSignal,
-    ) => request(signal ? { signal } : undefined),
-  ),
+
   isAbortError: vi.fn(
     (error: unknown) => error instanceof DOMException && error.name === "AbortError",
   ),

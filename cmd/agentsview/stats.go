@@ -160,13 +160,6 @@ func openStatsService(
 	if err != nil {
 		return nil, nil, err
 	}
-	if tr.Mode == transportHTTP && tr.ReadOnly {
-		d, err := openReadOnlyDB(cfg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("opening db: %w", err)
-		}
-		return service.NewDirectBackend(d, nil), func() { d.Close() }, nil
-	}
 	return newService(cfg, tr)
 }
 

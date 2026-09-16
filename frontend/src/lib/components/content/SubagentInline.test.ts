@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { SessionsService } from "../../api/generated/index";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import type { Session } from "../../api/types.js";
@@ -6,15 +7,13 @@ import { setLocale } from "../../i18n/index.js";
 // @ts-ignore
 import SubagentInline from "./SubagentInline.svelte";
 
-const { getMessages, getSession, childSessions, callGenerated } = vi.hoisted(() => ({
+const { getMessages, getSession, childSessions } = vi.hoisted(() => ({
   getMessages: vi.fn(),
   getSession: vi.fn(),
   childSessions: new Map<string, Session>(),
-  callGenerated: vi.fn((request: () => Promise<unknown>, _signal?: AbortSignal) => request()),
 }));
 
 vi.mock("../../api/runtime.js", () => ({
-  callGenerated,
   isAbortError: vi.fn(() => false),
 }));
 
@@ -78,20 +77,12 @@ afterEach(() => {
   childSessions.clear();
   getMessages.mockReset();
   getSession.mockReset();
-  callGenerated.mockReset();
-  callGenerated.mockImplementation((request: () => Promise<unknown>, _signal?: AbortSignal) =>
-    request(),
-  );
+
   document.body.innerHTML = "";
 });
 
 describe("SubagentInline", () => {
   it("aborts the nested read when collapsed", async () => {
-    const signals: AbortSignal[] = [];
-    callGenerated.mockImplementation((request, signal) => {
-      signals.push(signal as AbortSignal);
-      return request();
-    });
     getMessages.mockImplementationOnce(() => new Promise(() => {}));
     getSession.mockImplementationOnce(() => new Promise(() => {}));
     const component = mount(SubagentInline, {
@@ -106,8 +97,22 @@ describe("SubagentInline", () => {
     toggle.click();
     await tick();
 
-    expect(signals).toHaveLength(2);
-    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    expect([
+      ...vi
+        .mocked(SessionsService.getApiV1SessionsByIdMessages)
+        .mock.calls.map((call) => call[2]?.signal),
+      ...vi.mocked(SessionsService.getApiV1SessionsById).mock.calls.map((call) => call[1]?.signal),
+    ]).toHaveLength(2);
+    expect(
+      [
+        ...vi
+          .mocked(SessionsService.getApiV1SessionsByIdMessages)
+          .mock.calls.map((call) => call[2]?.signal),
+        ...vi
+          .mocked(SessionsService.getApiV1SessionsById)
+          .mock.calls.map((call) => call[1]?.signal),
+      ].every((signal) => signal?.aborted),
+    ).toBe(true);
     unmount(component);
   });
 

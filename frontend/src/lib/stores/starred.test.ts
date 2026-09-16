@@ -3,7 +3,7 @@ import { StarredService } from "../api/generated/index";
 import { createStarredStore } from "./starred.svelte.js";
 
 vi.mock("../api/runtime.js", () => ({
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+
 }));
 
 vi.mock("../api/generated/index", () => ({

@@ -6,7 +6,6 @@
   import type { VectorBuildStatus, VectorGenerationInfo } from "../../api/generated/index";
   import {
     ApiError,
-    callGenerated,
     isAbortError,
   } from "../../api/runtime.js";
   import { LatestRead } from "../../utils/latest-read.js";
@@ -80,10 +79,7 @@
   async function refresh(withGenerations: boolean): Promise<void> {
     const signal = statusRead.begin();
     try {
-      const next = await callGenerated((options) =>
-        EmbeddingsService.getApiV1EmbeddingsStatus({}, options),
-        signal,
-      );
+      const next = await EmbeddingsService.getApiV1EmbeddingsStatus({}, { signal });
       if (disposed || !statusRead.isCurrent(signal)) return;
       const wasRunning = status?.running ?? false;
       status = next;
@@ -120,10 +116,7 @@
   async function refreshGenerations(): Promise<void> {
     const signal = generationsRead.begin();
     try {
-      const res = await callGenerated((options) =>
-        EmbeddingsService.getApiV1EmbeddingsGenerations({}, options),
-        signal,
-      );
+      const res = await EmbeddingsService.getApiV1EmbeddingsGenerations({}, { signal });
       if (disposed || !generationsRead.isCurrent(signal)) return;
       generations = res.generations ?? [];
     } finally {

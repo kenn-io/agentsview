@@ -16,12 +16,7 @@ const runtimeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../api/runtime.js", () => ({
-  callGenerated: vi.fn(
-    (request: (options?: { signal?: AbortSignal }) => Promise<unknown>, signal?: AbortSignal) => {
-      if (signal) runtimeMocks.signals.push(signal);
-      return request(signal ? { signal } : undefined);
-    },
-  ),
+
   isAbortError: (err: unknown) => {
     if (err instanceof DOMException && err.name === "AbortError") {
       return true;

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test"
 import { analytics } from "./analytics.svelte.js";
 import { sessions } from "./sessions.svelte.js";
 import { AnalyticsService } from "../api/generated/index";
-import { callGenerated } from "../api/runtime.js";
+
 import type {
   DbAnalyticsSummary as AnalyticsSummary,
   DbActivityResponse as ActivityResponse,
@@ -18,7 +18,6 @@ import type {
 } from "../api/generated/index.js";
 
 vi.mock("../api/runtime.js", () => ({
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   isAbortError: vi.fn(() => false),
 }));
 
@@ -1114,13 +1113,6 @@ describe("executeFetch concurrency and error handling", () => {
   });
 
   it("aborts stale panel requests when a newer fetch starts", async () => {
-    const signals: (AbortSignal | undefined)[] = [];
-    vi.mocked(callGenerated).mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal);
-        return request();
-      },
-    );
     vi.mocked(analyticsService.getApiV1AnalyticsSummary)
       .mockImplementationOnce(() => new Promise(() => {}))
       .mockResolvedValueOnce(makeSummary());
@@ -1130,18 +1122,19 @@ describe("executeFetch concurrency and error handling", () => {
     void analytics.fetchSummary();
     await Promise.resolve();
 
-    expect(signals[0]).toBeDefined();
-    expect(signals[0]?.aborted).toBe(true);
+    expect(
+      vi
+        .mocked(AnalyticsService.getApiV1AnalyticsSummary)
+        .mock.calls[0]?.[1]?.signal,
+    ).toBeDefined();
+    expect(
+      vi
+        .mocked(AnalyticsService.getApiV1AnalyticsSummary)
+        .mock.calls[0]?.[1]?.signal?.aborted,
+    ).toBe(true);
   });
 
   it("aborts visible panel requests on teardown", async () => {
-    const signals: (AbortSignal | undefined)[] = [];
-    vi.mocked(callGenerated).mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal);
-        return request();
-      },
-    );
     vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockImplementationOnce(
       () => new Promise(() => {}),
     );
@@ -1150,7 +1143,11 @@ describe("executeFetch concurrency and error handling", () => {
     await Promise.resolve();
     analytics.cancelInFlightReads();
 
-    expect(signals[0]?.aborted).toBe(true);
+    expect(
+      vi
+        .mocked(AnalyticsService.getApiV1AnalyticsSummary)
+        .mock.calls[0]?.[1]?.signal?.aborted,
+    ).toBe(true);
   });
 });
 

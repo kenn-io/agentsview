@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { getApiV1Version } from "./generated/metadata/metadata.js";
-import { ApiError, callGenerated, orvalFetch, setAuthToken } from "./runtime.js";
+import { ApiError, orvalFetch, setAuthToken } from "./runtime.js";
 
 describe("orvalFetch", () => {
   afterEach(() => {
@@ -49,19 +49,10 @@ describe("orvalFetch", () => {
   });
 });
 
-describe("callGenerated", () => {
+describe("API errors", () => {
   afterEach(() => {
     localStorage.clear();
     vi.unstubAllGlobals();
-  });
-
-  it("passes its abort signal to the generated request", async () => {
-    const controller = new AbortController();
-    const request = vi.fn(async () => "done");
-
-    await expect(callGenerated(request, controller.signal)).resolves.toBe("done");
-
-    expect(request).toHaveBeenCalledWith({ signal: controller.signal });
   });
 
   it("normalizes generated API error bodies and codes", async () => {
@@ -79,9 +70,7 @@ describe("callGenerated", () => {
       ),
     );
 
-    await expect(
-      callGenerated(() => orvalFetch("/api/v1/usage/summary", {})),
-    ).rejects.toMatchObject({
+    await expect(orvalFetch("/api/v1/usage/summary", {})).rejects.toMatchObject({
       name: "ApiError",
       status: 400,
       code: "unknown_project_key",

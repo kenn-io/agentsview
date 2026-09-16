@@ -12,13 +12,7 @@
     type SegmentedControlOption,
     type TypeaheadOption,
   } from "@kenn-io/kit-ui";
-  import {
-    activateRecallExtractionGeneration,
-    fetchRecallEntries,
-    fetchRecallExtractionProgress,
-    fetchRecallExtractionStatus,
-    retireRecallExtractionGeneration,
-  } from "../../api/recall.js";
+  import { RecallService } from "../../api/generated/index.js";
   import type {
     RecallEntry,
     RecallEvidence,
@@ -168,20 +162,21 @@
     entriesLoading = true;
     entriesFailed = false;
     try {
-      const page = await fetchRecallEntries({
-        query: query || undefined,
+      const page = await RecallService.getApiV1RecallEntries({
+        limit: 200,
+        q: query || undefined,
         project: project || undefined,
         type: entryType || undefined,
-        sourceRunId: generation || undefined,
-        reviewState: reviewState || undefined,
+        source_run_id: generation || undefined,
+        review_state: reviewState || undefined,
         cursor: cursor || undefined,
-      }, signal);
+      }, { signal });
       if (!entriesRead.isCurrent(signal)) return;
       entries = appending
         ? [...entries, ...page.entries]
         : page.entries;
-      nextCursor = page.nextCursor ?? "";
-      resultCap = page.resultCap ?? 0;
+      nextCursor = page.next_cursor ?? "";
+      resultCap = page.result_cap ?? 0;
       entriesUpdatedAt = Date.now();
     } catch (error) {
       if (isAbortError(error) || !entriesRead.isCurrent(signal)) return;
@@ -205,7 +200,7 @@
     statusLoading = true;
     statusFailed = false;
     try {
-      const next = await fetchRecallExtractionStatus(signal);
+      const next = await RecallService.getApiV1RecallExtractionStatus({ signal });
       if (!statusRead.isCurrent(signal)) return;
       status = next;
       statusUpdatedAt = Date.now();
@@ -224,16 +219,17 @@
     progressLoading = true;
     progressFailed = false;
     try {
-      const page = await fetchRecallExtractionProgress({
+      const page = await RecallService.getApiV1RecallExtractionProgress({
+        limit: 50,
         generation: status?.fingerprint || undefined,
         state: progressState || undefined,
         cursor: cursor || undefined,
-      }, signal);
+      }, { signal });
       if (!progressRead.isCurrent(signal)) return;
       progress = appending
         ? [...progress, ...page.progress]
         : page.progress;
-      progressNextCursor = page.nextCursor ?? "";
+      progressNextCursor = page.next_cursor ?? "";
     } catch (error) {
       if (isAbortError(error) || !progressRead.isCurrent(signal)) return;
       if (!appending) {
@@ -287,9 +283,9 @@
     generationActionError = "";
     try {
       if (action.kind === "activate") {
-        await activateRecallExtractionGeneration();
+        await RecallService.postApiV1RecallExtractionActivate();
       } else {
-        await retireRecallExtractionGeneration(action.generation.fingerprint);
+        await RecallService.postApiV1RecallExtractionGenerationsByFingerprintRetire({ fingerprint: action.generation.fingerprint });
       }
       await refreshRecall();
       generationAction = null;

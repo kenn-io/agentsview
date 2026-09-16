@@ -14,7 +14,7 @@ vi.mock("../api/runtime.js", async (importOriginal) => {
   const orig = await importOriginal<typeof import("../api/runtime.js")>();
   return {
     ...orig,
-    callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+
     setAuthToken: runtime.setAuthToken,
     isRemoteConnection: runtime.isRemoteConnection,
   };

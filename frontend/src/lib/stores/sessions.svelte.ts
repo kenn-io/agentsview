@@ -1,6 +1,6 @@
 import type { DataChangedEvent } from "../api/client.js";
 import { MetadataService, SessionsService, SettingsService } from "../api/generated/index";
-import { callGenerated, isAbortError, isNotFoundError } from "../api/runtime.js";
+import { isAbortError, isNotFoundError } from "../api/runtime.js";
 import type { Session } from "../api/types.js";
 import type {
   DbProjectInfo as ProjectInfo,
@@ -523,10 +523,7 @@ class SessionsStore {
       total: this.total,
     };
     try {
-      const index = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsSidebarIndex(params, options),
-        signal,
-      );
+      const index = await SessionsService.getApiV1SessionsSidebarIndex(params, { signal });
       if (this.loadVersion !== version) return;
 
       this.sidebarIndexVersion = indexVersion;
@@ -612,10 +609,7 @@ class SessionsStore {
         const promise = this.runSidebarHydration(async () => {
           if (signal.aborted) return;
           try {
-            const hydrated = await callGenerated(
-              (options) => SessionsService.getApiV1SessionsById({ id }, options),
-              signal,
-            );
+            const hydrated = await SessionsService.getApiV1SessionsById({ id }, { signal });
             if (
               version !== this.sidebarIndexVersion ||
               epoch !== (this.sidebarHydrationEpochByVersion.get(version) ?? 0)
@@ -695,17 +689,13 @@ class SessionsStore {
     const signal = this.routeSignal();
     this.loading = true;
     try {
-      const index = await callGenerated(
-        (options) =>
-          SessionsService.getApiV1SessionsSidebarIndex(
-            {
-              ...this.apiParams,
-              cursor: this.nextCursor!,
-              limit: SESSION_PAGE_SIZE,
-            },
-            options,
-          ),
-        signal,
+      const index = await SessionsService.getApiV1SessionsSidebarIndex(
+        {
+          ...this.apiParams,
+          cursor: this.nextCursor!,
+          limit: SESSION_PAGE_SIZE,
+        },
+        { signal },
       );
       if (this.loadVersion !== version) return;
       // Merge index-page order first, appended rows last. Rows outside
@@ -887,10 +877,7 @@ class SessionsStore {
     const entry = { id, promise: Promise.resolve() };
     entry.promise = (async () => {
       try {
-        const session = await callGenerated(
-          (options) => SessionsService.getApiV1SessionsById({ id }, options),
-          signal,
-        );
+        const session = await SessionsService.getApiV1SessionsById({ id }, { signal });
         if (this.activeSessionId === id && this.navigateRead.isCurrent(signal)) {
           const idx = this.sessions.findIndex((s) => s.id === id);
           if (idx >= 0) {
@@ -970,10 +957,7 @@ class SessionsStore {
     const version = ++this.refreshVersion;
     const signal = this.refreshRead.begin();
     try {
-      const session = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsById({ id }, options),
-        signal,
-      );
+      const session = await SessionsService.getApiV1SessionsById({ id }, { signal });
       if (
         this.refreshVersion !== version ||
         this.activeSessionId !== id ||
@@ -1000,9 +984,9 @@ class SessionsStore {
     const version = ++this.childSessionsVersion;
     const signal = this.childSessionsRead.begin();
     try {
-      const children = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsByIdChildren({ id: parentId }, options),
-        signal,
+      const children = await SessionsService.getApiV1SessionsByIdChildren(
+        { id: parentId },
+        { signal },
       );
       if (
         this.childSessionsVersion !== version ||
@@ -1053,10 +1037,7 @@ class SessionsStore {
     const signal = this.routeSignal();
     this.signalDetailLoading = true;
     try {
-      const session = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsById({ id }, options),
-        signal,
-      );
+      const session = await SessionsService.getApiV1SessionsById({ id }, { signal });
       if (signal.aborted) return;
       this.signalDetailCache.set(id, {
         basis: session.health_score_basis ?? null,

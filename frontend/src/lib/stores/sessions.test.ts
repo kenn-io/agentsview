@@ -12,7 +12,7 @@ import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
 import type { Filters } from "./sessions.svelte.js";
 import type { Session } from "../api/types.js";
-import { ApiError, callGenerated } from "../api/runtime.js";
+import { ApiError } from "../api/runtime.js";
 import { rollingRange } from "../utils/dates.js";
 
 const api = vi.hoisted(() => ({
@@ -63,7 +63,7 @@ vi.mock("../api/client.js", () => ({
 
 vi.mock("../api/runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/runtime.js")>()),
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+
   isAbortError: vi.fn(
     (error: unknown) => error instanceof DOMException && error.name === "AbortError",
   ),
@@ -208,10 +208,16 @@ describe("SessionsStore", () => {
       ...resolvedOptions,
       timeZone: "America/New_York",
     });
-    vi.mocked(callGenerated).mockImplementation((request: () => Promise<unknown>) => request());
+
     storageData.clear();
     mockSidebarPage();
     mockSidebarIndex();
+    vi.mocked(SessionsService.getApiV1SessionsSidebarIndex).mockImplementation((params) =>
+      api.getSidebarSessionIndex(params),
+    );
+    vi.mocked(SessionsService.getApiV1SessionsById).mockImplementation(({ id }) =>
+      api.getSession(id),
+    );
     starred.filterOnly = false;
     starred.ids = new Set();
     yokedDates.setEnabled(false);
@@ -632,14 +638,6 @@ describe("SessionsStore", () => {
     });
 
     it("aborts an in-flight sidebar load when the filter signature changes", async () => {
-      const signals: AbortSignal[] = [];
-      vi.mocked(callGenerated).mockImplementation(
-        (request: () => Promise<unknown>, signal?: AbortSignal) => {
-          if (signal) signals.push(signal);
-          return request();
-        },
-      );
-
       vi.mocked(api.getSidebarSessionIndex)
         .mockReturnValueOnce(new Promise(() => {}))
         .mockResolvedValueOnce({
@@ -651,12 +649,20 @@ describe("SessionsStore", () => {
       const detach = sessions.attachSidebar();
       void sessions.load();
       await Promise.resolve();
-      expect(signals[0]?.aborted).toBe(false);
+      expect(
+        vi
+          .mocked(SessionsService.getApiV1SessionsSidebarIndex)
+          .mock.calls[0]?.[1]?.signal?.aborted,
+      ).toBe(false);
 
       sessions.filters.project = "changed";
       await sessions.load();
 
-      expect(signals[0]?.aborted).toBe(true);
+      expect(
+        vi
+          .mocked(SessionsService.getApiV1SessionsSidebarIndex)
+          .mock.calls[0]?.[1]?.signal?.aborted,
+      ).toBe(true);
       expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
       detach();
     });
@@ -2793,12 +2799,12 @@ describe("SessionsStore", () => {
 
   describe("route cancellation", () => {
     it("aborts pagination and treats cancellation as normal completion", async () => {
-      const signals: AbortSignal[] = [];
-      vi.mocked(callGenerated).mockImplementation(
-        (request: () => Promise<unknown>, signal?: AbortSignal) => {
-          if (signal) signals.push(signal);
-          return rejectGeneratedRequestOnAbort(request, signal);
-        },
+      vi.mocked(SessionsService.getApiV1SessionsSidebarIndex).mockImplementation(
+        (params, options) =>
+          rejectGeneratedRequestOnAbort(
+            () => api.getSidebarSessionIndex(params),
+            options?.signal ?? undefined,
+          ) as ReturnType<typeof SessionsService.getApiV1SessionsSidebarIndex>,
       );
       vi.mocked(api.getSidebarSessionIndex).mockReturnValue(new Promise(() => {}));
       sessions.nextCursor = "next";
@@ -2807,13 +2813,27 @@ describe("SessionsStore", () => {
       await Promise.resolve();
       sessions.cancelRouteReads();
 
-      expect(signals).toHaveLength(1);
-      expect(signals[0]?.aborted).toBe(true);
+      expect(
+        vi
+          .mocked(SessionsService.getApiV1SessionsSidebarIndex)
+          .mock.calls.map((call) => call[1]?.signal),
+      ).toHaveLength(1);
+      expect(
+        vi
+          .mocked(SessionsService.getApiV1SessionsSidebarIndex)
+          .mock.calls[0]?.[1]?.signal?.aborted,
+      ).toBe(true);
       await expect(load).resolves.toBeUndefined();
     });
 
     it("keeps a replacement signal-detail request registered", async () => {
-      vi.mocked(callGenerated).mockImplementation(rejectGeneratedRequestOnAbort);
+      vi.mocked(SessionsService.getApiV1SessionsById).mockImplementation(
+        ({ id }, options) =>
+          rejectGeneratedRequestOnAbort(
+            () => api.getSession(id),
+            options?.signal ?? undefined,
+          ) as ReturnType<typeof SessionsService.getApiV1SessionsById>,
+      );
       vi.mocked(api.getSession).mockReturnValue(new Promise(() => {}));
 
       const obsolete = sessions.fetchSignalDetail("detail");

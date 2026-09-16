@@ -1,7 +1,7 @@
-/** Analytics types — match Go structs in internal/db/analytics.go */
-
-export type Granularity = "day" | "week" | "month";
-export type TrendsGranularity = "day" | "week" | "month";
-export type HeatmapMetric = "messages" | "sessions" | "output_tokens";
-export type TopSessionsMetric = "messages" | "duration" | "output_tokens";
-export type AutomatedScope = "human" | "all" | "automated";
+export type {
+  GetApiV1AnalyticsActivityGranularity as Granularity,
+  GetApiV1TrendsTermsGranularity as TrendsGranularity,
+  GetApiV1AnalyticsHeatmapMetric as HeatmapMetric,
+  GetApiV1AnalyticsTopSessionsMetric as TopSessionsMetric,
+  GetApiV1AnalyticsActivityAutomatedScope as AutomatedScope,
+} from "../generated/index.js";

@@ -410,7 +410,7 @@ func TestStatsCommandReportsDaemonValidationError(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid timezone: Fake/Zone")
 }
 
-func TestStatsCommandSkipsReadOnlyDaemon(t *testing.T) {
+func TestStatsCommandUsesReadOnlyDaemon(t *testing.T) {
 	dataDir := setupGoldenStatsDataDir(t)
 
 	var called bool
@@ -430,11 +430,8 @@ func TestStatsCommandSkipsReadOnlyDaemon(t *testing.T) {
 		"--timezone", "UTC",
 	)
 
-	require.NoError(t, err, "stats output:\n%s", out)
-	assert.False(t, called, "read-only daemon stats endpoint should be skipped")
-	var got db.SessionStats
-	require.NoError(t, json.Unmarshal([]byte(out), &got))
-	assert.Equal(t, 9, got.Totals.SessionsAll)
+	require.ErrorIs(t, err, db.ErrReadOnly, "stats output:\n%s", out)
+	assert.True(t, called, "stats should use the discovered read-only daemon")
 }
 
 // updateGolden toggles regeneration of stats_golden.json.

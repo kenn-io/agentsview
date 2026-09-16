@@ -1,3 +1,4 @@
+import { UsageService } from "../api/generated/index";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type {
   Comparison,
@@ -143,7 +144,7 @@ const apiRuntimeMocks = vi.hoisted(() => {
   }
   return {
     ApiError,
-    callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+
     isAbortError: vi.fn(() => false),
   };
 });
@@ -386,9 +387,7 @@ function usagePairwiseComparison(): ServiceUsagePairwiseComparisonResponse {
   };
 }
 
-afterEach(() => {
-  apiRuntimeMocks.callGenerated.mockImplementation((request: () => Promise<unknown>) => request());
-});
+afterEach(() => {});
 
 describe("UsageStore filter persistence", () => {
   beforeEach(() => {
@@ -612,23 +611,22 @@ describe("UsageStore session filter params", () => {
   });
 
   it("aborts an in-flight ranking when the usage mode changes", async () => {
-    const signals: (AbortSignal | undefined)[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal);
-        return request();
-      },
-    );
     usageServiceMocks.getApiV1UsageTopSessions.mockImplementationOnce(() => new Promise(() => {}));
     const { usage } = await loadStore();
 
     void usage.fetchTopSessions();
     await Promise.resolve();
-    expect(signals[0]?.aborted).toBe(false);
+    expect(
+      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal
+        ?.aborted,
+    ).toBe(false);
 
     usage.setMode("token");
 
-    expect(signals[0]?.aborted).toBe(true);
+    expect(
+      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal
+        ?.aborted,
+    ).toBe(true);
     expect(usage.topSessions).toBeNull();
   });
 
@@ -1006,13 +1004,6 @@ describe("UsageStore session filter params", () => {
   });
 
   it("aborts stale top sessions when a new full refresh starts", async () => {
-    const signals: (AbortSignal | undefined)[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal);
-        return request();
-      },
-    );
     usageServiceMocks.getApiV1UsageTopSessions.mockImplementationOnce(() => new Promise(() => {}));
     usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise(() => {}));
 
@@ -1020,22 +1011,21 @@ describe("UsageStore session filter params", () => {
 
     void usage.fetchTopSessions();
     await Promise.resolve();
-    expect(signals[0]?.aborted).toBe(false);
+    expect(
+      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal
+        ?.aborted,
+    ).toBe(false);
 
     void usage.fetchAll();
     await Promise.resolve();
 
-    expect(signals[0]?.aborted).toBe(true);
+    expect(
+      vi.mocked(UsageService.getApiV1UsageTopSessions).mock.calls[0]?.[1]?.signal
+        ?.aborted,
+    ).toBe(true);
   });
 
   it("aborts visible panel requests on teardown", async () => {
-    const signals: (AbortSignal | undefined)[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal);
-        return request();
-      },
-    );
     usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(() => new Promise(() => {}));
     const { usage } = await loadStore();
 
@@ -1043,7 +1033,10 @@ describe("UsageStore session filter params", () => {
     await Promise.resolve();
     usage.cancelInFlightReads();
 
-    expect(signals[0]?.aborted).toBe(true);
+    expect(
+      vi.mocked(UsageService.getApiV1UsageSummary).mock.calls[0]?.[1]?.signal
+        ?.aborted,
+    ).toBe(true);
   });
 
   it("reuses summary params for top sessions during full refresh", async () => {
@@ -1078,14 +1071,6 @@ describe("UsageStore session filter params", () => {
   });
 
   it("does not let stale comparison abort the current comparison", async () => {
-    const signals: (AbortSignal | undefined)[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal);
-        return request();
-      },
-    );
-
     const { usage } = await loadStore();
     const loaded = await usage.fetchSummary({ loadComparison: false });
     expect(loaded).not.toBeNull();
@@ -1113,7 +1098,8 @@ describe("UsageStore session filter params", () => {
       loadedSummary.params,
     );
     await Promise.resolve();
-    const currentSignal = signals[1];
+    const currentSignal = vi.mocked(UsageService.getApiV1UsageComparison).mock.calls[0]?.[1]
+      ?.signal;
     expect(currentSignal).toBeDefined();
     expect(currentSignal?.aborted).toBe(false);
 
@@ -1131,14 +1117,6 @@ describe("UsageStore session filter params", () => {
   });
 
   it("aborts active comparison when a newer summary starts", async () => {
-    const signals: (AbortSignal | undefined)[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal);
-        return request();
-      },
-    );
-
     const { usage } = await loadStore();
     const loaded = await usage.fetchSummary({ loadComparison: false });
     expect(loaded).not.toBeNull();
@@ -1159,7 +1137,8 @@ describe("UsageStore session filter params", () => {
       loadedSummary.params,
     );
     await Promise.resolve();
-    const comparisonSignal = signals[1];
+    const comparisonSignal = vi.mocked(UsageService.getApiV1UsageComparison).mock.calls[0]?.[1]
+      ?.signal;
     expect(comparisonSignal).toBeDefined();
     expect(comparisonSignal?.aborted).toBe(false);
 
@@ -1262,13 +1241,6 @@ describe("UsageStore session filter params", () => {
   });
 
   it("aborts stale summary requests when a newer fetch starts", async () => {
-    const signals: (AbortSignal | undefined)[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal);
-        return request();
-      },
-    );
     usageServiceMocks.getApiV1UsageSummary
       .mockImplementationOnce(() => new Promise(() => {}))
       .mockResolvedValueOnce({
@@ -1307,8 +1279,13 @@ describe("UsageStore session filter params", () => {
     void usage.fetchSummary();
     await Promise.resolve();
 
-    expect(signals[0]).toBeDefined();
-    expect(signals[0]?.aborted).toBe(true);
+    expect(
+      vi.mocked(UsageService.getApiV1UsageSummary).mock.calls[0]?.[1]?.signal,
+    ).toBeDefined();
+    expect(
+      vi.mocked(UsageService.getApiV1UsageSummary).mock.calls[0]?.[1]?.signal
+        ?.aborted,
+    ).toBe(true);
   });
 });
 

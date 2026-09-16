@@ -5,12 +5,11 @@ import type {
 import type { Report } from "../api/types/activity.js";
 import { m } from "../i18n/index.js";
 import { MetadataService } from "../api/generated/index";
-import { callGenerated, isAbortError } from "../api/runtime.js";
+import { isAbortError } from "../api/runtime.js";
 import {
   fetchActivityReport,
   fetchActivitySessions,
   type ActivityReportProgress,
-  type ActivityReportQuery,
   type ActivityBucketRange,
   type ActivitySessionPageOptions,
   type ActivitySessionSort,
@@ -52,7 +51,7 @@ function customToInstant(to: string): string {
   return end.toISOString();
 }
 
-export type ActivityQueryParams = ActivityReportQuery;
+export type ActivityQueryParams = import("../api/generated/index.js").GetApiV1ActivityReportParams;
 
 class ActivityStore {
   preset = $state<Preset>("day");
@@ -307,10 +306,7 @@ class ActivityStore {
     request = (async () => {
       let ok = true;
       try {
-        const res = await callGenerated(
-          (options) => MetadataService.getApiV1Projects(opts, options),
-          signal,
-        );
+        const res = await MetadataService.getApiV1Projects(opts, { signal });
         if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal))
           this.projects = res.projects;
       } catch (e) {
@@ -318,10 +314,7 @@ class ActivityStore {
         ok = false; // keep the current list; retry on the next call
       }
       try {
-        const res = await callGenerated(
-          (options) => MetadataService.getApiV1Agents(opts, options),
-          signal,
-        );
+        const res = await MetadataService.getApiV1Agents(opts, { signal });
         if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal))
           this.agents = res.agents;
       } catch (e) {
@@ -329,10 +322,7 @@ class ActivityStore {
         ok = false;
       }
       try {
-        const res = await callGenerated(
-          (options) => MetadataService.getApiV1Machines(opts, options),
-          signal,
-        );
+        const res = await MetadataService.getApiV1Machines(opts, { signal });
         if (ver === this.#filterOptionsVersion && this.filterOptionsRead.isCurrent(signal))
           this.machines = res.machines;
       } catch (e) {

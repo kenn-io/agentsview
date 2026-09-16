@@ -3,7 +3,7 @@
   import { onDestroy } from "svelte";
   import { m } from "../../i18n/index.js";
   import { SessionsService } from "../../api/generated/index";
-  import { callGenerated, isAbortError } from "../../api/runtime.js";
+  import { isAbortError } from "../../api/runtime.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -72,14 +72,10 @@
     errorKind = null;
     const signal = lookup.begin();
     try {
-      const response = await callGenerated(
-        (options) =>
-          SessionsService.getApiV1SessionIdsResolve(
+      const response = await SessionsService.getApiV1SessionIdsResolve(
             { partial: sessionLookupPartial(value), limit: SESSION_ID_LIMIT },
-            options,
-          ),
-        signal,
-      );
+            { signal },
+          );
       if (!isOpen() || !lookup.isCurrent(signal)) return;
 
       const resolution = resolveSessionId(

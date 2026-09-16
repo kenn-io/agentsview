@@ -10,7 +10,6 @@ vi.mock("../../api/runtime.js", async (importOriginal) => {
   const orig = await importOriginal<typeof import("../../api/runtime.js")>();
   return {
     ...orig,
-    callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   };
 });
 
@@ -52,7 +51,16 @@ function reportWithPayloads() {
     payloads: 3,
     stored_bytes: 4096,
     decoded_bytes: 2048,
-    projects: [{ project: "my-project", sessions: 2, changed: 2, payloads: 3, stored_bytes: 4096, decoded_bytes: 2048 }],
+    projects: [
+      {
+        project: "my-project",
+        sessions: 2,
+        changed: 2,
+        payloads: 3,
+        stored_bytes: 4096,
+        decoded_bytes: 2048,
+      },
+    ],
   };
 }
 
@@ -328,7 +336,10 @@ describe("ToolImageCleanup", () => {
     vi.useFakeTimers();
     dataService.postApiV1DataStripImagesPreview.mockResolvedValue(reportWithPayloads());
     dataService.postApiV1DataStripImages.mockRejectedValue(
-      new ApiError(409, "Another archive maintenance operation is already running. Try again once it finishes."),
+      new ApiError(
+        409,
+        "Another archive maintenance operation is already running. Try again once it finishes.",
+      ),
     );
 
     const component = mount(ToolImageCleanup, { target: document.body });
@@ -368,7 +379,9 @@ describe("ToolImageCleanup", () => {
   it("failed apply shows partial-completion warning and disables apply", async () => {
     vi.useFakeTimers();
     dataService.postApiV1DataStripImagesPreview.mockResolvedValue(reportWithPayloads());
-    dataService.postApiV1DataStripImages.mockRejectedValue(new ApiError(500, "Internal server error"));
+    dataService.postApiV1DataStripImages.mockRejectedValue(
+      new ApiError(500, "Internal server error"),
+    );
 
     const component = mount(ToolImageCleanup, { target: document.body });
     await settle();
@@ -490,7 +503,7 @@ describe("ToolImageCleanup", () => {
     await settle();
     expect(dataService.postApiV1DataStripImagesPreview).toHaveBeenCalledWith(
       { project: "alpha", before: "2025-01-10" },
-      undefined,
+      { signal: expect.any(AbortSignal) },
     );
     Array.from(document.body.querySelectorAll("button"))
       .find((b) => b.textContent?.includes("Remove image payloads"))

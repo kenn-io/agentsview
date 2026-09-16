@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { RecentEditsService } from "../../api/generated/index";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { setLocale } from "../../i18n/index.js";
@@ -31,7 +32,6 @@ const mocks = vi.hoisted(() => ({
     ],
     has_more: false,
   })),
-  signals: [] as AbortSignal[],
 }));
 
 vi.mock("../../api/generated/index", () => ({
@@ -41,10 +41,6 @@ vi.mock("../../api/generated/index", () => ({
 }));
 
 vi.mock("../../api/runtime.js", () => ({
-  callGenerated: (fn: () => unknown, signal?: AbortSignal) => {
-    if (signal) mocks.signals.push(signal);
-    return fn();
-  },
   isAbortError: vi.fn(() => false),
 }));
 
@@ -76,7 +72,6 @@ describe("RecentEditsPage", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.signals.length = 0;
     setLocale("en");
   });
 
@@ -84,7 +79,7 @@ describe("RecentEditsPage", () => {
     mocks.getApiV1RecentEdits.mockImplementationOnce(() => new Promise(() => {}));
     component = mount(RecentEditsPage, { target: document.body });
     await tick();
-    const signal = mocks.signals[0];
+    const signal = vi.mocked(RecentEditsService.getApiV1RecentEdits).mock.calls[0]?.[1]?.signal;
 
     unmount(component);
     component = undefined;

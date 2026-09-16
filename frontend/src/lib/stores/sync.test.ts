@@ -34,7 +34,7 @@ vi.mock("../api/client.js", () => ({
 
 vi.mock("../api/runtime.js", () => ({
   ApiError: api.ApiError,
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+
   isRemoteConnection: api.isRemoteConnection,
 }));
 

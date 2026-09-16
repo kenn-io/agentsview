@@ -33,7 +33,6 @@ vi.mock("../../api/generated/index", () => ({
   },
 }));
 vi.mock("../../api/runtime.js", () => ({
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   isAbortError: vi.fn(() => false),
   isRemoteConnection: vi.fn(() => false),
 }));
@@ -266,7 +265,7 @@ describe("ProjectWorkspace", () => {
         direction: "asc",
         roles: "user,assistant",
       },
-      undefined,
+      { signal: expect.any(AbortSignal) },
     );
     expect(screen.getByText("The repository layout shows this belongs to project A.")).toBeTruthy();
     expect(screen.queryByTitle(m.message_content_pin_message())).toBeNull();
@@ -438,7 +437,7 @@ describe("ProjectWorkspace", () => {
         direction: "asc",
         roles: "user,assistant",
       },
-      undefined,
+      { signal: expect.any(AbortSignal) },
     );
   });
 
@@ -584,7 +583,7 @@ describe("ProjectWorkspace", () => {
         direction: "asc",
         roles: "user,assistant",
       },
-      undefined,
+      { signal: expect.any(AbortSignal) },
     );
   });
 

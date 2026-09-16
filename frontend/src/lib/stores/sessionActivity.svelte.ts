@@ -1,5 +1,5 @@
 import { SessionsService } from "../api/generated/index";
-import { callGenerated, isAbortError } from "../api/runtime.js";
+import { isAbortError } from "../api/runtime.js";
 import type { DbSessionActivityBucket as SessionActivityBucket } from "../api/generated/index.js";
 import { LatestRead } from "../utils/latest-read.js";
 
@@ -55,9 +55,9 @@ class SessionActivityStore {
     this.error = null;
     this.firstVisibleTimestamp = null;
     try {
-      const resp = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsByIdActivity({ id: sessionId }, options),
-        signal,
+      const resp = await SessionsService.getApiV1SessionsByIdActivity(
+        { id: sessionId },
+        { signal },
       );
       // Ignore stale responses from previous sessions.
       if (version !== this.loadVersion || !this.activityRead.isCurrent(signal)) return;

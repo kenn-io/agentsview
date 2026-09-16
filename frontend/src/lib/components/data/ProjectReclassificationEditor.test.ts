@@ -21,7 +21,7 @@ vi.mock("../../api/generated/index", () => ({
   },
 }));
 vi.mock("../../api/runtime.js", () => ({
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+
   isAbortError: vi.fn(() => false),
 }));
 
