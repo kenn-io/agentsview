@@ -14,8 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func captureHelperProcessGroupID() int { return 0 }
-
 func captureHelperWaitForSignal(mode, marker string) {
 	var ch chan os.Signal
 	if mode == "claude-trap-signal" {
