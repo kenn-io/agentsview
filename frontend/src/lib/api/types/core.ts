@@ -29,8 +29,6 @@ export interface Session {
   cwd?: string;
   agent: string;
   agent_label?: string;
-  /** Owning parser agent; differs from `agent` only after an agent remap. */
-  source_agent?: string;
   entrypoint?: string;
   first_message: string | null;
   display_name?: string | null;

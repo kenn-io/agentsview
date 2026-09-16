@@ -7963,6 +7963,126 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 		"legacy-zero message HasOutputTokens = false, want true")
 }
 
+func TestOpenBackfillsSourceAgentRecoversRemappedOwners(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "legacy-source-agent.db")
+
+	// Build a pre-source_agent archive: sessions without the column, and
+	// one row already remapped (agent rewritten, ID prefix untouched) —
+	// exactly the state an upgrade from the first remap release leaves.
+	conn, err := sql.Open("sqlite3", makeDSN(path, false))
+	requireNoError(t, err, "opening legacy db")
+	conn.SetMaxOpenConns(1)
+
+	legacySchema := `
+CREATE TABLE IF NOT EXISTS sessions (
+    id          TEXT PRIMARY KEY,
+    project     TEXT NOT NULL,
+    machine     TEXT NOT NULL DEFAULT 'local',
+    agent       TEXT NOT NULL DEFAULT 'claude',
+    first_message TEXT,
+    display_name TEXT,
+    started_at  TEXT,
+    ended_at    TEXT,
+    message_count INTEGER NOT NULL DEFAULT 0,
+    user_message_count INTEGER NOT NULL DEFAULT 0,
+    file_path   TEXT,
+    file_size   INTEGER,
+    file_mtime  INTEGER,
+    file_hash   TEXT,
+    local_modified_at TEXT,
+    parent_session_id TEXT,
+    relationship_type TEXT NOT NULL DEFAULT '',
+    total_output_tokens INTEGER NOT NULL DEFAULT 0,
+    peak_context_tokens INTEGER NOT NULL DEFAULT 0,
+    deleted_at  TEXT,
+    created_at  TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE TABLE IF NOT EXISTS messages (
+    id             INTEGER PRIMARY KEY,
+    session_id     TEXT NOT NULL
+        REFERENCES sessions(id) ON DELETE CASCADE,
+    ordinal        INTEGER NOT NULL,
+    role           TEXT NOT NULL,
+    content        TEXT NOT NULL,
+    timestamp      TEXT,
+    has_thinking   INTEGER NOT NULL DEFAULT 0,
+    has_tool_use   INTEGER NOT NULL DEFAULT 0,
+    content_length INTEGER NOT NULL DEFAULT 0,
+    is_system      INTEGER NOT NULL DEFAULT 0,
+    model          TEXT NOT NULL DEFAULT '',
+    token_usage    TEXT NOT NULL DEFAULT '',
+    context_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens  INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(session_id, ordinal)
+);
+CREATE TABLE IF NOT EXISTS tool_calls (
+    id         INTEGER PRIMARY KEY,
+    message_id INTEGER NOT NULL,
+    session_id TEXT NOT NULL,
+    tool_name  TEXT NOT NULL DEFAULT '',
+    category   TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS stats (
+    key   TEXT PRIMARY KEY,
+    value INTEGER NOT NULL DEFAULT 0
+);`
+	_, err = conn.Exec(legacySchema)
+	requireNoError(t, err, "creating legacy schema")
+	_, err = conn.Exec(
+		fmt.Sprintf("PRAGMA user_version = %d", dataVersion),
+	)
+	requireNoError(t, err, "setting user_version")
+
+	// codex:remapped models the documented Augure flow: a codex session
+	// remapped to augure before source_agent existed. The ID prefix is the
+	// only surviving ownership record. goose:swapped models a remap across
+	// a prefixed provider, where the prefix must win over the display
+	// agent too.
+	_, err = conn.Exec(`INSERT INTO sessions (
+			id, project, machine, agent, message_count
+		) VALUES
+			('codex:remapped', 'proj', 'local', 'augure', 1),
+			('codex:native',   'proj', 'local', 'codex',  1),
+			('unprefixed',     'proj', 'local', 'claude', 1),
+			('goose:swapped',  'proj', 'local', 'codex',  1)`,
+	)
+	requireNoError(t, err, "inserting legacy sessions")
+	requireNoError(t, conn.Close(), "closing legacy db")
+
+	d, err := Open(path)
+	requireNoError(t, err, "Open with pre-source_agent archive")
+	defer d.Close()
+
+	ctx := context.Background()
+
+	remapped, err := d.GetSession(ctx, "codex:remapped")
+	requireNoError(t, err, "GetSession codex:remapped")
+	require.NotNil(t, remapped)
+	assert.Equal(t, "augure", remapped.Agent, "display agent preserved")
+	assert.Equal(t, "codex", remapped.SourceAgent,
+		"owner recovered from the codex: ID prefix")
+
+	native, err := d.GetSession(ctx, "codex:native")
+	requireNoError(t, err, "GetSession codex:native")
+	require.NotNil(t, native)
+	assert.Equal(t, "codex", native.SourceAgent, "native codex owner")
+
+	unprefixed, err := d.GetSession(ctx, "unprefixed")
+	requireNoError(t, err, "GetSession unprefixed")
+	require.NotNil(t, unprefixed)
+	assert.Equal(t, "claude", unprefixed.SourceAgent,
+		"unprefixed rows keep the display agent as owner")
+
+	swapped, err := d.GetSession(ctx, "goose:swapped")
+	requireNoError(t, err, "GetSession goose:swapped")
+	require.NotNil(t, swapped)
+	assert.Equal(t, "codex", swapped.Agent, "display agent preserved")
+	assert.Equal(t, "goose", swapped.SourceAgent,
+		"owner recovered from the goose: ID prefix")
+}
+
 func TestOpenRepairsLegacyCurrentSchemaTokenCoverageOnce(t *testing.T) {
 
 	dir := t.TempDir()

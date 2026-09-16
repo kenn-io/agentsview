@@ -398,8 +398,10 @@ type Session struct {
 	// SourceAgent is the owning parser agent for this row's source. It equals
 	// Agent unless an agent remap rule rewrote the display agent; freshness,
 	// baseline, and source-missing reconciliation key on it so remapping
-	// never detaches a session from its real source file.
-	SourceAgent string `json:"source_agent,omitempty"`
+	// never detaches a session from its real source file. Like
+	// ClaudeLinearParse below, it is SQLite-only sync bookkeeping: not
+	// mirrored to PG/DuckDB and not part of the API session model.
+	SourceAgent string `json:"-"`
 
 	DeletedAt         *string `json:"deleted_at,omitempty"`
 	DeletionCause     *string `json:"-"`

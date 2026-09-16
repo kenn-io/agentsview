@@ -449,17 +449,16 @@ func evaluateAgentRemapTx(
 		if !rule.Enabled {
 			continue
 		}
-		// Matching keys on the source owner, not the display agent: a session
-		// previously remapped to this rule's target keeps its parser identity
-		// in source_agent, so it re-matches here and the idempotent write-back
-		// below keeps it stable. Matching on s.agent alone would make every
-		// applied remap permanent and un-revertible.
+		// Matching keys on the current display agent, so a rule re-evaluated
+		// after its source and target were swapped finds the sessions a
+		// previous apply rewrote and can move them back. source_agent is
+		// immutable ownership metadata for freshness and reconciliation; it
+		// never participates in remap matching or write-back guards.
 		query := `
 			SELECT s.id, s.agent, COALESCE(s.started_at, '')
 			FROM sessions s
-			WHERE (s.source_agent = ? OR (s.source_agent = '' AND s.agent = ?))
-			  AND s.deleted_at IS NULL`
-		args := []any{rule.SourceAgent, rule.SourceAgent}
+			WHERE s.agent = ? AND s.deleted_at IS NULL`
+		args := []any{rule.SourceAgent}
 		globClauses, globArgs := agentRemapModelGlobSQL(
 			agentRemapGlobPatterns(rule.ModelGlob),
 		)
@@ -609,8 +608,10 @@ func (db *DB) PreviewAgentRemapRules(
 }
 
 // applyAgentRemapMatchesTx rewrites each match's agent inside the caller's
-// transaction, guarding on the current agent value. Returns the matched IDs
-// whose row actually changed.
+// transaction, guarding on the current display agent so a concurrent relabel
+// is not clobbered. source_agent is untouched: it stays the owning parser
+// agent for freshness and reconciliation. Returns the matched IDs whose row
+// actually changed.
 func applyAgentRemapMatchesTx(
 	ctx context.Context, tx *sql.Tx, eval agentRemapEvaluation,
 ) ([]string, error) {
@@ -620,10 +621,9 @@ func applyAgentRemapMatchesTx(
 			UPDATE sessions
 			SET agent = ?,
 				local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-			WHERE id = ?
-			  AND (source_agent = ? OR (source_agent = '' AND agent = ?))
+			WHERE id = ? AND agent = ?
 			  AND deleted_at IS NULL`,
-			m.nextAgent, m.id, m.currentAgent, m.currentAgent,
+			m.nextAgent, m.id, m.currentAgent,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -797,14 +797,12 @@ func (db *DB) ApplyAgentRemapRulesToSession(
 		)
 	}
 	defer func() { _ = tx.Rollback() }()
-	res, err := tx.ExecContext(ctx, `
-		UPDATE sessions
+	res, err := tx.ExecContext(ctx, `UPDATE sessions
 		SET agent = ?,
 			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE id = ?
-		  AND (source_agent = ? OR (source_agent = '' AND agent = ?))
+		WHERE id = ? AND agent = ?
 		  AND deleted_at IS NULL`,
-		next, sessionID, sess.Agent, sess.Agent,
+		next, sessionID, sess.Agent,
 	)
 	if err != nil {
 		return "", fmt.Errorf(
@@ -894,20 +892,25 @@ func (db *DB) ApplyAgentRemapRulesToSessions(
 		if next == sess.Agent {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE sessions
+		res, err := tx.ExecContext(ctx, `UPDATE sessions
 			SET agent = ?,
 				local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-			WHERE id = ?
-			  AND (source_agent = ? OR (source_agent = '' AND agent = ?))
+			WHERE id = ? AND agent = ?
 			  AND deleted_at IS NULL`,
-			next, sessionID, sess.Agent, sess.Agent,
-		); err != nil {
+			next, sessionID, sess.Agent,
+		)
+		if err != nil {
 			return nil, fmt.Errorf(
 				"remapping session %s: %w", sessionID, err,
 			)
 		}
-		matched = append(matched, sessionID)
+		changed, err := res.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if changed > 0 {
+			matched = append(matched, sessionID)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf(

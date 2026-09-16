@@ -2153,8 +2153,7 @@ func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
 		{
 			"sessions", "source_agent",
-			"ALTER TABLE sessions ADD COLUMN source_agent TEXT NOT NULL DEFAULT ''" +
-				"; UPDATE sessions SET source_agent = agent WHERE source_agent = ''",
+			"ALTER TABLE sessions ADD COLUMN source_agent TEXT NOT NULL DEFAULT ''",
 		},
 		{
 			"session_project_assignments", "original_project",
@@ -2656,8 +2655,93 @@ func applySchemaColumnMigrations(w *writerHandle, progress OpenProgressFunc) err
 	); err != nil {
 		return err
 	}
+	if err := backfillSessionSourceAgent(tx); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing column migrations: %w", err)
+	}
+	return nil
+}
+
+// backfillSessionSourceAgent populates sessions.source_agent wherever it is
+// empty. The first write of any session persists the owning parser agent, so
+// an empty value means either a row predating the column or a row written by
+// raw SQL that bypassed the write seam. Both cases owned their row under
+// agent before the column existed.
+//
+// The subtle case is a row remapped before source_agent existed: its agent
+// was rewritten to the target agent while no ownership record survived. The
+// session ID is the surviving record: parsers prefix IDs with their own
+// agent's name (augure:... for augure, codex:... for codex), so a row whose
+// ID carries another known provider's prefix was remapped, and the prefix
+// names the true owner — a codex session remapped to augure keeps its
+// codex: ID whatever the display agent shows. Unprefixed IDs carry no such
+// record and keep the display agent, which matches the canonical owner
+// predicate's fallback.
+//
+// The recovery pass runs only when the backfill populated rows, so
+// steady-state opens never pay for the scan.
+func backfillSessionSourceAgent(tx *sql.Tx) error {
+	res, err := tx.Exec(
+		`UPDATE sessions SET source_agent = agent
+		 WHERE source_agent = ''`,
+	)
+	if err != nil {
+		return fmt.Errorf("backfilling sessions.source_agent: %w", err)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("counting source_agent backfill: %w", err)
+	}
+	if changed == 0 {
+		return nil
+	}
+	rows, err := tx.Query(
+		`SELECT id, agent FROM sessions WHERE source_agent = agent`)
+	if err != nil {
+		return fmt.Errorf(
+			"scanning sessions for source-agent recovery: %w", err)
+	}
+	type ownerFix struct{ id, owner string }
+	var fixes []ownerFix
+	for rows.Next() {
+		var id, agent string
+		if err := rows.Scan(&id, &agent); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanning source-agent candidate: %w", err)
+		}
+		// Freebuff shares the Codebuff registry entry but keys freshness
+		// on the freebuff agent literal; leave its ownership alone.
+		def, ok := parser.AgentByPrefix(id)
+		if !ok || def.IDPrefix == "" ||
+			def.IDPrefix == string(parser.AgentFreebuff)+":" {
+			continue
+		}
+		if string(def.Type) == agent {
+			continue
+		}
+		fixes = append(fixes, ownerFix{id: id, owner: string(def.Type)})
+	}
+	closeErr := rows.Err()
+	rows.Close()
+	if closeErr != nil {
+		return fmt.Errorf("iterating source-agent candidates: %w", closeErr)
+	}
+	for _, f := range fixes {
+		if _, err := tx.Exec(
+			`UPDATE sessions SET source_agent = ? WHERE id = ?`,
+			f.owner, f.id,
+		); err != nil {
+			return fmt.Errorf(
+				"recovering source owner for %s: %w", f.id, err)
+		}
+	}
+	if len(fixes) > 0 {
+		log.Printf(
+			"migration: recovered %d sessions.source_agent values from ID prefixes",
+			len(fixes),
+		)
 	}
 	return nil
 }

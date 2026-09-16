@@ -273,3 +273,178 @@ func TestAgentRemapApplyToSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "augure", sess.Agent)
 }
+
+// seedRemapFixtures inserts two sessions matching rule.SourceAgent with
+// message models, plus one non-matching session.
+func seedRemapFixtures(t *testing.T, d *DB) {
+	t.Helper()
+	require.NoError(t, d.UpsertSession(Session{
+		ID: "goose:a", Project: "p", Machine: defaultMachine,
+		Agent: "goose", MessageCount: 2, SourceAgent: "goose",
+		StartedAt: new("2026-09-01T00:00:00Z"),
+	}))
+	require.NoError(t, d.UpsertSession(Session{
+		ID: "goose:b", Project: "p", Machine: defaultMachine,
+		Agent: "goose", MessageCount: 2, SourceAgent: "goose",
+		StartedAt: new("2026-09-02T00:00:00Z"),
+	}))
+	require.NoError(t, d.UpsertSession(Session{
+		ID: "codex:c", Project: "p", Machine: defaultMachine,
+		Agent: "codex", MessageCount: 1, SourceAgent: "codex",
+	}))
+	insertMessages(t, d,
+		userMsg("goose:a", 0, "hi"),
+		Message{SessionID: "goose:a", Ordinal: 1, Role: "assistant",
+			Model: "ossington-5"},
+		userMsg("goose:b", 0, "hi"),
+		Message{SessionID: "goose:b", Ordinal: 1, Role: "assistant",
+			Model: "rosedale-1"},
+	)
+}
+
+func agentOf(t *testing.T, d *DB, id string) (string, string) {
+	t.Helper()
+	sess, err := d.GetSession(context.Background(), id)
+	require.NoError(t, err, "GetSession %s", id)
+	require.NotNil(t, sess)
+	return sess.Agent, sess.SourceAgent
+}
+
+// TestAgentRemapForwardAndReverseBulk covers the preview/apply flow in both
+// directions: goose -> augure forward, then the swapped rule augure ->
+// goose reverses it. source_agent and session IDs must never move.
+func TestAgentRemapForwardAndReverseBulk(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedRemapFixtures(t, d)
+
+	forward, err := d.CreateAgentRemapRule(ctx, AgentRemapRule{
+		SourceAgent: "goose", TargetAgent: "augure", Enabled: true,
+	})
+	require.NoError(t, err)
+
+	// Forward apply.
+	preview, err := d.PreviewAgentRemapRules(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, preview.MatchedSessions)
+	_, err = d.ApplyAgentRemapRules(ctx, preview.Token)
+	require.NoError(t, err)
+	agent, source := agentOf(t, d, "goose:a")
+	assert.Equal(t, "augure", agent, "forward agent")
+	assert.Equal(t, "goose", source, "forward source_agent immutable")
+	agent, _ = agentOf(t, d, "goose:b")
+	assert.Equal(t, "augure", agent)
+	agent, _ = agentOf(t, d, "codex:c")
+	assert.Equal(t, "codex", agent, "non-match untouched")
+
+	// Reverse: swap source and target on the same rule.
+	_, err = d.UpdateAgentRemapRule(ctx, AgentRemapRule{
+		ID: forward.ID, SourceAgent: "augure", TargetAgent: "goose",
+		Enabled: true,
+	})
+	require.NoError(t, err)
+	preview, err = d.PreviewAgentRemapRules(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, preview.MatchedSessions,
+		"reverse must find the sessions forward remapped")
+	_, err = d.ApplyAgentRemapRules(ctx, preview.Token)
+	require.NoError(t, err)
+	agent, source = agentOf(t, d, "goose:a")
+	assert.Equal(t, "goose", agent, "reverse restored agent")
+	assert.Equal(t, "goose", source, "reverse left source_agent alone")
+
+	// Re-apply forward after a reverse: remapping must stay repeatable.
+	_, err = d.UpdateAgentRemapRule(ctx, AgentRemapRule{
+		ID: forward.ID, SourceAgent: "goose", TargetAgent: "augure",
+		Enabled: true,
+	})
+	require.NoError(t, err)
+	preview, err = d.PreviewAgentRemapRules(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 2, preview.MatchedSessions, "re-forward matches again")
+	_, err = d.ApplyAgentRemapRules(ctx, preview.Token)
+	require.NoError(t, err)
+	agent, source = agentOf(t, d, "goose:a")
+	assert.Equal(t, "augure", agent)
+	assert.Equal(t, "goose", source)
+}
+
+// TestAgentRemapForwardAndReverseSingle covers the incremental
+// single-session path in both directions.
+func TestAgentRemapForwardAndReverseSingle(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedRemapFixtures(t, d)
+
+	rule, err := d.CreateAgentRemapRule(ctx, AgentRemapRule{
+		SourceAgent: "goose", TargetAgent: "augure", Enabled: true,
+	})
+	require.NoError(t, err)
+
+	got, err := d.ApplyAgentRemapRulesToSession(ctx, "goose:a")
+	require.NoError(t, err)
+	assert.Equal(t, "augure", got)
+	agent, source := agentOf(t, d, "goose:a")
+	assert.Equal(t, "augure", agent)
+	assert.Equal(t, "goose", source)
+
+	// Idempotent re-run: already at target, no change.
+	got, err = d.ApplyAgentRemapRulesToSession(ctx, "goose:a")
+	require.NoError(t, err)
+	assert.Equal(t, "augure", got)
+
+	// Reverse by swapping the rule.
+	_, err = d.UpdateAgentRemapRule(ctx, AgentRemapRule{
+		ID: rule.ID, SourceAgent: "augure", TargetAgent: "goose",
+		Enabled: true,
+	})
+	require.NoError(t, err)
+	got, err = d.ApplyAgentRemapRulesToSession(ctx, "goose:a")
+	require.NoError(t, err)
+	assert.Equal(t, "goose", got, "reverse restored agent")
+	agent, source = agentOf(t, d, "goose:a")
+	assert.Equal(t, "goose", agent)
+	assert.Equal(t, "goose", source)
+}
+
+// TestAgentRemapForwardAndReverseBatch covers the full-parse batch path in
+// both directions, including the changed-row accounting: a session whose
+// agent was concurrently rewritten must not be reported as remapped.
+func TestAgentRemapForwardAndReverseBatch(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedRemapFixtures(t, d)
+
+	rule, err := d.CreateAgentRemapRule(ctx, AgentRemapRule{
+		SourceAgent: "goose", TargetAgent: "augure", Enabled: true,
+	})
+	require.NoError(t, err)
+
+	matched, err := d.ApplyAgentRemapRulesToSessions(ctx,
+		[]string{"goose:a", "goose:b"})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"goose:a", "goose:b"}, matched)
+	agent, source := agentOf(t, d, "goose:a")
+	assert.Equal(t, "augure", agent)
+	assert.Equal(t, "goose", source)
+
+	// Concurrent relabel: goose:a was already moved by someone else, so
+	// the guard must skip it and it must not appear in matched.
+	_, err = d.getWriter().Exec(
+		`UPDATE sessions SET agent = 'codex' WHERE id = 'goose:a'`)
+	require.NoError(t, err)
+	_, err = d.UpdateAgentRemapRule(ctx, AgentRemapRule{
+		ID: rule.ID, SourceAgent: "augure", TargetAgent: "goose",
+		Enabled: true,
+	})
+	require.NoError(t, err)
+	matched, err = d.ApplyAgentRemapRulesToSessions(ctx,
+		[]string{"goose:a", "goose:b"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"goose:b"}, matched,
+		"only the still-guarded session is reported")
+	agent, _ = agentOf(t, d, "goose:a")
+	assert.Equal(t, "codex", agent, "clobbered relabel preserved")
+	agent, _ = agentOf(t, d, "goose:b")
+	assert.Equal(t, "goose", agent, "reverse restored goose:b")
+}
