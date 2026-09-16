@@ -20,7 +20,7 @@ import (
 
 type sessionListDocument struct {
 	service.SessionList
-	MachineLabels map[string]string `json:"machine_labels"`
+	MachineLabels service.MachineLabelCatalog `json:"machine_labels"`
 }
 
 func newSessionListCommand() *cobra.Command {
@@ -138,7 +138,7 @@ func newSessionListCommand() *cobra.Command {
 				}
 				machineLabels := machineLabelsForKeys(machineLabelCatalog(
 					cmd.Context(), cmd.ErrOrStderr(),
-					func(ctx context.Context) (map[string]string, error) {
+					func(ctx context.Context) (service.MachineLabelCatalog, error) {
 						return service.MachineLabels(ctx, svc)
 					},
 				), keys)

@@ -77,7 +77,7 @@ type UsageDailyConfig struct {
 
 type usageDailyDocument struct {
 	db.DailyUsageResult
-	MachineLabels map[string]string `json:"machine_labels,omitzero"`
+	MachineLabels service.MachineLabelCatalog `json:"machine_labels,omitzero"`
 }
 
 // resolveUsageWindow resolves the raw --since/--until flags into concrete

@@ -15,7 +15,7 @@ import (
 
 type machineLabelsStore struct {
 	db.Store
-	labels map[string]string
+	labels service.MachineLabelCatalog
 	calls  int
 }
 
@@ -28,7 +28,7 @@ func (s *machineLabelsStore) GetMachineLabels(
 
 func TestMachineLabelsFromStoreBackend(t *testing.T) {
 	store := &machineLabelsStore{
-		labels: map[string]string{"machine-key": "Build Host"},
+		labels: service.MachineLabelCatalog{"machine-key": "Build Host"},
 	}
 
 	got, err := service.MachineLabels(
@@ -60,7 +60,7 @@ func TestMachineLabelsFromHTTPBackend(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "/api/v1/machines", gotPath)
-	assert.Equal(t, map[string]string{"machine-key": "Build Host"}, got)
+	assert.Equal(t, service.MachineLabelCatalog{"machine-key": "Build Host"}, got)
 }
 
 func TestMachineLabelsUnsupportedServiceReturnsNil(t *testing.T) {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+
+	"go.kenn.io/agentsview/internal/service"
 )
 
 // machineLabelCatalog owns optional machine-label enrichment for CLI documents
@@ -11,23 +13,23 @@ import (
 func machineLabelCatalog(
 	ctx context.Context,
 	stderr io.Writer,
-	read func(context.Context) (map[string]string, error),
-) map[string]string {
+	read func(context.Context) (service.MachineLabelCatalog, error),
+) service.MachineLabelCatalog {
 	labels, err := read(ctx)
 	if err != nil {
 		fmt.Fprintf(stderr, "warning: machine labels unavailable: %v\n", err)
-		return map[string]string{}
+		return service.MachineLabelCatalog{}
 	}
 	if labels == nil {
-		return map[string]string{}
+		return service.MachineLabelCatalog{}
 	}
 	return labels
 }
 
 func machineLabelsForKeys(
-	labels map[string]string, keys map[string]struct{},
-) map[string]string {
-	filtered := make(map[string]string, len(keys))
+	labels service.MachineLabelCatalog, keys map[string]struct{},
+) service.MachineLabelCatalog {
+	filtered := make(service.MachineLabelCatalog, len(keys))
 	for key := range keys {
 		if label, ok := labels[key]; ok {
 			filtered[key] = label

@@ -22,8 +22,8 @@ func TestMachineLabelCatalogDiscardsPartialResult(t *testing.T) {
 
 	got := machineLabelCatalog(
 		context.Background(), &stderr,
-		func(context.Context) (map[string]string, error) {
-			return map[string]string{"partial-key": "Partial Label"}, wantErr
+		func(context.Context) (service.MachineLabelCatalog, error) {
+			return service.MachineLabelCatalog{"partial-key": "Partial Label"}, wantErr
 		},
 	)
 
@@ -37,7 +37,7 @@ func TestMachineLabelCatalogNilSuccessReturnsEmpty(t *testing.T) {
 
 	got := machineLabelCatalog(
 		context.Background(), &stderr,
-		func(context.Context) (map[string]string, error) { return nil, nil },
+		func(context.Context) (service.MachineLabelCatalog, error) { return nil, nil },
 	)
 
 	assert.NotNil(t, got)
@@ -89,7 +89,7 @@ func TestMachineLabelCatalogHTTPNullBodyReturnsEmpty(t *testing.T) {
 
 	labels := machineLabelCatalog(
 		context.Background(), &stderr,
-		func(ctx context.Context) (map[string]string, error) {
+		func(ctx context.Context) (service.MachineLabelCatalog, error) {
 			return service.MachineLabels(
 				ctx, service.NewHTTPBackend(server.URL, "", true, ""),
 			)

@@ -155,9 +155,9 @@ func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }
 
 func (b *httpBackend) MachineLabels(
 	ctx context.Context,
-) (map[string]string, error) {
+) (MachineLabelCatalog, error) {
 	var out struct {
-		MachineLabels map[string]string `json:"machine_labels"`
+		MachineLabels MachineLabelCatalog `json:"machine_labels"`
 	}
 	if err := b.getJSON(ctx, "/api/v1/machines", &out); err != nil {
 		return nil, err

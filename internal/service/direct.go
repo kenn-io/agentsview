@@ -57,8 +57,12 @@ func (b *directBackend) SupportsRecallQueries() bool { return b.local != nil }
 
 func (b *directBackend) MachineLabels(
 	ctx context.Context,
-) (map[string]string, error) {
-	return b.db.GetMachineLabels(ctx)
+) (MachineLabelCatalog, error) {
+	labels, err := b.db.GetMachineLabels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return MachineLabelCatalog(labels), nil
 }
 
 func (b *directBackend) Get(
