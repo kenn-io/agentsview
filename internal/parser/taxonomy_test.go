@@ -132,6 +132,10 @@ func TestNormalizeToolCategory(t *testing.T) {
 		{"skill", "Tool"},
 		{"search", "Tool"},
 
+		// Charm Crush tools
+		// bash, view, edit, and write are covered in earlier sections.
+		{"todos", "Tool"},
+
 		// Unknown
 		{"view_image", "Other"},
 		{"update_plan", "Other"},

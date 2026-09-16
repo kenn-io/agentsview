@@ -81,6 +81,7 @@ const (
 	AgentOmnigent       AgentType = "omnigent"
 	AgentCodebuff       AgentType = "codebuff"
 	AgentFreebuff       AgentType = "freebuff"
+	AgentCrush          AgentType = "crush"
 )
 
 const AgentDeepSeekHarness AgentType = "deepseek-harness"
@@ -1033,6 +1034,26 @@ var Registry = []AgentDef{
 		Usage: UsageCapabilities{
 			NoPerMessageTokenData: true,
 		},
+	},
+	{
+		// Charm Crush keeps one SQLite store per project at
+		// <project>/.crush/crush.db and records the project list in
+		// ~/.local/share/crush/projects.json; the provider expands that
+		// registry into roots at configuration time.
+		Type:        AgentCrush,
+		DisplayName: "Charm Crush",
+		EnvVar:      "CRUSH_DIR",
+		ConfigKey:   "crush_dirs",
+		DefaultDirs: crushDefaultDirs(),
+		IDPrefix:    "crush:",
+		FileBased:   false,
+		Usage: UsageCapabilities{
+			NoPerMessageTokenData: true,
+		},
+		// Session rows live in a WAL-mode SQLite store whose change
+		// events are not authoritative; periodic reconcile covers
+		// registry and schema churn.
+		PeriodicReconcile: true,
 	},
 }
 

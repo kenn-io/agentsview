@@ -1471,6 +1471,72 @@ func TestProviderParserHandlesEmptyForgeSnapshot(t *testing.T) {
 	assert.Equal(t, parser.SkipNoSession, parsed.Outcome.SkipReason)
 }
 
+func TestProviderParserPreservesCrushRegistryProjectPath(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "external-crush-data")
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
+	dbPath := filepath.Join(dataDir, parser.CrushDBName)
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY, parent_session_id TEXT, title TEXT NOT NULL,
+			message_count INTEGER NOT NULL DEFAULT 0,
+			prompt_tokens INTEGER NOT NULL DEFAULT 0,
+			completion_tokens INTEGER NOT NULL DEFAULT 0,
+			cost REAL NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL, created_at INTEGER NOT NULL
+		);
+		CREATE TABLE messages (
+			id TEXT PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL,
+			parts TEXT NOT NULL DEFAULT '[]', model TEXT,
+			created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+		);
+		INSERT INTO sessions (id, title, updated_at, created_at)
+		VALUES ('session-1', 'Hosted Crush', 1789093626, 1789093626);
+		INSERT INTO messages (id, session_id, role, parts, created_at, updated_at)
+		VALUES ('message-1', 'session-1', 'user',
+			'[{"type":"text","data":{"text":"hello"}}]', 1789093626, 1789093626);
+	`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	projectDir := filepath.Join(t.TempDir(), "client-project")
+	registryDir := t.TempDir()
+	registry := fmt.Sprintf(`{"projects":[{"path":%q,"data_dir":%q}]}`,
+		filepath.ToSlash(projectDir), filepath.ToSlash(dataDir))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(registryDir, parser.CrushProjectsFileName),
+		[]byte(registry), 0o600,
+	))
+	provider, ok := parser.NewProvider(parser.AgentCrush, parser.ProviderConfig{
+		Roots: []string{registryDir}, Machine: "hosted-worker",
+	})
+	require.True(t, ok)
+	discovery, err := parser.DiscoverRawCaptureSources(t.Context(), provider)
+	require.NoError(t, err)
+	require.Len(t, discovery.Sources, 1)
+	manifest, objects := manifestFromCapturePlan(
+		t, parser.AgentCrush, provider, discovery.Sources[0],
+	)
+	materialized, err := (Materializer{
+		Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(),
+		MaxTotalBytes: 1 << 20,
+	}).Materialize(t.Context(), manifest)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
+	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
+	require.NoError(t, err)
+
+	hosted, err := dispatch.Parse(t.Context(), manifest, materialized)
+
+	require.NoError(t, err)
+	require.Len(t, hosted.Outcome.Results, 1)
+	session := hosted.Outcome.Results[0].Result.Session
+	assert.Equal(t, projectDir, session.Cwd)
+	assert.Equal(t, "client_project", session.Project)
+	assert.NotContains(t, session.Cwd, materialized.Root())
+}
+
 // forgeSnapshotFixture writes a real Forge SQLite store carrying one
 // conversation per supplied session ID mapped to its created_at timestamp.
 func forgeSnapshotFixture(t *testing.T, conversations map[string]string) []byte {
