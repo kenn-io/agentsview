@@ -207,7 +207,10 @@ func TestStoredSourcePathHintsLookupUsesAgentFilePathRangeSeek(t *testing.T) {
 	require.NoError(t, rows.Err())
 
 	plan := strings.Join(details, "\n")
-	assert.Contains(t, plan, "idx_sessions_agent_file_path_active")
+	// The ownership predicate's OR shape cannot drive the compound
+	// (agent, file_path) index; the path range seek on idx_sessions_file_path
+	// still bounds the scan to the affected source paths.
+	assert.Contains(t, plan, "idx_sessions_file_path")
 	assert.Contains(t, plan, "file_path>? AND file_path<?",
 		"hint lookup must seek affected path ranges, not scan every source for the agent")
 }
@@ -240,7 +243,7 @@ func TestStoredSourcePathHintVirtualMemberLookupUsesBoundedRangeSeek(t *testing.
 	require.NoError(t, rows.Err())
 
 	plan := strings.Join(details, "\n")
-	assert.Contains(t, plan, "idx_sessions_agent_file_path_active")
+	assert.Contains(t, plan, "idx_sessions_file_path")
 	assert.GreaterOrEqual(t, strings.Count(plan, "file_path>? AND file_path<?"), 2,
 		"directory children and virtual members must each use bounded seeks")
 }

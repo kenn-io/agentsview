@@ -63,6 +63,44 @@ export function stripIdPrefix(id: string, agent?: string): string {
   return id;
 }
 
+/**
+ * Registry of agent ID prefixes, mirroring internal/parser's Registry.
+ * Remap rules relabel sessions without renaming them, so the prefix in
+ * the ID — not the displayed agent — identifies the owning provider.
+ */
+const ID_PREFIXES: readonly string[] = [
+  "openclaude:", "cowork:", "codex:", "traex:", "augure:",
+  "augure-desktop:", "copilot:", "gemini:", "mimocode:", "opencode:",
+  "opencodereview:", "kilo:", "kilo-legacy:", "openhands:", "cursor:",
+  "cursor-ide:", "amp:", "zencoder:", "iflow:", "vscode-copilot:",
+  "visualstudio-copilot:", "windsurf:", "trae:", "pi:", "tau:",
+  "prime-agent:", "omp:", "qwen:", "commandcode:", "deepseek-tui:",
+  "deepseek-harness:", "openclaw:", "qclaw:", "kimi:", "kimi-work:",
+  "claude-ai:", "chatgpt:", "gemini-apps:", "kiro:", "kiro-ide:",
+  "cortex:", "hermes:", "grok:", "goose:", "workbuddy:", "forge:",
+  "devin:", "piebald:", "warp:", "positron:", "posit-assistant:",
+  "zcode:", "zed:", "antigravity:", "antigravity-cli:", "qwenpaw:",
+  "gptme:", "qoder:", "shelley:", "vibe:", "aider:", "evener:",
+  "reasonix:", "icodemate:", "roocode:", "cline:", "poolside:",
+  "omnigent:", "codebuff:", "freebuff:",
+];
+
+/**
+ * Strip the owning provider's prefix from a session ID, determined from
+ * the ID itself rather than the displayed agent. Mirrors the server's
+ * resumeRawSessionID: a codex-prefixed ID displayed as augure must resume
+ * with the raw codex ID; the agent only selects the resume command.
+ */
+export function stripOwningIdPrefix(id: string, agent?: string): string {
+  const raw = stripHostPrefix(id);
+  for (const prefix of ID_PREFIXES) {
+    if (raw.startsWith(prefix)) return raw.slice(prefix.length);
+  }
+  // Remote-style host prefix with no registry match: fall back to the
+  // serving agent's own prefix ("host~claude:<id>" when serving claude).
+  return stripIdPrefix(raw, agent);
+}
+
 function stripHostPrefix(id: string): string {
   return id.slice(id.indexOf("~") + 1);
 }
@@ -91,7 +129,7 @@ export function buildResumeCommand(
   const builder = RESUME_AGENTS[agent];
   if (!builder) return null;
 
-  const rawId = stripIdPrefix(stripHostPrefix(sessionId), agent);
+  const rawId = stripOwningIdPrefix(sessionId, agent);
   let cmd = builder(rawId);
 
   if (flags?.model) {

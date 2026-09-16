@@ -79,6 +79,19 @@ describe("buildResumeCommand", () => {
     );
   });
 
+  it("strips the owning provider's prefix, not the display agent's", () => {
+    // A codex-prefixed session remapped to augure must resume with the raw
+    // codex ID; the display agent only selects the resume command.
+    expect(buildResumeCommand("augure", "codex:thread-9")).toBe(
+      "augure resume thread-9",
+    );
+    expect(buildResumeCommand("augure", "devbox~codex:thread-9")).toBe(
+      "augure resume thread-9",
+    );
+    // Unprefixed IDs pass through untouched.
+    expect(buildResumeCommand("augure", "sess-1")).toBe("augure resume sess-1");
+  });
+
   it("pins Claude and Codex models with shell quoting", () => {
     expect(buildResumeCommand("claude", "run-1", { model: "claude sonnet" })).toBe(
       "claude --resume run-1 --model 'claude sonnet'",

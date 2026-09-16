@@ -87,6 +87,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- archived session; it only prevents freshness checks from skipping a
     -- reparse when that source returns.
     source_missing_at TEXT,
+    -- SQLite-only sync bookkeeping: the parser's original agent for this
+    -- row's source. Equals agent until an agent remap rule rewrites the
+    -- display agent; freshness, baselines, and source-missing reconciliation
+    -- must keep keying on this column so remapped rows stay owned by their
+    -- real provider. Not mirrored to PostgreSQL or DuckDB, which have no
+    -- parser phase.
+    source_agent TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     termination_status TEXT,
     secret_leak_count INTEGER NOT NULL DEFAULT 0,
@@ -255,6 +262,10 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user_message_count
     ON sessions(user_message_count);
 CREATE INDEX IF NOT EXISTS idx_sessions_agent
     ON sessions(agent);
+-- idx_sessions_source_agent_path (source_agent, file_path) is created in
+-- createPartialIndexesLocked rather than here: schema.sql runs on every Open()
+-- before schemaColumnMigrations adds source_agent to legacy archives, so an
+-- index referencing the column here would fail to create against them.
 
 -- Session-level usage events. These complement message-level
 -- messages.token_usage rows for agents that only expose aggregate

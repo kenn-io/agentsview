@@ -2526,7 +2526,7 @@
   "duplicate_review_role_duplicate": "중복",
   "duplicate_review_agent": "에이전트",
   "duplicate_review_started": "시작",
-  "duplicate_review_messages": "메시지"
+  "duplicate_review_messages": "메시지",
   "go_to_session_title": "세션으로 이동",
   "go_to_session_input_label": "세션 ID 또는 UUID",
   "go_to_session_placeholder": "세션 ID 또는 UUID 붙여넣기",

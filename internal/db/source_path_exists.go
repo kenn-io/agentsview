@@ -11,7 +11,7 @@ import (
 const hasActiveSessionSourceBelowQuery = `
 	SELECT 1
 	FROM sessions
-	WHERE agent = ?
+	WHERE (source_agent = ? OR (source_agent = '' AND agent = ?))
 	  AND file_path >= ?
 	  AND file_path < ?
 	  AND file_path IS NOT NULL
@@ -28,7 +28,7 @@ func (db *DB) HasActiveSessionSourceBelow(agent, path string) (bool, error) {
 	lower, upper := activeSessionSourceBounds(path)
 	var one int
 	err := db.getReader().QueryRow(
-		hasActiveSessionSourceBelowQuery, agent, lower, upper,
+		hasActiveSessionSourceBelowQuery, agent, agent, lower, upper,
 	).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil

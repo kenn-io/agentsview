@@ -73,7 +73,7 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 			lower, upper := activeSessionSourceBounds(tc.path)
 			rows, err := database.getReader().Query(
 				hasActiveSessionSourceBelowQuery,
-				"codex", lower, upper,
+				"codex", "codex", lower, upper,
 			)
 			require.NoError(t, err)
 			var gotRows []int
@@ -89,7 +89,7 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 
 			planRows, err := database.getReader().Query(
 				"EXPLAIN QUERY PLAN "+hasActiveSessionSourceBelowQuery,
-				"codex", lower, upper,
+				"codex", "codex", lower, upper,
 			)
 			require.NoError(t, err)
 			var plan []string
@@ -103,8 +103,8 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 			require.NoError(t, planRows.Close())
 			assert.Condition(t, func() bool {
 				return strings.Contains(strings.Join(plan, "\n"),
-					"idx_sessions_agent_file_path_active (agent=? AND file_path>? AND file_path<?)")
-			}, "expected indexed agent/path range seek, plans: %v", plan)
+					"idx_sessions_file_path (file_path>? AND file_path<?)")
+			}, "expected indexed path range seek, plans: %v", plan)
 			if tc.wantRows != nil {
 				positivePlan = append([]string(nil), plan...)
 			} else {

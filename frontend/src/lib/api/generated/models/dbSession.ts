@@ -54,6 +54,7 @@ export interface DbSession {
   secret_leak_count: number;
   session_kind?: string;
   signals_pending_since?: string;
+  source_agent?: string;
   source_session_id?: string;
   source_version?: string;
   /** @nullable */

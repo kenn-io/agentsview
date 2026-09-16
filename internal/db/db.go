@@ -2152,6 +2152,11 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
 		{
+			"sessions", "source_agent",
+			"ALTER TABLE sessions ADD COLUMN source_agent TEXT NOT NULL DEFAULT ''" +
+				"; UPDATE sessions SET source_agent = agent WHERE source_agent = ''",
+		},
+		{
 			"session_project_assignments", "original_project",
 			"ALTER TABLE session_project_assignments ADD COLUMN original_project TEXT NOT NULL DEFAULT '';" +
 				" UPDATE session_project_assignments SET original_project = COALESCE(" +
@@ -3633,6 +3638,14 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 		   AND claude_request_id != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
+		// Freshness, baselines, and source-missing reconciliation look sessions
+		// up by (source_agent, file_path) so agent remap rules can rewrite the
+		// display agent without blinding the sync engine to the row's real
+		// owner. Lives here, not schema.sql, because schema.sql runs before
+		// schemaColumnMigrations adds source_agent to legacy archives.
+		`CREATE INDEX IF NOT EXISTS idx_sessions_source_agent_path
+		 ON sessions(source_agent, file_path)
+		 WHERE source_agent <> '' AND file_path IS NOT NULL`,
 	}
 	for _, ddl := range indexes {
 		if _, err := w.Exec(ddl); err != nil {

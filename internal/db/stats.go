@@ -108,7 +108,7 @@ func (db *DB) FileBackedSessionCountForRebuildOwner(
 			FROM local_session_source_baselines AS b
 			WHERE b.session_id = sessions.id
 			  AND b.machine = sessions.machine
-			  AND b.agent = sessions.agent
+			  AND b.agent = COALESCE(NULLIF(sessions.source_agent, ''), sessions.agent)
 			  AND b.file_path = sessions.file_path
 		)
 	)`}
@@ -135,13 +135,16 @@ func (db *DB) FileBackedSessionCountForRebuildOwner(
 			continue
 		}
 		seenAgents[exclusion.Agent] = struct{}{}
+		// The agent side matches the row's source owner so a remap relabel
+		// neither spares nor double-drops rows in the rebuild count.
 		if exclusion.KeepJSONLRows {
 			conditions = append(conditions,
-				`(agent <> ? OR lower(file_path) LIKE '%.jsonl')`)
+				`(COALESCE(NULLIF(source_agent, ''), agent) <> ? OR lower(file_path) LIKE '%.jsonl')`)
 			args = append(args, exclusion.Agent)
 			continue
 		}
-		conditions = append(conditions, `agent <> ?`)
+		conditions = append(conditions,
+			`COALESCE(NULLIF(source_agent, ''), agent) <> ?`)
 		args = append(args, exclusion.Agent)
 	}
 

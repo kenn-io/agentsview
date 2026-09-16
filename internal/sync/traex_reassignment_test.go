@@ -75,6 +75,9 @@ func seedSharedPathProjectRepairConflict(
 	codex := *traex
 	codex.ID = "codex:" + fx.uuid
 	codex.Agent = string(parser.AgentCodex)
+	// A parser write owns the row with its display agent; the traex copy's
+	// remapped source owner must not leak into the simulated codex row.
+	codex.SourceAgent = string(parser.AgentCodex)
 	codex.Project = "project"
 	newerMtime := *traex.FileMtime + 1
 	codex.FileMtime = &newerMtime

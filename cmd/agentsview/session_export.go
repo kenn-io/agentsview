@@ -138,7 +138,16 @@ func newSessionExportCommand() *cobra.Command {
 				}
 				return err
 			}
-			switch session.Agent {
+			// Export dispatch keys on the session's source provider, not the
+			// display agent: agent remap rules rewrite sessions.agent without
+			// changing where the source lives or which virtual-path layout it
+			// uses. The fallback covers rows written before source_agent
+			// existed; those rows cannot have been remapped.
+			sourceAgent := session.SourceAgent
+			if sourceAgent == "" {
+				sourceAgent = session.Agent
+			}
+			switch sourceAgent {
 			case string(parser.AgentWindsurf):
 				if dbPath, sessionID, ok := parser.SplitWindsurfVirtualPath(storedPath); ok {
 					err := parser.WriteWindsurfSessionJSON(
@@ -169,16 +178,16 @@ func newSessionExportCommand() *cobra.Command {
 			// streaming the SQLite file. Augure Desktop stores state.db#<id>
 			// virtual paths but keeps the raw (unprefixed) ID in
 			// SourceSessionID, so the same writer serves both agents.
-			if (session.Agent == string(parser.AgentHermes) ||
-				session.Agent == string(parser.AgentAugureDesktop)) &&
+			if (sourceAgent == string(parser.AgentHermes) ||
+				sourceAgent == string(parser.AgentAugureDesktop)) &&
 				filepath.Base(parser.ResolveSourceFilePath(storedPath)) == "state.db" {
 				rawSessionID := session.SourceSessionID
 				if rawSessionID == "" {
 					rawSessionID, _ = rawPrefixedSessionID(
-						id, parser.AgentType(session.Agent),
+						id, parser.AgentType(sourceAgent),
 					)
 				}
-				agent := parser.AgentType(session.Agent)
+				agent := parser.AgentType(sourceAgent)
 				roots := cfg.AgentDirs[agent]
 				if len(roots) == 0 {
 					// The fork reuses the Hermes provider, so its

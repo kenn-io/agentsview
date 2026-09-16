@@ -2591,7 +2591,7 @@
   "duplicate_review_role_duplicate": "duplicate",
   "duplicate_review_agent": "Agent",
   "duplicate_review_started": "Started",
-  "duplicate_review_messages": "Messages"
+  "duplicate_review_messages": "Messages",
   "go_to_session_title": "Go to session",
   "go_to_session_input_label": "Session ID or UUID",
   "go_to_session_placeholder": "Paste a session ID or UUID",

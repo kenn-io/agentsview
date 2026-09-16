@@ -51,7 +51,7 @@ var resumeAgents = map[string]string{
 	"opencode": "opencode --session %s",
 	"amp":      "amp --resume %s",
 	"kiro":     "kiro-cli chat --resume-id %s",
-	"augure": "augure resume %s",
+	"augure":   "augure resume %s",
 	"pi":       "pi --session %s",
 }
 

@@ -1853,6 +1853,9 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		cols = append(cols, "source_missing_at")
 	}
 	cols = append(cols, "created_at")
+	if oldDBHasColumn(ctx, tx, "sessions", "source_agent") {
+		cols = append(cols, "source_agent")
+	}
 	for _, c := range []string{
 		"total_output_tokens", "peak_context_tokens",
 		"has_total_output_tokens", "has_peak_context_tokens",

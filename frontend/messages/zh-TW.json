@@ -2526,7 +2526,7 @@
   "duplicate_review_role_duplicate": "重複",
   "duplicate_review_agent": "Agent",
   "duplicate_review_started": "開始時間",
-  "duplicate_review_messages": "訊息數"
+  "duplicate_review_messages": "訊息數",
   "go_to_session_title": "跳轉至對話",
   "go_to_session_input_label": "對話 ID 或 UUID",
   "go_to_session_placeholder": "貼上對話 ID 或 UUID",

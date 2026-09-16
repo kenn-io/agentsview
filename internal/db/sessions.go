@@ -1,6 +1,7 @@
 package db
 
 import (
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -40,6 +41,18 @@ const legacyDeletionCauseSourceMissing = "source_missing"
 // it into subagent_parent_repair_queue before processing queued children.
 const subagentParentRepairQueueStateKey = "subagent_parent_repair_queue_v1"
 
+// sessionSourceOwnerPredicate is the WHERE fragment that scopes a query to
+// rows whose source is owned by the given agent. Freshness, baseline, and
+// source-missing reconciliation must key on the parser agent that owns the
+// source, not the display agent: agent remap rewrites `agent` without
+// touching ownership. The fragment binds ?agent twice; each call site passes
+// the agent value once per bind.
+//
+// The legacy fallback covers rows written before the source_agent column
+// existed and rows written by callers that never populate it: their owner is
+// by definition the display agent.
+const sessionSourceOwnerPredicate = "(source_agent = ? OR (source_agent = '' AND agent = ?))"
+
 // sessionBaseCols is the column list for standard session queries
 // (list, get). Keep in sync with scanSessionRow.
 const sessionBaseCols = `id, project, machine, agent,
@@ -73,7 +86,10 @@ const sessionBaseCols = `id, project, machine, agent,
 	EXISTS (
 		SELECT 1 FROM session_project_assignments spa
 		WHERE spa.session_id = sessions.id
-	) AS project_assigned`
+	) AS project_assigned,
+	-- Source owner falls back to the display agent for rows written before
+	-- the column existed; remapped rows read their true parser agent.
+	COALESCE(NULLIF(sessions.source_agent, ''), sessions.agent) AS source_agent`
 
 // sessionPruneCols extends sessionBaseCols with file metadata
 // needed by FindPruneCandidates.
@@ -105,7 +121,8 @@ const sessionPruneCols = `id, project, machine, agent,
 	transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	deleted_at, termination_status, transcript_revision,
-	file_path, file_size, created_at`
+	file_path, file_size, created_at,
+	COALESCE(NULLIF(sessions.source_agent, ''), sessions.agent) AS source_agent`
 
 // sessionFullCols includes all columns for a complete session record.
 const sessionFullCols = `id, project, machine, agent,
@@ -144,7 +161,8 @@ const sessionFullCols = `id, project, machine, agent,
 	EXISTS (
 		SELECT 1 FROM session_project_assignments spa
 		WHERE spa.session_id = sessions.id
-	) AS project_assigned`
+	) AS project_assigned,
+	COALESCE(NULLIF(sessions.source_agent, ''), sessions.agent) AS source_agent`
 
 const (
 	// DefaultSessionLimit is the default number of sessions returned.
@@ -199,6 +217,7 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.DeletedAt, &s.TerminationStatus,
 		&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
+		&s.SourceAgent,
 	}
 	if includeSource {
 		targets = append(targets, &s.FilePath)
@@ -375,6 +394,12 @@ type Session struct {
 	TranscriptFidelity          string `json:"transcript_fidelity,omitempty"`
 	ParserMalformedLines        int    `json:"parser_malformed_lines,omitzero"`
 	IsTruncated                 bool   `json:"is_truncated,omitzero"`
+
+	// SourceAgent is the owning parser agent for this row's source. It equals
+	// Agent unless an agent remap rule rewrote the display agent; freshness,
+	// baseline, and source-missing reconciliation key on it so remapping
+	// never detaches a session from its real source file.
+	SourceAgent string `json:"source_agent,omitempty"`
 
 	DeletedAt         *string `json:"deleted_at,omitempty"`
 	DeletionCause     *string `json:"-"`
@@ -1260,6 +1285,7 @@ func (db *DB) getSessionFullUncoalesced(
 		&s.FileInode, &s.FileDevice,
 		&s.FileHash, &s.LocalModifiedAt,
 		&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
+		&s.SourceAgent,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1317,10 +1343,11 @@ func (db *DB) HasTrashedSessionByFilePath(path, agent string) bool {
 	var n int
 	_ = db.getReader().QueryRow(
 		"SELECT 1 FROM sessions"+
-			" WHERE file_path = ? AND agent = ?"+
+			" WHERE file_path = ?"+
+			" AND "+sessionSourceOwnerPredicate+
 			" AND deleted_at IS NOT NULL"+
 			" LIMIT 1",
-		path, agent,
+		path, agent, agent,
 	).Scan(&n)
 	return n == 1
 }
@@ -1428,8 +1455,9 @@ const insertSessionSQL = `
 			last_write_incremental,
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
-			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			file_inode, file_device, file_hash,
+			source_agent
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1490,7 +1518,15 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 				excluded.claude_linear_parse, sessions.claude_linear_parse),
 			file_inode = excluded.file_inode,
 			file_device = excluded.file_device,
-			file_hash = excluded.file_hash`
+			file_hash = excluded.file_hash,
+			-- The source owner is the parser's identity for this row's source.
+			-- It is only rewritten by parser writes (excluded.source_agent is
+			-- empty for callers that did not come from a parser, e.g. artifact
+			-- import), never by agent remap, so freshness, baselines, and
+			-- source-missing reconciliation keep resolving the real owner.
+			source_agent = COALESCE(
+				NULLIF(excluded.source_agent, ''), sessions.source_agent,
+				agent)`
 
 const upsertSessionSQL = upsertSessionBaseSQL + `,
 			source_missing_at = NULL`
@@ -1533,6 +1569,11 @@ func upsertSessionArgs(s Session) []any {
 		s.FilePath, s.FileSize, s.FileMtime,
 		s.NextOrdinal, s.LastEntryUUID, s.ClaudeLinearParse,
 		s.FileInode, s.FileDevice, s.FileHash,
+		// The source owner binds to the parser agent: callers that carry one
+		// explicitly (SourceAgent) use it, everything else owns the row with
+		// its display agent, matching pre-column behavior. The ON CONFLICT
+		// clause keeps an existing owner when the bind is empty.
+		cmp.Or(s.SourceAgent, s.Agent),
 	}
 }
 
@@ -2864,10 +2905,10 @@ func (db *DB) GetSessionForIncremental(
 	err := db.getReader().QueryRow(
 		`SELECT COUNT(*) FROM sessions
 		 WHERE file_path = ?
-		   AND agent = ?
+		   AND `+sessionSourceOwnerPredicate+`
 		   AND deleted_at IS NULL
 		   AND source_missing_at IS NULL`, path,
-		agent,
+		agent, agent,
 	).Scan(&count)
 	if err != nil || count != 1 {
 		return nil, false
@@ -2903,10 +2944,10 @@ func (db *DB) GetSessionForIncremental(
 		 LEFT JOIN session_project_identity_snapshots snap
 		   ON snap.session_id = s.id
 		 WHERE s.file_path = ?
-		   AND s.agent = ?
+		   AND (s.source_agent = ? OR (s.source_agent = '' AND s.agent = ?))
 		   AND s.deleted_at IS NULL
 		   AND s.source_missing_at IS NULL`,
-		path, agent,
+		path, agent, agent,
 	).Scan(
 		&info.ID, &info.Project, &info.SourceProject,
 		&info.Machine, &info.Cwd,
@@ -3133,7 +3174,7 @@ func (db *DB) GetFileInfoByPath(
 // agent once per discovered source, making archive reconciliation quadratic.
 const getFileInfoByAgentPathQuery = "SELECT file_size, file_mtime FROM sessions" +
 	" INDEXED BY idx_sessions_file_path" +
-	" WHERE file_path = ? AND agent = ?" +
+	" WHERE file_path = ? AND " + sessionSourceOwnerPredicate +
 	" AND source_missing_at IS NULL" +
 	" ORDER BY file_mtime DESC LIMIT 1"
 
@@ -3141,7 +3182,7 @@ func (db *DB) GetFileInfoByAgentPath(
 	path, agent string,
 ) (size int64, mtime int64, ok bool) {
 	var s, m sql.NullInt64
-	err := db.getReader().QueryRow(getFileInfoByAgentPathQuery, path, agent).
+	err := db.getReader().QueryRow(getFileInfoByAgentPathQuery, path, agent, agent).
 		Scan(&s, &m)
 	if err != nil {
 		return 0, 0, false
@@ -3158,10 +3199,10 @@ func (db *DB) GetFileIdentityByAgentPath(
 	var s, m, i, d sql.NullInt64
 	err := db.getReader().QueryRow(
 		"SELECT file_size, file_mtime, file_inode, file_device FROM sessions"+
-			" WHERE file_path = ? AND agent = ?"+
+			" WHERE file_path = ? AND "+sessionSourceOwnerPredicate+
 			" AND source_missing_at IS NULL"+
 			" ORDER BY file_mtime DESC LIMIT 1",
-		path, agent,
+		path, agent, agent,
 	).Scan(&s, &m, &i, &d)
 	if err != nil || !s.Valid || !m.Valid || !i.Valid || !d.Valid {
 		return 0, 0, 0, 0, false
@@ -3176,10 +3217,10 @@ func (db *DB) GetCwdByAgentPath(path, agent string) (cwd string, ok bool) {
 	err := db.getReader().QueryRow(
 		"SELECT cwd FROM sessions"+
 			" INDEXED BY idx_sessions_file_path"+
-			" WHERE file_path = ? AND agent = ?"+
+			" WHERE file_path = ? AND "+sessionSourceOwnerPredicate+
 			" AND deleted_at IS NULL"+
 			" ORDER BY file_mtime DESC LIMIT 1",
-		path, agent,
+		path, agent, agent,
 	).Scan(&cwd)
 	if err != nil {
 		return "", false
@@ -3198,13 +3239,13 @@ func (db *DB) UpdateSessionCwd(id, cwd string) error {
 }
 
 // UpdateSessionCwdByIdentity updates one session only when its source path and
-// agent still match the parsed source that requested the reconciliation.
+// owning agent still match the parsed source that requested the reconciliation.
 func (db *DB) UpdateSessionCwdByIdentity(
 	id, path, agent, cwd string,
 ) (bool, error) {
 	return db.updateSessionCwd(
-		` WHERE id = ? AND file_path = ? AND agent = ?`,
-		[]any{id, path, agent}, cwd,
+		` WHERE id = ? AND file_path = ? AND `+sessionSourceOwnerPredicate,
+		[]any{id, path, agent, agent}, cwd,
 	)
 }
 
@@ -3258,10 +3299,10 @@ func (db *DB) UpdateCwdByAgentPathCount(path, agent, cwd string) (int, error) {
 			cwd = ?,
 			data_version = MIN(data_version, ?),
 			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		 WHERE file_path = ? AND agent = ?
+		 WHERE file_path = ? AND `+sessionSourceOwnerPredicate+`
 		 AND cwd IS NOT ?
 		 AND deleted_at IS NULL`,
-		cwd, staleVersion, path, agent, cwd,
+		cwd, staleVersion, path, agent, agent, cwd,
 	)
 	if err != nil {
 		return 0, fmt.Errorf(
@@ -3472,11 +3513,11 @@ func (db *DB) GetProjectByAgentPath(
 ) (project string, ok bool) {
 	err := db.getReader().QueryRow(
 		"SELECT project FROM sessions"+
-			" WHERE file_path = ? AND agent = ?"+
+			" WHERE file_path = ? AND "+sessionSourceOwnerPredicate+
 			" AND deleted_at IS NULL"+
 			" AND source_missing_at IS NULL"+
 			" ORDER BY file_mtime DESC LIMIT 1",
-		path, agent,
+		path, agent, agent,
 	).Scan(&project)
 	if err != nil {
 		return "", false
@@ -3531,14 +3572,16 @@ func (db *DB) GetSourceRepairStateByAgentPath(
 		SELECT project, file_size, file_mtime, (
 			SELECT MIN(data_version)
 			FROM sessions
-			WHERE file_path = ? AND agent = ? AND deleted_at IS NULL
+			WHERE file_path = ? AND (source_agent = ? OR (source_agent = '' AND agent = ?))
+			  AND deleted_at IS NULL
 			  AND source_missing_at IS NULL
 		)
 		FROM sessions
-		WHERE file_path = ? AND agent = ? AND deleted_at IS NULL
+		WHERE file_path = ? AND (source_agent = ? OR (source_agent = '' AND agent = ?))
+		  AND deleted_at IS NULL
 		  AND source_missing_at IS NULL
 		ORDER BY file_mtime DESC
-		LIMIT 1`, path, agent, path, agent,
+		LIMIT 1`, path, agent, agent, path, agent, agent,
 	).Scan(&project, &fileSize, &fileMtime, &dataVersion)
 	if err != nil {
 		return "", 0, 0, 0, false
@@ -3570,7 +3613,7 @@ func (db *DB) GetFileHashByPath(path string) (hash string, ok bool) {
 // the source path.
 const getFileHashByAgentPathQuery = "SELECT file_hash FROM sessions" +
 	" INDEXED BY idx_sessions_file_path" +
-	" WHERE file_path = ? AND agent = ?" +
+	" WHERE file_path = ? AND " + sessionSourceOwnerPredicate +
 	" AND source_missing_at IS NULL" +
 	" ORDER BY file_mtime DESC LIMIT 1"
 
@@ -3578,7 +3621,7 @@ func (db *DB) GetFileHashByAgentPath(
 	path, agent string,
 ) (hash string, ok bool) {
 	var h sql.NullString
-	err := db.getReader().QueryRow(getFileHashByAgentPathQuery, path, agent).
+	err := db.getReader().QueryRow(getFileHashByAgentPathQuery, path, agent, agent).
 		Scan(&h)
 	if err != nil {
 		return "", false
@@ -3592,10 +3635,11 @@ func (db *DB) GetFileHashByAgentPath(
 func (db *DB) ListSessionIDsByFilePath(path, agent string) ([]string, error) {
 	rows, err := db.getReader().Query(
 		"SELECT id FROM sessions"+
-			" WHERE file_path = ? AND agent = ? AND deleted_at IS NULL"+
+			" WHERE file_path = ? AND "+sessionSourceOwnerPredicate+
+			" AND deleted_at IS NULL"+
 			" AND source_missing_at IS NULL"+
 			" ORDER BY id",
-		path, agent,
+		path, agent, agent,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing session IDs by file path: %w", err)
@@ -3626,12 +3670,13 @@ func (db *DB) ListStaleForkSessionOwnerships(
 ) ([]SessionSourceOwnership, error) {
 	rows, err := db.getReader().Query(
 		"SELECT id, machine, file_path FROM sessions"+
-			" WHERE agent = ? AND deleted_at IS NULL"+
+			" WHERE "+sessionSourceOwnerPredicate+
+			" AND deleted_at IS NULL"+
 			" AND source_missing_at IS NULL"+
 			" AND relationship_type = 'fork' AND data_version < ?"+
 			" AND file_path IS NOT NULL"+
 			" ORDER BY file_path, id",
-		agent, dataVersion,
+		agent, agent, dataVersion,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing stale fork session ownerships: %w", err)
@@ -3668,11 +3713,12 @@ func (db *DB) ListStaleForkSessionIDsByFilePath(
 ) ([]string, error) {
 	rows, err := db.getReader().Query(
 		"SELECT id FROM sessions"+
-			" WHERE file_path = ? AND agent = ? AND deleted_at IS NULL"+
+			" WHERE file_path = ? AND "+sessionSourceOwnerPredicate+
+			" AND deleted_at IS NULL"+
 			" AND source_missing_at IS NULL"+
 			" AND relationship_type = 'fork' AND data_version < ?"+
 			" ORDER BY id",
-		path, agent, dataVersion,
+		path, agent, agent, dataVersion,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -3822,14 +3868,18 @@ func (db *DB) ListActiveDescendantSessionSourcePaths(
 				  FROM sessions INDEXED BY idx_sessions_parent
 				 WHERE parent_session_id IS NOT NULL
 				   AND parent_session_id IN (` + placeholders + `)
-				   AND machine = ? AND agent = ? AND deleted_at IS NULL
+				   AND machine = ?
+				   AND (source_agent = ? OR (source_agent = '' AND agent = ?))
+				   AND deleted_at IS NULL
 				   AND source_missing_at IS NULL
 				UNION
 				SELECT s.id, s.file_path
 				  FROM sessions AS s INDEXED BY idx_sessions_parent
 				  JOIN descendants AS d ON s.parent_session_id = d.id
 				 WHERE s.parent_session_id IS NOT NULL
-				   AND s.machine = ? AND s.agent = ? AND s.deleted_at IS NULL
+				   AND s.machine = ?
+				   AND (s.source_agent = ? OR (s.source_agent = '' AND s.agent = ?))
+				   AND s.deleted_at IS NULL
 				   AND s.source_missing_at IS NULL
 			)
 			SELECT file_path
@@ -3840,7 +3890,7 @@ func (db *DB) ListActiveDescendantSessionSourcePaths(
 		for _, id := range batch {
 			args = append(args, id)
 		}
-		args = append(args, machine, agent, machine, agent)
+		args = append(args, machine, agent, agent, machine, agent, agent)
 		rows, err := db.getReader().QueryContext(ctx, query, args...)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -4009,12 +4059,17 @@ func (db *DB) listActiveSessionSourceOwnershipScopeBatch(
 		WatchReconcileSourcePageSize,
 	)
 	rows, err := db.getReader().QueryContext(ctx, `
-		SELECT s.machine, s.agent, s.id, s.file_path
+		SELECT s.machine,
+			-- The ownership Agent field feeds downstream tombstoning, which
+			-- keys on the source owner; the display agent must not leak into it.
+			COALESCE(NULLIF(s.source_agent, ''), s.agent),
+			s.id, s.file_path
 		FROM local_session_source_baselines AS b
 		JOIN sessions AS s
 		  ON s.id = b.session_id
 		 AND s.machine = b.machine
-		 AND s.agent = b.agent
+		 AND (s.source_agent = b.agent
+		      OR (s.source_agent = '' AND s.agent = b.agent))
 		 AND s.file_path = b.file_path
 		WHERE b.machine = ?
 		  AND b.agent = ?
@@ -4189,7 +4244,8 @@ func (db *DB) CopySessionSourceOwnershipBaselinesFrom(
 				JOIN main.sessions AS s
 				  ON s.id = b.session_id
 				 AND s.machine = b.machine
-				 AND s.agent = b.agent
+				 AND (s.source_agent = b.agent
+				      OR (s.source_agent = '' AND s.agent = b.agent))
 				 AND s.file_path = b.file_path
 				WHERE b.session_id = ? AND b.machine = ?
 				  AND b.agent = ? AND b.file_path = ?
@@ -4335,16 +4391,16 @@ func (db *DB) ReplaceActiveSessionSourceBaselinesWithExceptions(
 		return err
 	}
 	if err := deleteSessionSourceBaselinesTx(
-		ctx, tx, machine, admitted, `
-			  AND NOT EXISTS (
-				SELECT 1 FROM sessions AS s
-				WHERE s.id = local_session_source_baselines.session_id
-				  AND s.machine = local_session_source_baselines.machine
-				  AND s.agent = local_session_source_baselines.agent
-				  AND s.file_path = local_session_source_baselines.file_path
-				  AND s.deleted_at IS NULL
-				  AND s.source_missing_at IS NULL
-			  )`, "stale admitted",
+		ctx, tx, machine, admitted, `				  AND NOT EXISTS (
+					SELECT 1 FROM sessions AS s
+					WHERE s.id = local_session_source_baselines.session_id
+					  AND s.machine = local_session_source_baselines.machine
+					  AND (s.source_agent = local_session_source_baselines.agent
+					       OR (s.source_agent = '' AND s.agent = local_session_source_baselines.agent))
+					  AND s.file_path = local_session_source_baselines.file_path
+					  AND s.deleted_at IS NULL
+					  AND s.source_missing_at IS NULL
+				  )`, "stale admitted",
 	); err != nil {
 		return err
 	}
@@ -4378,7 +4434,9 @@ func baselineActiveSessionSourceOwnershipsTx(
 				(session_id, machine, agent, file_path)
 			SELECT id, machine, agent, file_path
 			FROM sessions
-			WHERE id = ? AND machine = ? AND agent = ? AND file_path = ?
+			WHERE id = ? AND machine = ?
+			  AND (source_agent = ? OR (source_agent = '' AND agent = ?))
+			  AND file_path = ?
 			  AND deleted_at IS NULL
 			  AND source_missing_at IS NULL
 			ON CONFLICT(session_id) DO UPDATE SET
@@ -4389,7 +4447,7 @@ func baselineActiveSessionSourceOwnershipsTx(
 			   OR local_session_source_baselines.agent IS NOT excluded.agent
 			   OR local_session_source_baselines.file_path IS NOT excluded.file_path`,
 			ownership.ID, ownership.Machine,
-			ownership.Agent, ownership.FilePath,
+			ownership.Agent, ownership.Agent, ownership.FilePath,
 		); err != nil {
 			return fmt.Errorf("baselining exact active session ownership: %w", err)
 		}
@@ -4450,7 +4508,7 @@ func deleteSessionSourceBaselinesTx(
 ) error {
 	for start := 0; start < len(sources); start += baselinePairChunk {
 		end := min(start+baselinePairChunk, len(sources))
-		filter, args, ok := buildSourcePairFilter(sources[start:end])
+		filter, args, ok := buildBaselinePairFilter(sources[start:end])
 		if !ok {
 			continue
 		}
@@ -4475,7 +4533,7 @@ func deleteSessionSourceBaselinesAcrossMachinesTx(
 ) error {
 	for start := 0; start < len(sources); start += baselinePairChunk {
 		end := min(start+baselinePairChunk, len(sources))
-		filter, args, ok := buildSourcePairFilter(sources[start:end])
+		filter, args, ok := buildBaselinePairFilter(sources[start:end])
 		if !ok {
 			continue
 		}
@@ -4502,9 +4560,43 @@ func deleteSessionSourceBaselinesAcrossMachinesTx(
 const baselinePairChunk = 200
 
 // buildSourcePairFilter renders a row-value IN clause matching each non-empty
-// (agent, file_path) pair and returns the SQL fragment plus its bind arguments
-// in pair order. It returns ok=false when the batch holds no usable pair.
+// (agent, file_path) pair against the sessions table and returns the SQL
+// fragment plus its bind arguments in pair order. It returns ok=false when the
+// batch holds no usable pair.
+//
+// The agent side of each pair matches the row's source owner (source_agent,
+// falling back to agent), so reconciliation keeps matching rows whose display
+// agent was rewritten by an agent remap rule. Baseline-table filters must use
+// buildBaselinePairFilter instead: that table stores the owner directly and
+// has no source_agent column.
 func buildSourcePairFilter(sources []SessionSourcePath) (string, []any, bool) {
+	args := make([]any, 0, len(sources)*2)
+	var sb strings.Builder
+	sb.Grow(len("(agent, file_path) IN (VALUES )") + len(sources)*len("(?,?),"))
+	sb.WriteString("((CASE WHEN source_agent <> '' THEN source_agent ELSE agent END), file_path) IN (VALUES ")
+	for _, source := range sources {
+		if source.Agent == "" || source.FilePath == "" {
+			continue
+		}
+		if len(args) > 0 {
+			sb.WriteString(",")
+		}
+		sb.WriteString("(?,?)")
+		args = append(args, source.Agent, source.FilePath)
+	}
+	if len(args) == 0 {
+		return "", nil, false
+	}
+	sb.WriteString(")")
+	return sb.String(), args, true
+}
+
+// buildBaselinePairFilter renders the plain (agent, file_path) row-value IN
+// clause for the local_session_source_baselines table, whose agent column
+// stores the source owner directly (no source_agent column). Baseline rows
+// are always written from the sessions row's source owner, so the plain
+// pair match is exact.
+func buildBaselinePairFilter(sources []SessionSourcePath) (string, []any, bool) {
 	args := make([]any, 0, len(sources)*2)
 	var sb strings.Builder
 	sb.Grow(len("(agent, file_path) IN (VALUES )") + len(sources)*len("(?,?),"))
@@ -4545,7 +4637,9 @@ func (db *DB) ListActiveSessionSourceAttributions(
 			continue
 		}
 		rows, err := db.getReader().QueryContext(ctx, `
-			SELECT DISTINCT machine, agent, file_path
+			SELECT DISTINCT machine,
+				CASE WHEN source_agent <> '' THEN source_agent ELSE agent END,
+				file_path
 			FROM sessions
 			WHERE `+filter+`
 			  AND file_path IS NOT NULL
@@ -4612,7 +4706,9 @@ func baselineActiveSessionSourcePathsTx(
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO local_session_source_baselines
 				(session_id, machine, agent, file_path)
-			SELECT id, machine, agent, file_path
+			SELECT id, machine,
+				CASE WHEN source_agent <> '' THEN source_agent ELSE agent END,
+				file_path
 			FROM sessions
 			WHERE machine = ? AND `+filter+`
 			  AND file_path IS NOT NULL AND deleted_at IS NULL
@@ -4651,16 +4747,18 @@ func (db *DB) MarkSessionSourceMissing(
 		        strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		    ),
 		    local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE machine = ? AND agent = ? AND id = ? AND file_path = ?
+		WHERE machine = ?
+		  AND (source_agent = ? OR (source_agent = '' AND agent = ?))
+		  AND id = ? AND file_path = ?
 		  AND source_missing_at IS NULL
 		  AND EXISTS (
 			SELECT 1 FROM local_session_source_baselines AS b
 			WHERE b.session_id = sessions.id
 			  AND b.machine = sessions.machine
-			  AND b.agent = sessions.agent
+			  AND b.agent = COALESCE(NULLIF(sessions.source_agent, ''), sessions.agent)
 			  AND b.file_path = sessions.file_path
 		  )`,
-		machine, agent, id, filePath,
+		machine, agent, agent, id, filePath,
 	)
 	if err != nil {
 		return false, fmt.Errorf("marking exact session source missing: %w", err)
@@ -4772,11 +4870,12 @@ func storedSourcePathHintQuery(
 	appendSelect := func(predicate string, values ...any) {
 		selects = append(selects, `SELECT file_path
 			FROM sessions
-			WHERE agent = ?
+			WHERE (source_agent = ? OR (source_agent = '' AND agent = ?))
 			  AND file_path IS NOT NULL
 			  AND deleted_at IS NULL
 			  AND source_missing_at IS NULL
 			  AND `+predicate)
+		args = append(args, agent)
 		args = append(args, agent)
 		args = append(args, values...)
 	}
@@ -4930,12 +5029,12 @@ func (db *DB) GetDataVersionByPath(path string) int {
 // owns the source path.
 const getDataVersionByAgentPathQuery = "SELECT MIN(data_version) FROM sessions" +
 	" INDEXED BY idx_sessions_file_path" +
-	" WHERE file_path = ? AND agent = ?" +
+	" WHERE file_path = ? AND " + sessionSourceOwnerPredicate +
 	" AND source_missing_at IS NULL"
 
 func (db *DB) GetDataVersionByAgentPath(path, agent string) int {
 	var v int
-	err := db.getReader().QueryRow(getDataVersionByAgentPathQuery, path, agent).
+	err := db.getReader().QueryRow(getDataVersionByAgentPathQuery, path, agent, agent).
 		Scan(&v)
 	if err != nil {
 		return 0
@@ -5501,6 +5600,7 @@ func (db *DB) FindPruneCandidates(
 			&s.ParserMalformedLines, &s.IsTruncated,
 			&s.DeletedAt, &s.TerminationStatus, &s.TranscriptRevision,
 			&s.FilePath, &s.FileSize, &s.CreatedAt,
+			&s.SourceAgent,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning prune candidate: %w", err)
@@ -5952,6 +6052,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.FileInode, &s.FileDevice,
 			&s.FileHash, &s.LocalModifiedAt,
 			&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
+			&s.SourceAgent,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)
@@ -6065,6 +6166,7 @@ func (db *DB) ListSessionsForMirrorWindow(
 			&s.FileInode, &s.FileDevice,
 			&s.FileHash, &s.LocalModifiedAt,
 			&s.TranscriptRevision, &s.CreatedAt, &s.ProjectAssigned,
+			&s.SourceAgent,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)

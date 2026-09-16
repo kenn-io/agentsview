@@ -1,4 +1,4 @@
-import { stripIdPrefix } from "./resume.js";
+import { stripOwningIdPrefix } from "./resume.js";
 
 /**
  * Build the URL understood by the Codex Desktop application for a local
@@ -7,7 +7,9 @@ import { stripIdPrefix } from "./resume.js";
 export function codexDesktopLink(agent: string, sessionId: string): string | null {
   if (agent !== "codex" || sessionId.includes("~")) return null;
 
-  const threadId = stripIdPrefix(sessionId, agent);
+  // The thread ID comes from the ID's own prefix, not the display agent: a
+  // session remapped onto codex still belongs to its original provider.
+  const threadId = stripOwningIdPrefix(sessionId, agent);
   if (!threadId) return null;
 
   return `codex://threads/${encodeURIComponent(threadId)}`;

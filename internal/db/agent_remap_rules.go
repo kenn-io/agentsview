@@ -449,11 +449,17 @@ func evaluateAgentRemapTx(
 		if !rule.Enabled {
 			continue
 		}
+		// Matching keys on the source owner, not the display agent: a session
+		// previously remapped to this rule's target keeps its parser identity
+		// in source_agent, so it re-matches here and the idempotent write-back
+		// below keeps it stable. Matching on s.agent alone would make every
+		// applied remap permanent and un-revertible.
 		query := `
 			SELECT s.id, s.agent, COALESCE(s.started_at, '')
 			FROM sessions s
-			WHERE s.agent = ? AND s.deleted_at IS NULL`
-		args := []any{rule.SourceAgent}
+			WHERE (s.source_agent = ? OR (s.source_agent = '' AND s.agent = ?))
+			  AND s.deleted_at IS NULL`
+		args := []any{rule.SourceAgent, rule.SourceAgent}
 		globClauses, globArgs := agentRemapModelGlobSQL(
 			agentRemapGlobPatterns(rule.ModelGlob),
 		)
@@ -614,8 +620,10 @@ func applyAgentRemapMatchesTx(
 			UPDATE sessions
 			SET agent = ?,
 				local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-			WHERE id = ? AND agent = ? AND deleted_at IS NULL`,
-			m.nextAgent, m.id, m.currentAgent,
+			WHERE id = ?
+			  AND (source_agent = ? OR (source_agent = '' AND agent = ?))
+			  AND deleted_at IS NULL`,
+			m.nextAgent, m.id, m.currentAgent, m.currentAgent,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -793,8 +801,10 @@ func (db *DB) ApplyAgentRemapRulesToSession(
 		UPDATE sessions
 		SET agent = ?,
 			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE id = ? AND agent = ? AND deleted_at IS NULL`,
-		next, sessionID, sess.Agent,
+		WHERE id = ?
+		  AND (source_agent = ? OR (source_agent = '' AND agent = ?))
+		  AND deleted_at IS NULL`,
+		next, sessionID, sess.Agent, sess.Agent,
 	)
 	if err != nil {
 		return "", fmt.Errorf(
@@ -888,8 +898,10 @@ func (db *DB) ApplyAgentRemapRulesToSessions(
 			UPDATE sessions
 			SET agent = ?,
 				local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-			WHERE id = ? AND agent = ? AND deleted_at IS NULL`,
-			next, sessionID, sess.Agent,
+			WHERE id = ?
+			  AND (source_agent = ? OR (source_agent = '' AND agent = ?))
+			  AND deleted_at IS NULL`,
+			next, sessionID, sess.Agent, sess.Agent,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"remapping session %s: %w", sessionID, err,

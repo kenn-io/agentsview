@@ -2579,7 +2579,7 @@
   "duplicate_review_role_duplicate": "重複",
   "duplicate_review_agent": "エージェント",
   "duplicate_review_started": "開始",
-  "duplicate_review_messages": "メッセージ"
+  "duplicate_review_messages": "メッセージ",
   "go_to_session_title": "セッションへ移動",
   "go_to_session_input_label": "セッションIDまたはUUID",
   "go_to_session_placeholder": "セッションIDまたはUUIDを貼り付け",

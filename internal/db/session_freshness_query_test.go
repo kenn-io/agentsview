@@ -20,7 +20,7 @@ func TestAgentScopedFreshnessQueriesSeekByFilePath(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			plan := queryPlanOf(
-				t, database, test.query, "/sessions/example.jsonl", "codex",
+				t, database, test.query, "/sessions/example.jsonl", "codex", "codex",
 			)
 
 			assert.Contains(t, plan,

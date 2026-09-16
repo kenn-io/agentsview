@@ -2526,7 +2526,7 @@
   "duplicate_review_role_duplicate": "重复",
   "duplicate_review_agent": "Agent",
   "duplicate_review_started": "开始时间",
-  "duplicate_review_messages": "消息数"
+  "duplicate_review_messages": "消息数",
   "go_to_session_title": "跳转到会话",
   "go_to_session_input_label": "会话 ID 或 UUID",
   "go_to_session_placeholder": "粘贴会话 ID 或 UUID",
