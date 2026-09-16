@@ -292,7 +292,7 @@ agentsview sync [flags]
 | ---------- | ------- | --------------------------------------------------- |
 | `--full`   | `false` | Force a full resync regardless of data version      |
 | `--target` |         | Exchange normalized artifacts with a trusted folder |
-| `--host`   |         | SSH hostname for deprecated remote sync             |
+| `--host`   |         | Configured HTTP host name or deprecated SSH hostname |
 | `--user`   |         | SSH username for deprecated remote sync             |
 | `--port`   | `22`    | SSH port for deprecated remote sync                 |
 
