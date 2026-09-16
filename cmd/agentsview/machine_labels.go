@@ -23,3 +23,15 @@ func machineLabelCatalog(
 	}
 	return labels
 }
+
+func machineLabelsForKeys(
+	labels map[string]string, keys map[string]struct{},
+) map[string]string {
+	filtered := make(map[string]string, len(keys))
+	for key := range keys {
+		if label, ok := labels[key]; ok {
+			filtered[key] = label
+		}
+	}
+	return filtered
+}

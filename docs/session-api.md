@@ -240,7 +240,8 @@ to describe the filtered result, not the excluded sessions. Use the
 
 In JSON output, `sessions[].machine` keeps the machine key. Look it up in the
 top-level `machine_labels` map when a display name is needed. A key without a
-stored label is absent from the map. If the catalog cannot be read, the
+stored label is absent from the map, and labels for machines outside the
+current page are omitted. If the catalog cannot be read, the
 command keeps the session result and emits `machine_labels: {}` with a warning
 on stderr. Human output does not read the catalog.
 

@@ -197,9 +197,15 @@ func runUsageDaily(cfg UsageDailyConfig) {
 	if cfg.JSON {
 		document := usageDailyDocument{DailyUsageResult: result}
 		if cfg.Breakdown {
-			document.MachineLabels = machineLabelCatalog(
+			keys := make(map[string]struct{})
+			for _, day := range result.Daily {
+				for _, breakdown := range day.MachineBreakdowns {
+					keys[breakdown.MachineName] = struct{}{}
+				}
+			}
+			document.MachineLabels = machineLabelsForKeys(machineLabelCatalog(
 				ctx, os.Stderr, backend.MachineLabels,
-			)
+			), keys)
 		}
 		enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
 		if err := json.MarshalEncode(enc, document); err != nil {

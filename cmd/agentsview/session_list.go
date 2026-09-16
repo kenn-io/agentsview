@@ -119,15 +119,6 @@ func newSessionListCommand() *cobra.Command {
 			}
 			f.OrderBy = db.FormatSortSpec(keys)
 
-			var machineLabels map[string]string
-			if outputFormat(cmd) == "json" {
-				machineLabels = machineLabelCatalog(
-					cmd.Context(), cmd.ErrOrStderr(),
-					func(ctx context.Context) (map[string]string, error) {
-						return service.MachineLabels(ctx, svc)
-					},
-				)
-			}
 			list, err := svc.List(cmd.Context(), f)
 			if err != nil {
 				return err
@@ -141,6 +132,16 @@ func newSessionListCommand() *cobra.Command {
 				fmt.Fprintln(cmd.ErrOrStderr(), notice)
 			}
 			if outputFormat(cmd) == "json" {
+				keys := make(map[string]struct{}, len(list.Sessions))
+				for _, session := range list.Sessions {
+					keys[session.Machine] = struct{}{}
+				}
+				machineLabels := machineLabelsForKeys(machineLabelCatalog(
+					cmd.Context(), cmd.ErrOrStderr(),
+					func(ctx context.Context) (map[string]string, error) {
+						return service.MachineLabels(ctx, svc)
+					},
+				), keys)
 				document := sessionListDocument{
 					SessionList:   *list,
 					MachineLabels: machineLabels,

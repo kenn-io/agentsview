@@ -634,10 +634,14 @@ func TestSessionList_ServerFlagUsesHTTP(t *testing.T) {
 	var gotPath, gotProject string
 	ts := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			gotPath = r.URL.Path
-			gotProject = r.URL.Query().Get("project")
 			assert.Equal(t, http.MethodGet, r.Method)
 			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Path == "/api/v1/machines" {
+				_, _ = w.Write([]byte(`{"machine_labels":{}}`))
+				return
+			}
+			gotPath = r.URL.Path
+			gotProject = r.URL.Query().Get("project")
 			_, _ = w.Write([]byte(`{
 				"sessions": [
 					{"id":"remote-session","project":"remote","agent":"claude"}
@@ -1661,6 +1665,7 @@ func sessionUsageRuntimeServerWithMachines(
 	t *testing.T,
 	machineResponse string,
 	sessionHandler http.HandlerFunc,
+	onMachineRequest ...func(),
 ) *httptest.Server {
 	t.Helper()
 	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{
@@ -1680,6 +1685,9 @@ func sessionUsageRuntimeServerWithMachines(
 			return
 		}
 		if r.URL.Path == "/api/v1/machines" {
+			if len(onMachineRequest) > 0 {
+				onMachineRequest[0]()
+			}
 			writeJSONResponse(w, machineResponse)
 			return
 		}

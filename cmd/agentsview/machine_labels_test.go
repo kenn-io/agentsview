@@ -45,7 +45,7 @@ func TestMachineLabelCatalogNilSuccessReturnsEmpty(t *testing.T) {
 	assert.Empty(t, stderr.String())
 }
 
-func TestSessionListJSONDegradesWhenMachineCatalogUnavailable(t *testing.T) {
+func TestMachineLabelCatalogHTTPErrorDegrades(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter, _ *http.Request,
 	) {
@@ -69,7 +69,7 @@ func TestSessionListJSONDegradesWhenMachineCatalogUnavailable(t *testing.T) {
 	assert.NotContains(t, stderr.String(), "stdout")
 }
 
-func TestSessionListJSONHandlesNullMachineLabelsBody(t *testing.T) {
+func TestMachineLabelCatalogHTTPNullBodyReturnsEmpty(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter, _ *http.Request,
 	) {
@@ -131,6 +131,9 @@ func TestSessionListJSONIncludesMachineLabelCatalog(t *testing.T) {
 	require.NoError(t, database.SetSyncState(
 		db.MachineLabelKeyPrefix+machineKey, "Build Host",
 	))
+	require.NoError(t, database.SetSyncState(
+		db.MachineLabelKeyPrefix+"unrelated-machine", "Other Host",
+	))
 	require.NoError(t, database.Close())
 
 	out, err := executeCommand(
@@ -146,26 +149,14 @@ func TestSessionListJSONIncludesMachineLabelCatalog(t *testing.T) {
 	require.Len(t, document.Sessions, 1)
 	assert.Equal(t, machineKey, document.Sessions[0].Machine)
 	assert.Equal(t, "Build Host", document.MachineLabels[machineKey])
-}
-
-func TestMachineLabelCatalogUnsupportedServiceDegrades(t *testing.T) {
-	var stderr bytes.Buffer
-	labels := machineLabelCatalog(
-		context.Background(), &stderr,
-		func(ctx context.Context) (map[string]string, error) {
-			return service.MachineLabels(ctx, unsupportedSessionService{})
-		},
-	)
-
-	assert.Empty(t, labels)
-	assert.Empty(t, stderr.String())
+	assert.NotContains(t, document.MachineLabels, "unrelated-machine")
 }
 
 func TestRunUsageDailyBreakdownJSONMachineLabelsFromDaemon(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	const machineKey = "machine-key"
 	ts := sessionUsageRuntimeServerWithMachines(t,
-		`{"machines":["machine-key"],"machine_labels":{"machine-key":"Build Host"},"machine_aliases":{}}`,
+		`{"machines":["machine-key","unrelated-machine"],"machine_labels":{"machine-key":"Build Host","unrelated-machine":"Other Host"},"machine_aliases":{}}`,
 		func(w http.ResponseWriter, r *http.Request) {
 			writeUsageStreamResponse(t, w, r, `{
 				"schema_version":6,
@@ -194,21 +185,61 @@ func TestRunUsageDailyBreakdownJSONMachineLabelsFromDaemon(t *testing.T) {
 	require.Len(t, document.Daily[0].MachineBreakdowns, 1)
 	assert.Equal(t, machineKey, document.Daily[0].MachineBreakdowns[0].MachineName)
 	assert.Equal(t, "Build Host", document.MachineLabels[machineKey])
+	assert.NotContains(t, document.MachineLabels, "unrelated-machine")
 }
 
-func TestUsageDailyJSONWithoutBreakdownOmitsMachineCatalog(t *testing.T) {
-	data, err := json.Marshal(usageDailyDocument{
-		DailyUsageResult: db.DailyUsageResult{
-			Daily: []db.DailyUsageEntry{{MachineBreakdowns: []db.MachineBreakdown{{
-				MachineName: "machine-key",
-			}}}},
+func TestRunUsageDailyBreakdownJSONEmitsEmptyMachineLabels(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	ts := sessionUsageRuntimeServerWithMachines(t,
+		`{"machines":[],"machine_labels":{},"machine_aliases":{}}`,
+		func(w http.ResponseWriter, r *http.Request) {
+			writeUsageStreamResponse(t, w, r, `{
+				"schema_version":6,
+				"projects":{},
+				"daily":[{"date":"2026-06-01","machineBreakdowns":[]}],
+				"totals":{}
+			}`)
 		},
+	)
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+
+	out := captureStdout(t, func() {
+		runUsageDaily(UsageDailyConfig{
+			JSON: true, Breakdown: true, NoSync: true,
+			Since: "2026-06-01", Until: "2026-06-01", Timezone: "UTC",
+		})
 	})
 
-	require.NoError(t, err)
-	assert.NotContains(t, string(data), `"machine_labels"`)
+	assert.Contains(t, out, `"machine_labels": {}`)
 }
 
-type unsupportedSessionService struct {
-	service.SessionService
+func TestRunUsageDailySkipsMachineLabelsWithoutJSONBreakdown(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  UsageDailyConfig
+	}{
+		{name: "json without breakdown", cfg: UsageDailyConfig{JSON: true}},
+		{name: "human table", cfg: UsageDailyConfig{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dataDir := newAgentDataDir(t)
+			machineRequests := 0
+			ts := sessionUsageRuntimeServerWithMachines(t,
+				`{"machines":[],"machine_labels":{},"machine_aliases":{}}`,
+				func(w http.ResponseWriter, r *http.Request) {
+					writeUsageStreamResponse(t, w, r, sampleDailyUsageJSON)
+				},
+				func() { machineRequests++ },
+			)
+			registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+			cfg := tt.cfg
+			cfg.NoSync = true
+			cfg.Timezone = "UTC"
+
+			captureStdout(t, func() { runUsageDaily(cfg) })
+
+			assert.Zero(t, machineRequests)
+		})
+	}
 }
