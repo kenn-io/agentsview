@@ -325,8 +325,7 @@ add an archived or maintained mirror without replacing the original identity.
   skill names from recorded paths without consulting worker-local `SKILL.md`
   frontmatter or the local parse cache; local parsing retains frontmatter
   lookup. `TestHostedSkillInferenceKeepsNamesLexical` covers this boundary.
-  Reverified 2026-08-22 against
-  local sessions launched from repository-local
+  Reverified 2026-08-22 against local sessions launched from repository-local
   `REPO/.claude/worktrees/<generated-name>` worktrees: the transcript retains
   the generated worktree path after that checkout is deleted, so Agentsview
   recognizes the anchored layout and attributes it to `REPO`. Evidence remains
