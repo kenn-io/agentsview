@@ -347,5 +347,8 @@
       "codex": 2,
       "cursor": 1
     }
+  },
+  "machine_labels": {
+    "golden-host": "Golden Host"
   }
 }

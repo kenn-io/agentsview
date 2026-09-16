@@ -1,0 +1,214 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json/v2"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
+)
+
+func TestMachineLabelCatalogDiscardsPartialResult(t *testing.T) {
+	var stderr bytes.Buffer
+	wantErr := errors.New("catalog unavailable")
+
+	got := machineLabelCatalog(
+		context.Background(), &stderr,
+		func(context.Context) (map[string]string, error) {
+			return map[string]string{"partial-key": "Partial Label"}, wantErr
+		},
+	)
+
+	assert.Empty(t, got)
+	assert.Equal(t, "warning: machine labels unavailable: catalog unavailable\n",
+		stderr.String())
+}
+
+func TestMachineLabelCatalogNilSuccessReturnsEmpty(t *testing.T) {
+	var stderr bytes.Buffer
+
+	got := machineLabelCatalog(
+		context.Background(), &stderr,
+		func(context.Context) (map[string]string, error) { return nil, nil },
+	)
+
+	assert.NotNil(t, got)
+	assert.Empty(t, got)
+	assert.Empty(t, stderr.String())
+}
+
+func TestSessionListJSONDegradesWhenMachineCatalogUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter, _ *http.Request,
+	) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"error":"catalog unavailable"}`)
+	}))
+	t.Cleanup(server.Close)
+	var stderr bytes.Buffer
+
+	labels := machineLabelCatalog(
+		context.Background(), &stderr,
+		func(ctx context.Context) (map[string]string, error) {
+			return service.MachineLabels(
+				ctx, service.NewHTTPBackend(server.URL, "", true, ""),
+			)
+		},
+	)
+
+	assert.Empty(t, labels)
+	assert.Contains(t, stderr.String(), "HTTP 500")
+	assert.NotContains(t, stderr.String(), "stdout")
+}
+
+func TestSessionListJSONHandlesNullMachineLabelsBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter, _ *http.Request,
+	) {
+		_, _ = io.WriteString(w,
+			`{"machines":[],"machine_labels":null,"machine_aliases":null}`,
+		)
+	}))
+	t.Cleanup(server.Close)
+	var stderr bytes.Buffer
+
+	labels := machineLabelCatalog(
+		context.Background(), &stderr,
+		func(ctx context.Context) (map[string]string, error) {
+			return service.MachineLabels(
+				ctx, service.NewHTTPBackend(server.URL, "", true, ""),
+			)
+		},
+	)
+
+	assert.Empty(t, labels)
+	assert.Empty(t, stderr.String())
+}
+
+func TestSessionListHumanSkipsMachineCatalog(t *testing.T) {
+	_ = newAgentDataDir(t)
+	var machineRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		if r.URL.Path == "/api/v1/machines" {
+			machineRequests++
+			return
+		}
+		writeJSONResponse(w, `{"sessions":[],"total":0}`)
+	}))
+	t.Cleanup(server.Close)
+
+	out, err := executeCommand(
+		newRootCommand(), "session", "list", "--server", server.URL,
+	)
+
+	require.NoError(t, err)
+	assert.Zero(t, machineRequests)
+	assert.NotEmpty(t, out)
+}
+
+func TestSessionListJSONIncludesMachineLabelCatalog(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	const machineKey = "machine-key"
+	seedSessionsWithOpts(t, dataDir, sessionSeed{
+		id:      "session-with-machine-label",
+		project: "machine-label-project",
+		mut: func(s *db.Session) {
+			s.Machine = machineKey
+		},
+	})
+	database, err := db.Open(sessionsDBPath(dataDir))
+	require.NoError(t, err)
+	require.NoError(t, database.SetSyncState(
+		db.MachineLabelKeyPrefix+machineKey, "Build Host",
+	))
+	require.NoError(t, database.Close())
+
+	out, err := executeCommand(
+		newRootCommand(), "session", "list", "--format", "json",
+	)
+
+	require.NoError(t, err)
+	var document struct {
+		Sessions      []db.Session      `json:"sessions"`
+		MachineLabels map[string]string `json:"machine_labels"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &document))
+	require.Len(t, document.Sessions, 1)
+	assert.Equal(t, machineKey, document.Sessions[0].Machine)
+	assert.Equal(t, "Build Host", document.MachineLabels[machineKey])
+}
+
+func TestMachineLabelCatalogUnsupportedServiceDegrades(t *testing.T) {
+	var stderr bytes.Buffer
+	labels := machineLabelCatalog(
+		context.Background(), &stderr,
+		func(ctx context.Context) (map[string]string, error) {
+			return service.MachineLabels(ctx, unsupportedSessionService{})
+		},
+	)
+
+	assert.Empty(t, labels)
+	assert.Empty(t, stderr.String())
+}
+
+func TestRunUsageDailyBreakdownJSONMachineLabelsFromDaemon(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	const machineKey = "machine-key"
+	ts := sessionUsageRuntimeServerWithMachines(t,
+		`{"machines":["machine-key"],"machine_labels":{"machine-key":"Build Host"},"machine_aliases":{}}`,
+		func(w http.ResponseWriter, r *http.Request) {
+			writeUsageStreamResponse(t, w, r, `{
+				"schema_version":6,
+				"projects":{},
+				"daily":[{"date":"2026-06-01","machineBreakdowns":[{"machineName":"machine-key"}]}],
+				"totals":{}
+			}`)
+		},
+	)
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+
+	out := captureStdout(t, func() {
+		runUsageDaily(UsageDailyConfig{
+			JSON:      true,
+			Breakdown: true,
+			NoSync:    true,
+			Since:     "2026-06-01",
+			Until:     "2026-06-01",
+			Timezone:  "UTC",
+		})
+	})
+
+	var document usageDailyDocument
+	require.NoError(t, json.Unmarshal([]byte(out), &document))
+	require.Len(t, document.Daily, 1)
+	require.Len(t, document.Daily[0].MachineBreakdowns, 1)
+	assert.Equal(t, machineKey, document.Daily[0].MachineBreakdowns[0].MachineName)
+	assert.Equal(t, "Build Host", document.MachineLabels[machineKey])
+}
+
+func TestUsageDailyJSONWithoutBreakdownOmitsMachineCatalog(t *testing.T) {
+	data, err := json.Marshal(usageDailyDocument{
+		DailyUsageResult: db.DailyUsageResult{
+			Daily: []db.DailyUsageEntry{{MachineBreakdowns: []db.MachineBreakdown{{
+				MachineName: "machine-key",
+			}}}},
+		},
+	})
+
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), `"machine_labels"`)
+}
+
+type unsupportedSessionService struct {
+	service.SessionService
+}

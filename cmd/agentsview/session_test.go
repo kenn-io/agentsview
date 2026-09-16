@@ -1651,6 +1651,17 @@ func sessionUsageRuntimeServer(
 	t *testing.T,
 	sessionHandler http.HandlerFunc,
 ) *httptest.Server {
+	return sessionUsageRuntimeServerWithMachines(
+		t, `{"machines":[],"machine_labels":{},"machine_aliases":{}}`,
+		sessionHandler,
+	)
+}
+
+func sessionUsageRuntimeServerWithMachines(
+	t *testing.T,
+	machineResponse string,
+	sessionHandler http.HandlerFunc,
+) *httptest.Server {
 	t.Helper()
 	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{
 		Service: daemonService,
@@ -1666,6 +1677,10 @@ func sessionUsageRuntimeServer(
 		}
 		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/sync" && r.URL.Query().Get("startup_only") == "true" {
 			writeJSONResponse(w, `{}`)
+			return
+		}
+		if r.URL.Path == "/api/v1/machines" {
+			writeJSONResponse(w, machineResponse)
 			return
 		}
 		sessionHandler(w, r)

@@ -55,6 +55,12 @@ func NewReadOnlyBackend(d db.Store) SessionService {
 
 func (b *directBackend) SupportsRecallQueries() bool { return b.local != nil }
 
+func (b *directBackend) MachineLabels(
+	ctx context.Context,
+) (map[string]string, error) {
+	return b.db.GetMachineLabels(ctx)
+}
+
 func (b *directBackend) Get(
 	ctx context.Context, id string,
 ) (*SessionDetail, error) {

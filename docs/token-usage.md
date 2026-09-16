@@ -726,6 +726,9 @@ to X" still works.
     "cacheCreationTokens": 1172133,
     "cacheReadTokens": 10908442,
     "totalCost": 36.4700
+  },
+  "machine_labels": {
+    "build-host": "Build Host"
   }
 }
 ```
@@ -735,7 +738,12 @@ appears first. Daily entries always emit `modelBreakdowns`, `projectBreakdowns`,
 `agentBreakdowns`, and `machineBreakdowns` as arrays; empty breakdowns are `[]`,
 not omitted. `modelBreakdowns` always includes a row per model. The other three
 arrays are populated when `--breakdown` is passed; the flag also controls
-per-model terminal table output.
+per-model terminal table output. With `--breakdown`, `machine_labels` maps each
+`machineBreakdowns[].machineName` key to its display label. The map is `{}` when
+the archive has no labels or the catalog read fails; failures produce a warning
+on stderr while the report continues. Without `--breakdown`, the field is
+omitted and the command does not read the catalog. Adding this field does not
+change `schema_version`.
 
 ### JSON Contract
 

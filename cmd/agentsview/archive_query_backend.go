@@ -37,6 +37,7 @@ type archiveQueryBackend interface {
 	ActivityReport(context.Context, ActivityReportConfig) (activity.Report, error)
 	DailyUsage(context.Context, dailyUsageQuery) (db.DailyUsageResult, error)
 	SessionUsage(context.Context, sessionUsageQuery) (*sessionUsageOutput, int, error)
+	MachineLabels(context.Context) (map[string]string, error)
 }
 
 // sessionUsageQuery selects the session and the attribution scope for
@@ -215,6 +216,15 @@ func (b daemonArchiveQueryBackend) SessionUsage(
 	return httpSessionUsageData(ctx, b.tr.URL, b.authToken, query)
 }
 
+func (b daemonArchiveQueryBackend) MachineLabels(
+	ctx context.Context,
+) (map[string]string, error) {
+	return service.MachineLabels(
+		ctx,
+		service.NewHTTPBackend(b.tr.URL, b.authToken, b.tr.ReadOnly, ""),
+	)
+}
+
 type localArchiveQueryBackend struct {
 	cfg           config.Config
 	database      *db.DB
@@ -247,6 +257,12 @@ func (b localArchiveQueryBackend) DailyUsage(
 		return db.DailyUsageResult{}, err
 	}
 	return b.database.GetDailyUsage(ctx, filter)
+}
+
+func (b localArchiveQueryBackend) MachineLabels(
+	ctx context.Context,
+) (map[string]string, error) {
+	return b.database.GetMachineLabels(ctx)
 }
 
 func localDailyUsageFilter(query dailyUsageQuery) db.UsageFilter {

@@ -75,6 +75,11 @@ type UsageDailyConfig struct {
 	Timezone  string
 }
 
+type usageDailyDocument struct {
+	db.DailyUsageResult
+	MachineLabels map[string]string `json:"machine_labels,omitzero"`
+}
+
 // resolveUsageWindow resolves the raw --since/--until flags into concrete
 // inclusive YYYY-MM-DD bounds. Both accept a duration like 28d or a date,
 // the same syntax as `stats`. --until resolves first; a duration --since is
@@ -190,8 +195,14 @@ func runUsageDaily(cfg UsageDailyConfig) {
 	}
 
 	if cfg.JSON {
+		document := usageDailyDocument{DailyUsageResult: result}
+		if cfg.Breakdown {
+			document.MachineLabels = machineLabelCatalog(
+				ctx, os.Stderr, backend.MachineLabels,
+			)
+		}
 		enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
-		if err := json.MarshalEncode(enc, result); err != nil {
+		if err := json.MarshalEncode(enc, document); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}

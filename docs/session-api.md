@@ -212,7 +212,8 @@ ______________________________________________________________________
 
 ### `agentsview session list`
 
-Filtered session list. Response shape matches `GET /api/v1/sessions`.
+Filtered session list. The session fields match `GET /api/v1/sessions`; CLI JSON
+also includes a `machine_labels` catalog.
 
 ```bash
 agentsview session list [flags]
@@ -222,17 +223,26 @@ agentsview session list [flags]
 {
   "sessions": [ ... ],
   "next_cursor": "...",
-  "total": 42
+  "total": 42,
+  "machine_labels": {
+    "machine-key": "Build Host"
+  }
 }
 ```
 
 One-shot and automated sessions are excluded by default. When the first CLI page
 hides any, `session list` writes an advisory to stderr with the hidden count for
 each category and the `--include-one-shot` or `--include-automated` flag that
-reveals it. Human and JSON stdout are unchanged, so redirecting or piping
-structured output remains safe. The JSON `total` continues to describe the
-filtered result, not the excluded sessions. Use the `--include-*` flags to opt
-back in.
+reveals it. Human stdout stays unchanged, and the JSON catalog is additive, so
+redirecting or piping structured output remains safe. The JSON `total` continues
+to describe the filtered result, not the excluded sessions. Use the
+`--include-*` flags to opt back in.
+
+In JSON output, `sessions[].machine` keeps the machine key. Look it up in the
+top-level `machine_labels` map when a display name is needed. A key without a
+stored label is absent from the map. If the catalog cannot be read, the
+command keeps the session result and emits `machine_labels: {}` with a warning
+on stderr. Human output does not read the catalog.
 
 Date filters match a session when its activity window overlaps the selected date
 or range. Sessions that start before midnight and remain active after it

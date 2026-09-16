@@ -153,6 +153,18 @@ func ProbeHTTPServerCapabilities(
 
 func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }
 
+func (b *httpBackend) MachineLabels(
+	ctx context.Context,
+) (map[string]string, error) {
+	var out struct {
+		MachineLabels map[string]string `json:"machine_labels"`
+	}
+	if err := b.getJSON(ctx, "/api/v1/machines", &out); err != nil {
+		return nil, err
+	}
+	return out.MachineLabels, nil
+}
+
 func (b *httpBackend) Get(
 	ctx context.Context, id string,
 ) (*SessionDetail, error) {
