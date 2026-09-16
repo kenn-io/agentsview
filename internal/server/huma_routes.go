@@ -285,10 +285,16 @@ func (*Server) stream[I any](
 }
 
 func (*Server) raw[I any](
-	group *huma.Group, method, path, summary string,
+	group *huma.Group, method, path, summary, contentType string,
 	handler func(context.Context, *I) (*bytesOutput, error),
 ) {
-	registerRoute(group, method, path, summary, handler)
+	registerRoute(group, method, path, summary, handler, func(op *huma.Operation) {
+		op.Responses = map[string]*huma.Response{
+			"200": {Description: "OK", Content: map[string]*huma.MediaType{
+				contentType: {Schema: &huma.Schema{Type: "string", Format: "binary"}},
+			}},
+		}
+	})
 }
 
 func operationID(method, path string) string {

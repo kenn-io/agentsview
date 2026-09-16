@@ -99,16 +99,16 @@ export type ApiRequestOptions = RequestInit & {
   baseUrl?: string;
 };
 
-export async function orvalRequest(
+export async function orvalRequest<T extends Response = Response>(
   url: string,
   options: ApiRequestOptions = {},
-): Promise<Response> {
+): Promise<T> {
   const { baseUrl, ...init } = options;
   const response = await fetch(`${baseUrl ?? getGeneratedBase()}${url}`, {
     ...init,
     headers: baseUrl === undefined ? generatedHeaders(init.headers) : init.headers,
   });
-  if (response.ok) return response;
+  if (response.ok) return response as T;
 
   const body = await response.text().catch(() => "");
   let error: unknown = body;

@@ -14,7 +14,7 @@ func (s *Server) registerAssetRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1")
 	configureRouteGroup(group, "Assets")
 
-	s.raw(group, http.MethodGet, "/assets/{filename}", "Get imported asset", s.humaGetAsset)
+	s.raw(group, http.MethodGet, "/assets/{filename}", "Get imported asset", "application/octet-stream", s.humaGetAsset)
 }
 
 type assetInput struct {

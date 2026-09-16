@@ -149,7 +149,7 @@ func fetchHTTPActivityReport(
 		if cfg.ProgressWriter != nil {
 			onProgress = newActivityProgressPrinter(cfg.ProgressWriter)
 		}
-		r, err = parseDaemonPushSSE[activity.Report, activity.Progress](resp.Body, onProgress)
+		r, err = consumeDaemonPushEvents[activity.Report, activity.Progress](response.Stream200, onProgress)
 		if err != nil {
 			return activity.Report{}, err
 		}

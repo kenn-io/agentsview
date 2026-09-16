@@ -3,7 +3,7 @@
  */
 import type { GetApiV1AssetsByFilenamePathParameters } from "../models";
 
-import { orvalFetch } from "../../runtime.ts";
+import { orvalRequest } from "../../runtime.ts";
 
 export const getGetApiV1AssetsByFilenameUrl = ({
   filename,
@@ -16,9 +16,9 @@ export const getGetApiV1AssetsByFilenameUrl = ({
  */
 export const getApiV1AssetsByFilename = async (
   { filename }: GetApiV1AssetsByFilenamePathParameters,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<string> => {
-  return orvalFetch<string>(getGetApiV1AssetsByFilenameUrl({ filename }), {
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getGetApiV1AssetsByFilenameUrl({ filename }), {
     ...options,
     method: "GET",
   });

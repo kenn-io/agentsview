@@ -1308,7 +1308,7 @@ func TestParseDaemonSyncSSEAllowsLargeDoneEvent(t *testing.T) {
 		Warnings:      []string{largeWarning},
 	}
 
-	got, err := parseDaemonSyncSSE(doneSSE(t, want, true))
+	got, err := consumeDaemonSyncEvents(daemonEventStream(doneSSE(t, want, true)))
 	require.NoError(t, err)
 	assert.Equal(t, want.TotalSessions, got.TotalSessions)
 	assert.Equal(t, want.Synced, got.Synced)
@@ -1322,18 +1322,18 @@ func TestParseDaemonSyncSSEFlushesUnterminatedDoneEvent(t *testing.T) {
 		Synced:        3,
 	}
 
-	got, err := parseDaemonSyncSSE(doneSSE(t, want, false))
+	got, err := consumeDaemonSyncEvents(daemonEventStream(doneSSE(t, want, false)))
 	require.NoError(t, err)
 	assert.Equal(t, want.TotalSessions, got.TotalSessions)
 	assert.Equal(t, want.Synced, got.Synced)
 }
 
 func TestParseDaemonSyncSSEReportsErrorEventPayload(t *testing.T) {
-	_, err := parseDaemonSyncSSE(strings.NewReader(
+	_, err := consumeDaemonSyncEvents(daemonEventStream(strings.NewReader(
 		"event: error\n" +
 			"data: remote sync failed\n" +
 			"data: permission denied\n\n",
-	))
+	)))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "daemon sync error")
@@ -1347,11 +1347,11 @@ func TestParseDaemonSyncSSEReportsProgressEvents(t *testing.T) {
 	}
 	var progress []agentsync.Progress
 
-	got, err := parseDaemonSyncSSE(strings.NewReader(
+	got, err := consumeDaemonSyncEvents(daemonEventStream(strings.NewReader(
 		"event: progress\n"+
 			"data: {\"phase\":\"rebuilding_search\",\"detail\":\"Rebuilding search index\",\"resync\":true}\n\n"+
 			sseString(t, doneSSE(t, want, true)),
-	), func(p agentsync.Progress) {
+	)), func(p agentsync.Progress) {
 		progress = append(progress, p)
 	})
 
@@ -2456,8 +2456,9 @@ func sseString(t *testing.T, r io.Reader) string {
 }
 
 // writeDoneSSE writes a terminated daemon sync "done" SSE event to w.
-func writeDoneSSE(t *testing.T, w io.Writer, stats agentsync.SyncStats) {
+func writeDoneSSE(t *testing.T, w http.ResponseWriter, stats agentsync.SyncStats) {
 	t.Helper()
+	w.Header().Set("Content-Type", "text/event-stream")
 	_, err := io.Copy(w, doneSSE(t, stats, true))
 	require.NoError(t, err)
 }

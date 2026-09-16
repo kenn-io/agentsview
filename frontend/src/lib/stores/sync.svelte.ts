@@ -1,3 +1,4 @@
+import type { EventSource } from "eventsource";
 import { triggerResync, triggerSync, watchSession, type SyncHandle } from "../api/client.js";
 import { MetadataService, SyncService } from "../api/generated/index";
 import { ApiError, isRemoteConnection } from "../api/runtime.js";

@@ -1,3 +1,4 @@
+import type { EventSource } from "eventsource";
 import { watchEvents, type DataChangedEvent } from "../api/client.js";
 
 type Listener = (e: DataChangedEvent) => void;

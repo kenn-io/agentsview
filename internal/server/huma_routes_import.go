@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -19,14 +20,15 @@ import (
 func (s *Server) registerImportRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/import")
 	configureRouteGroup(group, "Import")
+	s.api.OpenAPI().Components.Schemas.Schema(reflect.TypeFor[importer.ImportStats](), true, "")
 
 	s.stream(group, http.MethodPost, "/claude-ai",
 		"Import Claude.ai archive", s.humaImportClaudeAI,
-		streamJSONResponse(),
+		streamJSONResponseSchema("ImporterImportStats"),
 	)
 	s.stream(group, http.MethodPost, "/chatgpt",
 		"Import ChatGPT archive", s.humaImportChatGPT,
-		streamJSONResponse(),
+		streamJSONResponseSchema("ImporterImportStats"),
 	)
 }
 

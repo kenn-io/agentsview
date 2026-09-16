@@ -23,8 +23,8 @@ func (s *Server) registerInsightsRoutes() {
 
 	s.get(group, "/insights", "List insights", s.humaListInsights)
 	s.get(group, "/insights/{id}", "Get insight", s.humaGetInsight)
-	s.raw(group, http.MethodGet, "/insights/{id}/export", "Export insight as HTML", s.humaExportInsight)
-	s.raw(group, http.MethodGet, "/insights/{id}/md", "Export insight as Markdown", s.humaMarkdownInsight)
+	s.raw(group, http.MethodGet, "/insights/{id}/export", "Export insight as HTML", "text/html", s.humaExportInsight)
+	s.raw(group, http.MethodGet, "/insights/{id}/md", "Export insight as Markdown", "text/markdown", s.humaMarkdownInsight)
 	s.post(group, "/insights/{id}/publish", "Publish insight", s.humaPublishInsight)
 	s.deleteRoute(group, "/insights/{id}", "Delete insight", s.humaDeleteInsight)
 	s.stream(group, http.MethodPost, "/insights/generate", "Generate insight", s.humaGenerateInsight)

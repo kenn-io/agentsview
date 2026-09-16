@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
@@ -21,12 +22,13 @@ import (
 func (s *Server) registerSyncRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1")
 	configureRouteGroup(group, "Sync")
+	s.api.OpenAPI().Components.Schemas.Schema(reflect.TypeFor[remoteSyncResponse](), true, "")
 
 	s.stream(group, http.MethodPost, "/sync", "Trigger sync", s.humaTriggerSync)
 	s.stream(group, http.MethodPost, "/resync", "Trigger full resync", s.humaTriggerResync)
 	s.get(group, "/sync/status", "Get sync status", s.humaSyncStatus)
 	s.stream(group, http.MethodPost, "/sync/remotes",
-		"Sync remote hosts", s.humaSyncRemotes, streamJSONResponse(),
+		"Sync remote hosts", s.humaSyncRemotes, streamJSONResponseSchema("RemoteSyncResponse"),
 	)
 	s.postLong(group, "/sessions/sync", "Sync a session", s.humaSyncSession)
 }

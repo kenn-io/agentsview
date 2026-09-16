@@ -1,12 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
+	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"net/http"
 	"strings"
 
@@ -45,25 +44,26 @@ func postDaemonPush[T, P any](
 		}
 		var resp *http.Response
 		var payload []byte
+		var stream *runtime.Stream[[]byte]
 		switch target {
 		case daemonPushPG:
 			response, requestErr := api.PostAPIV1PushPgStreamWithResponse(ctx, &apiclient.PostAPIV1PushPgRequestOptions{Body: &body})
 			if response == nil {
 				return zero, requestErr
 			}
-			resp, payload = response.HTTPResponse, response.Body
+			resp, payload, stream = response.HTTPResponse, response.Body, response.Stream200
 		case daemonPushDuckDB:
 			response, requestErr := api.PostAPIV1PushDuckdbStreamWithResponse(ctx, &apiclient.PostAPIV1PushDuckdbRequestOptions{Body: &body})
 			if response == nil {
 				return zero, requestErr
 			}
-			resp, payload = response.HTTPResponse, response.Body
+			resp, payload, stream = response.HTTPResponse, response.Body, response.Stream200
 		case daemonStartupSync:
 			response, requestErr := api.PostAPIV1SyncStreamWithResponse(ctx, &apiclient.PostAPIV1SyncRequestOptions{Query: &apiclient.PostAPIV1SyncQuery{Wait: new(true), StartupOnly: new(true)}})
 			if response == nil {
 				return zero, requestErr
 			}
-			resp, payload = response.HTTPResponse, response.Body
+			resp, payload, stream = response.HTTPResponse, response.Body, response.Stream200
 		default:
 			return zero, fmt.Errorf("unknown daemon push target: %d", target)
 		}
@@ -83,7 +83,7 @@ func postDaemonPush[T, P any](
 		if strings.HasPrefix(
 			resp.Header.Get("Content-Type"), "text/event-stream",
 		) {
-			return parseDaemonPushSSE[T](resp.Body, onProgress)
+			return consumeDaemonPushEvents[T](stream, onProgress)
 		}
 		var out T
 		if err := json.Unmarshal(payload, &out); err != nil {
@@ -131,79 +131,42 @@ func daemonPushError(status int, body []byte) error {
 	return fmt.Errorf("HTTP %d: %s", status, strings.TrimSpace(string(body)))
 }
 
-// parseDaemonPushSSE consumes the daemon push event stream: "progress" events
-// decode as P and feed onProgress, a "done" event decodes as the result T,
-// and an "error" event (an {"error": ...} body) fails the push. A stream that
-// ends without a done event is an error — the daemon died mid-push.
-func parseDaemonPushSSE[T, P any](
-	r io.Reader, onProgress func(P),
-) (T, error) {
-	var zero T
-	reader := bufio.NewReaderSize(r, 64*1024)
-	var event string
-	var data strings.Builder
+// consumeDaemonPushEvents applies daemon progress and terminal events decoded
+// by the generated client's stream.
+func consumeDaemonPushEvents[T, P any](stream *runtime.Stream[[]byte], onProgress func(P)) (T, error) {
+	var result, zero T
 	var done bool
-	var result T
 	var pushErr error
-	dispatch := func() error {
-		if data.Len() == 0 {
-			return nil
+	defer stream.Close()
+	for stream.Next() {
+		frame := stream.Event()
+		if len(frame.Data) == 0 {
+			continue
 		}
-		switch event {
+		switch frame.Type {
 		case "done", "report":
-			if err := json.Unmarshal([]byte(data.String()), &result); err != nil {
-				return fmt.Errorf("decoding daemon push result: %w", err)
+			if err := json.Unmarshal(frame.Data, &result); err != nil {
+				return zero, fmt.Errorf("decoding daemon push result: %w", err)
 			}
 			done = true
 		case "progress":
-			if onProgress == nil {
-				return nil
+			if onProgress != nil {
+				var progress P
+				if err := json.Unmarshal(frame.Data, &progress); err != nil {
+					return zero, fmt.Errorf("decoding daemon push progress: %w", err)
+				}
+				onProgress(progress)
 			}
-			var p P
-			if err := json.Unmarshal([]byte(data.String()), &p); err != nil {
-				return fmt.Errorf("decoding daemon push progress: %w", err)
-			}
-			onProgress(p)
 		default:
-			var apiErr struct {
-				Error string `json:"error"`
-			}
-			raw := data.String()
-			if err := json.Unmarshal([]byte(raw), &apiErr); err == nil &&
-				apiErr.Error != "" {
-				pushErr = errors.New(apiErr.Error)
+			var apiErr apiclient.APIErrorResponse
+			if err := json.Unmarshal(frame.Data, &apiErr); err == nil && apiErr.ErrorData != "" {
+				pushErr = errors.New(apiErr.ErrorData)
 			} else {
-				pushErr = fmt.Errorf("daemon push error: %s", raw)
+				pushErr = fmt.Errorf("daemon push error: %s", frame.Data)
 			}
-		}
-		return nil
-	}
-	for {
-		line, readErr := reader.ReadString('\n')
-		line = strings.TrimSuffix(line, "\n")
-		line = strings.TrimSuffix(line, "\r")
-		if line == "" {
-			if err := dispatch(); err != nil {
-				return zero, err
-			}
-			event = ""
-			data.Reset()
-		} else if value, ok := strings.CutPrefix(line, "event: "); ok {
-			event = value
-		} else if value, ok := strings.CutPrefix(line, "data: "); ok {
-			if data.Len() > 0 {
-				data.WriteByte('\n')
-			}
-			data.WriteString(value)
-		}
-		if readErr != nil {
-			if !errors.Is(readErr, io.EOF) {
-				return zero, readErr
-			}
-			break
 		}
 	}
-	if err := dispatch(); err != nil {
+	if err := stream.Err(); err != nil {
 		return zero, err
 	}
 	if pushErr != nil {

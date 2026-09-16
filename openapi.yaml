@@ -4630,6 +4630,27 @@ components:
       required:
         - configured
       type: object
+    ImporterImportStats:
+      additionalProperties: false
+      properties:
+        errors:
+          format: int64
+          type: integer
+        imported:
+          format: int64
+          type: integer
+        skipped:
+          format: int64
+          type: integer
+        updated:
+          format: int64
+          type: integer
+      required:
+        - imported
+        - updated
+        - skipped
+        - errors
+      type: object
     InsightsResponse:
       additionalProperties: false
       properties:
@@ -5210,6 +5231,17 @@ components:
         - base_score
         - total
       type: object
+    RemoteSyncFailure:
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+        host:
+          $ref: "#/components/schemas/ConfigRemoteHost"
+      required:
+        - host
+        - error
+      type: object
     RemoteSyncRequest:
       additionalProperties: false
       properties:
@@ -5225,6 +5257,18 @@ components:
         - full
         - include_local
         - hosts
+      type: object
+    RemoteSyncResponse:
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+        failures:
+          items:
+            $ref: "#/components/schemas/RemoteSyncFailure"
+          type: array
+        local_stats:
+          $ref: "#/components/schemas/SyncSyncStats"
       type: object
     RemotesyncArchiveRequest:
       additionalProperties: false
@@ -10209,9 +10253,10 @@ paths:
       responses:
         "200":
           content:
-            application/json:
+            application/octet-stream:
               schema:
-                contentEncoding: base64
+                contentMediaType: application/octet-stream
+                format: binary
                 type: string
           description: OK
           headers:
@@ -11949,7 +11994,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/ImporterImportStats"
             text/event-stream:
               schema:
                 type: string
@@ -12054,7 +12099,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/ImporterImportStats"
             text/event-stream:
               schema:
                 type: string
@@ -12513,9 +12558,10 @@ paths:
       responses:
         "200":
           content:
-            application/json:
+            text/html:
               schema:
-                contentEncoding: base64
+                contentMediaType: application/octet-stream
+                format: binary
                 type: string
           description: OK
           headers:
@@ -12615,9 +12661,10 @@ paths:
       responses:
         "200":
           content:
-            application/json:
+            text/markdown:
               schema:
-                contentEncoding: base64
+                contentMediaType: application/octet-stream
+                format: binary
                 type: string
           description: OK
           headers:
@@ -17253,9 +17300,10 @@ paths:
       responses:
         "200":
           content:
-            application/json:
+            text/html:
               schema:
-                contentEncoding: base64
+                contentMediaType: application/octet-stream
+                format: binary
                 type: string
           description: OK
           headers:
@@ -17364,9 +17412,10 @@ paths:
       responses:
         "200":
           content:
-            application/json:
+            text/markdown:
               schema:
-                contentEncoding: base64
+                contentMediaType: application/octet-stream
+                format: binary
                 type: string
           description: OK
           headers:
@@ -20340,7 +20389,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/RemoteSyncResponse"
             text/event-stream:
               schema:
                 type: string

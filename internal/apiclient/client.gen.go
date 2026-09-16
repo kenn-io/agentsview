@@ -15869,7 +15869,7 @@ type PostAPIV1SyncErrorResponseJSON503 = APIErrorResponse
 
 type PostAPIV1SyncErrorResponseJSON504 = APIErrorResponse
 
-type PostAPIV1SyncRemotesResponse = map[string]any
+type PostAPIV1SyncRemotesResponse = RemoteSyncResponse
 
 type PostAPIV1SyncRemotesErrorResponse = APIErrorResponse
 
@@ -19360,6 +19360,27 @@ type RecallScoreBreakdown struct {
 	Total                  float64 `json:"total"`
 }
 
+type RemoteSyncFailure struct {
+	ErrorData string           `json:"error" validate:"required"`
+	Host      ConfigRemoteHost `json:"host"`
+}
+
+func (r RemoteSyncFailure) Validate() error {
+	var errors runtime.ValidationErrors
+	if err := typesValidator.Var(r.ErrorData, "required"); err != nil {
+		errors = errors.Append("ErrorData", err)
+	}
+	if v, ok := any(r.Host).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Host", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
 type RemoteSyncRequest struct {
 	Full         bool               `json:"full"`
 	Hosts        []ConfigRemoteHost `json:"hosts" validate:"required"`
@@ -19372,6 +19393,34 @@ func (r RemoteSyncRequest) Validate() error {
 		if v, ok := any(item).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
 				errors = errors.Append(fmt.Sprintf("Hosts[%d]", i), err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type RemoteSyncResponse struct {
+	ErrorData  *string             `json:"error,omitempty"`
+	Failures   []RemoteSyncFailure `json:"failures,omitempty"`
+	LocalStats *SyncSyncStats      `json:"local_stats,omitempty"`
+}
+
+func (r RemoteSyncResponse) Validate() error {
+	var errors runtime.ValidationErrors
+	for i, item := range r.Failures {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Failures[%d]", i), err)
+			}
+		}
+	}
+	if r.LocalStats != nil {
+		if v, ok := any(r.LocalStats).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("LocalStats", err)
 			}
 		}
 	}
@@ -20035,6 +20084,91 @@ func (s SessionUsageResponse) Validate() error {
 	}
 	if err := typesValidator.Var(s.UnpricedModels, "required"); err != nil {
 		errors = errors.Append("UnpricedModels", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type SyncAnomalyStats struct {
+	GenMetadataWithoutUsageByAgent  map[string]int64   `json:"gen_metadata_without_usage_by_agent,omitempty"`
+	GenMetadataWithoutUsageTotal    *int64             `json:"gen_metadata_without_usage_total,omitempty"`
+	MalformedLinesByAgent           map[string]int64   `json:"malformed_lines_by_agent,omitempty"`
+	MalformedLinesTotal             *int64             `json:"malformed_lines_total,omitempty"`
+	Sanitize                        *SyncSanitizeStats `json:"sanitize,omitempty"`
+	UnknownSchemaSessionsByAgent    map[string]int64   `json:"unknown_schema_sessions_by_agent,omitempty"`
+	UnknownSchemaSessionsTotal      *int64             `json:"unknown_schema_sessions_total,omitempty"`
+	UnsupportedSourceLayoutsByAgent map[string]int64   `json:"unsupported_source_layouts_by_agent,omitempty"`
+	UnsupportedSourceLayoutsTotal   *int64             `json:"unsupported_source_layouts_total,omitempty"`
+}
+
+func (s SyncAnomalyStats) Validate() error {
+	var errors runtime.ValidationErrors
+	if s.Sanitize != nil {
+		if v, ok := any(s.Sanitize).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Sanitize", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type SyncRebuildPhaseStats struct {
+	BatchedWrites  int64  `json:"batched_writes"`
+	Batches        int64  `json:"batches"`
+	Contributor    string `json:"contributor" validate:"required"`
+	PrepNanos      int64  `json:"prep_nanos"`
+	ScanNanos      int64  `json:"scan_nanos"`
+	WriteBatchSize int64  `json:"write_batch_size"`
+	WriteNanos     int64  `json:"write_nanos"`
+}
+
+func (s SyncRebuildPhaseStats) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(s))
+}
+
+type SyncSanitizeStats struct {
+	ControlCharsStripped *int64 `json:"control_chars_stripped,omitempty"`
+	ModelClamped         *int64 `json:"model_clamped,omitempty"`
+	RoleCoerced          *int64 `json:"role_coerced,omitempty"`
+	TimestampsBlanked    *int64 `json:"timestamps_blanked,omitempty"`
+	TokensClamped        *int64 `json:"tokens_clamped,omitempty"`
+}
+
+type SyncSyncStats struct {
+	Aborted        *bool                   `json:"aborted,omitempty"`
+	Anomalies      *SyncAnomalyStats       `json:"anomalies,omitempty"`
+	CwdUpdated     *int64                  `json:"cwd_updated,omitempty"`
+	Failed         int64                   `json:"failed"`
+	OrphanedCopied *int64                  `json:"orphaned_copied,omitempty"`
+	RebuildPhases  []SyncRebuildPhaseStats `json:"rebuild_phases,omitempty"`
+	Skipped        int64                   `json:"skipped"`
+	Synced         int64                   `json:"synced"`
+	Tombstoned     *int64                  `json:"tombstoned,omitempty"`
+	TotalSessions  int64                   `json:"total_sessions"`
+	Warnings       []string                `json:"warnings,omitempty"`
+}
+
+func (s SyncSyncStats) Validate() error {
+	var errors runtime.ValidationErrors
+	if s.Anomalies != nil {
+		if v, ok := any(s.Anomalies).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Anomalies", err)
+			}
+		}
+	}
+	for i, item := range s.RebuildPhases {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("RebuildPhases[%d]", i), err)
+			}
+		}
 	}
 	if len(errors) == 0 {
 		return nil

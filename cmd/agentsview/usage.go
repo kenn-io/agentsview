@@ -631,12 +631,13 @@ func fetchHTTPDailyUsage(
 	}
 	var resp *http.Response
 	var payload []byte
+	var stream *runtime.Stream[[]byte]
 	if query.Progress != nil {
 		response, requestErr := api.GetAPIV1UsageSummaryStreamStreamWithResponse(ctx, &apiclient.GetAPIV1UsageSummaryStreamRequestOptions{Query: &q})
 		if response == nil {
 			return db.DailyUsageResult{}, requestErr
 		}
-		resp, payload = response.HTTPResponse, response.Body
+		resp, payload, stream = response.HTTPResponse, response.Body, response.Stream200
 	} else {
 		bufferedQuery := apiclient.GetAPIV1UsageSummaryQuery(q)
 		response, requestErr := api.GetAPIV1UsageSummaryWithResponse(ctx, &apiclient.GetAPIV1UsageSummaryRequestOptions{Query: &bufferedQuery})
@@ -658,7 +659,7 @@ func fetchHTTPDailyUsage(
 		if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 			return db.DailyUsageResult{}, fmt.Errorf("usage summary: expected a progress stream, received %q", resp.Header.Get("Content-Type"))
 		}
-		data, err := parseDaemonPushSSE[jsontext.Value](resp.Body, func(p struct {
+		data, err := consumeDaemonPushEvents[jsontext.Value](stream, func(p struct {
 			Detail string `json:"detail"`
 		}) {
 			query.Progress(p.Detail)
