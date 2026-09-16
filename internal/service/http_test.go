@@ -281,7 +281,7 @@ func TestHTTPBackend_FindSessionIDsByRawSuffixRejectsOldServer(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	svc := service.NewHTTPBackend(ts.URL, "", false, "")
+	svc := servicehttp.NewHTTPBackend(ts.URL, "", false, "")
 	ids, err := svc.FindSessionIDsByRawSuffix(context.Background(), "uuid", 2)
 	require.ErrorContains(t, err, "does not acknowledge raw session ID lookup")
 	assert.Nil(t, ids)

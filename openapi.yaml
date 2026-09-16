@@ -5394,6 +5394,8 @@ components:
           items:
             type: string
           type: array
+        raw_suffix:
+          type: boolean
       required:
         - ids
       type: object
@@ -15779,13 +15781,13 @@ paths:
     get:
       operationId: get-api-v1-session-ids-resolve
       parameters:
-        - description: Session ID substring
+        - description: Session ID substring or raw suffix
           explode: false
           in: query
           name: partial
           required: true
           schema:
-            description: Session ID substring
+            description: Session ID substring or raw suffix
             type: string
         - description: Maximum number of matching IDs
           explode: false
@@ -15797,6 +15799,13 @@ paths:
             maximum: 1000
             minimum: 0
             type: integer
+        - description: Use literal exact, colon-suffix, or host-tilde-suffix matching
+          explode: false
+          in: query
+          name: raw_suffix
+          schema:
+            description: Use literal exact, colon-suffix, or host-tilde-suffix matching
+            type: boolean
       responses:
         "200":
           content:

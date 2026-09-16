@@ -14464,11 +14464,14 @@ func (p PostAPIV1SecretsScanQuery) Validate() error {
 }
 
 type GetAPIV1SessionIdsResolveQuery struct {
-	// Partial Session ID substring
+	// Partial Session ID substring or raw suffix
 	Partial string `json:"partial" validate:"required"`
 
 	// Limit Maximum number of matching IDs
 	Limit *int64 `json:"limit,omitempty" validate:"omitempty,gte=0,lte=1000"`
+
+	// RawSuffix Use literal exact, colon-suffix, or host-tilde-suffix matching
+	RawSuffix *bool `json:"raw_suffix,omitempty"`
 }
 
 func (g GetAPIV1SessionIdsResolveQuery) Validate() error {
@@ -18753,7 +18756,8 @@ type RemotesyncTargetSet struct {
 }
 
 type ResolveSessionIDsResponse struct {
-	Ids []string `json:"ids" validate:"required"`
+	Ids       []string `json:"ids" validate:"required"`
+	RawSuffix *bool    `json:"raw_suffix,omitempty"`
 }
 
 func (r ResolveSessionIDsResponse) Validate() error {
