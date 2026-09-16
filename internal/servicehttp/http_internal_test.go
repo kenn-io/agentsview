@@ -1,4 +1,4 @@
-package service
+package servicehttp
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestNewHTTPBackendUsesLongRunningClient(t *testing.T) {
@@ -36,7 +37,7 @@ func TestHTTPBackendRecallCapabilityRespectsReadOnlyMode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			svc := NewHTTPBackend("http://example.test", "", tt.readOnly, "")
-			assert.Equal(t, tt.want, SupportsRecallQueries(svc))
+			assert.Equal(t, tt.want, service.SupportsRecallQueries(svc))
 		})
 	}
 }
@@ -51,7 +52,7 @@ func TestListForwardsListOptions(t *testing.T) {
 		_, _ = w.Write([]byte(`{"sessions":[]}`))
 	}))
 	t.Cleanup(srv.Close)
-	_, err := NewHTTPBackend(srv.URL, "", false, "").List(t.Context(), ListFilter{Timezone: "America/New_York", Cursor: "next-page", IncludeSource: true})
+	_, err := NewHTTPBackend(srv.URL, "", false, "").List(t.Context(), service.ListFilter{Timezone: "America/New_York", Cursor: "next-page", IncludeSource: true})
 	require.NoError(t, err)
 }
 
@@ -70,7 +71,7 @@ func TestSearchContentUsesLongRunningClient(t *testing.T) {
 	require.True(t, ok)
 	backend.client.Timeout = 10 * time.Millisecond
 
-	result, err := svc.SearchContent(context.Background(), ContentSearchRequest{
+	result, err := svc.SearchContent(context.Background(), service.ContentSearchRequest{
 		Pattern: "slow first query",
 		Mode:    "semantic",
 	})
@@ -89,7 +90,7 @@ func TestUsageSummaryUsesLongRunningClient(t *testing.T) {
 	t.Cleanup(srv.Close)
 	backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
 	backend.client.Timeout = 10 * time.Millisecond
-	result, err := backend.UsageSummary(t.Context(), UsageRequest{})
+	result, err := backend.UsageSummary(t.Context(), service.UsageRequest{})
 	require.NoError(t, err)
 	require.Len(t, result.Daily, 1)
 	assert.Equal(t, "2026-09-01", result.Daily[0].Date)
@@ -106,7 +107,7 @@ func TestUsagePairwiseComparisonUsesLongRunningClient(t *testing.T) {
 	t.Cleanup(srv.Close)
 	backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
 	backend.client.Timeout = 10 * time.Millisecond
-	result, err := backend.UsagePairwiseComparison(t.Context(), UsagePairwiseComparisonRequest{})
+	result, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, 42, result.Left.TotalTokens)
 }
@@ -135,7 +136,7 @@ func TestQueryRecallSemanticModesUseLongRunningClient(t *testing.T) {
 			require.True(t, ok)
 			backend.client.Timeout = 10 * time.Millisecond
 
-			result, err := svc.QueryRecallEntries(context.Background(), RecallQuery{
+			result, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 				Query: "connection storm", Mode: tt.inputMode,
 			})
 			require.NoError(t, err)

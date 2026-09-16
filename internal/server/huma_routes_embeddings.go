@@ -74,7 +74,8 @@ func (s *Server) registerEmbeddingsRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/embeddings")
 	configureRouteGroup(group, "Embeddings")
 
-	s.post(group, "/build", "Start an embeddings build", s.humaEmbeddingsBuild)
+	registerRoute(group, http.MethodPost, "/build", "Start an embeddings build", s.humaEmbeddingsBuild,
+		s.humaTimeout(), func(op *huma.Operation) { op.DefaultStatus = http.StatusAccepted })
 	s.get(group, "/status", "Embeddings build status", s.humaEmbeddingsStatus)
 	s.get(group, "/generations", "List embedding generations", s.humaEmbeddingsGenerations)
 	s.post(group, "/generations/{id}/activate", "Activate an embedding generation",

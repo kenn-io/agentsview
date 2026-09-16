@@ -11,6 +11,12 @@ import (
 
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"github.com/go-playground/validator/v10"
+	activity "go.kenn.io/agentsview/internal/activity"
+	db "go.kenn.io/agentsview/internal/db"
+	export "go.kenn.io/agentsview/internal/export"
+	money "go.kenn.io/agentsview/internal/money"
+	service "go.kenn.io/agentsview/internal/service"
+	vector "go.kenn.io/agentsview/internal/vector"
 )
 
 // GetAPIV1ActivityReportRequestOptions is the options needed to make a request to GetAPIV1ActivityReport.
@@ -4963,11 +4969,11 @@ func (c *Client) PostAPIV1EmbeddingsBuildWithResponse(ctx context.Context, optio
 	}
 
 	switch resp.StatusCode {
-	case 200:
-		out.JSON200 = new(PostAPIV1EmbeddingsBuildResponse)
+	case 202:
+		out.JSON202 = new(PostAPIV1EmbeddingsBuildResponse)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+			if err := json.Unmarshal(bodyBytes, out.JSON202); err != nil {
 				return out, &runtime.ResponseDecodeError{
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
@@ -14921,7 +14927,7 @@ func (g GetAPIV1UsageSummaryStreamQuery) Validate() error {
 	return errors
 }
 
-type GetAPIV1ActivityReportResponse = ActivityReport
+type GetAPIV1ActivityReportResponse = activity.Report
 
 type GetAPIV1ActivityReportErrorResponse = APIErrorResponse
 
@@ -14997,7 +15003,7 @@ type PostAPIV1ArtifactsExchangeErrorResponseText502 string
 
 type PostAPIV1ArtifactsExchangeErrorResponseText503 string
 
-type PostAPIV1DataCompactResponse = DBCompactResult
+type PostAPIV1DataCompactResponse = db.CompactResult
 
 type PostAPIV1DataCompactErrorResponse = APIErrorResponse
 
@@ -15113,7 +15119,7 @@ type PostAPIV1EmbeddingsGenerationsIDRetireErrorResponseJSON503 = APIErrorRespon
 
 type PostAPIV1EmbeddingsGenerationsIDRetireErrorResponseJSON504 = APIErrorResponse
 
-type GetAPIV1EmbeddingsStatusResponse = VectorBuildStatus
+type GetAPIV1EmbeddingsStatusResponse = vector.BuildStatus
 
 type GetAPIV1EmbeddingsStatusErrorResponse = APIErrorResponse
 
@@ -15371,7 +15377,7 @@ type GetAPIV1RecallEntriesErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1RecallEntriesErrorResponseJSON504 = APIErrorResponse
 
-type GetAPIV1RecallEntriesIDResponse = DBRecallEntry
+type GetAPIV1RecallEntriesIDResponse = db.RecallEntry
 
 type GetAPIV1RecallEntriesIDErrorResponse = APIErrorResponse
 
@@ -15391,7 +15397,7 @@ type GetAPIV1RecallEntriesIDErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1RecallEntriesIDErrorResponseJSON504 = APIErrorResponse
 
-type PostAPIV1RecallImportResponse = DBRecallImportResult
+type PostAPIV1RecallImportResponse = db.RecallImportResult
 
 type PostAPIV1RecallImportErrorResponse = APIErrorResponse
 
@@ -15411,7 +15417,7 @@ type PostAPIV1RecallImportErrorResponseJSON503 = APIErrorResponse
 
 type PostAPIV1RecallImportErrorResponseJSON504 = APIErrorResponse
 
-type PostAPIV1RecallQueryResponse = ServiceRecallQueryResult
+type PostAPIV1RecallQueryResponse = service.RecallQueryResult
 
 type PostAPIV1RecallQueryErrorResponse = APIErrorResponse
 
@@ -15557,7 +15563,7 @@ type GetAPIV1SearchErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1SearchErrorResponseJSON504 = APIErrorResponse
 
-type GetAPIV1SearchContentResponse = ServiceContentSearchResult
+type GetAPIV1SearchContentResponse = service.ContentSearchResult
 
 type GetAPIV1SearchContentErrorResponse = APIErrorResponse
 
@@ -15581,7 +15587,7 @@ type GetAPIV1SearchContentErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1SearchContentErrorResponseJSON504 = APIErrorResponse
 
-type GetAPIV1SecretsResponse = ServiceSecretFindingList
+type GetAPIV1SecretsResponse = service.SecretFindingList
 
 type GetAPIV1SecretsErrorResponse = APIErrorResponse
 
@@ -15653,7 +15659,7 @@ type GetAPIV1SessionIdsResolveErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1SessionIdsResolveErrorResponseJSON504 = APIErrorResponse
 
-type GetAPIV1SessionStatsResponse = DBSessionStats
+type GetAPIV1SessionStatsResponse = db.SessionStats
 
 type GetAPIV1SessionStatsErrorResponse = APIErrorResponse
 
@@ -15677,7 +15683,7 @@ type GetAPIV1SessionStatsErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1SessionStatsErrorResponseJSON504 = APIErrorResponse
 
-type GetAPIV1SessionsResponse = ServiceSessionList
+type GetAPIV1SessionsResponse = service.SessionList
 
 type GetAPIV1SessionsErrorResponse = APIErrorResponse
 
@@ -15701,7 +15707,7 @@ type GetAPIV1SessionsErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1SessionsErrorResponseJSON504 = APIErrorResponse
 
-type PostAPIV1SessionsSyncResponse = ServiceSessionDetail
+type PostAPIV1SessionsSyncResponse = service.SessionDetail
 
 type PostAPIV1SessionsSyncErrorResponse = APIErrorResponse
 
@@ -15725,7 +15731,7 @@ type PostAPIV1SessionsSyncErrorResponseJSON503 = APIErrorResponse
 
 type PostAPIV1SessionsSyncErrorResponseJSON504 = APIErrorResponse
 
-type GetAPIV1SessionsIDResponse = ServiceSessionDetail
+type GetAPIV1SessionsIDResponse = service.SessionDetail
 
 type GetAPIV1SessionsIDErrorResponse = APIErrorResponse
 
@@ -15749,7 +15755,7 @@ type GetAPIV1SessionsIDErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1SessionsIDErrorResponseJSON504 = APIErrorResponse
 
-type GetAPIV1SessionsIDMessagesResponse = ServiceMessageList
+type GetAPIV1SessionsIDMessagesResponse = service.MessageList
 
 type GetAPIV1SessionsIDMessagesErrorResponse = APIErrorResponse
 
@@ -15773,7 +15779,7 @@ type GetAPIV1SessionsIDMessagesErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1SessionsIDMessagesErrorResponseJSON504 = APIErrorResponse
 
-type GetAPIV1SessionsIDToolCallsResponse = ServiceToolCallList
+type GetAPIV1SessionsIDToolCallsResponse = service.ToolCallList
 
 type GetAPIV1SessionsIDToolCallsErrorResponse = APIErrorResponse
 
@@ -15893,7 +15899,7 @@ type PostAPIV1SyncRemotesErrorResponseJSON503 = APIErrorResponse
 
 type PostAPIV1SyncRemotesErrorResponseJSON504 = APIErrorResponse
 
-type GetAPIV1UsagePairwiseComparisonResponse = ServiceUsagePairwiseComparisonResponse
+type GetAPIV1UsagePairwiseComparisonResponse = service.UsagePairwiseComparisonResponse
 
 type GetAPIV1UsagePairwiseComparisonErrorResponse = APIErrorResponse
 
@@ -16064,7 +16070,7 @@ type PostAPIV1EmbeddingsBuildResp struct {
 	HTTPResponse *http.Response
 	Body         []byte
 	StatusCode   int
-	JSON200      *PostAPIV1EmbeddingsBuildResponse
+	JSON202      *PostAPIV1EmbeddingsBuildResponse
 	JSON400      *PostAPIV1EmbeddingsBuildErrorResponse
 	JSON401      *PostAPIV1EmbeddingsBuildErrorResponseJSON
 	JSON403      *PostAPIV1EmbeddingsBuildErrorResponseJSON403
@@ -16909,136 +16915,7 @@ func (a ActivityPeak) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(a))
 }
 
-type ActivityReport struct {
-	AsOf               *string                          `json:"as_of,omitempty" validate:"required"`
-	AutomatedPeak      ActivityPeak                     `json:"automated_peak"`
-	BucketCount        int64                            `json:"bucket_count"`
-	BucketSeconds      int64                            `json:"bucket_seconds"`
-	BucketUnit         string                           `json:"bucket_unit" validate:"required"`
-	Buckets            []ActivityBucket                 `json:"buckets" validate:"required"`
-	ByAgent            []ActivityKeyMinutes             `json:"by_agent" validate:"required"`
-	ByModel            []ActivityKeyMinutes             `json:"by_model" validate:"required"`
-	ByProject          []ActivityKeyMinutes             `json:"by_project" validate:"required"`
-	BySession          []ActivitySessionRow             `json:"by_session" validate:"required"`
-	EffectiveEnd       string                           `json:"effective_end" validate:"required"`
-	ElapsedBucketCount int64                            `json:"elapsed_bucket_count"`
-	InteractivePeak    ActivityPeak                     `json:"interactive_peak"`
-	Partial            bool                             `json:"partial"`
-	Peak               ActivityPeak                     `json:"peak"`
-	Pricing            *ExportPricingBlock              `json:"pricing,omitempty"`
-	Projects           map[string]ExportProjectMapEntry `json:"projects"`
-	RangeEnd           string                           `json:"range_end" validate:"required"`
-	RangeStart         string                           `json:"range_start" validate:"required"`
-	ReportID           *string                          `json:"report_id,omitempty"`
-	SchemaVersion      *int64                           `json:"schema_version,omitempty"`
-	SessionsNextCursor *string                          `json:"sessions_next_cursor,omitempty"`
-	SessionsTotal      int64                            `json:"sessions_total"`
-	SubagentPeak       ActivityPeak                     `json:"subagent_peak"`
-	Timezone           string                           `json:"timezone" validate:"required"`
-	Totals             ActivityTotals                   `json:"totals"`
-}
-
-func (a ActivityReport) Validate() error {
-	var errors runtime.ValidationErrors
-	if a.AsOf != nil {
-		if err := typesValidator.Var(a.AsOf, "required"); err != nil {
-			errors = errors.Append("AsOf", err)
-		}
-	}
-	if v, ok := any(a.AutomatedPeak).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("AutomatedPeak", err)
-		}
-	}
-	if err := typesValidator.Var(a.BucketUnit, "required"); err != nil {
-		errors = errors.Append("BucketUnit", err)
-	}
-	for i, item := range a.Buckets {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("Buckets[%d]", i), err)
-			}
-		}
-	}
-	for i, item := range a.ByAgent {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("ByAgent[%d]", i), err)
-			}
-		}
-	}
-	for i, item := range a.ByModel {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("ByModel[%d]", i), err)
-			}
-		}
-	}
-	for i, item := range a.ByProject {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("ByProject[%d]", i), err)
-			}
-		}
-	}
-	for i, item := range a.BySession {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("BySession[%d]", i), err)
-			}
-		}
-	}
-	if err := typesValidator.Var(a.EffectiveEnd, "required"); err != nil {
-		errors = errors.Append("EffectiveEnd", err)
-	}
-	if v, ok := any(a.InteractivePeak).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("InteractivePeak", err)
-		}
-	}
-	if v, ok := any(a.Peak).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Peak", err)
-		}
-	}
-	if a.Pricing != nil {
-		if v, ok := any(a.Pricing).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("Pricing", err)
-			}
-		}
-	}
-	for k, v := range a.Projects {
-		if validator, ok := any(v).(runtime.Validator); ok {
-			if err := validator.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("Projects[%s]", k), err)
-			}
-		}
-	}
-	if err := typesValidator.Var(a.RangeEnd, "required"); err != nil {
-		errors = errors.Append("RangeEnd", err)
-	}
-	if err := typesValidator.Var(a.RangeStart, "required"); err != nil {
-		errors = errors.Append("RangeStart", err)
-	}
-	if v, ok := any(a.SubagentPeak).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("SubagentPeak", err)
-		}
-	}
-	if err := typesValidator.Var(a.Timezone, "required"); err != nil {
-		errors = errors.Append("Timezone", err)
-	}
-	if v, ok := any(a.Totals).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Totals", err)
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type ActivityReport = activity.Report
 
 type ActivityReportSessionsResponse struct {
 	NextCursor      *string              `json:"next_cursor,omitempty"`
@@ -17074,70 +16951,7 @@ func (a ActivityReportSessionsResponse) Validate() error {
 	return errors
 }
 
-type ActivitySessionRow struct {
-	Agent         string     `json:"agent" validate:"required"`
-	AgentMinutes  *float64   `json:"agent_minutes,omitempty"`
-	Cost          MoneyMoney `json:"cost"`
-	FirstActive   *string    `json:"first_active,omitempty" validate:"required"`
-	IsAutomated   bool       `json:"is_automated"`
-	IsSubagent    bool       `json:"is_subagent"`
-	LastActive    *string    `json:"last_active,omitempty" validate:"required"`
-	Models        []string   `json:"models" validate:"required"`
-	OutputTokens  int64      `json:"output_tokens"`
-	PrimaryModel  string     `json:"primary_model" validate:"required"`
-	Project       string     `json:"project" validate:"required"`
-	ProjectKey    string     `json:"project_key" validate:"required"`
-	SessionID     string     `json:"session_id" validate:"required"`
-	TimingQuality string     `json:"timing_quality" validate:"required"`
-	Title         string     `json:"title" validate:"required"`
-}
-
-func (a ActivitySessionRow) Validate() error {
-	var errors runtime.ValidationErrors
-	if err := typesValidator.Var(a.Agent, "required"); err != nil {
-		errors = errors.Append("Agent", err)
-	}
-	if v, ok := any(a.Cost).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Cost", err)
-		}
-	}
-	if a.FirstActive != nil {
-		if err := typesValidator.Var(a.FirstActive, "required"); err != nil {
-			errors = errors.Append("FirstActive", err)
-		}
-	}
-	if a.LastActive != nil {
-		if err := typesValidator.Var(a.LastActive, "required"); err != nil {
-			errors = errors.Append("LastActive", err)
-		}
-	}
-	if err := typesValidator.Var(a.Models, "required"); err != nil {
-		errors = errors.Append("Models", err)
-	}
-	if err := typesValidator.Var(a.PrimaryModel, "required"); err != nil {
-		errors = errors.Append("PrimaryModel", err)
-	}
-	if err := typesValidator.Var(a.Project, "required"); err != nil {
-		errors = errors.Append("Project", err)
-	}
-	if err := typesValidator.Var(a.ProjectKey, "required"); err != nil {
-		errors = errors.Append("ProjectKey", err)
-	}
-	if err := typesValidator.Var(a.SessionID, "required"); err != nil {
-		errors = errors.Append("SessionID", err)
-	}
-	if err := typesValidator.Var(a.TimingQuality, "required"); err != nil {
-		errors = errors.Append("TimingQuality", err)
-	}
-	if err := typesValidator.Var(a.Title, "required"); err != nil {
-		errors = errors.Append("Title", err)
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type ActivitySessionRow = activity.SessionRow
 
 type ActivityTotals struct {
 	ActiveMinutes           float64    `json:"active_minutes"`
@@ -17188,30 +17002,7 @@ func (a ActivityTotals) Validate() error {
 	return errors
 }
 
-type AgentTotal struct {
-	Agent               string     `json:"agent" validate:"required"`
-	CacheCreationTokens int64      `json:"cacheCreationTokens"`
-	CacheReadTokens     int64      `json:"cacheReadTokens"`
-	Cost                MoneyMoney `json:"cost"`
-	InputTokens         int64      `json:"inputTokens"`
-	OutputTokens        int64      `json:"outputTokens"`
-}
-
-func (a AgentTotal) Validate() error {
-	var errors runtime.ValidationErrors
-	if err := typesValidator.Var(a.Agent, "required"); err != nil {
-		errors = errors.Append("Agent", err)
-	}
-	if v, ok := any(a.Cost).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Cost", err)
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type AgentTotal = service.AgentTotal
 
 type APIErrorResponse struct {
 	Code              *string `json:"code,omitempty"`
@@ -17255,27 +17046,7 @@ func (a ArtifactSyncResult) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(a))
 }
 
-type CacheStats struct {
-	CacheCreationTokens int64      `json:"cacheCreationTokens"`
-	CacheReadTokens     int64      `json:"cacheReadTokens"`
-	HitRate             float64    `json:"hitRate"`
-	OutputTokens        int64      `json:"outputTokens"`
-	SavingsVsUncached   MoneyMoney `json:"savingsVsUncached"`
-	UncachedInputTokens int64      `json:"uncachedInputTokens"`
-}
-
-func (c CacheStats) Validate() error {
-	var errors runtime.ValidationErrors
-	if v, ok := any(c.SavingsVsUncached).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("SavingsVsUncached", err)
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type CacheStats = service.CacheStats
 
 type Comparison struct {
 	DeltaPct       float64    `json:"deltaPct"`
@@ -17512,31 +17283,7 @@ type DBCompactEstimate struct {
 	WalBytes               int64 `json:"wal_bytes"`
 }
 
-type DBCompactResult struct {
-	After          DBCompactEstimate `json:"after"`
-	BackupPath     *string           `json:"backup_path,omitempty"`
-	Before         DBCompactEstimate `json:"before"`
-	DurationMillis int64             `json:"duration_millis"`
-	ReclaimedBytes int64             `json:"reclaimed_bytes"`
-}
-
-func (d DBCompactResult) Validate() error {
-	var errors runtime.ValidationErrors
-	if v, ok := any(d.After).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("After", err)
-		}
-	}
-	if v, ok := any(d.Before).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Before", err)
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type DBCompactResult = db.CompactResult
 
 type DBContentMatch struct {
 	Agent           string      `json:"agent" validate:"required"`
@@ -17646,66 +17393,7 @@ func (d DBCursorConversationCount) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(d))
 }
 
-type DBDailyUsageEntry struct {
-	AgentBreakdowns     []DBAgentBreakdown   `json:"agentBreakdowns" validate:"required"`
-	CacheCreationTokens int64                `json:"cacheCreationTokens"`
-	CacheReadTokens     int64                `json:"cacheReadTokens"`
-	Date                string               `json:"date" validate:"required"`
-	InputTokens         int64                `json:"inputTokens"`
-	MachineBreakdowns   []DBMachineBreakdown `json:"machineBreakdowns" validate:"required"`
-	ModelBreakdowns     []DBModelBreakdown   `json:"modelBreakdowns" validate:"required"`
-	ModelsUsed          []string             `json:"modelsUsed" validate:"required"`
-	OutputTokens        int64                `json:"outputTokens"`
-	ProjectBreakdowns   []DBProjectBreakdown `json:"projectBreakdowns" validate:"required"`
-	TotalCost           MoneyMoney           `json:"totalCost"`
-}
-
-func (d DBDailyUsageEntry) Validate() error {
-	var errors runtime.ValidationErrors
-	for i, item := range d.AgentBreakdowns {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("AgentBreakdowns[%d]", i), err)
-			}
-		}
-	}
-	if err := typesValidator.Var(d.Date, "required"); err != nil {
-		errors = errors.Append("Date", err)
-	}
-	for i, item := range d.MachineBreakdowns {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("MachineBreakdowns[%d]", i), err)
-			}
-		}
-	}
-	for i, item := range d.ModelBreakdowns {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("ModelBreakdowns[%d]", i), err)
-			}
-		}
-	}
-	if err := typesValidator.Var(d.ModelsUsed, "required"); err != nil {
-		errors = errors.Append("ModelsUsed", err)
-	}
-	for i, item := range d.ProjectBreakdowns {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("ProjectBreakdowns[%d]", i), err)
-			}
-		}
-	}
-	if v, ok := any(d.TotalCost).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("TotalCost", err)
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type DBDailyUsageEntry = db.DailyUsageEntry
 
 type DBDistributionBucketV1 struct {
 	Count int64      `json:"count"`
@@ -17885,14 +17573,7 @@ func (d DBProjectBreakdown) Validate() error {
 	return errors
 }
 
-type DBProjectInfo struct {
-	Name         string `json:"name" validate:"required"`
-	SessionCount int64  `json:"session_count"`
-}
-
-func (d DBProjectInfo) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(d))
-}
+type DBProjectInfo = db.ProjectInfo
 
 type DBQualitySignals struct {
 	DuplicatePromptCount        int64 `json:"duplicate_prompt_count"`
@@ -17905,79 +17586,7 @@ type DBQualitySignals struct {
 	Version                     int64 `json:"version"`
 }
 
-type DBRecallEntry struct {
-	Agent               *string            `json:"agent,omitempty"`
-	Body                string             `json:"body" validate:"required"`
-	Confidence          *float64           `json:"confidence,omitempty"`
-	CreatedAt           string             `json:"created_at" validate:"required"`
-	Cwd                 *string            `json:"cwd,omitempty"`
-	Evidence            []DBRecallEvidence `json:"evidence,omitempty"`
-	ExtractorMethod     *string            `json:"extractor_method,omitempty"`
-	GitBranch           *string            `json:"git_branch,omitempty"`
-	ID                  string             `json:"id" validate:"required"`
-	Model               *string            `json:"model,omitempty"`
-	Project             *string            `json:"project,omitempty"`
-	ProvenanceOk        bool               `json:"provenance_ok"`
-	ReviewState         string             `json:"review_state" validate:"required"`
-	Scope               string             `json:"scope" validate:"required"`
-	SourceEpisodeID     *string            `json:"source_episode_id,omitempty"`
-	SourceRunID         *string            `json:"source_run_id,omitempty"`
-	SourceSessionID     string             `json:"source_session_id" validate:"required"`
-	Status              string             `json:"status" validate:"required"`
-	SupersededByEntryID *string            `json:"superseded_by_entry_id,omitempty"`
-	SupersedesEntryID   *string            `json:"supersedes_entry_id,omitempty"`
-	Title               string             `json:"title" validate:"required"`
-	Transferable        bool               `json:"transferable"`
-	Trigger             *string            `json:"trigger,omitempty"`
-	Type                string             `json:"type" validate:"required"`
-	Uncertainty         *string            `json:"uncertainty,omitempty"`
-	UpdatedAt           string             `json:"updated_at" validate:"required"`
-}
-
-func (d DBRecallEntry) Validate() error {
-	var errors runtime.ValidationErrors
-	if err := typesValidator.Var(d.Body, "required"); err != nil {
-		errors = errors.Append("Body", err)
-	}
-	if err := typesValidator.Var(d.CreatedAt, "required"); err != nil {
-		errors = errors.Append("CreatedAt", err)
-	}
-	for i, item := range d.Evidence {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("Evidence[%d]", i), err)
-			}
-		}
-	}
-	if err := typesValidator.Var(d.ID, "required"); err != nil {
-		errors = errors.Append("ID", err)
-	}
-	if err := typesValidator.Var(d.ReviewState, "required"); err != nil {
-		errors = errors.Append("ReviewState", err)
-	}
-	if err := typesValidator.Var(d.Scope, "required"); err != nil {
-		errors = errors.Append("Scope", err)
-	}
-	if err := typesValidator.Var(d.SourceSessionID, "required"); err != nil {
-		errors = errors.Append("SourceSessionID", err)
-	}
-	if err := typesValidator.Var(d.Status, "required"); err != nil {
-		errors = errors.Append("Status", err)
-	}
-	if err := typesValidator.Var(d.Title, "required"); err != nil {
-		errors = errors.Append("Title", err)
-	}
-	if err := typesValidator.Var(d.Type, "required"); err != nil {
-		errors = errors.Append("Type", err)
-	}
-	if err := typesValidator.Var(d.UpdatedAt, "required"); err != nil {
-		errors = errors.Append("UpdatedAt", err)
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type DBRecallEntry = db.RecallEntry
 
 type DBRecallEvidence struct {
 	ContentDigest          *string `json:"content_digest,omitempty"`
@@ -18009,126 +17618,9 @@ func (d DBRecallImportItem) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(d))
 }
 
-type DBRecallImportResult struct {
-	Imported           int64                `json:"imported"`
-	ImportedEntries    []DBRecallImportItem `json:"imported_entries,omitempty"`
-	Skipped            int64                `json:"skipped"`
-	SkippedEntries     []DBRecallImportItem `json:"skipped_entries,omitempty"`
-	WouldImport        *int64               `json:"would_import,omitempty"`
-	WouldImportEntries []DBRecallImportItem `json:"would_import_entries,omitempty"`
-}
+type DBRecallImportResult = db.RecallImportResult
 
-func (d DBRecallImportResult) Validate() error {
-	var errors runtime.ValidationErrors
-	for i, item := range d.ImportedEntries {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("ImportedEntries[%d]", i), err)
-			}
-		}
-	}
-	for i, item := range d.SkippedEntries {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("SkippedEntries[%d]", i), err)
-			}
-		}
-	}
-	for i, item := range d.WouldImportEntries {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("WouldImportEntries[%d]", i), err)
-			}
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
-
-type DBRecallResult struct {
-	Agent               *string              `json:"agent,omitempty"`
-	Body                string               `json:"body" validate:"required"`
-	Confidence          *float64             `json:"confidence,omitempty"`
-	CreatedAt           string               `json:"created_at" validate:"required"`
-	Cwd                 *string              `json:"cwd,omitempty"`
-	Evidence            []DBRecallEvidence   `json:"evidence,omitempty"`
-	ExtractorMethod     *string              `json:"extractor_method,omitempty"`
-	GitBranch           *string              `json:"git_branch,omitempty"`
-	ID                  string               `json:"id" validate:"required"`
-	MatchReasons        []string             `json:"match_reasons,omitempty"`
-	MatchedTerms        []string             `json:"matched_terms,omitempty"`
-	Model               *string              `json:"model,omitempty"`
-	Project             *string              `json:"project,omitempty"`
-	ProvenanceOk        bool                 `json:"provenance_ok"`
-	ReviewState         string               `json:"review_state" validate:"required"`
-	Scope               string               `json:"scope" validate:"required"`
-	Score               float64              `json:"score"`
-	ScoreBreakdown      RecallScoreBreakdown `json:"score_breakdown"`
-	SourceEpisodeID     *string              `json:"source_episode_id,omitempty"`
-	SourceRunID         *string              `json:"source_run_id,omitempty"`
-	SourceSessionID     string               `json:"source_session_id" validate:"required"`
-	Status              string               `json:"status" validate:"required"`
-	SupersededByEntryID *string              `json:"superseded_by_entry_id,omitempty"`
-	SupersedesEntryID   *string              `json:"supersedes_entry_id,omitempty"`
-	Title               string               `json:"title" validate:"required"`
-	Transferable        bool                 `json:"transferable"`
-	Trigger             *string              `json:"trigger,omitempty"`
-	Type                string               `json:"type" validate:"required"`
-	Uncertainty         *string              `json:"uncertainty,omitempty"`
-	UpdatedAt           string               `json:"updated_at" validate:"required"`
-}
-
-func (d DBRecallResult) Validate() error {
-	var errors runtime.ValidationErrors
-	if err := typesValidator.Var(d.Body, "required"); err != nil {
-		errors = errors.Append("Body", err)
-	}
-	if err := typesValidator.Var(d.CreatedAt, "required"); err != nil {
-		errors = errors.Append("CreatedAt", err)
-	}
-	for i, item := range d.Evidence {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("Evidence[%d]", i), err)
-			}
-		}
-	}
-	if err := typesValidator.Var(d.ID, "required"); err != nil {
-		errors = errors.Append("ID", err)
-	}
-	if err := typesValidator.Var(d.ReviewState, "required"); err != nil {
-		errors = errors.Append("ReviewState", err)
-	}
-	if err := typesValidator.Var(d.Scope, "required"); err != nil {
-		errors = errors.Append("Scope", err)
-	}
-	if v, ok := any(d.ScoreBreakdown).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("ScoreBreakdown", err)
-		}
-	}
-	if err := typesValidator.Var(d.SourceSessionID, "required"); err != nil {
-		errors = errors.Append("SourceSessionID", err)
-	}
-	if err := typesValidator.Var(d.Status, "required"); err != nil {
-		errors = errors.Append("Status", err)
-	}
-	if err := typesValidator.Var(d.Title, "required"); err != nil {
-		errors = errors.Append("Title", err)
-	}
-	if err := typesValidator.Var(d.Type, "required"); err != nil {
-		errors = errors.Append("Type", err)
-	}
-	if err := typesValidator.Var(d.UpdatedAt, "required"); err != nil {
-		errors = errors.Append("UpdatedAt", err)
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type DBRecallResult = db.RecallResult
 
 type DBScopedDistribution struct {
 	Buckets []DBDistributionBucketV1 `json:"buckets" validate:"required"`
@@ -18173,21 +17665,7 @@ func (d DBScopedDistributionPair) Validate() error {
 	return errors
 }
 
-type DBSearchResult struct {
-	Agent          string  `json:"agent" validate:"required"`
-	Name           string  `json:"name" validate:"required"`
-	Ordinal        int64   `json:"ordinal"`
-	Project        string  `json:"project" validate:"required"`
-	Rank           float64 `json:"rank"`
-	SessionEndedAt string  `json:"session_ended_at" validate:"required"`
-	SessionID      string  `json:"session_id" validate:"required"`
-	Snippet        string  `json:"snippet" validate:"required"`
-	WebURL         *string `json:"web_url,omitempty"`
-}
-
-func (d DBSearchResult) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(d))
-}
+type DBSearchResult = db.SearchResult
 
 type DBSecretFindingRow struct {
 	Agent          string `json:"agent" validate:"required"`
@@ -18323,121 +17801,7 @@ func (d DBSession) Validate() error {
 	return errors
 }
 
-type DBSessionStats struct {
-	Adoption        *DBStatsAdoption       `json:"adoption,omitempty"`
-	AgentPortfolio  DBStatsAgentPortfolio  `json:"agent_portfolio"`
-	Archetypes      DBStatsArchetypes      `json:"archetypes"`
-	CacheEconomics  *DBStatsCacheEconomics `json:"cache_economics,omitempty"`
-	CodeAttribution *DBCodeAttribution     `json:"code_attribution,omitempty"`
-	Distributions   DBStatsDistributions   `json:"distributions"`
-	Filters         DBStatsFilters         `json:"filters"`
-	GeneratedAt     string                 `json:"generated_at" validate:"required"`
-	ModelMix        DBStatsModelMix        `json:"model_mix"`
-	OutcomeStats    *DBStatsOutcomeStats   `json:"outcome_stats,omitempty"`
-	Outcomes        *DBStatsOutcomes       `json:"outcomes,omitempty"`
-	SchemaVersion   int64                  `json:"schema_version"`
-	Temporal        DBStatsTemporal        `json:"temporal"`
-	ToolMix         DBStatsToolMix         `json:"tool_mix"`
-	Totals          DBStatsTotals          `json:"totals"`
-	Velocity        DBStatsVelocity        `json:"velocity"`
-	Window          DBStatsWindow          `json:"window"`
-}
-
-func (d DBSessionStats) Validate() error {
-	var errors runtime.ValidationErrors
-	if d.Adoption != nil {
-		if v, ok := any(d.Adoption).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("Adoption", err)
-			}
-		}
-	}
-	if v, ok := any(d.AgentPortfolio).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("AgentPortfolio", err)
-		}
-	}
-	if v, ok := any(d.Archetypes).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Archetypes", err)
-		}
-	}
-	if d.CacheEconomics != nil {
-		if v, ok := any(d.CacheEconomics).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("CacheEconomics", err)
-			}
-		}
-	}
-	if d.CodeAttribution != nil {
-		if v, ok := any(d.CodeAttribution).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("CodeAttribution", err)
-			}
-		}
-	}
-	if v, ok := any(d.Distributions).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Distributions", err)
-		}
-	}
-	if v, ok := any(d.Filters).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Filters", err)
-		}
-	}
-	if err := typesValidator.Var(d.GeneratedAt, "required"); err != nil {
-		errors = errors.Append("GeneratedAt", err)
-	}
-	if v, ok := any(d.ModelMix).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("ModelMix", err)
-		}
-	}
-	if d.OutcomeStats != nil {
-		if v, ok := any(d.OutcomeStats).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("OutcomeStats", err)
-			}
-		}
-	}
-	if d.Outcomes != nil {
-		if v, ok := any(d.Outcomes).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("Outcomes", err)
-			}
-		}
-	}
-	if v, ok := any(d.Temporal).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Temporal", err)
-		}
-	}
-	if v, ok := any(d.ToolMix).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("ToolMix", err)
-		}
-	}
-	if v, ok := any(d.Totals).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Totals", err)
-		}
-	}
-	if v, ok := any(d.Velocity).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Velocity", err)
-		}
-	}
-	if v, ok := any(d.Window).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Window", err)
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type DBSessionStats = db.SessionStats
 
 type DBStatsAdoption struct {
 	ClaudeOnly          bool    `json:"claude_only"`
@@ -18712,39 +18076,9 @@ func (d DBToolResultEvent) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(d))
 }
 
-type DBUsageSessionCounts struct {
-	ByAgent   map[string]int64 `json:"byAgent"`
-	ByProject map[string]int64 `json:"byProject"`
-	Total     int64            `json:"total"`
-}
+type DBUsageSessionCounts = db.UsageSessionCounts
 
-type DBUsageTotals struct {
-	CacheCreationTokens int64      `json:"cacheCreationTokens"`
-	CacheReadTokens     int64      `json:"cacheReadTokens"`
-	CacheSavings        MoneyMoney `json:"cacheSavings"`
-	CopilotAICredits    *float64   `json:"copilotAICredits,omitempty"`
-	InputTokens         int64      `json:"inputTokens"`
-	OutputTokens        int64      `json:"outputTokens"`
-	TotalCost           MoneyMoney `json:"totalCost"`
-}
-
-func (d DBUsageTotals) Validate() error {
-	var errors runtime.ValidationErrors
-	if v, ok := any(d.CacheSavings).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("CacheSavings", err)
-		}
-	}
-	if v, ok := any(d.TotalCost).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("TotalCost", err)
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type DBUsageTotals = db.UsageTotals
 
 type EmbeddingsBuildRequest struct {
 	Backstop         *bool   `json:"backstop,omitempty"`
@@ -18942,54 +18276,7 @@ func (e ExportPricingBand) Validate() error {
 	return errors
 }
 
-type ExportPricingBlock struct {
-	CostSource          string                                  `json:"cost_source" validate:"required"`
-	CustomOverrideCount int64                                   `json:"custom_override_count"`
-	Digest              string                                  `json:"digest" validate:"required"`
-	EffectiveRowCount   int64                                   `json:"effective_row_count"`
-	Fallback            ExportPricingFallback                   `json:"fallback"`
-	LatestRowUpdatedAt  *time.Time                              `json:"latest_row_updated_at,omitempty" validate:"required"`
-	Models              map[string]ExportModelPricingProvenance `json:"models"`
-	Source              string                                  `json:"source" validate:"required"`
-	TableVersion        string                                  `json:"table_version" validate:"required"`
-}
-
-func (e ExportPricingBlock) Validate() error {
-	var errors runtime.ValidationErrors
-	if err := typesValidator.Var(e.CostSource, "required"); err != nil {
-		errors = errors.Append("CostSource", err)
-	}
-	if err := typesValidator.Var(e.Digest, "required"); err != nil {
-		errors = errors.Append("Digest", err)
-	}
-	if v, ok := any(e.Fallback).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Fallback", err)
-		}
-	}
-	if e.LatestRowUpdatedAt != nil {
-		if err := typesValidator.Var(e.LatestRowUpdatedAt, "required"); err != nil {
-			errors = errors.Append("LatestRowUpdatedAt", err)
-		}
-	}
-	for k, v := range e.Models {
-		if validator, ok := any(v).(runtime.Validator); ok {
-			if err := validator.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("Models[%s]", k), err)
-			}
-		}
-	}
-	if err := typesValidator.Var(e.Source, "required"); err != nil {
-		errors = errors.Append("Source", err)
-	}
-	if err := typesValidator.Var(e.TableVersion, "required"); err != nil {
-		errors = errors.Append("TableVersion", err)
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type ExportPricingBlock = export.PricingBlock
 
 type ExportPricingFallback struct {
 	Models []string `json:"models" validate:"required"`
@@ -19012,32 +18299,7 @@ func (e ExportProjectIdentity) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(e))
 }
 
-type ExportProjectMapEntry struct {
-	DisplayLabel string                 `json:"display_label" validate:"required"`
-	Identity     *ExportProjectIdentity `json:"identity,omitempty"`
-	Resolution   string                 `json:"resolution" validate:"required"`
-}
-
-func (e ExportProjectMapEntry) Validate() error {
-	var errors runtime.ValidationErrors
-	if err := typesValidator.Var(e.DisplayLabel, "required"); err != nil {
-		errors = errors.Append("DisplayLabel", err)
-	}
-	if e.Identity != nil {
-		if v, ok := any(e.Identity).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("Identity", err)
-			}
-		}
-	}
-	if err := typesValidator.Var(e.Resolution, "required"); err != nil {
-		errors = errors.Append("Resolution", err)
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type ExportProjectMapEntry = export.ProjectMapEntry
 
 type FillStats struct {
 	Chunks    int64 `json:"Chunks"`
@@ -19046,63 +18308,11 @@ type FillStats struct {
 	Stale     int64 `json:"Stale"`
 }
 
-type ModelTotal struct {
-	CacheCreationTokens int64      `json:"cacheCreationTokens"`
-	CacheReadTokens     int64      `json:"cacheReadTokens"`
-	Cost                MoneyMoney `json:"cost"`
-	InputTokens         int64      `json:"inputTokens"`
-	Model               string     `json:"model" validate:"required"`
-	OutputTokens        int64      `json:"outputTokens"`
-}
+type ModelTotal = service.ModelTotal
 
-func (m ModelTotal) Validate() error {
-	var errors runtime.ValidationErrors
-	if v, ok := any(m.Cost).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Cost", err)
-		}
-	}
-	if err := typesValidator.Var(m.Model, "required"); err != nil {
-		errors = errors.Append("Model", err)
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type MoneyMoney = money.Money
 
-type MoneyMoney struct {
-	Microdollars int64 `json:"microdollars"`
-}
-
-type ProjectTotal struct {
-	CacheCreationTokens int64      `json:"cacheCreationTokens"`
-	CacheReadTokens     int64      `json:"cacheReadTokens"`
-	Cost                MoneyMoney `json:"cost"`
-	InputTokens         int64      `json:"inputTokens"`
-	OutputTokens        int64      `json:"outputTokens"`
-	Project             string     `json:"project" validate:"required"`
-	ProjectKey          string     `json:"project_key" validate:"required"`
-}
-
-func (p ProjectTotal) Validate() error {
-	var errors runtime.ValidationErrors
-	if v, ok := any(p.Cost).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Cost", err)
-		}
-	}
-	if err := typesValidator.Var(p.Project, "required"); err != nil {
-		errors = errors.Append("Project", err)
-	}
-	if err := typesValidator.Var(p.ProjectKey, "required"); err != nil {
-		errors = errors.Append("ProjectKey", err)
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type ProjectTotal = service.ProjectTotal
 
 type ProjectsResponse struct {
 	Projects []DBProjectInfo `json:"projects" validate:"required"`
@@ -19524,47 +18734,9 @@ func (s SearchResponse) Validate() error {
 	return errors
 }
 
-type ServiceContentSearchResult struct {
-	Matches    []DBContentMatch `json:"matches" validate:"required"`
-	NextCursor *int64           `json:"next_cursor,omitempty"`
-}
+type ServiceContentSearchResult = service.ContentSearchResult
 
-func (s ServiceContentSearchResult) Validate() error {
-	var errors runtime.ValidationErrors
-	for i, item := range s.Matches {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("Matches[%d]", i), err)
-			}
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
-
-type ServiceMessageList struct {
-	Count        int64       `json:"count"`
-	FirstOrdinal *int64      `json:"first_ordinal,omitempty"`
-	LastOrdinal  *int64      `json:"last_ordinal,omitempty"`
-	Messages     []DBMessage `json:"messages" validate:"required"`
-}
-
-func (s ServiceMessageList) Validate() error {
-	var errors runtime.ValidationErrors
-	for i, item := range s.Messages {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("Messages[%d]", i), err)
-			}
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type ServiceMessageList = service.MessageList
 
 type ServiceRecallContextMeta struct {
 	EntryCount                        int64               `json:"entry_count"`
@@ -19611,70 +18783,7 @@ func (s ServiceRecallQuery) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(s))
 }
 
-type ServiceRecallQueryResult struct {
-	Context        *string                    `json:"context,omitempty"`
-	ContextEntries []DBRecallResult           `json:"context_entries,omitempty"`
-	ContextMeta    *ServiceRecallContextMeta  `json:"context_meta,omitempty"`
-	ContextSummary *ServiceRecallQuerySummary `json:"context_summary,omitempty"`
-	Entries        []DBRecallResult           `json:"entries" validate:"required"`
-	MissReason     string                     `json:"miss_reason" validate:"required"`
-	Mode           string                     `json:"mode" validate:"required"`
-	QueryID        string                     `json:"query_id" validate:"required"`
-	Summary        *ServiceRecallQuerySummary `json:"summary,omitempty"`
-	TrustedOnly    bool                       `json:"trusted_only"`
-}
-
-func (s ServiceRecallQueryResult) Validate() error {
-	var errors runtime.ValidationErrors
-	for i, item := range s.ContextEntries {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("ContextEntries[%d]", i), err)
-			}
-		}
-	}
-	if s.ContextMeta != nil {
-		if v, ok := any(s.ContextMeta).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("ContextMeta", err)
-			}
-		}
-	}
-	if s.ContextSummary != nil {
-		if v, ok := any(s.ContextSummary).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("ContextSummary", err)
-			}
-		}
-	}
-	for i, item := range s.Entries {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("Entries[%d]", i), err)
-			}
-		}
-	}
-	if err := typesValidator.Var(s.MissReason, "required"); err != nil {
-		errors = errors.Append("MissReason", err)
-	}
-	if err := typesValidator.Var(s.Mode, "required"); err != nil {
-		errors = errors.Append("Mode", err)
-	}
-	if err := typesValidator.Var(s.QueryID, "required"); err != nil {
-		errors = errors.Append("QueryID", err)
-	}
-	if s.Summary != nil {
-		if v, ok := any(s.Summary).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("Summary", err)
-			}
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type ServiceRecallQueryResult = service.RecallQueryResult
 
 type ServiceRecallQuerySummary struct {
 	ByAgent           map[string]int64 `json:"by_agent"`
@@ -19697,162 +18806,11 @@ type ServiceRecallQuerySummary struct {
 	Count             int64            `json:"count"`
 }
 
-type ServiceSecretFindingList struct {
-	Findings   []DBSecretFindingRow `json:"findings" validate:"required"`
-	NextCursor *int64               `json:"next_cursor,omitempty"`
-}
+type ServiceSecretFindingList = service.SecretFindingList
 
-func (s ServiceSecretFindingList) Validate() error {
-	var errors runtime.ValidationErrors
-	for i, item := range s.Findings {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("Findings[%d]", i), err)
-			}
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type ServiceSessionDetail = service.SessionDetail
 
-type ServiceSessionDetail struct {
-	Agent                  string            `json:"agent" validate:"required"`
-	AgentLabel             *string           `json:"agent_label,omitempty"`
-	CompactionCount        int64             `json:"compaction_count"`
-	ConsecutiveFailureMax  int64             `json:"consecutive_failure_max"`
-	ContextPressureMax     *float64          `json:"context_pressure_max,omitempty"`
-	CreatedAt              string            `json:"created_at" validate:"required"`
-	Cwd                    *string           `json:"cwd,omitempty"`
-	DecodeConfidence       *string           `json:"decode_confidence,omitempty"`
-	DeletedAt              *string           `json:"deleted_at,omitempty"`
-	DisplayName            *string           `json:"display_name,omitempty"`
-	EditChurnCount         int64             `json:"edit_churn_count"`
-	EndedAt                *string           `json:"ended_at,omitempty" validate:"required"`
-	EndedWithRole          string            `json:"ended_with_role" validate:"required"`
-	Entrypoint             *string           `json:"entrypoint,omitempty"`
-	FileDevice             *int64            `json:"file_device,omitempty"`
-	FileHash               *string           `json:"file_hash,omitempty"`
-	FileInode              *int64            `json:"file_inode,omitempty"`
-	FileMtime              *int64            `json:"file_mtime,omitempty"`
-	FilePath               *string           `json:"file_path,omitempty"`
-	FileSize               *int64            `json:"file_size,omitempty"`
-	FinalFailureStreak     int64             `json:"final_failure_streak"`
-	FirstMessage           *string           `json:"first_message,omitempty" validate:"required"`
-	GitBranch              *string           `json:"git_branch,omitempty"`
-	HasPeakContextTokens   bool              `json:"has_peak_context_tokens"`
-	HasTotalOutputTokens   bool              `json:"has_total_output_tokens"`
-	HealthGrade            *string           `json:"health_grade,omitempty"`
-	HealthPenalties        map[string]int64  `json:"health_penalties,omitempty"`
-	HealthScore            *int64            `json:"health_score,omitempty"`
-	HealthScoreBasis       []string          `json:"health_score_basis,omitempty"`
-	ID                     string            `json:"id" validate:"required"`
-	IsAutomated            bool              `json:"is_automated"`
-	IsTruncated            *bool             `json:"is_truncated,omitempty"`
-	LocalModifiedAt        *string           `json:"local_modified_at,omitempty"`
-	Machine                string            `json:"machine" validate:"required"`
-	MessageCount           int64             `json:"message_count"`
-	MidTaskCompactionCount int64             `json:"mid_task_compaction_count"`
-	Outcome                string            `json:"outcome" validate:"required"`
-	OutcomeConfidence      string            `json:"outcome_confidence" validate:"required"`
-	ParentSessionID        *string           `json:"parent_session_id,omitempty"`
-	ParserMalformedLines   *int64            `json:"parser_malformed_lines,omitempty"`
-	PeakContextTokens      int64             `json:"peak_context_tokens"`
-	Project                string            `json:"project" validate:"required"`
-	ProjectAssigned        *bool             `json:"project_assigned,omitempty"`
-	QualitySignals         *DBQualitySignals `json:"quality_signals,omitempty"`
-	RelationshipType       *string           `json:"relationship_type,omitempty"`
-	SecretLeakCount        int64             `json:"secret_leak_count"`
-	SessionKind            *string           `json:"session_kind,omitempty"`
-	SignalsPendingSince    *string           `json:"signals_pending_since,omitempty"`
-	SourceSessionID        *string           `json:"source_session_id,omitempty"`
-	SourceVersion          *string           `json:"source_version,omitempty"`
-	StartedAt              *string           `json:"started_at,omitempty" validate:"required"`
-	TerminationStatus      *string           `json:"termination_status,omitempty"`
-	ToolFailureSignalCount int64             `json:"tool_failure_signal_count"`
-	ToolRetryCount         int64             `json:"tool_retry_count"`
-	TotalOutputTokens      int64             `json:"total_output_tokens"`
-	TranscriptFidelity     *string           `json:"transcript_fidelity,omitempty"`
-	TranscriptRevision     *string           `json:"transcript_revision,omitempty"`
-	UserMessageCount       int64             `json:"user_message_count"`
-	WebURL                 *string           `json:"web_url,omitempty"`
-}
-
-func (s ServiceSessionDetail) Validate() error {
-	var errors runtime.ValidationErrors
-	if err := typesValidator.Var(s.Agent, "required"); err != nil {
-		errors = errors.Append("Agent", err)
-	}
-	if err := typesValidator.Var(s.CreatedAt, "required"); err != nil {
-		errors = errors.Append("CreatedAt", err)
-	}
-	if s.EndedAt != nil {
-		if err := typesValidator.Var(s.EndedAt, "required"); err != nil {
-			errors = errors.Append("EndedAt", err)
-		}
-	}
-	if err := typesValidator.Var(s.EndedWithRole, "required"); err != nil {
-		errors = errors.Append("EndedWithRole", err)
-	}
-	if s.FirstMessage != nil {
-		if err := typesValidator.Var(s.FirstMessage, "required"); err != nil {
-			errors = errors.Append("FirstMessage", err)
-		}
-	}
-	if err := typesValidator.Var(s.ID, "required"); err != nil {
-		errors = errors.Append("ID", err)
-	}
-	if err := typesValidator.Var(s.Machine, "required"); err != nil {
-		errors = errors.Append("Machine", err)
-	}
-	if err := typesValidator.Var(s.Outcome, "required"); err != nil {
-		errors = errors.Append("Outcome", err)
-	}
-	if err := typesValidator.Var(s.OutcomeConfidence, "required"); err != nil {
-		errors = errors.Append("OutcomeConfidence", err)
-	}
-	if err := typesValidator.Var(s.Project, "required"); err != nil {
-		errors = errors.Append("Project", err)
-	}
-	if s.QualitySignals != nil {
-		if v, ok := any(s.QualitySignals).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("QualitySignals", err)
-			}
-		}
-	}
-	if s.StartedAt != nil {
-		if err := typesValidator.Var(s.StartedAt, "required"); err != nil {
-			errors = errors.Append("StartedAt", err)
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
-
-type ServiceSessionList struct {
-	NextCursor *string     `json:"next_cursor,omitempty"`
-	Sessions   []DBSession `json:"sessions" validate:"required"`
-	Total      int64       `json:"total"`
-}
-
-func (s ServiceSessionList) Validate() error {
-	var errors runtime.ValidationErrors
-	for i, item := range s.Sessions {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("Sessions[%d]", i), err)
-			}
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type ServiceSessionList = service.SessionList
 
 type ServiceSyncInput struct {
 	ID        *string `json:"id,omitempty"`
@@ -19876,25 +18834,7 @@ func (s ServiceToolCall) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(s))
 }
 
-type ServiceToolCallList struct {
-	Count     int64             `json:"count"`
-	ToolCalls []ServiceToolCall `json:"tool_calls" validate:"required"`
-}
-
-func (s ServiceToolCallList) Validate() error {
-	var errors runtime.ValidationErrors
-	for i, item := range s.ToolCalls {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("ToolCalls[%d]", i), err)
-			}
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type ServiceToolCallList = service.ToolCallList
 
 type ServiceUsagePairwiseComparisonDelta struct {
 	CacheCreationDelta      int64      `json:"cacheCreationDelta"`
@@ -19935,34 +18875,7 @@ func (s ServiceUsagePairwiseComparisonDelta) Validate() error {
 	return errors
 }
 
-type ServiceUsagePairwiseComparisonResponse struct {
-	Deltas ServiceUsagePairwiseComparisonDelta `json:"deltas"`
-	Left   ServiceUsagePairwiseComparisonSide  `json:"left"`
-	Right  ServiceUsagePairwiseComparisonSide  `json:"right"`
-}
-
-func (s ServiceUsagePairwiseComparisonResponse) Validate() error {
-	var errors runtime.ValidationErrors
-	if v, ok := any(s.Deltas).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Deltas", err)
-		}
-	}
-	if v, ok := any(s.Left).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Left", err)
-		}
-	}
-	if v, ok := any(s.Right).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Right", err)
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type ServiceUsagePairwiseComparisonResponse = service.UsagePairwiseComparisonResponse
 
 type ServiceUsagePairwiseComparisonSide struct {
 	CacheCreationTokens int64       `json:"cacheCreationTokens"`
@@ -19996,47 +18909,7 @@ func (s ServiceUsagePairwiseComparisonSide) Validate() error {
 	return errors
 }
 
-type SessionUsageBreakdownResponse struct {
-	CacheCreationInputTokens int64      `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int64      `json:"cache_read_input_tokens"`
-	Cost                     MoneyMoney `json:"cost"`
-	HasCost                  bool       `json:"has_cost"`
-	InputTokens              int64      `json:"input_tokens"`
-	Label                    string     `json:"label" validate:"required"`
-	MessageOrdinal           *int64     `json:"message_ordinal,omitempty"`
-	Model                    string     `json:"model" validate:"required"`
-	Ordinal                  int64      `json:"ordinal"`
-	OutputTokens             int64      `json:"output_tokens"`
-	Source                   string     `json:"source" validate:"required"`
-	SubagentSessionID        *string    `json:"subagent_session_id,omitempty"`
-	Timestamp                string     `json:"timestamp" validate:"required"`
-	WebSearchRequests        *int64     `json:"web_search_requests,omitempty"`
-}
-
-func (s SessionUsageBreakdownResponse) Validate() error {
-	var errors runtime.ValidationErrors
-	if v, ok := any(s.Cost).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("Cost", err)
-		}
-	}
-	if err := typesValidator.Var(s.Label, "required"); err != nil {
-		errors = errors.Append("Label", err)
-	}
-	if err := typesValidator.Var(s.Model, "required"); err != nil {
-		errors = errors.Append("Model", err)
-	}
-	if err := typesValidator.Var(s.Source, "required"); err != nil {
-		errors = errors.Append("Source", err)
-	}
-	if err := typesValidator.Var(s.Timestamp, "required"); err != nil {
-		errors = errors.Append("Timestamp", err)
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
+type SessionUsageBreakdownResponse = db.SessionUsageBreakdownEntry
 
 type SessionUsageResponse struct {
 	Agent               string                          `json:"agent" validate:"required"`
@@ -20228,13 +19101,7 @@ func (s SyncWatchRename) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(s))
 }
 
-type UnsupportedUsage struct {
-	Kind string `json:"kind" validate:"required"`
-}
-
-func (u UnsupportedUsage) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(u))
-}
+type UnsupportedUsage = service.UnsupportedUsage
 
 type UsageSummaryResponse struct {
 	AgentTotals      []AgentTotal                     `json:"agentTotals" validate:"required"`
@@ -20372,51 +19239,9 @@ func (v VectorBuildResult) Validate() error {
 	return errors
 }
 
-type VectorBuildStatus struct {
-	BuildID         *int64             `json:"build_id,omitempty"`
-	Dimension       *int64             `json:"dimension,omitempty"`
-	Done            int64              `json:"done"`
-	EstimateReady   *bool              `json:"estimate_ready,omitempty"`
-	EtaMilliseconds int64              `json:"eta_milliseconds"`
-	LastError       *string            `json:"last_error,omitempty"`
-	LastResult      *VectorBuildResult `json:"last_result,omitempty"`
-	Model           *string            `json:"model,omitempty"`
-	Phase           *string            `json:"phase,omitempty"`
-	RatePerSecond   *float64           `json:"rate_per_second,omitempty"`
-	Running         bool               `json:"running"`
-	StartedAt       *string            `json:"started_at,omitempty"`
-	Total           int64              `json:"total"`
-}
+type VectorBuildStatus = vector.BuildStatus
 
-func (v VectorBuildStatus) Validate() error {
-	var errors runtime.ValidationErrors
-	if v.LastResult != nil {
-		if v, ok := any(v.LastResult).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("LastResult", err)
-			}
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
-
-type VectorGenerationInfo struct {
-	Dimension   int64   `json:"dimension"`
-	Embedded    int64   `json:"embedded"`
-	Fingerprint string  `json:"fingerprint" validate:"required"`
-	ID          int64   `json:"id"`
-	Missing     int64   `json:"missing"`
-	Model       string  `json:"model" validate:"required"`
-	State       string  `json:"state" validate:"required"`
-	Store       *string `json:"store,omitempty"`
-}
-
-func (v VectorGenerationInfo) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(v))
-}
+type VectorGenerationInfo = vector.GenerationInfo
 
 type VectorRefreshStats struct {
 	Deleted   int64 `json:"Deleted"`

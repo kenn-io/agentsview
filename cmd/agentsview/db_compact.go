@@ -209,11 +209,10 @@ func requestDBCompact(
 		}
 		return db.CompactResult{}, fmt.Errorf("archive compaction: %s", api.Error)
 	}
-	var result db.CompactResult
-	if err := json.Unmarshal(response.Body, &result); err != nil {
+	if err != nil {
 		return db.CompactResult{}, fmt.Errorf("decode archive compaction result: %w", err)
 	}
-	return result, nil
+	return *response.JSON200, nil
 }
 
 func writeDBCompactResult(out io.Writer, result db.CompactResult, jsonOutput bool) error {

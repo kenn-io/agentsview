@@ -22,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	mcpserver "go.kenn.io/agentsview/internal/mcp"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func newMCPCommand() *cobra.Command {
@@ -159,13 +160,13 @@ func resolveMCPService(
 		if err != nil {
 			return nil, nil, err
 		}
-		capabilities, err := service.ProbeHTTPServerCapabilities(
+		capabilities, err := servicehttp.ProbeHTTPServerCapabilities(
 			cmd.Context(), remote, token,
 		)
 		if err != nil {
 			return nil, nil, err
 		}
-		return service.NewHTTPBackendForServer(remote, token, capabilities),
+		return servicehttp.NewHTTPBackendForServer(remote, token, capabilities),
 			func() {}, nil
 	}
 	cfg, err := config.LoadPFlags(cmd.Flags())
@@ -218,7 +219,7 @@ func (s *mcpDaemonService) daemonService(
 		)
 	}
 	s.cfg.AuthToken = cfg.AuthToken
-	return service.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL), nil
+	return servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL), nil
 }
 
 func (s *mcpDaemonService) Get(

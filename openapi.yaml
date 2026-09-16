@@ -11456,12 +11456,12 @@ paths:
               $ref: "#/components/schemas/EmbeddingsBuildRequest"
         required: true
       responses:
-        "200":
+        "202":
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/EmbeddingsBuildResponse"
-          description: OK
+          description: Accepted
         "400":
           content:
             application/json:

@@ -31,6 +31,9 @@ func (s *Server) describeTransferRoutes() {
 			}
 			archiveSchema := schemas.SchemaFromRef(requestSchema.Ref)
 			deltaFilesSchema := archiveSchema.Properties["delta_files"]
+			if deltaFilesSchema == nil {
+				panic("remote archive schema is missing delta_files")
+			}
 			if deltaFilesSchema.Extensions == nil {
 				deltaFilesSchema.Extensions = map[string]any{}
 			}

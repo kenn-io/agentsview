@@ -231,17 +231,10 @@ func fetchHTTPActivitySessionPage(
 			response.StatusCode, strings.TrimSpace(string(body)),
 		)
 	}
-	var page struct {
-		ReportID        string                `json:"report_id"`
-		Sessions        []activity.SessionRow `json:"sessions"`
-		NextCursor      string                `json:"next_cursor"`
-		Total           int                   `json:"total"`
-		RefreshRequired bool                  `json:"refresh_required"`
-		Report          *activity.Report      `json:"report"`
-	}
-	if err := json.Unmarshal(result.Body, &page); err != nil {
+	if err != nil {
 		return activity.Report{}, err
 	}
+	page := result.JSON200
 	if page.Report != nil {
 		return *page.Report, nil
 	}
@@ -251,8 +244,10 @@ func fetchHTTPActivitySessionPage(
 		)
 	}
 	report.BySession = page.Sessions
-	report.SessionsNextCursor = page.NextCursor
-	report.SessionsTotal = page.Total
+	if page.NextCursor != nil {
+		report.SessionsNextCursor = *page.NextCursor
+	}
+	report.SessionsTotal = int(page.Total)
 	return report, nil
 }
 
@@ -431,7 +426,7 @@ func resolveActivityReport(
 	}
 	report := artifacts.Report
 	report.BySession = page.Sessions
-	report.SessionsTotal = page.Total
+	report.SessionsTotal = int(page.Total)
 	if page.HasNext {
 		payload, marshalErr := json.Marshal(newCLIActivitySessionCursor(
 			digest, page.Next, options, q, f,

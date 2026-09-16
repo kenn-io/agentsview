@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 // fixedNow is the deterministic clock used in tests so the 10-minute
@@ -1649,7 +1650,7 @@ func TestListSessionsIncludesBrowserLink(t *testing.T) {
 		fmt.Fprint(w, `{"sessions":[{"id":"codex:session-42"}]}`)
 	}))
 	defer server.Close()
-	tools := &toolset{svc: service.NewHTTPBackend(server.URL, "", false, "")}
+	tools := &toolset{svc: servicehttp.NewHTTPBackend(server.URL, "", false, "")}
 	_, out, err := tools.listSessions(t.Context(), nil, listSessionsIn{})
 	require.NoError(t, err)
 	require.Len(t, out.Sessions, 1)

@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 	"go.kenn.io/agentsview/internal/timeutil"
 )
 
@@ -71,7 +72,7 @@ func resolveService(
 		if err != nil {
 			return nil, nil, err
 		}
-		return service.NewHTTPBackend(remote, token, false, ""),
+		return servicehttp.NewHTTPBackend(remote, token, false, ""),
 			func() {}, nil
 	}
 	cfg, err := config.LoadPFlags(cmd.Flags())
@@ -145,7 +146,7 @@ func resolveWritableServiceWithIntent(
 		if err != nil {
 			return nil, nil, err
 		}
-		return service.NewHTTPBackend(remote, token, false, ""),
+		return servicehttp.NewHTTPBackend(remote, token, false, ""),
 			func() {}, nil
 	}
 	if pgReadRequested(cmd) {

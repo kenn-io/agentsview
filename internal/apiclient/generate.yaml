@@ -55,3 +55,6 @@ filter:
       - head-api-v1-raw-sync-uploads-upload-id
       - patch-api-v1-raw-sync-uploads-upload-id
       - post-api-v1-raw-sync-manifests
+overlay:
+  sources:
+    - internal/apiclient/models.overlay.yaml

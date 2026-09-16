@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -631,6 +630,7 @@ func fetchHTTPDailyUsage(
 	}
 	var resp *http.Response
 	var payload []byte
+	var out apiclient.UsageSummaryResponse
 	var stream *runtime.Stream[[]byte]
 	if query.Progress != nil {
 		response, requestErr := api.GetAPIV1UsageSummaryStreamStreamWithResponse(ctx, &apiclient.GetAPIV1UsageSummaryStreamRequestOptions{Query: &q})
@@ -645,6 +645,12 @@ func fetchHTTPDailyUsage(
 			return db.DailyUsageResult{}, requestErr
 		}
 		resp, payload = response.HTTPResponse, response.Body
+		if response.StatusCode == http.StatusOK {
+			if requestErr != nil {
+				return db.DailyUsageResult{}, requestErr
+			}
+			out = *response.JSON200
+		}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -654,12 +660,11 @@ func fetchHTTPDailyUsage(
 			resp.StatusCode, strings.TrimSpace(string(body)),
 		)
 	}
-	var body io.Reader = bytes.NewReader(payload)
 	if query.Progress != nil {
 		if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 			return db.DailyUsageResult{}, fmt.Errorf("usage summary: expected a progress stream, received %q", resp.Header.Get("Content-Type"))
 		}
-		data, err := consumeDaemonPushEvents[jsontext.Value](stream, func(p struct {
+		data, err := consumeDaemonPushEvents[apiclient.UsageSummaryResponse](stream, func(p struct {
 			Detail string `json:"detail"`
 		}) {
 			query.Progress(p.Detail)
@@ -667,24 +672,17 @@ func fetchHTTPDailyUsage(
 		if err != nil {
 			return db.DailyUsageResult{}, fmt.Errorf("usage summary: %w", err)
 		}
-		body = bytes.NewReader(data)
-	}
-	var out struct {
-		SchemaVersion int                               `json:"schema_version,omitempty"`
-		Pricing       *export.PricingBlock              `json:"pricing,omitempty"`
-		Projects      map[string]export.ProjectMapEntry `json:"projects,omitempty"`
-		Totals        db.UsageTotals                    `json:"totals"`
-		Daily         []db.DailyUsageEntry              `json:"daily"`
-		SessionCounts db.UsageSessionCounts             `json:"sessionCounts"`
-	}
-	if err := json.UnmarshalRead(body, &out); err != nil {
-		return db.DailyUsageResult{}, err
+		out = data
 	}
 	if out.Projects == nil {
 		out.Projects = map[string]export.ProjectMapEntry{}
 	}
+	schemaVersion := 0
+	if out.SchemaVersion != nil {
+		schemaVersion = int(*out.SchemaVersion)
+	}
 	return db.DailyUsageResult{
-		SchemaVersion: out.SchemaVersion,
+		SchemaVersion: schemaVersion,
 		Pricing:       out.Pricing,
 		Projects:      out.Projects,
 		Daily:         out.Daily,

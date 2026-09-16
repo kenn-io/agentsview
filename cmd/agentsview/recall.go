@@ -19,6 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/pathutil"
 	corerecall "go.kenn.io/agentsview/internal/recall"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func newRecallCommand() *cobra.Command {
@@ -64,7 +65,7 @@ func resolveRecallEntryService(
 	if err != nil {
 		return nil, nil, err
 	}
-	return service.NewHTTPBackend(remote, token, false, ""), func() {}, nil
+	return servicehttp.NewHTTPBackend(remote, token, false, ""), func() {}, nil
 }
 
 // resolveWritableRecallEntryService is the write-capable counterpart of
@@ -83,7 +84,7 @@ func resolveWritableRecallEntryService(
 	if err != nil {
 		return nil, nil, err
 	}
-	return service.NewHTTPBackend(remote, token, false, ""), func() {}, nil
+	return servicehttp.NewHTTPBackend(remote, token, false, ""), func() {}, nil
 }
 
 func newRecallListCommand() *cobra.Command {

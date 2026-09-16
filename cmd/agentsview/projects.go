@@ -63,13 +63,7 @@ func fetchHTTPProjects(
 	if err != nil {
 		return nil, err
 	}
-	var out struct {
-		Projects []db.ProjectInfo `json:"projects"`
-	}
-	if err := json.Unmarshal(response.Body, &out); err != nil {
-		return nil, err
-	}
-	return out.Projects, nil
+	return response.JSON200.Projects, nil
 }
 
 func writeProjects(projects []db.ProjectInfo, jsonOutput bool) {

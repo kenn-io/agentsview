@@ -42,7 +42,7 @@ const fingerprintDisplayLen = 12
 // embeddingsDaemonHTTPClient bounds each individual request the embeddings
 // daemon client makes (build/status/list/activate/retire) so a wedged
 // daemon cannot hang the CLI forever, matching the timeout other daemon
-// HTTP clients in this codebase use (internal/service/http.go's
+// HTTP clients in this codebase use (internal/servicehttp/http.go's
 // httpBackend.client). This is a per-request timeout, not a deadline on the
 // overall command: buildViaDaemon's poll loop issues one status call every
 // embeddingsPollInterval, so a build that legitimately runs for longer than
@@ -964,7 +964,7 @@ func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.Build
 	if response == nil {
 		return err
 	}
-	return decodeEmbeddingResponse(response.StatusCode, response.Body, nil)
+	return embeddingResponseError(response.StatusCode, response.Body, err)
 }
 
 func (c embeddingsDaemonClient) status(ctx context.Context) (vector.BuildStatus, error) {
@@ -981,14 +981,13 @@ func (c embeddingsDaemonClient) status(ctx context.Context) (vector.BuildStatus,
 	if response == nil {
 		return out, err
 	}
-	err = decodeEmbeddingResponse(response.StatusCode, response.Body, &out)
-	return out, err
+	if err := embeddingResponseError(response.StatusCode, response.Body, err); err != nil {
+		return out, err
+	}
+	return *response.JSON200, nil
 }
 
 func (c embeddingsDaemonClient) generations(ctx context.Context) ([]vector.GenerationInfo, error) {
-	var out struct {
-		Generations []vector.GenerationInfo `json:"generations"`
-	}
 	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
 	if err != nil {
 		return nil, err
@@ -1001,8 +1000,10 @@ func (c embeddingsDaemonClient) generations(ctx context.Context) ([]vector.Gener
 	if response == nil {
 		return nil, err
 	}
-	err = decodeEmbeddingResponse(response.StatusCode, response.Body, &out)
-	return out.Generations, err
+	if err := embeddingResponseError(response.StatusCode, response.Body, err); err != nil {
+		return nil, err
+	}
+	return response.JSON200.Generations, nil
 }
 
 func (c embeddingsDaemonClient) activate(ctx context.Context, id int64, force bool) error {
@@ -1021,7 +1022,7 @@ func (c embeddingsDaemonClient) activate(ctx context.Context, id int64, force bo
 	if response == nil {
 		return err
 	}
-	return decodeEmbeddingResponse(response.StatusCode, response.Body, nil)
+	return embeddingResponseError(response.StatusCode, response.Body, err)
 }
 
 func (c embeddingsDaemonClient) retire(ctx context.Context, id int64, force bool) error {
@@ -1040,7 +1041,7 @@ func (c embeddingsDaemonClient) retire(ctx context.Context, id int64, force bool
 	if response == nil {
 		return err
 	}
-	return decodeEmbeddingResponse(response.StatusCode, response.Body, nil)
+	return embeddingResponseError(response.StatusCode, response.Body, err)
 }
 
 func daemonEmbeddingStore(name string) string {
@@ -1050,14 +1051,11 @@ func daemonEmbeddingStore(name string) string {
 	return name
 }
 
-func decodeEmbeddingResponse(status int, body []byte, out any) error {
+func embeddingResponseError(status int, body []byte, err error) error {
 	if status >= 300 {
 		return &daemonAPIError{status: status, message: daemonErrorMessage(status, body)}
 	}
-	if out == nil {
-		return nil
-	}
-	return json.Unmarshal(body, out)
+	return err
 }
 
 // daemonErrorMessage extracts the {"error": "..."} message huma's error

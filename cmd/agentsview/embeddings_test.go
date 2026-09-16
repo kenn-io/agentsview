@@ -668,7 +668,7 @@ func TestRunDirectBuildPrintsFailedAttemptResult(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusAccepted)
 	})
 	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -747,7 +747,7 @@ END`)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
+		w.WriteHeader(http.StatusAccepted)
 	})
 	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1546,6 +1546,7 @@ func TestBuildViaDaemonAlwaysSendsIncludeAutomated(t *testing.T) {
 			mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, r *http.Request) {
 				require.NoError(t, json.UnmarshalRead(r.Body, &body))
 				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusAccepted)
 				_ = json.MarshalWrite(w, map[string]bool{"started": true})
 			})
 			mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {
@@ -1576,6 +1577,7 @@ func TestBuildViaDaemonLastErrorReturnsNonZero(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
 		_ = json.MarshalWrite(w, map[string]bool{"started": true})
 	})
 	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, r *http.Request) {

@@ -1,4 +1,4 @@
-package service
+package servicehttp
 
 import (
 	"errors"

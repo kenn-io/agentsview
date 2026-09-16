@@ -24,6 +24,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 var sessionUsageHTTPClient = &http.Client{Timeout: 30 * time.Second}
@@ -136,7 +137,7 @@ func sessionUsageDataForCommand(
 func requireRemoteSubagentUsageSupport(
 	ctx context.Context, baseURL, token string,
 ) error {
-	capabilities, err := service.ProbeHTTPServerCapabilities(
+	capabilities, err := servicehttp.ProbeHTTPServerCapabilities(
 		ctx, baseURL, token,
 	)
 	if err != nil {
@@ -172,7 +173,7 @@ func httpSessionUsageData(
 	}
 	sessionID := query.SessionID
 	resolvedID, err := resolveServiceSessionID(
-		ctx, service.NewHTTPBackend(baseURL, token, false, ""), sessionID,
+		ctx, servicehttp.NewHTTPBackend(baseURL, token, false, ""), sessionID,
 	)
 	if err != nil {
 		if strings.HasPrefix(err.Error(), "session not found:") {
@@ -182,7 +183,7 @@ func httpSessionUsageData(
 		return nil, tokenUseExitErr, err
 	}
 	if !query.OwnOnly {
-		backend := service.NewHTTPBackend(baseURL, token, false, "")
+		backend := servicehttp.NewHTTPBackend(baseURL, token, false, "")
 		if _, syncErr := backend.Sync(ctx, service.SyncInput{
 			ID: resolvedID, Subagents: true,
 		}); syncErr != nil && !errors.Is(syncErr, db.ErrReadOnly) {
@@ -218,11 +219,25 @@ func httpSessionUsageData(
 			"usage: HTTP %d: %s", resp.StatusCode, body,
 		)
 	}
-	var out sessionUsageOutput
-	if err := json.Unmarshal(response.Body, &out); err != nil {
+	if err != nil {
 		return nil, tokenUseExitErr, err
 	}
-	out.ServerRunning = true
+	wire := response.JSON200
+	out := sessionUsageOutput{
+		SessionID: wire.SessionID, Agent: wire.Agent, Project: wire.Project,
+		TotalOutputTokens: int(wire.TotalOutputTokens), PeakContextTokens: int(wire.PeakContextTokens),
+		HasTokenData: wire.HasTokenData, Cost: wire.Cost, HasCost: wire.HasCost, CostUSD: wire.CostUsd,
+		Models: wire.Models, UnpricedModels: wire.UnpricedModels,
+		BreakdownCount: int(wire.BreakdownCount), Breakdown: wire.Breakdown, ServerRunning: true}
+	if wire.CostSource != nil {
+		out.CostSource = export.CostSource(*wire.CostSource)
+	}
+	if wire.AiCredits != nil {
+		out.AICredits = *wire.AiCredits
+	}
+	if wire.SubagentCount != nil {
+		out.SubagentCount = int(*wire.SubagentCount)
+	}
 	return &out, usageExitCode(&out.SessionUsage), nil
 }
 

@@ -1,6 +1,6 @@
 // ABOUTME: httpBackend implements SessionService by proxying HTTP
 // ABOUTME: calls to a running agentsview daemon.
-package service
+package servicehttp
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 // errHTTPNotFound is returned by the generated client adapter for 404 responses so callers
@@ -100,7 +101,7 @@ type HTTPServerCapabilities struct {
 // on every request so the backend works against daemons running
 // with require_auth=true. browserURL selects the browser-facing address;
 // an empty value uses baseURL.
-func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) SessionService {
+func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) service.SessionService {
 	b := newHTTPBackend(baseURL, token, readOnly, !readOnly)
 	if browserURL != "" {
 		b.browserURL = browserURL
@@ -112,7 +113,7 @@ func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) Ses
 // are limited by metadata probed from an explicitly selected daemon.
 func NewHTTPBackendForServer(
 	baseURL, token string, capabilities HTTPServerCapabilities,
-) SessionService {
+) service.SessionService {
 	return newHTTPBackend(
 		baseURL,
 		token,
@@ -142,7 +143,6 @@ func ProbeHTTPServerCapabilities(
 	ctx context.Context, baseURL, token string,
 ) (HTTPServerCapabilities, error) {
 	b := newHTTPBackend(baseURL, token, false, false)
-	var capabilities HTTPServerCapabilities
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return HTTPServerCapabilities{}, err
@@ -151,12 +151,12 @@ func ProbeHTTPServerCapabilities(
 	if response == nil {
 		return HTTPServerCapabilities{}, err
 	}
-	err = decodeServiceResponse(response.HTTPResponse, response.Body, &capabilities, err)
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		return HTTPServerCapabilities{},
 			fmt.Errorf("probing server capabilities: %w", err)
 	}
-	return capabilities, nil
+	return HTTPServerCapabilities{ReadOnly: response.JSON200.ReadOnly != nil && *response.JSON200.ReadOnly, APIVersion: int(response.JSON200.APIVersion)}, nil
 }
 
 func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }
@@ -175,8 +175,7 @@ func (b *httpBackend) MachineLabels(
 
 func (b *httpBackend) Get(
 	ctx context.Context, id string,
-) (*SessionDetail, error) {
-	var out SessionDetail
+) (*service.SessionDetail, error) {
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -185,7 +184,8 @@ func (b *httpBackend) Get(
 	if response == nil {
 		return nil, err
 	}
-	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	out := response.JSON200
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if errors.Is(err, errHTTPNotFound) {
 		// Match directBackend.Get: absent session returns (nil, nil)
 		// so transport swaps stay neutral.
@@ -195,7 +195,7 @@ func (b *httpBackend) Get(
 		return nil, err
 	}
 	out.WebURL = b.sessionWebURL(out.ID)
-	return &out, nil
+	return out, nil
 }
 
 func (b *httpBackend) FindSessionIDsByPartial(
@@ -206,9 +206,6 @@ func (b *httpBackend) FindSessionIDsByPartial(
 	if limit > 0 {
 		q.Limit = new(int64(limit))
 	}
-	var out struct {
-		IDs []string `json:"ids"`
-	}
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -217,11 +214,11 @@ func (b *httpBackend) FindSessionIDsByPartial(
 	if response == nil {
 		return nil, err
 	}
-	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		return nil, err
 	}
-	return out.IDs, nil
+	return response.JSON200.Ids, nil
 }
 
 func (b *httpBackend) FindSessionIDsByRawSuffix(
@@ -249,13 +246,12 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 }
 
 func (b *httpBackend) List(
-	ctx context.Context, f ListFilter,
-) (*SessionList, error) {
+	ctx context.Context, f service.ListFilter,
+) (*service.SessionList, error) {
 	q, err := filterToQuery(f)
 	if err != nil {
 		return nil, err
 	}
-	var out SessionList
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -264,20 +260,21 @@ func (b *httpBackend) List(
 	if response == nil {
 		return nil, err
 	}
-	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	out := response.JSON200
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		return nil, err
 	}
 	for i := range out.Sessions {
 		out.Sessions[i].WebURL = b.sessionWebURL(out.Sessions[i].ID)
 	}
-	return &out, nil
+	return out, nil
 }
 
 // filterToQuery converts a ListFilter into the URL query params
 // expected by handleListSessions. Field mapping mirrors the
 // server-side parser in internal/server/sessions.go.
-func filterToQuery(f ListFilter) (*apiclient.GetAPIV1SessionsQuery, error) {
+func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, error) {
 	q := &apiclient.GetAPIV1SessionsQuery{}
 	if f.Project != "" {
 		q.Project = new(f.Project)
@@ -380,8 +377,8 @@ func filterToQuery(f ListFilter) (*apiclient.GetAPIV1SessionsQuery, error) {
 }
 
 func (b *httpBackend) Messages(
-	ctx context.Context, id string, f MessageFilter,
-) (*MessageList, error) {
+	ctx context.Context, id string, f service.MessageFilter,
+) (*service.MessageList, error) {
 	q := &apiclient.GetAPIV1SessionsIDMessagesQuery{}
 	if f.From != nil {
 		q.From = new(int64(*f.From))
@@ -404,7 +401,6 @@ func (b *httpBackend) Messages(
 	if len(f.Roles) > 0 {
 		q.Roles = new(strings.Join(f.Roles, ","))
 	}
-	var out MessageList
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -413,17 +409,17 @@ func (b *httpBackend) Messages(
 	if response == nil {
 		return nil, err
 	}
-	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	out := response.JSON200
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		return nil, err
 	}
-	return &out, nil
+	return out, nil
 }
 
 func (b *httpBackend) ToolCalls(
 	ctx context.Context, id string,
-) (*ToolCallList, error) {
-	var out ToolCallList
+) (*service.ToolCallList, error) {
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -432,16 +428,17 @@ func (b *httpBackend) ToolCalls(
 	if response == nil {
 		return nil, err
 	}
-	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	out := response.JSON200
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		return nil, err
 	}
-	return &out, nil
+	return out, nil
 }
 
 func (b *httpBackend) Sync(
-	ctx context.Context, in SyncInput,
-) (*SessionDetail, error) {
+	ctx context.Context, in service.SyncInput,
+) (*service.SessionDetail, error) {
 	if b.readOnly {
 		// Return the shared sentinel so callers can
 		// errors.Is(err, db.ErrReadOnly) regardless of
@@ -459,21 +456,21 @@ func (b *httpBackend) Sync(
 	if response == nil {
 		return nil, err
 	}
+	detail := response.JSON200
 	if response.StatusCode == http.StatusNotImplemented {
 		return nil, fmt.Errorf("sync: daemon at %s: %w", b.baseURL, db.ErrReadOnly)
 	}
-	var detail SessionDetail
-	if err := decodeServiceResponse(response.HTTPResponse, response.Body, &detail, err); err != nil {
+	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
 	}
 
 	detail.WebURL = b.sessionWebURL(detail.ID)
-	return &detail, nil
+	return detail, nil
 }
 
 func (b *httpBackend) Watch(
 	ctx context.Context, id string,
-) (<-chan Event, error) {
+) (<-chan service.Event, error) {
 	client, err := b.apiClient(b.longRunningClient)
 	if err != nil {
 		return nil, err
@@ -493,7 +490,7 @@ func (b *httpBackend) Watch(
 	}
 
 	stream := response.Stream200
-	out := make(chan Event)
+	out := make(chan service.Event)
 	go func() {
 		defer close(out)
 		defer stream.Close()
@@ -501,7 +498,7 @@ func (b *httpBackend) Watch(
 		for stream.Next() {
 			frame := stream.Event()
 			select {
-			case out <- Event{Event: frame.Type, Data: string(frame.Data)}:
+			case out <- service.Event{Event: frame.Type, Data: string(frame.Data)}:
 			case <-ctx.Done():
 				return
 			}
@@ -511,8 +508,8 @@ func (b *httpBackend) Watch(
 }
 
 func (b *httpBackend) Stats(
-	ctx context.Context, f StatsFilter,
-) (*SessionStats, error) {
+	ctx context.Context, f service.StatsFilter,
+) (*service.SessionStats, error) {
 	q := &apiclient.GetAPIV1SessionStatsQuery{}
 	if f.Since != "" {
 		q.Since = new(f.Since)
@@ -539,7 +536,6 @@ func (b *httpBackend) Stats(
 	q.IncludeGitOutcomes = new(f.IncludeGitOutcomes)
 	q.IncludeGithubOutcomes = new(f.IncludeGitHubOutcomes)
 
-	var out SessionStats
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -548,7 +544,8 @@ func (b *httpBackend) Stats(
 	if response == nil {
 		return nil, err
 	}
-	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	out := response.JSON200
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if errors.Is(err, errHTTPNotImplemented) {
 		return nil, fmt.Errorf(
 			"stats: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
@@ -557,12 +554,12 @@ func (b *httpBackend) Stats(
 	if err != nil {
 		return nil, err
 	}
-	return &out, nil
+	return out, nil
 }
 
 func (b *httpBackend) Search(
-	ctx context.Context, req SearchRequest,
-) (*SessionSearchResult, error) {
+	ctx context.Context, req service.SearchRequest,
+) (*service.SessionSearchResult, error) {
 	q := &apiclient.GetAPIV1SearchQuery{}
 	q.Q = req.Query
 	if req.Project != "" {
@@ -591,13 +588,6 @@ func (b *httpBackend) Search(
 	if req.Limit > 0 {
 		q.Limit = new(int64(req.Limit))
 	}
-	// GET /api/v1/search responds with {query, results, count, next};
-	// "next" is the int pagination cursor. Decode into a local shape and
-	// map it onto SessionSearchResult so the wire format stays internal.
-	var out struct {
-		Results []db.SearchResult `json:"results"`
-		Next    int               `json:"next"`
-	}
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -606,13 +596,14 @@ func (b *httpBackend) Search(
 	if response == nil {
 		return nil, err
 	}
-	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		if errors.Is(err, errHTTPNotImplemented) {
-			return nil, ErrSearchUnavailable
+			return nil, service.ErrSearchUnavailable
 		}
 		return nil, err
 	}
+	out := response.JSON200
 	for i := range out.Results {
 		out.Results[i].WebURL = b.sessionWebURL(out.Results[i].SessionID)
 	}
@@ -620,12 +611,12 @@ func (b *httpBackend) Search(
 	if results == nil {
 		results = []db.SearchResult{}
 	}
-	return &SessionSearchResult{Results: results, NextCursor: out.Next}, nil
+	return &service.SessionSearchResult{Results: results, NextCursor: int(out.Next)}, nil
 }
 
 func (b *httpBackend) SearchContent(
-	ctx context.Context, req ContentSearchRequest,
-) (*ContentSearchResult, error) {
+	ctx context.Context, req service.ContentSearchRequest,
+) (*service.ContentSearchResult, error) {
 	q := &apiclient.GetAPIV1SearchContentQuery{}
 	q.Pattern = req.Pattern
 	if req.Mode != "" {
@@ -712,11 +703,10 @@ func (b *httpBackend) SearchContent(
 	if req.Context > 0 {
 		q.Context = new(int64(req.Context))
 	}
-	var out ContentSearchResult
 	var editors []runtime.RequestEditorFn
 	if req.Mode == "semantic" || req.Mode == "hybrid" {
 		editors = append(editors, func(_ context.Context, r *http.Request) error {
-			r.Header.Set(SemanticSearchIntentHeader, SemanticSearchIntentValue)
+			r.Header.Set(service.SemanticSearchIntentHeader, service.SemanticSearchIntentValue)
 			return nil
 		})
 	}
@@ -729,7 +719,8 @@ func (b *httpBackend) SearchContent(
 	if response == nil {
 		return nil, err
 	}
-	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	out := response.JSON200
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		if notImpl, ok := errors.AsType[*errNotImplementedBody](err); ok {
 			return nil, wrapSemanticUnavailable(notImpl.message)
@@ -739,7 +730,7 @@ func (b *httpBackend) SearchContent(
 	for i := range out.Matches {
 		out.Matches[i].WebURL = b.sessionWebURL(out.Matches[i].SessionID)
 	}
-	return &out, nil
+	return out, nil
 }
 
 // wrapSemanticUnavailable turns a search/content 501 response's error
@@ -751,12 +742,12 @@ func (b *httpBackend) SearchContent(
 // empty or is exactly the sentinel's own text (no extra cause), the bare
 // sentinel is returned rather than duplicating it.
 func wrapSemanticUnavailable(message string) error {
-	sentinel := ErrSemanticUnavailable.Error()
+	sentinel := service.ErrSemanticUnavailable.Error()
 	if message == "" || message == sentinel {
-		return ErrSemanticUnavailable
+		return service.ErrSemanticUnavailable
 	}
 	if cause, ok := strings.CutPrefix(message, sentinel); ok {
-		return fmt.Errorf("%w%s", ErrSemanticUnavailable, cause)
+		return fmt.Errorf("%w%s", service.ErrSemanticUnavailable, cause)
 	}
 	if reason, ok := strings.CutPrefix(
 		message, "semantic search not available: ",
@@ -781,8 +772,8 @@ func wrapSemanticTransient(message string) error {
 }
 
 func (b *httpBackend) UsageSummary(
-	ctx context.Context, req UsageRequest,
-) (*UsageSummaryResult, error) {
+	ctx context.Context, req service.UsageRequest,
+) (*service.UsageSummaryResult, error) {
 	q := &apiclient.GetAPIV1UsageSummaryQuery{}
 	if req.From != "" {
 		parsedFrom, err := time.Parse(time.DateOnly, req.From)
@@ -857,7 +848,6 @@ func (b *httpBackend) UsageSummary(
 	q.IncludeOneShot = new(req.IncludeOneShot)
 	q.IncludeAutomated = new(req.IncludeAutomated)
 
-	var out UsageSummaryResult
 	api, err := b.apiClient(b.longRunningClient)
 	if err != nil {
 		return nil, err
@@ -866,7 +856,7 @@ func (b *httpBackend) UsageSummary(
 	if response == nil {
 		return nil, err
 	}
-	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if errors.Is(err, errHTTPNotImplemented) {
 		// A read-only daemon (pg serve) returns 501 for usage; surface
 		// the shared sentinel so callers can errors.Is it.
@@ -877,12 +867,23 @@ func (b *httpBackend) UsageSummary(
 	if err != nil {
 		return nil, err
 	}
-	return &out, nil
+	wire := response.JSON200
+	out := &service.UsageSummaryResult{
+		Pricing: wire.Pricing, Projects: wire.Projects, From: wire.From, To: wire.To,
+		Totals: wire.Totals, Daily: wire.Daily, ProjectTotals: wire.ProjectTotals,
+		ModelTotals: wire.ModelTotals, AgentTotals: wire.AgentTotals,
+		SessionCounts: wire.SessionCounts, CacheStats: wire.CacheStats,
+		UnsupportedUsage: wire.UnsupportedUsage,
+	}
+	if wire.SchemaVersion != nil {
+		out.SchemaVersion = int(*wire.SchemaVersion)
+	}
+	return out, nil
 }
 
 func (b *httpBackend) UsagePairwiseComparison(
-	ctx context.Context, req UsagePairwiseComparisonRequest,
-) (*UsagePairwiseComparisonResponse, error) {
+	ctx context.Context, req service.UsagePairwiseComparisonRequest,
+) (*service.UsagePairwiseComparisonResponse, error) {
 	q := &apiclient.GetAPIV1UsagePairwiseComparisonQuery{}
 	if req.From != "" {
 		parsedFrom, err := time.Parse(time.DateOnly, req.From)
@@ -960,7 +961,6 @@ func (b *httpBackend) UsagePairwiseComparison(
 		q.Model = new(req.Model)
 	}
 
-	var out UsagePairwiseComparisonResponse
 	api, err := b.apiClient(b.longRunningClient)
 	if err != nil {
 		return nil, err
@@ -969,7 +969,8 @@ func (b *httpBackend) UsagePairwiseComparison(
 	if response == nil {
 		return nil, err
 	}
-	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	out := response.JSON200
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if errors.Is(err, errHTTPNotImplemented) {
 		return nil, fmt.Errorf(
 			"usage pairwise comparison: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
@@ -978,17 +979,16 @@ func (b *httpBackend) UsagePairwiseComparison(
 	if err != nil {
 		return nil, err
 	}
-	return &out, nil
+	return out, nil
 }
 
 func (b *httpBackend) ListRecallEntries(
-	ctx context.Context, f RecallFilter,
-) (*RecallList, error) {
-	if err := ValidateRecallEntryLimit(f.Limit); err != nil {
+	ctx context.Context, f service.RecallFilter,
+) (*service.RecallList, error) {
+	if err := service.ValidateRecallEntryLimit(f.Limit); err != nil {
 		return nil, err
 	}
 	q := recallFilterToQuery(f)
-	var out RecallList
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -997,7 +997,7 @@ func (b *httpBackend) ListRecallEntries(
 	if response == nil {
 		return nil, err
 	}
-	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		if errors.Is(err, errHTTPNotImplemented) {
 			return nil, fmt.Errorf(
@@ -1006,6 +1006,7 @@ func (b *httpBackend) ListRecallEntries(
 		}
 		return nil, err
 	}
+	out := service.RecallList{RecallEntries: response.JSON200.Entries, TrustedOnly: response.JSON200.TrustedOnly}
 	if out.RecallEntries == nil {
 		out.RecallEntries = []db.RecallResult{}
 	}
@@ -1018,7 +1019,6 @@ func (b *httpBackend) ListRecallEntries(
 func (b *httpBackend) GetRecallEntry(
 	ctx context.Context, id string,
 ) (*db.RecallEntry, error) {
-	var out db.RecallEntry
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -1027,7 +1027,8 @@ func (b *httpBackend) GetRecallEntry(
 	if response == nil {
 		return nil, err
 	}
-	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	out := response.JSON200
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if errors.Is(err, errHTTPNotFound) {
 		return nil, nil
 	}
@@ -1039,21 +1040,21 @@ func (b *httpBackend) GetRecallEntry(
 	if err != nil {
 		return nil, err
 	}
-	return &out, nil
+	return out, nil
 }
 
 func (b *httpBackend) QueryRecallEntries(
-	ctx context.Context, req RecallQuery,
-) (*RecallQueryResult, error) {
-	if err := ValidateRecallEntryLimit(req.Limit); err != nil {
+	ctx context.Context, req service.RecallQuery,
+) (*service.RecallQueryResult, error) {
+	if err := service.ValidateRecallEntryLimit(req.Limit); err != nil {
 		return nil, err
 	}
 	if req.IncludeContext {
-		if _, err := NormalizeRecallContextMaxBytes(req.ContextMaxBytes); err != nil {
+		if _, err := service.NormalizeRecallContextMaxBytes(req.ContextMaxBytes); err != nil {
 			return nil, err
 		}
 	}
-	if _, err := NormalizeRecallQuerySurface(req.Surface); err != nil {
+	if _, err := service.NormalizeRecallQuerySurface(req.Surface); err != nil {
 		return nil, err
 	}
 	if req.StrictRecording {
@@ -1064,7 +1065,6 @@ func (b *httpBackend) QueryRecallEntries(
 	if mode == db.RecallQueryModeVector || mode == db.RecallQueryModeHybrid {
 		httpClient = b.longRunningClient
 	}
-	var out RecallQueryResult
 	api, err := b.apiClient(httpClient)
 	if err != nil {
 		return nil, err
@@ -1073,7 +1073,8 @@ func (b *httpBackend) QueryRecallEntries(
 	if response == nil {
 		return nil, err
 	}
-	if err := decodeServiceResponse(response.HTTPResponse, response.Body, &out, err); err != nil {
+	out := response.JSON200
+	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
 		if errors.Is(err, errHTTPNotImplemented) {
 			var notImpl *errNotImplementedBody
 			if (mode == db.RecallQueryModeVector ||
@@ -1111,24 +1112,24 @@ func (b *httpBackend) QueryRecallEntries(
 		out.TrustedOnly = true
 	}
 	if out.Summary == nil {
-		out.Summary = BuildRecallQuerySummary(out.RecallEntries)
+		out.Summary = service.BuildRecallQuerySummary(out.RecallEntries)
 	}
 	if out.ContextEntries == nil && out.ContextMeta != nil {
-		out.ContextEntries = RecallContextResults(
+		out.ContextEntries = service.RecallContextResults(
 			out.RecallEntries, out.ContextMeta,
 		)
 	}
-	if err := ValidateRecallContextEntries(
+	if err := service.ValidateRecallContextEntries(
 		out.ContextEntries, out.ContextMeta,
 	); err != nil {
 		return nil, err
 	}
 	if out.ContextSummary == nil && out.ContextMeta != nil {
-		out.ContextSummary = BuildRecallContextSummary(
+		out.ContextSummary = service.BuildRecallContextSummary(
 			out.RecallEntries, out.ContextMeta,
 		)
 	}
-	return &out, nil
+	return out, nil
 }
 
 func (b *httpBackend) ImportRecallEntries(
@@ -1143,7 +1144,6 @@ func (b *httpBackend) ImportRecallEntries(
 			b.baseURL, db.ErrReadOnly,
 		)
 	}
-	var out db.RecallImportResult
 	q := &apiclient.PostAPIV1RecallImportQuery{}
 	if opts.DryRun {
 		q.DryRun = new(true)
@@ -1169,17 +1169,18 @@ func (b *httpBackend) ImportRecallEntries(
 	if response == nil {
 		return nil, err
 	}
+	out := response.JSON200
 	if response.StatusCode == http.StatusNotImplemented {
 		return nil, fmt.Errorf("daemon at %s is read-only: %w", b.baseURL, db.ErrReadOnly)
 	}
-	if err := decodeServiceResponse(response.HTTPResponse, response.Body, &out, err); err != nil {
+	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
 		return nil, err
 	}
 
-	return &out, nil
+	return out, nil
 }
 
-func recallFilterToQuery(f RecallFilter) *apiclient.GetAPIV1RecallEntriesQuery {
+func recallFilterToQuery(f service.RecallFilter) *apiclient.GetAPIV1RecallEntriesQuery {
 	q := &apiclient.GetAPIV1RecallEntriesQuery{}
 	if f.Query != "" {
 		q.Q = new(f.Query)
@@ -1233,8 +1234,8 @@ func recallFilterToQuery(f RecallFilter) *apiclient.GetAPIV1RecallEntriesQuery {
 }
 
 func (b *httpBackend) ListSecrets(
-	ctx context.Context, f SecretListFilter,
-) (*SecretFindingList, error) {
+	ctx context.Context, f service.SecretListFilter,
+) (*service.SecretFindingList, error) {
 	q := &apiclient.GetAPIV1SecretsQuery{}
 	if f.Project != "" {
 		q.Project = new(f.Project)
@@ -1271,7 +1272,6 @@ func (b *httpBackend) ListSecrets(
 	if f.Cursor > 0 {
 		q.Cursor = new(int64(f.Cursor))
 	}
-	var out SecretFindingList
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
@@ -1280,17 +1280,18 @@ func (b *httpBackend) ListSecrets(
 	if response == nil {
 		return nil, err
 	}
-	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	out := response.JSON200
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
 		return nil, err
 	}
-	return &out, nil
+	return out, nil
 }
 
 func (b *httpBackend) ScanSecrets(
-	ctx context.Context, in SecretScanInput,
-	progress func(SecretScanProgress),
-) (*SecretScanSummary, error) {
+	ctx context.Context, in service.SecretScanInput,
+	progress func(service.SecretScanProgress),
+) (*service.SecretScanSummary, error) {
 	if b.readOnly {
 		return nil, fmt.Errorf("scan: daemon at %s is read-only: %w",
 			b.baseURL, db.ErrReadOnly)
@@ -1340,16 +1341,16 @@ func (b *httpBackend) ScanSecrets(
 // canceled context, daemon crash) is reported as an error rather than a
 // zero-value success.
 func parseScanStream(
-	stream *runtime.Stream[[]byte], progress func(SecretScanProgress),
-) (*SecretScanSummary, error) {
-	var summary SecretScanSummary
+	stream *runtime.Stream[[]byte], progress func(service.SecretScanProgress),
+) (*service.SecretScanSummary, error) {
+	var summary service.SecretScanSummary
 	var scanErr, decodeErr error
 	var gotSummary bool
 	for stream.Next() {
 		ev := stream.Event()
 		switch ev.Type {
 		case "progress":
-			var p SecretScanProgress
+			var p service.SecretScanProgress
 			if json.Unmarshal(ev.Data, &p) == nil && progress != nil {
 				progress(p)
 			}
@@ -1386,7 +1387,7 @@ func (b *httpBackend) apiClient(client *http.Client) (*apiclient.Client, error) 
 	return apiclient.NewHTTPClient(b.baseURL, b.token, client)
 }
 
-func decodeServiceResponse(response *http.Response, body []byte, out any, err error) error {
+func serviceResponseError(response *http.Response, body []byte, err error) error {
 	switch response.StatusCode {
 	case http.StatusNotFound:
 		return errHTTPNotFound
@@ -1396,7 +1397,10 @@ func decodeServiceResponse(response *http.Response, body []byte, out any, err er
 		if err != nil {
 			return err
 		}
-		return json.Unmarshal(body, out)
+		if len(body) == 0 {
+			return io.ErrUnexpectedEOF
+		}
+		return nil
 	default:
 		return &httpStatusError{method: response.Request.Method, path: response.Request.URL.RequestURI(), statusCode: response.StatusCode, body: body}
 	}
