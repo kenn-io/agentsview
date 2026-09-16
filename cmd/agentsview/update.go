@@ -204,6 +204,9 @@ func restartDaemonAfterUpdateArgs(
 	} else if shouldForceLoopbackUpdateRestartHost(cfg, stopResult) {
 		args = append(args, "--host", "127.0.0.1")
 	}
+	if stopResult.Port > 0 {
+		args = append(args, "--restart-port", fmt.Sprint(stopResult.Port))
+	}
 	if stopResult.RequireAuth ||
 		(!stopResult.RequireAuthKnown && cfg.RequireAuth) {
 		args = append(args, "--require-auth")

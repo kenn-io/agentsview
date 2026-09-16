@@ -151,7 +151,7 @@ func TestRestartDaemonAfterUpdateArgsPreserveRuntimeBind(t *testing.T) {
 	})
 
 	assert.Equal(t, []string{
-		"serve", "--background", "--host", "0.0.0.0",
+		"serve", "--background", "--host", "0.0.0.0", "--restart-port", "18080",
 		"--require-auth", "--no-sync",
 	}, args)
 }
@@ -163,7 +163,7 @@ func TestRestartDaemonAfterUpdateArgsDropsLegacyNonLoopbackWithoutAuthConfig(t *
 	})
 
 	assert.Equal(t, []string{
-		"serve", "--background", "--host", "127.0.0.1",
+		"serve", "--background", "--host", "127.0.0.1", "--restart-port", "18080",
 	}, args)
 }
 
@@ -176,7 +176,7 @@ func TestRestartDaemonAfterUpdateArgsDropsKnownUnauthenticatedNonLoopback(t *tes
 	})
 
 	assert.Equal(t, []string{
-		"serve", "--background", "--host", "127.0.0.1",
+		"serve", "--background", "--host", "127.0.0.1", "--restart-port", "18080",
 	}, args)
 }
 
@@ -187,7 +187,16 @@ func TestRestartDaemonAfterUpdateArgsKeepsLegacyNonLoopbackWithAuthConfig(t *tes
 	)
 
 	assert.Equal(t, []string{
-		"serve", "--background", "--host", "0.0.0.0",
+		"serve", "--background", "--host", "0.0.0.0", "--restart-port", "18080",
 		"--require-auth",
 	}, args)
+}
+
+func TestApplyServeRestartPortKeepsFallbackImplicit(t *testing.T) {
+	got := applyServeRestartPort(config.Config{
+		Port: 8080, PortExplicit: true,
+	}, 18080)
+
+	assert.Equal(t, 18080, got.Port)
+	assert.False(t, got.PortExplicit)
 }
