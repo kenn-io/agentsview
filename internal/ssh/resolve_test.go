@@ -1603,6 +1603,7 @@ func TestResolveEvenerSkipsBackslashPaths(t *testing.T) {
 			dirs, selected, extras, forbidden, err := parseResolvedTargets(string(out))
 			require.NoError(t, err)
 			cmd := exec.Command("sh")
+			cmd.Env = append(os.Environ(), "COPYFILE_DISABLE=1")
 			cmd.Stdin = strings.NewReader(buildTarCommand(dirs, selected, extras, forbidden))
 			archive, err := cmd.Output()
 			require.NoError(t, err)
@@ -1614,6 +1615,9 @@ func TestResolveEvenerSkipsBackslashPaths(t *testing.T) {
 func TestResolveEvenerInvalidUTF8KeepsFileScope(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("remote shell and byte-valued filenames use POSIX paths")
+	}
+	if runtime.GOOS == "darwin" {
+		t.Skip("macOS libc rejects invalid UTF-8 in filenames (EILSEQ)")
 	}
 	for _, name := range []string{"invalid-only", "mixed"} {
 		t.Run(name, func(t *testing.T) {
@@ -1635,6 +1639,7 @@ func TestResolveEvenerInvalidUTF8KeepsFileScope(t *testing.T) {
 			dirs, selected, extras, forbidden, err := parseResolvedTargets(string(out))
 			require.NoError(t, err)
 			cmd := exec.Command("sh")
+			cmd.Env = append(os.Environ(), "COPYFILE_DISABLE=1")
 			cmd.Stdin = strings.NewReader(buildTarCommand(dirs, selected, extras, forbidden))
 			archive, err := cmd.Output()
 			require.NoError(t, err)

@@ -319,7 +319,11 @@ test.describe("Data mode project reclassification", () => {
     const versionResponse = await versionPromise;
     expect(await versionResponse.json()).toMatchObject({ read_only: true });
     await expect(page.getByRole("heading", { name: "Worktree mappings" })).toBeVisible();
-    await expect(page.getByRole("note")).toContainText("This store is read-only.");
+    // The rules view hosts three read-only notes (worktree mappings, agent
+    // remap rules, duplicate review); scope to the mappings warning.
+    await expect(
+      page.getByRole("note").filter({ hasText: "This store is read-only." }),
+    ).toBeVisible();
     await expect(page.getByRole("button", { name: "Add mapping" })).toHaveCount(0);
     await expect(page.getByRole("columnheader", { name: "Actions" })).toHaveCount(0);
     await expect(page.getByText("No worktree mappings configured.")).toBeVisible();
