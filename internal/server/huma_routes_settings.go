@@ -11,10 +11,13 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 func (s *Server) registerSettingsRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/settings", "Settings")
+	group := huma.NewGroup(s.api, "/api/v1/settings")
+	configureRouteGroup(group, "Settings")
 
 	s.get(group, "", "Get settings", s.humaGetSettings)
 	s.put(group, "", "Update settings", s.humaUpdateSettings)

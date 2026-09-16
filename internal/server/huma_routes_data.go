@@ -9,10 +9,13 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 func (s *Server) registerDataRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/data", "Data")
+	group := huma.NewGroup(s.api, "/api/v1/data")
+	configureRouteGroup(group, "Data")
 	s.get(group, "/projects", "Get project inventory", s.humaDataProjects)
 	s.get(group, "/projects/{project_key}/sessions",
 		"List sessions for an opaque project identity", s.humaDataProjectSessions)

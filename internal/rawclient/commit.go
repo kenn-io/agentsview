@@ -3,20 +3,10 @@ package rawclient
 import (
 	"context"
 	"fmt"
-	"net/http"
 
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
-
-// commitResultWire mirrors the manifest-commit response body. rawsync's
-// CommitResult is the custody-domain type and carries no JSON tags, so the
-// four wire fields decode here and convert.
-type commitResultWire struct {
-	ManifestID string `json:"manifest_id"`
-	Receipt    string `json:"receipt"`
-	Generation int64  `json:"generation"`
-	Created    bool   `json:"created"`
-}
 
 // CommitManifest submits one complete manifest and returns its durable
 // receipt. Only this response authorizes checkpoint advancement. Head
@@ -26,12 +16,32 @@ func (c *Client) CommitManifest(
 	ctx context.Context,
 	manifest rawsync.Manifest,
 ) (rawsync.CommitResult, error) {
-	resp, err := c.do(ctx, http.MethodPost, "/api/v1/raw-sync/manifests", nil, manifest)
+	body := apiclient.RawsyncManifest{
+		SchemaVersion: int64(manifest.SchemaVersion), Provider: string(manifest.Provider), ConfiguredRootID: manifest.ConfiguredRootID,
+		SourceKey: manifest.SourceKey, CaptureID: manifest.CaptureID, CapturedAt: manifest.CapturedAt, Kind: string(manifest.Kind),
+	}
+	if manifest.ExpectedParentReceipt != "" {
+		body.ExpectedParentReceipt = new(manifest.ExpectedParentReceipt)
+	}
+	for _, entry := range manifest.Entries {
+		wire := apiclient.RawsyncEntry{Path: entry.Path, Type: entry.Type, Length: entry.Length, Objects: make([]apiclient.RawsyncObjectRef, 0, len(entry.Objects))}
+		if entry.ModTimeNS != 0 {
+			wire.ModTimeNs = new(entry.ModTimeNS)
+		}
+		for _, object := range entry.Objects {
+			wire.Objects = append(wire.Objects, apiclient.RawsyncObjectRef{Sha256: object.SHA256, Length: object.Length})
+		}
+		body.Entries = append(body.Entries, wire)
+	}
+	resp, err := c.do(ctx, func(api *apiclient.Client) error {
+		_, err := api.PostAPIV1RawSyncManifestsWithResponse(ctx, &apiclient.PostAPIV1RawSyncManifestsRequestOptions{Body: &body})
+		return err
+	})
 	if err != nil {
 		return rawsync.CommitResult{}, err
 	}
 	defer resp.Body.Close()
-	var wire commitResultWire
+	var wire apiclient.RawSyncManifestResponse
 	if err := jsonDecode(resp.Body, &wire); err != nil {
 		return rawsync.CommitResult{}, fmt.Errorf("rawclient: decode commit result: %w", err)
 	}

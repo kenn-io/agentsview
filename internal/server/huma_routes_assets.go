@@ -6,12 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 func (s *Server) registerAssetRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/assets", "Assets")
+	group := huma.NewGroup(s.api, "/api/v1")
+	configureRouteGroup(group, "Assets")
 
-	s.raw(group, http.MethodGet, "/{filename}", "Get imported asset", s.humaGetAsset)
+	s.raw(group, http.MethodGet, "/assets/{filename}", "Get imported asset", s.humaGetAsset)
 }
 
 type assetInput struct {

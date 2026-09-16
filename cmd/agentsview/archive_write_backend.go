@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"io"
 	"log"
 	"os"
@@ -489,20 +490,26 @@ func (b daemonArchiveWriteBackend) PGPush(
 	defer finish()
 	return postDaemonPush[postgres.PushResult](
 		ctx, b.tr, b.appCfg.AuthToken, daemonPushPG,
-		daemonPushRequest{
-			Full:                   cfg.Full,
-			Projects:               projects,
-			ExcludeProjects:        excludeProjects,
-			PG:                     &target.PG,
-			SyncStateTarget:        target.SyncStateTarget,
-			MigrateLegacySyncState: target.MigrateLegacySyncState,
-			NoVectors:              cfg.NoVectors,
-			ScopeVectorsToChangedSessions: cfg.
-				ScopeVectorsToChangedSessions,
-			LastReconciledVectorGeneration: cfg.
-				LastReconciledVectorGeneration,
-			WatchBatch:    cfg.WatchBatch,
-			WatchRecovery: cfg.WatchRecovery,
+		apiclient.DaemonPushRequest{
+			Full:            cfg.Full,
+			Projects:        projects,
+			ExcludeProjects: excludeProjects,
+			Pg: &apiclient.ConfigPGConfig{
+				URL:             target.PG.URL,
+				Schema:          target.PG.Schema,
+				MachineName:     target.PG.MachineName,
+				AllowInsecure:   target.PG.AllowInsecure,
+				Projects:        target.PG.Projects,
+				ExcludeProjects: target.PG.ExcludeProjects,
+				PushVectors:     target.PG.PushVectors,
+			},
+			SyncStateTarget:                new(target.SyncStateTarget),
+			MigrateLegacySyncState:         new(target.MigrateLegacySyncState),
+			NoVectors:                      new(cfg.NoVectors),
+			ScopeVectorsToChangedSessions:  new(cfg.ScopeVectorsToChangedSessions),
+			LastReconciledVectorGeneration: new(cfg.LastReconciledVectorGeneration),
+			WatchBatch:                     generatedWatchBatch(cfg.WatchBatch),
+			WatchRecovery:                  generatedWatchRecovery(cfg.WatchRecovery),
 		},
 		onProgress,
 	)
@@ -632,12 +639,21 @@ func (b daemonArchiveWriteBackend) duckDBPush(
 	defer finish()
 	return postDaemonPush[duckdbsync.PushResult](
 		ctx, b.tr, b.appCfg.AuthToken, daemonPushDuckDB,
-		daemonPushRequest{
+		apiclient.DaemonPushRequest{
 			Full:            cfg.Full,
 			Projects:        projects,
 			ExcludeProjects: excludeProjects,
-			DuckDB:          &duckCfg,
-			Automatic:       cfg.Automatic,
+			Duckdb: &apiclient.ConfigDuckDBConfig{
+				Path:            duckCfg.Path,
+				URL:             duckCfg.URL,
+				Token:           new(duckCfg.Token),
+				MachineName:     duckCfg.MachineName,
+				AllowInsecure:   duckCfg.AllowInsecure,
+				AttachTimeout:   new(int64(duckCfg.AttachTimeout)),
+				Projects:        duckCfg.Projects,
+				ExcludeProjects: duckCfg.ExcludeProjects,
+			},
+			Automatic: new(cfg.Automatic),
 		},
 		onProgress,
 	)
@@ -1241,4 +1257,22 @@ func runPGWatchStartupSync(
 		return didResync, errors.New("startup sync processing incomplete")
 	}
 	return didResync, nil
+}
+
+func generatedWatchBatch(batch *syncpkg.WatchBatch) *apiclient.SyncWatchBatch {
+	if batch == nil {
+		return nil
+	}
+	out := &apiclient.SyncWatchBatch{Paths: batch.Paths, ReconcileRoots: batch.ReconcileRoots, FullSync: new(batch.FullSync), LostEvents: new(batch.LostEvents)}
+	for _, rename := range batch.Renames {
+		out.Renames = append(out.Renames, apiclient.SyncWatchRename{Path: rename.Path, Root: new(rename.Root), Agent: new(rename.Agent), ItemType: new(int32(rename.ItemType))})
+	}
+	return out
+}
+
+func generatedWatchRecovery(scope *syncpkg.WatchRecoveryScope) *apiclient.SyncWatchRecoveryScope {
+	if scope == nil {
+		return nil
+	}
+	return &apiclient.SyncWatchRecoveryScope{AvailableRoots: scope.AvailableRoots, DeferredRoots: scope.DeferredRoots}
 }

@@ -3,7 +3,7 @@ package rawclient
 import (
 	"context"
 	"fmt"
-	"net/http"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"sync"
 	"time"
 )
@@ -11,13 +11,6 @@ import (
 // tokenScopes is the exact scope set the transport needs; the status scope
 // has no server route yet and is not requested.
 var tokenScopes = []string{"negotiate", "upload", "commit"}
-
-type tokenResponse struct {
-	Token     string    `json:"token"`
-	DeviceID  string    `json:"device_id"`
-	Scopes    []string  `json:"scopes"`
-	ExpiresAt time.Time `json:"expires_at"`
-}
 
 // tokenProvider caches one live device token and refreshes it with
 // single-flight semantics before the server-side expiry margin.
@@ -90,19 +83,18 @@ func (p *tokenProvider) cached() (string, bool) {
 // it. It goes through rawRequest, never do: do prefetches an avdt token and
 // would recurse into this provider.
 func (p *tokenProvider) exchange(ctx context.Context) (string, error) {
-	body := struct {
-		Scopes []string `json:"scopes"`
-	}{Scopes: tokenScopes}
-	resp, err := p.client.rawRequest(ctx, http.MethodPost, "/api/v1/raw-sync/tokens",
-		http.Header{
-			"Authorization":          []string{"Bearer " + p.credential},
-			"X-AgentsView-Device-ID": []string{p.deviceID},
-		}, body)
+	resp, err := p.client.rawRequest(func(api *apiclient.Client) error {
+		_, err := api.PostAPIV1RawSyncTokensWithResponse(ctx, &apiclient.PostAPIV1RawSyncTokensRequestOptions{
+			Body:   &apiclient.RawSyncTokenInputBody{Scopes: tokenScopes},
+			Header: &apiclient.PostAPIV1RawSyncTokensHeaders{Authorization: new("Bearer " + p.credential), XAgentsViewDeviceID: new(p.deviceID)},
+		})
+		return err
+	}, "")
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	var issued tokenResponse
+	var issued apiclient.RawSyncTokenResponse
 	if err := jsonDecode(resp.Body, &issued); err != nil {
 		return "", fmt.Errorf("rawclient: decode token response: %w", err)
 	}

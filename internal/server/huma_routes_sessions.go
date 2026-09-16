@@ -24,7 +24,8 @@ import (
 )
 
 func (s *Server) registerSessionRoutes() {
-	group := newRouteGroup(s.api, "/api/v1", "Sessions")
+	group := huma.NewGroup(s.api, "/api/v1")
+	configureRouteGroup(group, "Sessions")
 
 	s.get(group, "/sessions", "List sessions", s.humaListSessions)
 	s.get(group, "/sessions/sidebar-index", "List sidebar sessions", s.humaSidebarSessionIndex)

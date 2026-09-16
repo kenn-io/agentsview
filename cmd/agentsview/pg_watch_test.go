@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/postgres"
 )
@@ -74,18 +75,18 @@ func TestArchiveWriteBackendPGPushPostsToDaemon(t *testing.T) {
 		r *http.Request,
 	) {
 		gotAuth = r.Header.Get("Authorization")
-		var req daemonPushRequest
+		var req apiclient.DaemonPushRequest
 		require.NoError(t, json.UnmarshalRead(r.Body, &req))
 		assert.True(t, req.Full)
 		assert.Equal(t, []string{"a"}, req.Projects)
 		assert.Equal(t, []string{"b"}, req.ExcludeProjects)
-		require.NotNil(t, req.PG)
-		assert.Equal(t, "postgres://user:pass@host/db", req.PG.URL)
-		assert.Equal(t, "mirror", req.PG.Schema)
-		assert.Equal(t, "laptop", req.PG.MachineName)
-		assert.True(t, req.PG.AllowInsecure)
-		assert.Equal(t, "work", req.SyncStateTarget)
-		assert.True(t, req.MigrateLegacySyncState)
+		require.NotNil(t, req.Pg)
+		assert.Equal(t, "postgres://user:pass@host/db", req.Pg.URL)
+		assert.Equal(t, "mirror", req.Pg.Schema)
+		assert.Equal(t, "laptop", req.Pg.MachineName)
+		assert.True(t, req.Pg.AllowInsecure)
+		assert.Equal(t, new("work"), req.SyncStateTarget)
+		assert.Equal(t, new(true), req.MigrateLegacySyncState)
 		writeTestJSON(t, w, postgres.PushResult{
 			SessionsPushed: 2,
 			MessagesPushed: 3,

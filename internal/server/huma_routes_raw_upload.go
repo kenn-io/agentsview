@@ -7,6 +7,8 @@ import (
 
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawsync"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 const (
@@ -21,16 +23,16 @@ const (
 	rawSyncUploadReadMaxBytes = rawsync.DefaultUploadChunkBytes + 1
 )
 
-func (s *Server) registerRawUploadRoutes(group routeGroup) {
-	group.register(
+func (s *Server) registerRawUploadRoutes(group *huma.Group) {
+	registerRoute(group,
 		http.MethodPost, "/uploads", "Create or resume a raw object upload",
 		s.humaRawSyncUploadStart, s.humaTimeout(), maxBodyBytes(rawSyncUploadStartMaxBytes),
 	)
-	group.register(
+	registerRoute(group,
 		http.MethodHead, "/uploads/{upload_id}", "Read a raw upload offset",
 		s.humaRawSyncUploadStatus, s.humaTimeout(),
 	)
-	group.register(
+	registerRoute(group,
 		http.MethodPatch, "/uploads/{upload_id}", "Append a raw upload chunk",
 		s.humaRawSyncUploadAppend, s.humaReadDeadline(rawSyncUploadReadTimeout),
 		maxBodyBytes(rawSyncUploadReadMaxBytes),

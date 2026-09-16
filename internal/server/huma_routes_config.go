@@ -8,10 +8,13 @@ import (
 
 	"github.com/google/shlex"
 	"go.kenn.io/agentsview/internal/config"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 func (s *Server) registerConfigRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/config", "Config")
+	group := huma.NewGroup(s.api, "/api/v1/config")
+	configureRouteGroup(group, "Config")
 
 	s.get(group, "/github", "Get GitHub config", s.humaGetGithubConfig)
 	s.post(group, "/github", "Set GitHub config", s.humaSetGithubConfig)

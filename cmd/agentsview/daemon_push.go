@@ -11,9 +11,7 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/apiclient"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/server"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 type daemonPushTarget int
@@ -23,34 +21,6 @@ const (
 	daemonPushDuckDB
 	daemonStartupSync
 )
-
-type daemonPushRequest struct {
-	Full                   bool                 `json:"full"`
-	Projects               []string             `json:"projects,omitempty"`
-	ExcludeProjects        []string             `json:"exclude_projects,omitempty"`
-	PG                     *config.PGConfig     `json:"pg,omitempty"`
-	DuckDB                 *config.DuckDBConfig `json:"duckdb,omitempty"`
-	SyncStateTarget        string               `json:"sync_state_target,omitempty"`
-	MigrateLegacySyncState bool                 `json:"migrate_legacy_sync_state,omitzero"`
-	// NoVectors mirrors the CLI --no-vectors flag into the daemon: it has no
-	// per-invocation flag of its own, so the gate must travel in the request.
-	NoVectors bool `json:"no_vectors,omitzero"`
-	// ScopeVectorsToChangedSessions is set by change-triggered watch
-	// pushes so the daemon's vector phase reads state only for the
-	// changed relational sessions (see postgres.PushOptions).
-	ScopeVectorsToChangedSessions bool `json:"scope_vectors_to_changed_sessions,omitzero"`
-	// LastReconciledVectorGeneration travels with a scoped push so the
-	// daemon's fresh Sync can promote to generation-wide when the active
-	// generation id has changed (see postgres.PushOptions).
-	LastReconciledVectorGeneration int64 `json:"last_reconciled_vector_generation,omitzero"`
-	// Automatic is set by the watch-mode DuckDB pushes so the daemon
-	// defers instead of rebuilding when a live serve process holds the
-	// mirror and skips archive-scale diagnostics (see
-	// duckdbsync.SyncOptions.Automatic).
-	Automatic     bool                        `json:"automatic,omitzero"`
-	WatchBatch    *syncpkg.WatchBatch         `json:"watch_batch,omitempty"`
-	WatchRecovery *syncpkg.WatchRecoveryScope `json:"watch_recovery,omitempty"`
-}
 
 // postDaemonPush delegates a push to the local daemon. It negotiates an SSE
 // response so the daemon can stream per-phase progress while the push runs;
@@ -62,21 +32,13 @@ func postDaemonPush[T, P any](
 	tr transport,
 	authToken string,
 	target daemonPushTarget,
-	body daemonPushRequest,
+	body apiclient.DaemonPushRequest,
 	onProgress func(P),
 ) (T, error) {
 	var zero T
 	body = daemonPushRequestForCapabilities(tr, body)
 	fallbackAttempted := false
 	for {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return zero, err
-		}
-		var wire apiclient.DaemonPushRequest
-		if err := json.Unmarshal(data, &wire); err != nil {
-			return zero, err
-		}
 		api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
 		if err != nil {
 			return zero, err
@@ -85,13 +47,13 @@ func postDaemonPush[T, P any](
 		var payload []byte
 		switch target {
 		case daemonPushPG:
-			response, requestErr := api.PostAPIV1PushPgStreamWithResponse(ctx, &apiclient.PostAPIV1PushPgRequestOptions{Body: &wire})
+			response, requestErr := api.PostAPIV1PushPgStreamWithResponse(ctx, &apiclient.PostAPIV1PushPgRequestOptions{Body: &body})
 			if response == nil {
 				return zero, requestErr
 			}
 			resp, payload = response.HTTPResponse, response.Body
 		case daemonPushDuckDB:
-			response, requestErr := api.PostAPIV1PushDuckdbStreamWithResponse(ctx, &apiclient.PostAPIV1PushDuckdbRequestOptions{Body: &wire})
+			response, requestErr := api.PostAPIV1PushDuckdbStreamWithResponse(ctx, &apiclient.PostAPIV1PushDuckdbRequestOptions{Body: &body})
 			if response == nil {
 				return zero, requestErr
 			}
@@ -132,8 +94,8 @@ func postDaemonPush[T, P any](
 }
 
 func daemonPushRequestForCapabilities(
-	tr transport, body daemonPushRequest,
-) daemonPushRequest {
+	tr transport, body apiclient.DaemonPushRequest,
+) apiclient.DaemonPushRequest {
 	if body.WatchBatch != nil && tr.Runtime != nil && tr.Runtime.API > 0 &&
 		tr.Runtime.API < server.ScopedWatchPushAPIVersion {
 		body.WatchBatch = nil

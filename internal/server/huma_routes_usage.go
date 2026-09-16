@@ -17,7 +17,8 @@ import (
 )
 
 func (s *Server) registerUsageRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/usage", "Usage")
+	group := huma.NewGroup(s.api, "/api/v1/usage")
+	configureRouteGroup(group, "Usage")
 
 	// A cold report builds the requested usage data before returning exact
 	// totals. Its lifetime is the request context, not the normal write limit.

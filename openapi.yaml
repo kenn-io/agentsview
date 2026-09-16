@@ -438,6 +438,55 @@ components:
         - matched_sessions
         - updated_sessions
       type: object
+    ArtifactExchangeRequest:
+      additionalProperties: false
+      properties:
+        full:
+          type: boolean
+        target:
+          type: string
+      required:
+        - target
+      type: object
+    ArtifactSyncResult:
+      additionalProperties: false
+      properties:
+        exported_sessions:
+          format: int64
+          type: integer
+        imported_messages:
+          format: int64
+          type: integer
+        imported_sessions:
+          format: int64
+          type: integer
+        more:
+          type: boolean
+        origin:
+          type: string
+        published_artifacts:
+          format: int64
+          type: integer
+        quarantined:
+          format: int64
+          type: integer
+        received_artifacts:
+          format: int64
+          type: integer
+        rejected_sessions:
+          format: int64
+          type: integer
+      required:
+        - origin
+        - exported_sessions
+        - rejected_sessions
+        - imported_sessions
+        - imported_messages
+        - quarantined
+        - received_artifacts
+        - published_artifacts
+        - more
+      type: object
     BatchDeleteInputBody:
       additionalProperties: false
       properties:
@@ -5176,6 +5225,74 @@ components:
         - full
         - include_local
         - hosts
+      type: object
+    RemotesyncArchiveRequest:
+      additionalProperties: false
+      properties:
+        codex_index_files:
+          additionalProperties:
+            items:
+              type: string
+            type: array
+          type: object
+        delta_files:
+          items:
+            type: string
+          type: array
+        dirs:
+          additionalProperties:
+            items:
+              type: string
+            type: array
+          type: object
+        extra_files:
+          items:
+            type: string
+          type: array
+        files:
+          additionalProperties:
+            items:
+              type: string
+            type: array
+          type: object
+        forbidden_roots:
+          items:
+            type: string
+          type: array
+        provider_extra_files:
+          additionalProperties:
+            items:
+              type: string
+            type: array
+          type: object
+      required:
+        - dirs
+      type: object
+    RemotesyncManifest:
+      additionalProperties: false
+      properties:
+        files:
+          items:
+            $ref: "#/components/schemas/RemotesyncManifestEntry"
+          type: array
+      required:
+        - files
+      type: object
+    RemotesyncManifestEntry:
+      additionalProperties: false
+      properties:
+        mtime_ns:
+          format: int64
+          type: integer
+        path:
+          type: string
+        size:
+          format: int64
+          type: integer
+      required:
+        - path
+        - size
+        - mtime_ns
       type: object
     RemotesyncTargetSet:
       additionalProperties: false
@@ -9993,6 +10110,91 @@ paths:
       summary: Get velocity analytics
       tags:
         - Analytics
+  /api/v1/artifacts/exchange:
+    post:
+      operationId: post-api-v1-artifacts-exchange
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactExchangeRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactSyncResult"
+          description: OK
+        "400":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "401":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "403":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "404":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "405":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "413":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "426":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "500":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "501":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "502":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "503":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+      summary: Exchange artifacts with a local folder
+      tags:
+        - Artifacts
   /api/v1/assets/{filename}:
     get:
       operationId: get-api-v1-assets-filename
@@ -14472,6 +14674,196 @@ paths:
       summary: List recent edits
       tags:
         - RecentEdits
+  /api/v1/remote-sync/archive:
+    post:
+      operationId: post-api-v1-remote-sync-archive
+      parameters:
+        - in: header
+          name: X-AgentsView-Remote-Sync-Version
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemotesyncArchiveRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/x-tar:
+              schema:
+                type: string
+          description: OK
+          headers:
+            X-AgentsView-Remote-Sync-Version:
+              schema:
+                type: string
+        "400":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "401":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "403":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "404":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "405":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "413":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "426":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "500":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "501":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "502":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "503":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+      summary: Download remote source archive
+      tags:
+        - RemoteSync
+  /api/v1/remote-sync/manifest:
+    post:
+      operationId: post-api-v1-remote-sync-manifest
+      parameters:
+        - in: header
+          name: X-AgentsView-Remote-Sync-Version
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemotesyncTargetSet"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemotesyncManifest"
+          description: OK
+          headers:
+            X-AgentsView-Remote-Sync-Version:
+              schema:
+                type: string
+        "400":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "401":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "403":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "404":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "405":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "413":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "426":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "500":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "501":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "502":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+        "503":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: Request failed
+      summary: Read remote source manifest
+      tags:
+        - RemoteSync
   /api/v1/remote-sync/targets:
     get:
       operationId: get-api-v1-remote-sync-targets

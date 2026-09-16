@@ -17,7 +17,8 @@ import (
 )
 
 func (s *Server) registerImportRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/import", "Import")
+	group := huma.NewGroup(s.api, "/api/v1/import")
+	configureRouteGroup(group, "Import")
 
 	s.stream(group, http.MethodPost, "/claude-ai",
 		"Import Claude.ai archive", s.humaImportClaudeAI,

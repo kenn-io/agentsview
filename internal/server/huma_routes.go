@@ -227,68 +227,68 @@ func pascalASCII(s string) string {
 }
 
 func (s *Server) get[I, O any](
-	group routeGroup, path, summary string,
+	group *huma.Group, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	group.register(http.MethodGet, path, summary, handler, s.humaTimeout())
+	registerRoute(group, http.MethodGet, path, summary, handler, s.humaTimeout())
 }
 
 func (*Server) getLong[I, O any](
-	group routeGroup, path, summary string,
+	group *huma.Group, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	group.register(http.MethodGet, path, summary, handler)
+	registerRoute(group, http.MethodGet, path, summary, handler)
 }
 
 func (s *Server) post[I, O any](
-	group routeGroup, path, summary string,
+	group *huma.Group, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	group.register(http.MethodPost, path, summary, handler, s.humaTimeout())
+	registerRoute(group, http.MethodPost, path, summary, handler, s.humaTimeout())
 }
 
 func (*Server) postLong[I, O any](
-	group routeGroup, path, summary string,
+	group *huma.Group, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	group.register(http.MethodPost, path, summary, handler)
+	registerRoute(group, http.MethodPost, path, summary, handler)
 }
 
 func (s *Server) put[I, O any](
-	group routeGroup, path, summary string,
+	group *huma.Group, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	group.register(http.MethodPut, path, summary, handler, s.humaTimeout())
+	registerRoute(group, http.MethodPut, path, summary, handler, s.humaTimeout())
 }
 
 func (s *Server) patch[I, O any](
-	group routeGroup, path, summary string,
+	group *huma.Group, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	group.register(http.MethodPatch, path, summary, handler, s.humaTimeout())
+	registerRoute(group, http.MethodPatch, path, summary, handler, s.humaTimeout())
 }
 
 func (s *Server) deleteRoute[I, O any](
-	group routeGroup, path, summary string,
+	group *huma.Group, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	group.register(http.MethodDelete, path, summary, handler, s.humaTimeout())
+	registerRoute(group, http.MethodDelete, path, summary, handler, s.humaTimeout())
 }
 
 func (*Server) stream[I any](
-	group routeGroup, method, path, summary string,
+	group *huma.Group, method, path, summary string,
 	handler func(context.Context, *I) (*huma.StreamResponse, error),
 	options ...func(*huma.Operation),
 ) {
 	routeOptions := append([]func(*huma.Operation){streamResponse()}, options...)
-	group.register(method, path, summary, handler, routeOptions...)
+	registerRoute(group, method, path, summary, handler, routeOptions...)
 }
 
 func (*Server) raw[I any](
-	group routeGroup, method, path, summary string,
+	group *huma.Group, method, path, summary string,
 	handler func(context.Context, *I) (*bytesOutput, error),
 ) {
-	group.register(method, path, summary, handler)
+	registerRoute(group, method, path, summary, handler)
 }
 
 func operationID(method, path string) string {
@@ -313,13 +313,13 @@ func operationID(method, path string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-func (group routeGroup) register[I, O any](
+func registerRoute[I, O any](group *huma.Group,
 	method, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 	options ...func(*huma.Operation),
 ) {
 	op := huma.Operation{
-		OperationID: operationID(method, group.fullPath(path)),
+		OperationID: operationID(method, path),
 		Method:      method,
 		Path:        path,
 		Summary:     summary,
@@ -339,7 +339,7 @@ func (group routeGroup) register[I, O any](
 	for _, option := range options {
 		option(&op)
 	}
-	huma.Register(group.api, op, handler)
+	huma.Register(group, op, handler)
 }
 
 func maxBodyBytes(limit int64) func(*huma.Operation) {

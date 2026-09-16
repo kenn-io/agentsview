@@ -5,10 +5,13 @@ import (
 	"net/http"
 
 	"go.kenn.io/agentsview/internal/db"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 func (s *Server) registerTrendsRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/trends", "Trends")
+	group := huma.NewGroup(s.api, "/api/v1/trends")
+	configureRouteGroup(group, "Trends")
 
 	s.get(group, "/terms", "Get trend terms", s.humaTrendsTerms)
 }

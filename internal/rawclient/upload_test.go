@@ -48,7 +48,7 @@ func TestMissingObjectsRoundTrip(t *testing.T) {
 		assert.Equal(t, "/api/v1/raw-sync/objects/missing", r.URL.Path)
 		body, err := io.ReadAll(r.Body)
 		if assert.NoError(t, err) {
-			assert.Equal(t, `{"provider":"claude","objects":[`+
+			assert.JSONEq(t, `{"provider":"claude","objects":[`+
 				`{"sha256":"`+digest+`","length":3}]}`, string(body))
 		}
 		w.Header().Set("Content-Type", "application/json")

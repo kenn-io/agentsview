@@ -83,7 +83,8 @@ func newDuckDBPushProgressLogger() func(duckdbsync.PushProgress) {
 }
 
 func (s *Server) registerPushRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/push", "Push")
+	group := huma.NewGroup(s.api, "/api/v1/push")
+	configureRouteGroup(group, "Push")
 
 	s.stream(group, http.MethodPost, "/pg",
 		"Push to PostgreSQL", s.humaPGPush, streamJSONResponse(),

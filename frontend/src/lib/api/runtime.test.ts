@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { getApiV1Version } from "./generated/metadata/metadata.js";
 import { ApiError, callGenerated, orvalFetch, setAuthToken } from "./runtime.js";
 
 describe("orvalFetch", () => {
@@ -32,9 +33,8 @@ describe("orvalFetch", () => {
         new Response('{"version":"test"}', { headers: { "Content-Type": "application/json" } }),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const { MetadataService } = await import("./generated/index.js");
-    await MetadataService.getApiV1Version({ baseUrl: "https://candidate.example.test" });
-    await MetadataService.getApiV1Version({
+    await getApiV1Version({ baseUrl: "https://candidate.example.test" });
+    await getApiV1Version({
       baseUrl: "https://candidate.example.test",
       headers: { Authorization: "Bearer candidate-token" },
     });

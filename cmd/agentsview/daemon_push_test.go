@@ -11,9 +11,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/server"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 func TestParseDaemonPushSSE(t *testing.T) {
@@ -98,7 +98,7 @@ func TestPostDaemonPushConsumesSSE(t *testing.T) {
 	var progress []postgres.PushProgress
 	result, err := postDaemonPush[postgres.PushResult](
 		context.Background(), transport{URL: ts.URL}, "", daemonPushPG,
-		daemonPushRequest{},
+		apiclient.DaemonPushRequest{},
 		func(p postgres.PushProgress) { progress = append(progress, p) },
 	)
 	require.NoError(t, err)
@@ -119,7 +119,7 @@ func TestPostDaemonPushJSONFallback(t *testing.T) {
 
 	result, err := postDaemonPush[postgres.PushResult, postgres.PushProgress](
 		context.Background(), transport{URL: ts.URL}, "", daemonPushPG,
-		daemonPushRequest{}, nil,
+		apiclient.DaemonPushRequest{}, nil,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 7, result.SessionsPushed)
@@ -147,14 +147,14 @@ func TestDaemonPushWatchTransportRetriesWithoutScopeForOlderSchema(t *testing.T)
 	}))
 	t.Cleanup(ts.Close)
 
-	batch := syncpkg.WatchBatch{Paths: []string{"/sessions/changed.jsonl"}}
-	recovery := syncpkg.WatchRecoveryScope{
+	batch := apiclient.SyncWatchBatch{Paths: []string{"/sessions/changed.jsonl"}}
+	recovery := apiclient.SyncWatchRecoveryScope{
 		AvailableRoots: []string{"/sessions"},
 		DeferredRoots:  []string{"/offline"},
 	}
 	result, err := postDaemonPush[postgres.PushResult, postgres.PushProgress](
 		t.Context(), transport{URL: ts.URL}, "", daemonPushPG,
-		daemonPushRequest{WatchBatch: &batch, WatchRecovery: &recovery}, nil,
+		apiclient.DaemonPushRequest{WatchBatch: &batch, WatchRecovery: &recovery}, nil,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.SessionsPushed)
@@ -174,7 +174,7 @@ func TestDaemonPushWatchTransportOmitsScopeForKnownOlderDaemon(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	batch := syncpkg.WatchBatch{Paths: []string{"/sessions/changed.jsonl"}}
+	batch := apiclient.SyncWatchBatch{Paths: []string{"/sessions/changed.jsonl"}}
 	result, err := postDaemonPush[postgres.PushResult, postgres.PushProgress](
 		t.Context(), transport{
 			URL: ts.URL,
@@ -182,7 +182,7 @@ func TestDaemonPushWatchTransportOmitsScopeForKnownOlderDaemon(t *testing.T) {
 				API: server.ScopedWatchPushAPIVersion - 1,
 			},
 		}, "", daemonPushPG,
-		daemonPushRequest{WatchBatch: &batch}, nil,
+		apiclient.DaemonPushRequest{WatchBatch: &batch}, nil,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.SessionsPushed)

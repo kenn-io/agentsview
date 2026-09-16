@@ -32,16 +32,19 @@ When changing route registration or generated client contracts:
 
 Run `npm run generate:api` in `frontend/` to regenerate the committed
 [`openapi.yaml`](../../openapi.yaml), the Orval TypeScript client, and the
-DoorDash Go client in `internal/apiclient`. The Go client currently covers the
-session-watch stream. `npm run check:api` checks all three outputs for drift.
-The standalone `agentsview openapi --yaml` command prints the same schema
-without opening an archive or starting a server.
+DoorDash Go client in `internal/apiclient`. The Go client covers CLI, service,
+raw-sync, and remote transfer operations. `npm run check:api` checks all three
+outputs for drift. The standalone `agentsview openapi --yaml` command prints the
+same schema without opening an archive or starting a server.
 
-Prek and CI run the shared `huma-check` linter pinned to the merge of kit PR
-#84. The `client` rule is temporarily disabled under kata task 58fz because that
-version mistakes the GitHub gist and user endpoints for local route-group paths.
-Remove the exclusion after the upstream matcher is fixed. A full audit can be
-run by omitting `-disable client` from the hook command.
+Prek and CI run every rule in the shared `huma-check` linter at kit PR #84's
+`efb469cee12d24fd52640ea05b03ced275bf4370` revision. The linter reads the Git
+index, so stage changes before running it locally.
+
+Use Huma's group type and literal prefixes when registering routes so the linter
+can distinguish grouped routes from root paths. Archive and raw-sync clients use
+generated operations with an unread-response transport to preserve streaming and
+caller-owned response limits.
 
 ## Collection nullability
 
