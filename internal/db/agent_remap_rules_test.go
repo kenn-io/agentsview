@@ -448,3 +448,91 @@ func TestAgentRemapForwardAndReverseBatch(t *testing.T) {
 	agent, _ = agentOf(t, d, "goose:b")
 	assert.Equal(t, "goose", agent, "reverse restored goose:b")
 }
+
+// TestAgentRemapSingleSessionReportsStoredAgentOnRace covers the guard-miss
+// window: another writer rewrites the session's agent between the caller's
+// read and the guarded remap write. The single-session path must report the
+// agent actually stored — not the target it failed to write.
+func TestAgentRemapSingleSessionReportsStoredAgentOnRace(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedRemapFixtures(t, d)
+
+	_, err := d.CreateAgentRemapRule(ctx, AgentRemapRule{
+		SourceAgent: "goose", TargetAgent: "augure", Enabled: true,
+	})
+	require.NoError(t, err)
+
+	// Simulate the race by relabeling goose:a after seedRemapFixtures but
+	// before apply: the remap's GetSession reads codex as the current
+	// agent, so the guarded UPDATE matches nothing and the row keeps its
+	// codex label.
+	_, err = d.getWriter().Exec(
+		`UPDATE sessions SET agent = 'codex' WHERE id = 'goose:a'`)
+	require.NoError(t, err)
+
+	got, err := d.ApplyAgentRemapRulesToSession(ctx, "goose:a")
+	require.NoError(t, err)
+	assert.Equal(t, "codex", got,
+		"must report the stored agent, not the unwritten target")
+
+	agent, source := agentOf(t, d, "goose:a")
+	assert.Equal(t, "codex", agent, "concurrent relabel preserved")
+	assert.Equal(t, "goose", source, "source_agent untouched")
+
+	// The uncontended sibling still remaps normally.
+	got, err = d.ApplyAgentRemapRulesToSession(ctx, "goose:b")
+	require.NoError(t, err)
+	assert.Equal(t, "augure", got)
+}
+
+// TestAgentRemapSingleSessionDeletedAfterRead covers the guard-miss variant
+// where the row is soft-deleted between read and write: nothing is stored,
+// so the path reports the empty string.
+func TestAgentRemapSingleSessionDeletedAfterRead(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedRemapFixtures(t, d)
+
+	_, err := d.CreateAgentRemapRule(ctx, AgentRemapRule{
+		SourceAgent: "goose", TargetAgent: "augure", Enabled: true,
+	})
+	require.NoError(t, err)
+
+	_, err = d.getWriter().Exec(
+		`UPDATE sessions SET deleted_at = '2026-09-16T00:00:00Z'
+		 WHERE id = 'goose:a'`)
+	require.NoError(t, err)
+
+	// GetSession filters deleted rows, so this returns early with no
+	// match; the empty string means "nothing remapped".
+	got, err := d.ApplyAgentRemapRulesToSession(ctx, "goose:a")
+	require.NoError(t, err)
+	assert.Empty(t, got, "deleted session must not report a remap")
+}
+
+// TestAgentRemapSingleSessionNoRules covers the fast-path returns: no
+// rules, no enabled rules, and an unknown session all report the empty
+// string without touching the row.
+func TestAgentRemapSingleSessionNoRules(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedRemapFixtures(t, d)
+
+	got, err := d.ApplyAgentRemapRulesToSession(ctx, "goose:a")
+	require.NoError(t, err)
+	assert.Empty(t, got, "no rules at all")
+
+	_, err = d.CreateAgentRemapRule(ctx, AgentRemapRule{
+		SourceAgent: "goose", TargetAgent: "augure", Enabled: false,
+	})
+	require.NoError(t, err)
+
+	got, err = d.ApplyAgentRemapRulesToSession(ctx, "goose:a")
+	require.NoError(t, err)
+	assert.Empty(t, got, "rules exist but none enabled")
+
+	got, err = d.ApplyAgentRemapRulesToSession(ctx, "missing:id")
+	require.NoError(t, err)
+	assert.Empty(t, got, "unknown session")
+}

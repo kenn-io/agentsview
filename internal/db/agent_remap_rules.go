@@ -749,10 +749,61 @@ func (db *DB) agentRemapSessionModels(
 	return models, rows.Err()
 }
 
+// remapSessionAgentGuarded rewrites one session's agent inside the caller's
+// transaction, guarding on the current display agent so a concurrent relabel
+// is not clobbered. It returns the agent value actually stored after the
+// write: the target on success, or the row's current agent when the guard
+// matched nothing. source_agent is untouched: it stays the owning parser
+// agent for freshness and reconciliation.
+func remapSessionAgentGuarded(
+	ctx context.Context, tx *sql.Tx,
+	sessionID, currentAgent, nextAgent string,
+) (string, error) {
+	res, err := tx.ExecContext(ctx, `UPDATE sessions
+		SET agent = ?,
+			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE id = ? AND agent = ?
+		  AND deleted_at IS NULL`,
+		nextAgent, sessionID, currentAgent,
+	)
+	if err != nil {
+		return "", fmt.Errorf(
+			"remapping session %s: %w", sessionID, err,
+		)
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return "", err
+	}
+	if changed > 0 {
+		return nextAgent, nil
+	}
+	// The guard matched nothing: another writer moved the row between the
+	// caller's read and this write. Report the agent actually stored — the
+	// row must still exist at its current value, and a deleted row is gone
+	// for every caller's purposes.
+	var stored string
+	err = tx.QueryRowContext(ctx,
+		`SELECT agent FROM sessions WHERE id = ?`, sessionID,
+	).Scan(&stored)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf(
+			"reading stored agent for %s after guarded remap: %w",
+			sessionID, err,
+		)
+	}
+	return stored, nil
+}
+
 // ApplyAgentRemapRulesToSession evaluates the enabled rules against one
 // freshly written session and rewrites its agent when a rule matches. It
-// returns the (possibly unchanged) agent. Used by the incremental write
-// path so new sessions land with rules applied.
+// returns the agent value actually stored: the remapped target on success,
+// the row's current agent when a concurrent writer moved it first, and the
+// empty string when no enabled rule matched or the session is gone. Used by
+// the incremental write path so new sessions land with rules applied.
 func (db *DB) ApplyAgentRemapRulesToSession(
 	ctx context.Context, sessionID string,
 ) (string, error) {
@@ -797,19 +848,9 @@ func (db *DB) ApplyAgentRemapRulesToSession(
 		)
 	}
 	defer func() { _ = tx.Rollback() }()
-	res, err := tx.ExecContext(ctx, `UPDATE sessions
-		SET agent = ?,
-			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE id = ? AND agent = ?
-		  AND deleted_at IS NULL`,
-		next, sessionID, sess.Agent,
+	remapped, err := remapSessionAgentGuarded(
+		ctx, tx, sessionID, sess.Agent, next,
 	)
-	if err != nil {
-		return "", fmt.Errorf(
-			"remapping session %s: %w", sessionID, err,
-		)
-	}
-	changed, err := res.RowsAffected()
 	if err != nil {
 		return "", err
 	}
@@ -818,10 +859,11 @@ func (db *DB) ApplyAgentRemapRulesToSession(
 			"committing single-session agent remap: %w", err,
 		)
 	}
-	if changed > 0 {
-		db.notifyUsageSessions([]string{sessionID})
-	}
-	return next, nil
+	// Notify the usage cache only when the stored agent actually changed:
+	// the session's baked-agent fingerprint moves whether the row moved to
+	// next or was concurrently moved by another writer.
+	db.notifyUsageSessions([]string{sessionID})
+	return remapped, nil
 }
 
 // applyAgentRemapRuleOrder sorts rules by ID for deterministic evaluation.
@@ -892,25 +934,15 @@ func (db *DB) ApplyAgentRemapRulesToSessions(
 		if next == sess.Agent {
 			continue
 		}
-		res, err := tx.ExecContext(ctx, `UPDATE sessions
-			SET agent = ?,
-				local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-			WHERE id = ? AND agent = ?
-			  AND deleted_at IS NULL`,
-			next, sessionID, sess.Agent,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"remapping session %s: %w", sessionID, err,
-			)
-		}
-		changed, err := res.RowsAffected()
-		if err != nil {
+		// The guard cannot miss mid-transaction (the write lock excludes
+		// other writers), so remapped == next here; the shared helper keeps
+		// the guarded SQL in one place.
+		if _, err := remapSessionAgentGuarded(
+			ctx, tx, sessionID, sess.Agent, next,
+		); err != nil {
 			return nil, err
 		}
-		if changed > 0 {
-			matched = append(matched, sessionID)
-		}
+		matched = append(matched, sessionID)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf(
