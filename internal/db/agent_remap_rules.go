@@ -752,9 +752,11 @@ func (db *DB) agentRemapSessionModels(
 // remapSessionAgentGuarded rewrites one session's agent inside the caller's
 // transaction, guarding on the current display agent so a concurrent relabel
 // is not clobbered. It returns the agent value actually stored after the
-// write: the target on success, or the row's current agent when the guard
-// matched nothing. source_agent is untouched: it stays the owning parser
-// agent for freshness and reconciliation.
+// write: the target on success, the row's current agent when the guard
+// matched nothing, and the empty string when the row is gone — including a
+// row soft-deleted between the caller's read and this write. source_agent is
+// untouched: it stays the owning parser agent for freshness and
+// reconciliation.
 func remapSessionAgentGuarded(
 	ctx context.Context, tx *sql.Tx,
 	sessionID, currentAgent, nextAgent string,
@@ -779,12 +781,13 @@ func remapSessionAgentGuarded(
 		return nextAgent, nil
 	}
 	// The guard matched nothing: another writer moved the row between the
-	// caller's read and this write. Report the agent actually stored — the
-	// row must still exist at its current value, and a deleted row is gone
-	// for every caller's purposes.
+	// caller's read and this write. Report the agent actually stored, or
+	// the empty string when the row is gone — a soft-deleted row counts as
+	// gone for every caller's purposes.
 	var stored string
 	err = tx.QueryRowContext(ctx,
-		`SELECT agent FROM sessions WHERE id = ?`, sessionID,
+		`SELECT agent FROM sessions
+		 WHERE id = ? AND deleted_at IS NULL`, sessionID,
 	).Scan(&stored)
 	if err == sql.ErrNoRows {
 		return "", nil

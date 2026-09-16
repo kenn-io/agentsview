@@ -453,7 +453,58 @@ func TestAgentRemapForwardAndReverseBatch(t *testing.T) {
 // window: another writer rewrites the session's agent between the caller's
 // read and the guarded remap write. The single-session path must report the
 // agent actually stored — not the target it failed to write.
-func TestAgentRemapSingleSessionReportsStoredAgentOnRace(t *testing.T) {
+// TestAgentRemapGuardedHelperReportsStoredAgent covers the guard-miss
+// branch of remapSessionAgentGuarded directly: a stale currentAgent makes
+// the guarded UPDATE match nothing, and the helper must report the agent
+// actually stored — or the empty string once the row is soft-deleted.
+func TestAgentRemapGuardedHelperReportsStoredAgent(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedRemapFixtures(t, d)
+
+	// Relabel goose:a behind the helper's back so its guard (built on the
+	// stale agent 'goose') matches nothing.
+	_, err := d.getWriter().Exec(
+		`UPDATE sessions SET agent = 'codex' WHERE id = 'goose:a'`)
+	require.NoError(t, err)
+
+	tx, err := d.getWriter().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+
+	// Guard miss on a live row: report the stored agent.
+	got, err := remapSessionAgentGuarded(ctx, tx, "goose:a", "goose", "augure")
+	require.NoError(t, err)
+	assert.Equal(t, "codex", got,
+		"must report the stored agent, not the unwritten target")
+
+	// Guard miss on a soft-deleted row: report nothing — the row counts
+	// as gone for every caller's purposes.
+	_, err = tx.Exec(
+		`UPDATE sessions SET deleted_at = '2026-09-16T00:00:00Z'
+		 WHERE id = 'goose:b'`)
+	require.NoError(t, err)
+	got, err = remapSessionAgentGuarded(ctx, tx, "goose:b", "goose", "augure")
+	require.NoError(t, err)
+	assert.Empty(t, got, "soft-deleted row must report empty")
+
+	// The contended write still wins when the guard matches.
+	got, err = remapSessionAgentGuarded(ctx, tx, "goose:a", "codex", "augure")
+	require.NoError(t, err)
+	assert.Equal(t, "augure", got)
+
+	require.NoError(t, tx.Commit())
+
+	agent, source := agentOf(t, d, "goose:a")
+	assert.Equal(t, "augure", agent)
+	assert.Equal(t, "goose", source, "source_agent untouched")
+}
+
+// TestAgentRemapSingleSessionSkipsWhenNoRuleMatches covers the public
+// single-session path when a concurrent relabel moves the row before the
+// call: the freshly-read agent matches no rule, so the no-match early
+// return fires and the stored agent is reported unchanged.
+func TestAgentRemapSingleSessionSkipsWhenNoRuleMatches(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	seedRemapFixtures(t, d)
@@ -463,10 +514,8 @@ func TestAgentRemapSingleSessionReportsStoredAgentOnRace(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Simulate the race by relabeling goose:a after seedRemapFixtures but
-	// before apply: the remap's GetSession reads codex as the current
-	// agent, so the guarded UPDATE matches nothing and the row keeps its
-	// codex label.
+	// Relabel before the call: the apply reads codex as the current agent,
+	// no rule matches codex, and the row keeps its codex label.
 	_, err = d.getWriter().Exec(
 		`UPDATE sessions SET agent = 'codex' WHERE id = 'goose:a'`)
 	require.NoError(t, err)
@@ -474,10 +523,10 @@ func TestAgentRemapSingleSessionReportsStoredAgentOnRace(t *testing.T) {
 	got, err := d.ApplyAgentRemapRulesToSession(ctx, "goose:a")
 	require.NoError(t, err)
 	assert.Equal(t, "codex", got,
-		"must report the stored agent, not the unwritten target")
+		"must report the stored agent when no rule matches it")
 
 	agent, source := agentOf(t, d, "goose:a")
-	assert.Equal(t, "codex", agent, "concurrent relabel preserved")
+	assert.Equal(t, "codex", agent, "relabel preserved")
 	assert.Equal(t, "goose", source, "source_agent untouched")
 
 	// The uncontended sibling still remaps normally.
