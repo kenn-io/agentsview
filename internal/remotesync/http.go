@@ -408,7 +408,9 @@ func (hs HTTPSync) requestArchive(ctx context.Context, client *http.Client, requ
 	body := apiclient.RemotesyncArchiveRequest{
 		Dirs: targets.Dirs, Files: targets.Files, ProviderExtraFiles: targets.ProviderExtraFiles,
 		ExtraFiles: targets.ExtraFiles, CodexIndexFiles: targets.CodexIndexFiles, ForbiddenRoots: targets.ForbiddenRoots,
-		DeltaFiles: request.DeltaFiles,
+	}
+	if request.DeltaFiles != nil {
+		body.DeltaFiles = new(request.DeltaFiles)
 	}
 	return apiclient.RawRequest(hs.URL, client, func(api *apiclient.Client) error {
 		_, err := api.PostAPIV1RemoteSyncArchiveWithResponse(ctx, &apiclient.PostAPIV1RemoteSyncArchiveRequestOptions{Body: &body})

@@ -13887,7 +13887,7 @@ type PostAPIV1RawSyncUploadsBody = RawSyncUploadStartInputBody
 
 type PatchAPIV1RawSyncUploadsUploadIDBody = runtime.File
 
-type PostAPIV1RecallImportBody = string
+type PostAPIV1RecallImportBody = runtime.File
 
 type PostAPIV1RecallQueryBody = ServiceRecallQuery
 
@@ -19432,12 +19432,25 @@ func (r RemoteSyncResponse) Validate() error {
 
 type RemotesyncArchiveRequest struct {
 	CodexIndexFiles    map[string][]string `json:"codex_index_files,omitempty"`
-	DeltaFiles         []string            `json:"delta_files,omitempty"`
+	DeltaFiles         *[]string           `json:"delta_files,omitempty"`
 	Dirs               map[string][]string `json:"dirs"`
 	ExtraFiles         []string            `json:"extra_files,omitempty"`
 	Files              map[string][]string `json:"files,omitempty"`
 	ForbiddenRoots     []string            `json:"forbidden_roots,omitempty"`
 	ProviderExtraFiles map[string][]string `json:"provider_extra_files,omitempty"`
+}
+
+func (r RemotesyncArchiveRequest) Validate() error {
+	var errors runtime.ValidationErrors
+	if v, ok := any(r.DeltaFiles).(runtime.Validator); ok && v != nil {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("DeltaFiles", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
 }
 
 type RemotesyncManifest struct {

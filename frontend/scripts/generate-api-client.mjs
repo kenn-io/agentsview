@@ -127,15 +127,19 @@ const apiDocument = JSON.parse(
     capture: true,
   }),
 );
+const rawResponseMediaTypes = new Set([
+  "text/event-stream",
+  "text/html",
+  "application/octet-stream",
+  "application/x-tar",
+]);
 const rawOperations = Object.values(apiDocument.paths).flatMap((path) =>
   Object.values(path)
     .filter(
       (op) =>
         op.responses &&
         Object.values(op.responses).some((response) =>
-          Object.keys(response.content ?? {}).some((media) =>
-            ["text/event-stream", "text/html", "application/octet-stream"].includes(media),
-          ),
+          Object.keys(response.content ?? {}).some((media) => rawResponseMediaTypes.has(media)),
         ),
     )
     .map((op) => [
@@ -167,11 +171,7 @@ await generate(
         // owns each operation's URL, parameters, method, and request encoding.
         transformer: (operation) => {
           const media = operation.response.contentTypes;
-          if (
-            media.includes("text/event-stream") ||
-            media.includes("text/html") ||
-            media.includes("application/octet-stream")
-          ) {
+          if (media.some((type) => rawResponseMediaTypes.has(type))) {
             operation.response.definition.success = "Response";
           }
           return operation;

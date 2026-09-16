@@ -3,6 +3,7 @@
  */
 import type { RemotesyncArchiveRequest, RemotesyncManifest, RemotesyncTargetSet } from "../models";
 
+import { orvalRequest } from "../../runtime.ts";
 import { orvalFetch } from "../../runtime.ts";
 
 export const getPostApiV1RemoteSyncArchiveUrl = () => {
@@ -14,8 +15,8 @@ export const getPostApiV1RemoteSyncArchiveUrl = () => {
  */
 export const postApiV1RemoteSyncArchive = async (
   remotesyncArchiveRequest: RemotesyncArchiveRequest,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<string> => {
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
   const getHeaders = (
     h?: NonNullable<RequestInit["headers"]>,
   ): Record<string, string | readonly string[]> => {
@@ -24,7 +25,7 @@ export const postApiV1RemoteSyncArchive = async (
     if (Array.isArray(h)) return Object.fromEntries(h);
     return h;
   };
-  return orvalFetch<string>(getPostApiV1RemoteSyncArchiveUrl(), {
+  return orvalRequest<Response>(getPostApiV1RemoteSyncArchiveUrl(), {
     ...options,
     method: "POST",
     headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },

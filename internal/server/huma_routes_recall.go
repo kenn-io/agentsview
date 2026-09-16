@@ -60,7 +60,15 @@ func (s *Server) registerRecallRoutes() {
 			}
 		}
 		if route.body != nil {
-			op.RequestBody = &huma.RequestBody{Required: true, Content: map[string]*huma.MediaType{route.contentType: {Schema: schemas.Schema(route.body, true, "")}}}
+			bodySchema := schemas.Schema(route.body, true, "")
+			if route.contentType == "application/x-ndjson" {
+				bodySchema = &huma.Schema{
+					Type:       "string",
+					Format:     "binary",
+					Extensions: map[string]any{"contentMediaType": route.contentType},
+				}
+			}
+			op.RequestBody = &huma.RequestBody{Required: true, Content: map[string]*huma.MediaType{route.contentType: {Schema: bodySchema}}}
 		}
 		handler := s.withTimeout(route.method+" "+path, route.handler)
 		s.api.OpenAPI().AddOperation(op)

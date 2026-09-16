@@ -21,9 +21,24 @@ func (s *Server) describeTransferRoutes() {
 		{"/api/v1/remote-sync/archive", "Download remote source archive", "RemoteSync", "application/x-tar", reflect.TypeFor[remotesync.ArchiveRequest](), reflect.TypeFor[string]()},
 		{"/api/v1/artifacts/exchange", "Exchange artifacts with a local folder", "Artifacts", "application/json", reflect.TypeFor[ArtifactExchangeRequest](), reflect.TypeFor[artifact.SyncResult]()},
 	} {
-		success := &huma.Response{Description: "OK", Content: map[string]*huma.MediaType{route.responseType: {Schema: schemas.Schema(route.response, true, "")}}}
+		requestSchema := schemas.Schema(route.request, true, "")
+		responseSchema := schemas.Schema(route.response, true, "")
+		if route.responseType == "application/x-tar" {
+			responseSchema = &huma.Schema{
+				Type:       "string",
+				Format:     "binary",
+				Extensions: map[string]any{"contentMediaType": route.responseType},
+			}
+			archiveSchema := schemas.SchemaFromRef(requestSchema.Ref)
+			deltaFilesSchema := archiveSchema.Properties["delta_files"]
+			if deltaFilesSchema.Extensions == nil {
+				deltaFilesSchema.Extensions = map[string]any{}
+			}
+			deltaFilesSchema.Extensions["x-go-type"] = "*[]string"
+		}
+		success := &huma.Response{Description: "OK", Content: map[string]*huma.MediaType{route.responseType: {Schema: responseSchema}}}
 		op := &huma.Operation{OperationID: operationID(http.MethodPost, route.path), Method: http.MethodPost, Path: route.path, Summary: route.summary, Tags: []string{route.tag},
-			RequestBody: &huma.RequestBody{Required: true, Content: map[string]*huma.MediaType{"application/json": {Schema: schemas.Schema(route.request, true, "")}}},
+			RequestBody: &huma.RequestBody{Required: true, Content: map[string]*huma.MediaType{"application/json": {Schema: requestSchema}}},
 			Responses:   map[string]*huma.Response{"200": success},
 		}
 		if route.tag == "RemoteSync" {

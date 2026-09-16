@@ -5283,6 +5283,7 @@ components:
           items:
             type: string
           type: array
+          x-go-type: "*[]string"
         dirs:
           additionalProperties:
             items:
@@ -14467,6 +14468,8 @@ paths:
         content:
           application/x-ndjson:
             schema:
+              contentMediaType: application/x-ndjson
+              format: binary
               type: string
         required: true
       responses:
@@ -14741,6 +14744,8 @@ paths:
           content:
             application/x-tar:
               schema:
+                contentMediaType: application/x-tar
+                format: binary
                 type: string
           description: OK
           headers:

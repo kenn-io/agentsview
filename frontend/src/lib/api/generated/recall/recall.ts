@@ -171,7 +171,7 @@ export const getPostApiV1RecallImportUrl = (params?: PostApiV1RecallImportParams
  * @summary Import recall entries
  */
 export const postApiV1RecallImport = async (
-  postApiV1RecallImportBody: string,
+  postApiV1RecallImportBody: Blob,
   params?: PostApiV1RecallImportParams,
   options?: Parameters<typeof orvalFetch>[1],
 ): Promise<DbRecallImportResult> => {
@@ -187,7 +187,7 @@ export const postApiV1RecallImport = async (
     ...options,
     method: "POST",
     headers: { "Content-Type": "application/x-ndjson", ...getHeaders(options?.headers) },
-    body: JSON.stringify(postApiV1RecallImportBody),
+    body: postApiV1RecallImportBody,
   });
 };
 
