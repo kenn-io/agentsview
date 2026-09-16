@@ -45,28 +45,35 @@ func TestMachineLabelCatalogNilSuccessReturnsEmpty(t *testing.T) {
 	assert.Empty(t, stderr.String())
 }
 
-func TestMachineLabelCatalogHTTPErrorDegrades(t *testing.T) {
+func TestSessionListJSONDegradesWhenMachineCatalogUnavailable(t *testing.T) {
+	_ = newAgentDataDir(t)
 	server := httptest.NewServer(http.HandlerFunc(func(
-		w http.ResponseWriter, _ *http.Request,
+		w http.ResponseWriter, r *http.Request,
 	) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = io.WriteString(w, `{"error":"catalog unavailable"}`)
+		if r.URL.Path == "/api/v1/machines" {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"error":"catalog unavailable"}`)
+			return
+		}
+		writeJSONResponse(w, `{"sessions":[{"id":"remote-session","machine":"machine-key"}],"total":1}`)
 	}))
 	t.Cleanup(server.Close)
-	var stderr bytes.Buffer
+	root := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{
+		"session", "list", "--server", server.URL, "--format", "json",
+	})
 
-	labels := machineLabelCatalog(
-		context.Background(), &stderr,
-		func(ctx context.Context) (map[string]string, error) {
-			return service.MachineLabels(
-				ctx, service.NewHTTPBackend(server.URL, "", true, ""),
-			)
-		},
-	)
-
-	assert.Empty(t, labels)
+	_, err := root.ExecuteC()
+	require.NoError(t, err)
+	var document sessionListDocument
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &document))
+	require.Len(t, document.Sessions, 1)
+	assert.Equal(t, "remote-session", document.Sessions[0].ID)
+	assert.Empty(t, document.MachineLabels)
 	assert.Contains(t, stderr.String(), "HTTP 500")
-	assert.NotContains(t, stderr.String(), "stdout")
 }
 
 func TestMachineLabelCatalogHTTPNullBodyReturnsEmpty(t *testing.T) {
