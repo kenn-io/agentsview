@@ -220,8 +220,30 @@ async function stepOccurrences(page: Page, total: number, direction: "F3" | "Shi
     const before = await counter.innerText();
     await page.keyboard.press(direction);
     await expect(counter).not.toHaveText(before);
-    await expect.poll(async () => (await currentGeometry(page))?.visible).toBe(true);
-    const current = await currentGeometry(page);
+    let current: Awaited<ReturnType<typeof currentGeometry>> = null;
+    await expect
+      .poll(async () => {
+        const first = await currentGeometry(page);
+        if (first?.visible && !first.native) {
+          current = first;
+          return true;
+        }
+        await page.evaluate(
+          () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+        );
+        const second = await currentGeometry(page);
+        if (
+          first?.visible &&
+          second?.visible &&
+          first.key === second.key &&
+          first.offset === second.offset
+        ) {
+          current = second;
+          return true;
+        }
+        return false;
+      })
+      .toBe(true);
     expect(current).not.toBeNull();
     steps.push(current!);
   }
