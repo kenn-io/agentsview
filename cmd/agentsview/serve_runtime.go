@@ -42,6 +42,12 @@ func prepareServeRuntimeConfig(
 	if err != nil {
 		return cfg, err
 	}
+	if cfg.PortExplicit && cfg.Port != 0 && port != cfg.Port {
+		return cfg, fmt.Errorf(
+			"requested port %d on %s is unavailable; choose another --port or use --port 0",
+			cfg.Port, cfg.Host,
+		)
+	}
 	if port != cfg.Port {
 		if cfg.Port == 0 {
 			fmt.Printf("Using available port %d\n", port)

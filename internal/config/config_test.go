@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"flag"
 	"log"
 	"os"
@@ -632,6 +633,93 @@ func TestLoadPFlags_AppliesExplicitFlags(t *testing.T) {
 
 	assert.Equal(t, "0.0.0.0", cfg.Host)
 	assert.Equal(t, 9090, cfg.Port)
+}
+
+func TestPortExplicitProvenance(t *testing.T) {
+	t.Run("standard flag marks explicit default", func(t *testing.T) {
+		cfg, err := loadConfigFromFlags(t, "-port", "8080")
+		require.NoError(t, err)
+		assert.Equal(t, 8080, cfg.Port)
+		assert.True(t, cfg.PortExplicit)
+	})
+
+	t.Run("pflag marks explicit default", func(t *testing.T) {
+		cfg, err := loadConfigFromPFlags(t, "--port", "8080")
+		require.NoError(t, err)
+		assert.Equal(t, 8080, cfg.Port)
+		assert.True(t, cfg.PortExplicit)
+	})
+
+	t.Run("explicit zero remains explicit", func(t *testing.T) {
+		cfg, err := loadConfigFromPFlags(t, "--port", "0")
+		require.NoError(t, err)
+		assert.Zero(t, cfg.Port)
+		assert.True(t, cfg.PortExplicit)
+	})
+
+	t.Run("omitted port stays implicit", func(t *testing.T) {
+		standard, err := loadConfigFromFlags(t)
+		require.NoError(t, err)
+		pflagConfig, err := loadConfigFromPFlags(t)
+		require.NoError(t, err)
+		assert.Equal(t, 8080, standard.Port)
+		assert.False(t, standard.PortExplicit)
+		assert.Equal(t, 8080, pflagConfig.Port)
+		assert.False(t, pflagConfig.PortExplicit)
+	})
+
+	t.Run("persisted port stays implicit", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		writeConfig(t, dir, map[string]any{"port": 7357})
+		fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+		RegisterServePFlags(fs)
+		cfg, err := LoadPFlags(fs)
+		require.NoError(t, err)
+		assert.Equal(t, 7357, cfg.Port)
+		assert.False(t, cfg.PortExplicit)
+	})
+
+	t.Run("pg and duckdb loaders mark explicit ports", func(t *testing.T) {
+		for _, load := range []struct {
+			name string
+			fn   func(*pflag.FlagSet) (Config, error)
+		}{
+			{name: "pg", fn: LoadPGServePFlags},
+			{name: "duckdb", fn: LoadDuckDBServePFlags},
+		} {
+			t.Run(load.name, func(t *testing.T) {
+				setupTestEnv(t)
+				fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+				RegisterServePFlags(fs)
+				require.NoError(t, fs.Parse([]string{"--port", "8080"}))
+				cfg, err := load.fn(fs)
+				require.NoError(t, err)
+				assert.Equal(t, 8080, cfg.Port)
+				assert.True(t, cfg.PortExplicit)
+			})
+		}
+	})
+
+	t.Run("serialization drops provenance", func(t *testing.T) {
+		cfg := Config{Host: "127.0.0.1", Port: 8080, PortExplicit: true}
+
+		jsonData, err := json.Marshal(cfg)
+		require.NoError(t, err)
+		assert.NotContains(t, string(jsonData), "PortExplicit")
+		var jsonRoundTrip Config
+		require.NoError(t, json.Unmarshal(jsonData, &jsonRoundTrip))
+		assert.Equal(t, 8080, jsonRoundTrip.Port)
+		assert.False(t, jsonRoundTrip.PortExplicit)
+
+		var tomlData bytes.Buffer
+		require.NoError(t, toml.NewEncoder(&tomlData).Encode(cfg))
+		assert.NotContains(t, tomlData.String(), "port_explicit")
+		var tomlRoundTrip Config
+		_, err = toml.Decode(tomlData.String(), &tomlRoundTrip)
+		require.NoError(t, err)
+		assert.Equal(t, 8080, tomlRoundTrip.Port)
+		assert.False(t, tomlRoundTrip.PortExplicit)
+	})
 }
 
 func TestLoad_NilFlagSet(t *testing.T) {

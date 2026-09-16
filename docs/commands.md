@@ -163,9 +163,10 @@ Running plain `agentsview` shows help instead of starting the web UI.
 | `--tls-key`         |             | TLS key path                                             |
 | `--allowed-subnet`  |             | Client CIDR allowlist (repeatable/comma-separated)       |
 
-The server auto-discovers an available port if `8080` is busy. See
-[Remote Access](/docs/remote-access/) for details on the remote access and proxy
-flags.
+The server auto-discovers an available port if the default `8080` is busy. An
+explicit nonzero `--port` exits when that port is occupied. Use `--port 0` to
+select any available port. See [Remote Access](/docs/remote-access/) for
+details on the remote access and proxy flags.
 
 **Examples:**
 

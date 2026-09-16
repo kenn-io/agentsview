@@ -791,6 +791,8 @@ type Config struct {
 	// Used to prevent auto-bind to 0.0.0.0 when the user
 	// explicitly requested a specific host.
 	HostExplicit bool `json:"-" toml:"-"`
+	// PortExplicit is true when the user passed --port on the CLI.
+	PortExplicit bool `json:"-" toml:"-"`
 
 	pgEnvOverrides pgEnvOverrides
 }
@@ -2042,7 +2044,7 @@ func (f *stringListFlag) Type() string {
 // The caller must call fs.Parse before passing fs to Load.
 func RegisterServeFlags(fs *flag.FlagSet) {
 	fs.String("host", "127.0.0.1", "Interface/IP for the backend HTTP server to bind")
-	fs.Int("port", 8080, "Port for the backend HTTP server to listen on")
+	fs.Int("port", 8080, "Backend HTTP port; an explicit nonzero port must be available (0 selects an available port)")
 	fs.String(
 		"public-url", "",
 		"Browser URL, also added to trusted origins; does not bind a listener",
@@ -2110,7 +2112,7 @@ func RegisterServeFlags(fs *flag.FlagSet) {
 // RegisterServePFlags registers serve-command flags on fs.
 func RegisterServePFlags(fs *pflag.FlagSet) {
 	fs.String("host", "127.0.0.1", "Interface/IP for the backend HTTP server to bind")
-	fs.Int("port", 8080, "Port for the backend HTTP server to listen on")
+	fs.Int("port", 8080, "Backend HTTP port; an explicit nonzero port must be available (0 selects an available port)")
 	fs.String(
 		"public-url", "",
 		"Browser URL, also added to trusted origins; does not bind a listener",
@@ -2202,6 +2204,7 @@ func applyFlagValue(cfg *Config, name, value string) {
 		cfg.HostExplicit = true
 	case "port":
 		cfg.Port, _ = strconv.Atoi(value)
+		cfg.PortExplicit = true
 	case "public-url":
 		cfg.PublicURL = value
 	case "public-origin":
