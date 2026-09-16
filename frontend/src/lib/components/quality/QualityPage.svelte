@@ -22,11 +22,8 @@
   import { AnalyticsService } from "../../api/generated/index.js";
   import { callGenerated, isAbortError } from "../../api/runtime.js";
   import { LatestRead } from "../../utils/latest-read.js";
-  import type {
-    AutomatedScope,
-    SignalCalibration,
-    SignalSessionExample,
-  } from "../../api/types.js";
+  import type { AutomatedScope } from "../../api/types.js";
+import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample as SignalSessionExample } from "../../api/generated/index.js";
   import { Card, Typeahead } from "@kenn-io/kit-ui";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangePicker from "../shared/RangePicker.svelte";

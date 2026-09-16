@@ -14,7 +14,7 @@
   import CompactBoundaryDivider from "./CompactBoundaryDivider.svelte";
   import SystemBoundaryCard from "../system/SystemBoundaryCard.svelte";
   import ToolCallGroup from "./ToolCallGroup.svelte";
-  import type { Message } from "../../api/types.js";
+  import type { DbMessage as Message } from "../../api/generated/index.js";
   import type { DisplayItem } from "../../utils/display-items.js";
   import {
     isSystemBoundaryMessage,

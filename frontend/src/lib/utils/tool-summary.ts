@@ -1,6 +1,6 @@
 // ABOUTME: Builds a structured one-line summary for a tool call header.
 // ABOUTME: Pure; reads input_json + result_content, conservative on counts.
-import type { ToolCall } from "../api/types.js";
+import type { DbToolCall as ToolCall } from "../api/generated/index.js";
 import { isAbsolutePath, pathDisplayValue } from "./tool-params.js";
 
 const MAX = 100;

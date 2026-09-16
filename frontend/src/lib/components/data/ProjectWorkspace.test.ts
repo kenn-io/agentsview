@@ -124,6 +124,8 @@ describe("ProjectWorkspace", () => {
       count: 2,
       messages: [
         {
+          has_context_tokens: false,
+          has_output_tokens: false,
           id: 1,
           session_id: "session-1",
           ordinal: 0,
@@ -140,6 +142,8 @@ describe("ProjectWorkspace", () => {
           is_system: false,
         },
         {
+          has_context_tokens: false,
+          has_output_tokens: false,
           id: 2,
           session_id: "session-1",
           ordinal: 1,
@@ -276,6 +280,8 @@ describe("ProjectWorkspace", () => {
         count: 1,
         messages: [
           {
+            has_context_tokens: false,
+            has_output_tokens: false,
             id: 1,
             session_id: "session-1",
             ordinal: 0,

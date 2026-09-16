@@ -1,4 +1,4 @@
-import type { PinnedMessage } from "../api/types.js";
+import type { DbPinnedMessage as PinnedMessage } from "../api/generated/index.js";
 import { PinsService } from "../api/generated/index";
 import { callGenerated, isAbortError } from "../api/runtime.js";
 import { LatestRead } from "../utils/latest-read.js";

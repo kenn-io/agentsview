@@ -1,13 +1,11 @@
 import { describe, it, expect } from "vite-plus/test";
-import {
-  computeMainModel,
-  computeMainModelInfo,
-  formatModelEffort,
-} from "./model.js";
-import type { Message } from "../api/types.js";
+import { computeMainModel, computeMainModelInfo, formatModelEffort } from "./model.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 
 function msg(role: string, model: string, reasoning_effort?: string): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: 0,
     session_id: "",
     ordinal: 0,
@@ -120,10 +118,7 @@ describe("computeMainModelInfo", () => {
 
   it("keeps the empty effort bucket as the alphabetical tie winner", () => {
     expect(
-      computeMainModelInfo([
-        msg("assistant", "model", "high"),
-        msg("assistant", "model"),
-      ]),
+      computeMainModelInfo([msg("assistant", "model", "high"), msg("assistant", "model")]),
     ).toEqual({ model: "model", reasoningEffort: "" });
   });
 

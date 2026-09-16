@@ -1,11 +1,9 @@
 <!-- ABOUTME: Expandable inline view of a subagent's conversation.
      ABOUTME: Lazily loads and renders subagent messages within a parent ToolBlock. -->
 <script lang="ts">
-  import type {
-    Message,
-    MessagesResponse,
-    Session,
-  } from "../../api/types.js";
+  import type { Session } from "../../api/types.js";
+import type { DbMessage as Message } from "../../api/generated/index.js";
+import type { ServiceMessageList as MessagesResponse } from "../../api/generated/index.js";
   import { SessionsService } from "../../api/generated/index";
   import {
     callGenerated,

@@ -1,4 +1,4 @@
-import type { SyncProgress, SyncStats, Insight, GenerateInsightRequest } from "./types.js";
+import type { SyncProgress, SyncSyncStats as SyncStats, DbInsight as Insight, GenerateInsightRequest } from "./generated/index.js";
 import {
   SyncService,
   SessionsService,

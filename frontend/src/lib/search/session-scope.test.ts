@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vite-plus/test";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 import type { BlockType } from "../stores/ui.svelte.js";
 import { keepsAnswerBeforeTrailingTools, projectSessionScope } from "./session-scope.js";
 
@@ -16,6 +16,8 @@ const ALL: ReadonlySet<BlockType> = new Set([
 let nextId = 970000;
 function message(ordinal: number, content: string, overrides: Partial<Message> = {}): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: nextId++,
     session_id: "scope",
     ordinal,
@@ -66,7 +68,12 @@ describe("session search scope", () => {
     const thinkingPlusTool = message(2, "[Thinking]\nneedle\n[/Thinking]", {
       has_thinking: true,
       has_tool_use: true,
-      tool_calls: [{ tool_name: "Bash" }],
+      tool_calls: [
+        {
+          category: "",
+          tool_name: "Bash",
+        },
+      ],
     });
     const legacyTool = message(3, "[Bash]\necho needle", { has_tool_use: true });
     const result = scope(

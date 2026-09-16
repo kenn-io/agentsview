@@ -1,5 +1,5 @@
 import type { DisplayItem, MessageItem } from "./display-items.js";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 
 // System rows that arrive while the assistant is still working on the
 // current prompt. The Claude parser keeps them on role "user" so analytics
@@ -12,9 +12,7 @@ const MID_TURN_SYSTEM_SUBTYPES = new Set(["task_notification", "stop_hook"]);
 
 function isMidTurnSystemMessage(m: Message): boolean {
   return (
-    m.is_system === true &&
-    !!m.source_subtype &&
-    MID_TURN_SYSTEM_SUBTYPES.has(m.source_subtype)
+    m.is_system === true && !!m.source_subtype && MID_TURN_SYSTEM_SUBTYPES.has(m.source_subtype)
   );
 }
 

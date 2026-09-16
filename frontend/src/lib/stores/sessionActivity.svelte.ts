@@ -1,6 +1,6 @@
 import { SessionsService } from "../api/generated/index";
 import { callGenerated, isAbortError } from "../api/runtime.js";
-import type { SessionActivityBucket } from "../api/types/session-activity.js";
+import type { DbSessionActivityBucket as SessionActivityBucket } from "../api/generated/index.js";
 import { LatestRead } from "../utils/latest-read.js";
 
 export function findActiveBucketIndex(

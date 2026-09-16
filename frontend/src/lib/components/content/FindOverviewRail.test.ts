@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
-import type { Message } from "../../api/types.js";
+import type { DbMessage as Message } from "../../api/generated/index.js";
 import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
 import { messages } from "../../stores/messages.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
@@ -42,6 +42,8 @@ it("positions visible matches without hidden thinking, including live filter cha
   const content = `[Thinking]\n${"x".repeat(10000)}\n[/Thinking]\n\nneedle`;
   messages.messages = [
     {
+      has_context_tokens: false,
+      has_output_tokens: false,
       id: 180000,
       session_id: "rail-fixture",
       ordinal: 0,

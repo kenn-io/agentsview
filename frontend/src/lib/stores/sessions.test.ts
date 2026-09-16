@@ -883,7 +883,7 @@ describe("SessionsStore", () => {
       ]);
       await sessions.load();
 
-      expect(sessions.sessions[0]!.display_name).toBeNull();
+      expect(sessions.sessions[0]!.display_name).toBeUndefined();
       expect(sessions.sessions[0]!.first_message).toBe("hydrated detail");
       expect(sessions.sessions[0]!.is_index_only).toBe(false);
     });
@@ -2282,7 +2282,7 @@ describe("SessionsStore", () => {
 
       await sessions.renameSession("s1", null);
 
-      expect(sessions.sessions[0]!.display_name).toBeNull();
+      expect(sessions.sessions[0]!.display_name).toBeUndefined();
     });
 
     it("keeps agent name restored by backend when rename is cleared", async () => {
@@ -2832,6 +2832,19 @@ describe("SessionsStore", () => {
 
 function makeSession(overrides: Partial<Session> & { id: string }): Session {
   return {
+    compaction_count: 0,
+    consecutive_failure_max: 0,
+    edit_churn_count: 0,
+    ended_with_role: "",
+    final_failure_streak: 0,
+    has_peak_context_tokens: false,
+    has_total_output_tokens: false,
+    mid_task_compaction_count: 0,
+    outcome: "",
+    outcome_confidence: "",
+    secret_leak_count: 0,
+    tool_failure_signal_count: 0,
+    tool_retry_count: 0,
     project: "proj",
     machine: "local",
     agent: "claude",

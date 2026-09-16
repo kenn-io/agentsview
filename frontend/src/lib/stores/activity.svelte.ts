@@ -1,4 +1,7 @@
-import type { AgentInfo, ProjectInfo } from "../api/types.js";
+import type {
+  DbAgentInfo as AgentInfo,
+  DbProjectInfo as ProjectInfo,
+} from "../api/generated/index.js";
 import type { Report } from "../api/types/activity.js";
 import { m } from "../i18n/index.js";
 import { MetadataService } from "../api/generated/index";

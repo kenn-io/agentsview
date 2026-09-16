@@ -1,7 +1,7 @@
 import { debounce } from "@kenn-io/kit-ui";
 import { SearchService } from "../api/generated/index.js";
 import { ApiError, callGenerated, isAbortError } from "../api/runtime.js";
-import type { SearchResult } from "../api/types.js";
+import type { DbSearchResult as SearchResult } from "../api/generated/index.js";
 import { resolveRange, type RangeSelection } from "../components/shared/rangeSelection.js";
 
 export type SearchMode = "fulltext" | "semantic" | "hybrid";

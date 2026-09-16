@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 const api = vi.hoisted(() => ({ getSession: vi.fn(), getMessages: vi.fn() }));
 vi.mock("../api/generated/index", () => ({
   SessionsService: {
@@ -27,6 +27,8 @@ const stores: MessagesStore[] = [];
 let id = 970000;
 function message(ordinal: number): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: id++,
     ordinal,
     session_id: "history",

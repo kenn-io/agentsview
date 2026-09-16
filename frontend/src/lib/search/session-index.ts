@@ -1,6 +1,6 @@
 /** Occurrence-level search over message data, independent of mounted DOM. */
 import type { MarkdownRenderOptions } from "../utils/markdown.js";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 import { collectSearchBlocks, type SearchBlock } from "./block-text.js";
 import { createOccurrenceMatcher, prepareSearchText, type PreparedSearchText } from "./dom-text.js";
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { setLocale } from "../../i18n/index.js";
-import type { SignalsAnalyticsResponse } from "../../api/types.js";
+import type { DbSignalsAnalyticsResponse as SignalsAnalyticsResponse } from "../../api/generated/index.js";
 import {
   buildQualityPatterns,
   buildQualitySummary,

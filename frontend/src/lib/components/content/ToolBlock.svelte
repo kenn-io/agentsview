@@ -2,7 +2,7 @@
 <!-- ABOUTME: Supports Task tool calls with inline subagent conversation expansion. -->
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import type { ToolCall } from "../../api/types.js";
+  import type { DbToolCall as ToolCall } from "../../api/generated/index.js";
   import SubagentInline from "./SubagentInline.svelte";
   import { extractToolParamMeta, type MetaTag } from "../../utils/tool-params.js";
   import { resolveToolInput } from "../../search/tool-input.js";

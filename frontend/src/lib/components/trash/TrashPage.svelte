@@ -18,10 +18,6 @@
   let emptying = $state(false);
   const trashRead = new LatestRead();
 
-  interface TrashResponse {
-    sessions: Session[];
-  }
-
   onMount(() => {
     loadTrash();
   });

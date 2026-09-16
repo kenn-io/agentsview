@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
-import type { Message } from "../../api/types.js";
+import type { DbMessage as Message } from "../../api/generated/index.js";
 import { messages } from "../../stores/messages.svelte.js";
 import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
@@ -11,6 +11,8 @@ let component: ReturnType<typeof mount> | undefined;
 let nextId = 230000;
 function message(ordinal: number, content: string): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: nextId++,
     session_id: "results-ui",
     ordinal,

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { findActiveBucketIndex, sessionActivity } from "./sessionActivity.svelte.js";
 import { SessionsService } from "../api/generated/index";
-import type { SessionActivityBucket } from "../api/types/session-activity.js";
-import type { SessionActivityResponse } from "../api/types/session-activity.js";
+import type { DbSessionActivityBucket as SessionActivityBucket } from "../api/generated/index.js";
+import type { DbSessionActivityResponse as SessionActivityResponse } from "../api/generated/index.js";
 
 const apiRuntimeMocks = vi.hoisted(() => ({
   callGenerated: vi.fn((request: () => Promise<unknown>, _signal?: AbortSignal) => request()),

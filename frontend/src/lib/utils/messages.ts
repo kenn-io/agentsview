@@ -1,4 +1,4 @@
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 
 const SYSTEM_MSG_PREFIXES = [
   "This session is being continued",

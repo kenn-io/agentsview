@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
-import type { ToolCall } from "../../api/types.js";
+import type { DbToolCall as ToolCall } from "../../api/generated/index.js";
 import { setLocale } from "../../i18n/index.js";
 // @ts-ignore
 import ParallelGroup from "./ParallelGroup.svelte";

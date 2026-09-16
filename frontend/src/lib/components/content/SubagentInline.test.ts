@@ -43,6 +43,17 @@ vi.mock("../../stores/router.svelte.js", () => ({
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
+    compaction_count: 0,
+    consecutive_failure_max: 0,
+    edit_churn_count: 0,
+    ended_with_role: "",
+    final_failure_streak: 0,
+    mid_task_compaction_count: 0,
+    outcome: "",
+    outcome_confidence: "",
+    secret_leak_count: 0,
+    tool_failure_signal_count: 0,
+    tool_retry_count: 0,
     id: "subagent-session-id",
     project: "proj-a",
     machine: "mac",

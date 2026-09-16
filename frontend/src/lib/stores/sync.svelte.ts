@@ -2,7 +2,12 @@ import { triggerResync, triggerSync, watchSession, type SyncHandle } from "../ap
 import { MetadataService, SyncService } from "../api/generated/index";
 import { ApiError, isRemoteConnection } from "../api/runtime.js";
 import { events } from "./events.svelte.js";
-import type { SyncProgress, SyncStats, Stats, VersionInfo } from "../api/types.js";
+import type {
+  SyncProgress,
+  SyncSyncStats as SyncStats,
+  DbStats as Stats,
+  VersionInfo,
+} from "../api/generated/index.js";
 import type { DbSessionTiming as SessionTiming } from "../api/generated/index.js";
 
 type SyncCompleteListener = () => void;

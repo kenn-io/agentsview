@@ -8,7 +8,7 @@
     type DbWorktreeReclassificationCandidate,
     type DbWorktreeReclassificationPreview,
   } from "../../api/generated/index";
-  import type { ProjectInfo } from "../../api/types/core.js";
+  import type { DbProjectInfo as ProjectInfo } from "../../api/generated/index.js";
   import { callGenerated, isAbortError } from "../../api/runtime.js";
   import { m } from "../../i18n/index.js";
   import { data } from "../../stores/data.svelte.js";

@@ -13,7 +13,7 @@
     callGenerated,
     isAbortError,
   } from "../../api/runtime.js";
-  import type { PublishResponse } from "../../api/types.js";
+  import type { PublishResponse } from "../../api/generated/index.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { LatestRead } from "../../utils/latest-read.js";
 

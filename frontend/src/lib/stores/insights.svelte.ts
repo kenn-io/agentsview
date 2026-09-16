@@ -3,9 +3,9 @@ import type {
   AgentName,
   CannedInsightKind,
   AutomatedScope,
-  InsightGenerationFilters,
   Session,
 } from "../api/types.js";
+import type { CannedSessionFiltersInput as InsightGenerationFilters } from "../api/generated/index.js";
 import { InsightsService, type DbInsight } from "../api/generated/index";
 import { ApiError, callGenerated, isAbortError } from "../api/runtime.js";
 import {

@@ -1,15 +1,15 @@
+import type { AutomatedScope } from "../api/types.js";
 import type {
-  AnalyticsSummary,
-  ActivityResponse,
-  ProjectsAnalyticsResponse,
-  HourOfWeekResponse,
-  SessionShapeResponse,
-  VelocityResponse,
-  ToolsAnalyticsResponse,
-  SkillsAnalyticsResponse,
-  SignalsAnalyticsResponse,
-  AutomatedScope,
-} from "../api/types.js";
+  DbAnalyticsSummary as AnalyticsSummary,
+  DbActivityResponse as ActivityResponse,
+  DbProjectsAnalyticsResponse as ProjectsAnalyticsResponse,
+  DbHourOfWeekResponse as HourOfWeekResponse,
+  DbSessionShapeResponse as SessionShapeResponse,
+  DbVelocityResponse as VelocityResponse,
+  DbToolsAnalyticsResponse as ToolsAnalyticsResponse,
+  DbSkillsAnalyticsResponse as SkillsAnalyticsResponse,
+  DbSignalsAnalyticsResponse as SignalsAnalyticsResponse,
+} from "../api/generated/index.js";
 import {
   AnalyticsService,
   type DbHeatmapResponse,

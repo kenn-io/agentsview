@@ -1,5 +1,5 @@
 import { SessionsService } from "../api/generated/index";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 import { isAbortError } from "../api/runtime.js";
 import { clearContentCaches } from "../utils/content-parser.js";
 import { computeMainModelInfo, type ModelEffort } from "../utils/model.js";

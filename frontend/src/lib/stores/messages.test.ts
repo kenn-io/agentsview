@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { messages } from "./messages.svelte.js";
 import { readProgress } from "./read-progress.svelte.js";
 import { parseContent } from "../utils/content-parser.js";
-import type { Message, MessagesResponse, Session } from "../api/types.js";
+import type { Session } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
+import type { ServiceMessageList as MessagesResponse } from "../api/generated/index.js";
 
 const api = vi.hoisted(() => ({
   getMessages: vi.fn(),
@@ -81,6 +83,19 @@ function generatedCancelError(): Error & { isCancelled: true } {
 
 function makeSession(id: string, messageCount: number): Session {
   return {
+    compaction_count: 0,
+    consecutive_failure_max: 0,
+    edit_churn_count: 0,
+    ended_with_role: "",
+    final_failure_streak: 0,
+    has_peak_context_tokens: false,
+    has_total_output_tokens: false,
+    mid_task_compaction_count: 0,
+    outcome: "",
+    outcome_confidence: "",
+    secret_leak_count: 0,
+    tool_failure_signal_count: 0,
+    tool_retry_count: 0,
     id,
     project: "project-alpha",
     machine: "test-machine",

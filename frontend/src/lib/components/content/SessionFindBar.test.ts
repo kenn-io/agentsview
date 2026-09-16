@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
-import type { Message } from "../../api/types.js";
+import type { DbMessage as Message } from "../../api/generated/index.js";
 import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
 import { messages } from "../../stores/messages.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
@@ -79,6 +79,8 @@ describe("SessionFindBar", () => {
     const content = "needles needle";
     messages.messages = [
       {
+        has_context_tokens: false,
+        has_output_tokens: false,
         id: 170000,
         session_id: "s1",
         ordinal: 0,

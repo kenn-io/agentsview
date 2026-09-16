@@ -3,7 +3,7 @@
   import { XIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
   import type { DbProjectInventoryRow } from "../../api/generated/index";
-  import type { ProjectInfo } from "../../api/types/core.js";
+  import type { DbProjectInfo as ProjectInfo } from "../../api/generated/index.js";
   import ProjectBatchReclassificationEditor from "./ProjectBatchReclassificationEditor.svelte";
 
   interface Props {

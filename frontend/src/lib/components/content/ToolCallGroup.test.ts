@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { mount, tick, unmount } from "svelte";
-import type { Message } from "../../api/types.js";
+import type { DbMessage as Message } from "../../api/generated/index.js";
 // @ts-ignore
 import ToolCallGroup from "./ToolCallGroup.svelte";
 
@@ -25,6 +25,7 @@ function makeToolMessage(ordinal: number): Message {
     has_output_tokens: false,
     tool_calls: [
       {
+        category: "",
         tool_name: "bash",
       },
     ],

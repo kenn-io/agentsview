@@ -1,12 +1,14 @@
 import { describe, it, expect } from "vite-plus/test";
 import { buildDisplayItems } from "./display-items.js";
 import { hasVisibleSegments } from "./content-parser.js";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 
 let nextId = 1;
 
 function msg(overrides: Partial<Message> & { content: string }): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: nextId++,
     session_id: "s1",
     ordinal: 0,
@@ -34,7 +36,13 @@ function toolMsg(ordinal: number, tool = "Bash", args = "$ ls") {
 }
 
 function textMsg(ordinal: number, content: string, role: "user" | "assistant" = "assistant") {
-  return msg({ ordinal, content, role });
+  return msg({
+    has_context_tokens: false,
+    has_output_tokens: false,
+    ordinal,
+    content,
+    role,
+  });
 }
 
 describe("buildDisplayItems", () => {
@@ -98,6 +106,8 @@ describe("buildDisplayItems", () => {
   it("user messages are always individual items", () => {
     const msgs = [
       msg({
+        has_context_tokens: false,
+        has_output_tokens: false,
         ordinal: 0,
         role: "user",
         content: "[Bash]\n$ ls",

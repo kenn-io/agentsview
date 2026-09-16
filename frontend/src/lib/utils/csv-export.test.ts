@@ -33,6 +33,7 @@ describe("generateAnalyticsCSV", () => {
       most_active_project: "my-project",
       concentration: 0.456,
       agents: {},
+      models: [],
     };
 
     const csv = generateAnalyticsCSV(data);
@@ -149,6 +150,7 @@ describe("generateAnalyticsCSV", () => {
       most_active_project: "p",
       concentration: 0.5,
       agents: {},
+      models: [],
     };
     data.tools = {
       total_calls: 1,
@@ -178,6 +180,7 @@ describe("generateAnalyticsCSV", () => {
       most_active_project: 'project, "special"',
       concentration: 0,
       agents: {},
+      models: [],
     };
 
     const csv = generateAnalyticsCSV(data);
@@ -199,6 +202,7 @@ describe("generateAnalyticsCSV", () => {
       most_active_project: "=cmd()",
       concentration: 0,
       agents: {},
+      models: [],
     };
 
     const csv = generateAnalyticsCSV(data);

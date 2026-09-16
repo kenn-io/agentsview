@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
-import type { Message } from "../../api/types.js";
+import type { DbMessage as Message } from "../../api/generated/index.js";
 import { messages } from "../../stores/messages.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
@@ -13,6 +13,8 @@ function message(ordinal: number, structured: boolean): Message {
   const content =
     "[Thinking]\nneedle needle\n[/Thinking]" + (structured ? "" : "\n[Bash]\necho done");
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: id++,
     session_id: "group-thinking",
     ordinal,

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount, type ComponentProps } from "svelte";
-import type { ToolCall } from "../../api/types.js";
+import type { DbToolCall as ToolCall } from "../../api/generated/index.js";
 import { setLocale } from "../../i18n/index.js";
 import retainedFixtureSource from "../../utils/__fixtures__/retained-tool-image-1735.json?raw";
 const SMALL_PNG_DATA_URI =
@@ -50,7 +50,12 @@ function call(
   params: Record<string, unknown> = {},
   rest: Partial<ToolCall> = {},
 ): ToolCall {
-  return { tool_name, input_json: JSON.stringify(params), ...rest };
+  return {
+    category: "",
+    tool_name,
+    input_json: JSON.stringify(params),
+    ...rest,
+  };
 }
 const text = (selector: string) => document.querySelector(selector)?.textContent ?? "";
 const longCommand = Array.from({ length: 30 }, (_, i) => `echo hidden-line-${i}`).join("\n");
@@ -489,12 +494,24 @@ describe("ToolBlock input source and copy", () => {
     expect(text(".tool-content")).toBe("explicit source");
   });
   it("handles an absent or invalid input_json", async () => {
-    await render({ content: "legacy", toolCall: { tool_name: "Read", input_json: "{" } });
+    await render({
+      content: "legacy",
+      toolCall: {
+        category: "",
+        tool_name: "Read",
+        input_json: "{",
+      },
+    });
     await click(".tool-header");
     expect(text(".tool-content")).toBe("legacy");
   });
   it("handles a tool call without input_json", async () => {
-    await render({ toolCall: { tool_name: "Read" } });
+    await render({
+      toolCall: {
+        category: "",
+        tool_name: "Read",
+      },
+    });
     await click(".tool-header");
     expect(document.querySelector(".tool-content")).toBeNull();
   });

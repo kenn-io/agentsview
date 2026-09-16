@@ -8,7 +8,7 @@ import {
 } from "./client.js";
 import type { SyncHandle } from "./client.js";
 import { ApiError } from "./runtime.js";
-import type { SyncProgress } from "./types.js";
+import type { SyncProgress } from "./generated/index.js";
 
 /**
  * Create a ReadableStream that yields the given chunks as

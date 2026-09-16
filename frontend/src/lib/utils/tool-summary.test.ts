@@ -1,10 +1,14 @@
 // ABOUTME: Table-driven unit tests for summarizeToolCall.
 import { describe, it, expect } from "vite-plus/test";
-import type { ToolCall } from "../api/types.js";
+import type { DbToolCall as ToolCall } from "../api/generated/index.js";
 import { summarizeToolCall, summarizeToolCallPath } from "./tool-summary.js";
 
 function call(partial: Partial<ToolCall>): ToolCall {
-  return { tool_name: "Tool", ...partial };
+  return {
+    category: "",
+    tool_name: "Tool",
+    ...partial,
+  };
 }
 
 describe("summarizeToolCall", () => {
@@ -20,7 +24,13 @@ describe("summarizeToolCall", () => {
 
   it("returns null when no structured fields are present", () => {
     expect(
-      summarizeToolCall(call({ tool_name: "mystery", input_json: JSON.stringify({ foo: 1 }) })),
+      summarizeToolCall(
+        call({
+          category: "",
+          tool_name: "mystery",
+          input_json: JSON.stringify({ foo: 1 }),
+        }),
+      ),
     ).toBeNull();
   });
 
@@ -375,6 +385,7 @@ describe("summarizeToolCall", () => {
       expect(
         summarizeToolCall(
           call({
+            category: "",
             tool_name: "TodoWrite",
             input_json: JSON.stringify({
               todos: [
@@ -391,6 +402,7 @@ describe("summarizeToolCall", () => {
       expect(
         summarizeToolCall(
           call({
+            category: "",
             tool_name: "TodoWrite",
             input_json: JSON.stringify({
               todos: [
@@ -407,6 +419,7 @@ describe("summarizeToolCall", () => {
       expect(
         summarizeToolCall(
           call({
+            category: "",
             tool_name: "TaskUpdate",
             input_json: JSON.stringify({
               taskId: 29,
@@ -422,6 +435,7 @@ describe("summarizeToolCall", () => {
       expect(
         summarizeToolCall(
           call({
+            category: "",
             tool_name: "Skill",
             input_json: JSON.stringify({ skill: "review-branch" }),
           }),

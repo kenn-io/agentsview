@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { trends } from "./trends.svelte.js";
 import { selectionFromRange } from "../components/shared/rangeSelection.js";
 import { TrendsService } from "../api/generated/index";
-import type { TrendsTermsResponse } from "../api/types.js";
+import type { DbTrendsTermsResponse as TrendsTermsResponse } from "../api/generated/index.js";
 
 const apiRuntimeMocks = vi.hoisted(() => ({
   callGenerated: vi.fn((request: () => Promise<unknown>, _signal?: AbortSignal) => request()),

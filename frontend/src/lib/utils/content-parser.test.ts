@@ -1,11 +1,13 @@
 import { describe, it, expect } from "vite-plus/test";
 import { parseContent, isToolOnly, enrichSegments, hasVisibleSegments } from "./content-parser.js";
-import type { Message, ToolCall } from "../api/types.js";
+import type { DbMessage as Message, DbToolCall as ToolCall } from "../api/generated/index.js";
 
 let nextId = 1;
 
 function makeMsg(overrides: Partial<Message> & { content: string }): Message {
   const defaults: Message = {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: nextId++,
     session_id: "s1",
     ordinal: 0,

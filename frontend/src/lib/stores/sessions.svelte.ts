@@ -1,7 +1,12 @@
 import type { DataChangedEvent } from "../api/client.js";
 import { MetadataService, SessionsService, SettingsService } from "../api/generated/index";
 import { callGenerated, isAbortError, isNotFoundError } from "../api/runtime.js";
-import type { Session, ProjectInfo, AgentInfo, SidebarSessionIndexRow } from "../api/types.js";
+import type { Session } from "../api/types.js";
+import type {
+  DbProjectInfo as ProjectInfo,
+  DbAgentInfo as AgentInfo,
+  DbSidebarSessionIndexRow as SidebarSessionIndexRow,
+} from "../api/generated/index.js";
 import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import { starred } from "./starred.svelte.js";
@@ -1073,7 +1078,7 @@ class SessionsStore {
         this.sessions[idx] = {
           ...s,
           health_score_basis: detail.basis,
-          health_penalties: detail.penalties,
+          health_penalties: detail.penalties ?? undefined,
         };
       }
     }
@@ -1442,7 +1447,7 @@ class SessionsStore {
       // Explicitly null it out so the store reflects the cleared state rather
       // than keeping the stale value until the next SSE-triggered refresh.
       if (displayName === null && updated.display_name === undefined) {
-        merged.display_name = null;
+        merged.display_name = undefined;
       }
       this.sessions[idx] = merged;
     }
@@ -1591,6 +1596,17 @@ export function createSessionsStore(): SessionsStore {
 
 function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Session): Session {
   const skinny: Session = {
+    compaction_count: 0,
+    consecutive_failure_max: 0,
+    edit_churn_count: 0,
+    ended_with_role: "",
+    final_failure_streak: 0,
+    mid_task_compaction_count: 0,
+    outcome: "",
+    outcome_confidence: "",
+    secret_leak_count: 0,
+    tool_failure_signal_count: 0,
+    tool_retry_count: 0,
     id: row.id,
     project: row.project,
     project_assigned: row.project_assigned ?? false,
@@ -1599,14 +1615,14 @@ function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Sessio
     agent_label: row.agent_label ?? undefined,
     entrypoint: row.entrypoint ?? undefined,
     first_message: null,
-    display_name: row.display_name ?? null,
+    display_name: row.display_name ?? undefined,
     started_at: row.started_at,
     ended_at: row.ended_at,
     message_count: row.message_count,
     user_message_count: row.user_message_count,
     parent_session_id: row.parent_session_id ?? undefined,
     relationship_type: row.relationship_type ?? undefined,
-    termination_status: row.termination_status ?? null,
+    termination_status: row.termination_status ?? undefined,
     total_output_tokens: 0,
     peak_context_tokens: 0,
     has_total_output_tokens: false,

@@ -28,6 +28,8 @@ const pinsService = PinsService as unknown as {
 };
 
 const PIN_ALPHA = {
+  has_context_tokens: false,
+  has_output_tokens: false,
   id: 1,
   session_id: "s1",
   message_id: 10,
@@ -39,6 +41,8 @@ const PIN_ALPHA = {
   session_title: "alpha session",
 };
 const PIN_BETA = {
+  has_context_tokens: false,
+  has_output_tokens: false,
   id: 2,
   session_id: "s2",
   message_id: 20,

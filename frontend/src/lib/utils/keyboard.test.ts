@@ -75,20 +75,48 @@ describe("registerShortcuts", () => {
       ["unknown", false, null],
     ] as const)("%s fallback=%s", async (agent, fallback, expected) => {
       const id = `devbox1~${agent}:abc-123`;
-      sessions.sessions = [{
-        id, agent, project: "remote-project", machine: "devbox1", first_message: null,
-        started_at: null, ended_at: null, message_count: 1, user_message_count: 1,
-        total_output_tokens: 0, peak_context_tokens: 0, is_automated: false,
-        created_at: "2026-01-01T00:00:00Z",
-      }];
+      sessions.sessions = [
+        {
+          compaction_count: 0,
+          consecutive_failure_max: 0,
+          edit_churn_count: 0,
+          ended_with_role: "",
+          final_failure_streak: 0,
+          has_peak_context_tokens: false,
+          has_total_output_tokens: false,
+          mid_task_compaction_count: 0,
+          outcome: "",
+          outcome_confidence: "",
+          secret_leak_count: 0,
+          tool_failure_signal_count: 0,
+          tool_retry_count: 0,
+          id,
+          agent,
+          project: "remote-project",
+          machine: "devbox1",
+          first_message: null,
+          started_at: null,
+          ended_at: null,
+          message_count: 1,
+          user_message_count: 1,
+          total_output_tokens: 0,
+          peak_context_tokens: 0,
+          is_automated: false,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ];
       sessions.activeSessionId = id;
       const resume = vi.spyOn(SessionsService, "postApiV1SessionsByIdResume");
       if (fallback) resume.mockRejectedValue(new Error("offline"));
-      else resume.mockResolvedValue({
-        launched: false,
-        command: agent === "cursor" ? "cursor agent --resume abc-123" : "cd '/remote/project' && claude --resume abc-123",
-        cwd: "/remote/project",
-      });
+      else
+        resume.mockResolvedValue({
+          launched: false,
+          command:
+            agent === "cursor"
+              ? "cursor agent --resume abc-123"
+              : "cd '/remote/project' && claude --resume abc-123",
+          cwd: "/remote/project",
+        });
       fireKey("c");
       await Promise.resolve();
       await Promise.resolve();
@@ -482,6 +510,19 @@ describe("registerShortcuts", () => {
   describe("[ ] with starred-only filter", () => {
     function makeSession(id: string) {
       return {
+        compaction_count: 0,
+        consecutive_failure_max: 0,
+        edit_churn_count: 0,
+        ended_with_role: "",
+        final_failure_streak: 0,
+        has_peak_context_tokens: false,
+        has_total_output_tokens: false,
+        mid_task_compaction_count: 0,
+        outcome: "",
+        outcome_confidence: "",
+        secret_leak_count: 0,
+        tool_failure_signal_count: 0,
+        tool_retry_count: 0,
         id,
         project: "proj",
         machine: "local",
@@ -681,6 +722,19 @@ describe("registerShortcuts", () => {
 
   it("pins the active session model in the resume fallback", async () => {
     const session = {
+      compaction_count: 0,
+      consecutive_failure_max: 0,
+      edit_churn_count: 0,
+      ended_with_role: "",
+      final_failure_streak: 0,
+      has_peak_context_tokens: false,
+      has_total_output_tokens: false,
+      mid_task_compaction_count: 0,
+      outcome: "",
+      outcome_confidence: "",
+      secret_leak_count: 0,
+      tool_failure_signal_count: 0,
+      tool_retry_count: 0,
       id: "run:keyboard-session",
       project: "proj",
       machine: "local",
@@ -735,6 +789,19 @@ describe("registerShortcuts", () => {
 
   it("keeps successful backend resume commands authoritative", async () => {
     const session = {
+      compaction_count: 0,
+      consecutive_failure_max: 0,
+      edit_churn_count: 0,
+      ended_with_role: "",
+      final_failure_streak: 0,
+      has_peak_context_tokens: false,
+      has_total_output_tokens: false,
+      mid_task_compaction_count: 0,
+      outcome: "",
+      outcome_confidence: "",
+      secret_leak_count: 0,
+      tool_failure_signal_count: 0,
+      tool_retry_count: 0,
       id: "run:keyboard-session",
       project: "proj",
       machine: "local",
@@ -788,6 +855,19 @@ describe("registerShortcuts", () => {
 
   it("does not pin a partial-history model in the resume fallback", async () => {
     const session = {
+      compaction_count: 0,
+      consecutive_failure_max: 0,
+      edit_churn_count: 0,
+      ended_with_role: "",
+      final_failure_streak: 0,
+      has_peak_context_tokens: false,
+      has_total_output_tokens: false,
+      mid_task_compaction_count: 0,
+      outcome: "",
+      outcome_confidence: "",
+      secret_leak_count: 0,
+      tool_failure_signal_count: 0,
+      tool_retry_count: 0,
       id: "run:keyboard-session",
       project: "proj",
       machine: "local",
@@ -840,6 +920,19 @@ describe("registerShortcuts", () => {
 
   it("does not pin a reloading stable model in the resume fallback", async () => {
     const session = {
+      compaction_count: 0,
+      consecutive_failure_max: 0,
+      edit_churn_count: 0,
+      ended_with_role: "",
+      final_failure_streak: 0,
+      has_peak_context_tokens: false,
+      has_total_output_tokens: false,
+      mid_task_compaction_count: 0,
+      outcome: "",
+      outcome_confidence: "",
+      secret_leak_count: 0,
+      tool_failure_signal_count: 0,
+      tool_retry_count: 0,
       id: "run:keyboard-session",
       project: "proj",
       machine: "local",

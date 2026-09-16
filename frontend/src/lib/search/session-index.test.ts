@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vite-plus/test";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 import { collectSearchBlocks } from "./block-text.js";
 import { buildSessionIndex } from "./session-index.js";
 
 let nextId = 100000;
 function message(ordinal: number, content: string, overrides: Partial<Message> = {}): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: nextId++,
     session_id: "index-fixture",
     ordinal,
@@ -184,11 +186,23 @@ describe("buildSessionIndex", () => {
 
   it("refreshes replaced same-length output data", () => {
     const initial = message(1, "", {
-      tool_calls: [{ tool_name: "Read", result_content: "needle" }],
+      tool_calls: [
+        {
+          category: "",
+          tool_name: "Read",
+          result_content: "needle",
+        },
+      ],
     });
     const replacement = {
       ...initial,
-      tool_calls: [{ tool_name: "Read", result_content: "absent" }],
+      tool_calls: [
+        {
+          category: "",
+          tool_name: "Read",
+          result_content: "absent",
+        },
+      ],
     };
     expect(buildSessionIndex([initial], "needle").total).toBe(1);
     expect(buildSessionIndex([replacement], "needle").total).toBe(0);
@@ -197,7 +211,13 @@ describe("buildSessionIndex", () => {
   it("indexes older messages that have never been mounted", () => {
     const source = Array.from({ length: 3000 }, (_, ordinal) =>
       message(ordinal, "", {
-        tool_calls: [{ tool_name: "Read", result_content: "needle needle" }],
+        tool_calls: [
+          {
+            category: "",
+            tool_name: "Read",
+            result_content: "needle needle",
+          },
+        ],
       }),
     );
     const index = buildSessionIndex(source, "needle");

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vite-plus/test";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 import { clearContentCaches } from "../utils/content-parser.js";
 import { collectSearchBlocks } from "./block-text.js";
 import { buildSessionIndex } from "./session-index.js";
@@ -8,6 +8,8 @@ let id = 940000;
 function message(text: string): Message {
   const content = `\`\`\`text\n${text}\n\`\`\``;
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: id++,
     session_id: "cache-test",
     ordinal: 0,

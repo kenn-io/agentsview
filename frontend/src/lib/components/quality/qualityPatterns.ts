@@ -1,8 +1,8 @@
 import type {
-  QualitySignalTotals,
-  SignalsAnalyticsResponse,
-  SignalsTrendBucket,
-} from "../../api/types.js";
+  DbQualitySignalTotals as QualitySignalTotals,
+  DbSignalsAnalyticsResponse as SignalsAnalyticsResponse,
+  DbSignalsTrendBucket as SignalsTrendBucket,
+} from "../../api/generated/index.js";
 import { m } from "../../i18n/index.js";
 
 export type QualityPatternSeverity = "clear" | "watch" | "warning" | "critical" | "unavailable";

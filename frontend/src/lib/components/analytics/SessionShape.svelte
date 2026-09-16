@@ -1,7 +1,7 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
   import { router } from "../../stores/router.svelte.js";
-  import type { DistributionBucket } from "../../api/types.js";
+  import type { DbDistributionBucket as DistributionBucket } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
 
   type View = "length" | "duration" | "autonomy";

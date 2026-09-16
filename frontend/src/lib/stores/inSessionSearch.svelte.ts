@@ -1,6 +1,6 @@
 /** Local, occurrence-level session search with a stable navigation cursor. */
 import { untrack } from "svelte";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 import { buildSessionIndex, type Match, type SessionIndex } from "../search/session-index.js";
 import {
   cursorFor,

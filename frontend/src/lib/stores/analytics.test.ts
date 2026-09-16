@@ -4,18 +4,18 @@ import { sessions } from "./sessions.svelte.js";
 import { AnalyticsService } from "../api/generated/index";
 import { callGenerated } from "../api/runtime.js";
 import type {
-  AnalyticsSummary,
-  ActivityResponse,
-  HeatmapResponse,
-  ProjectsAnalyticsResponse,
-  HourOfWeekResponse,
-  SessionShapeResponse,
-  VelocityResponse,
-  ToolsAnalyticsResponse,
-  SkillsAnalyticsResponse,
-  TopSessionsResponse,
-  SignalsAnalyticsResponse,
-} from "../api/types.js";
+  DbAnalyticsSummary as AnalyticsSummary,
+  DbActivityResponse as ActivityResponse,
+  DbHeatmapResponse as HeatmapResponse,
+  DbProjectsAnalyticsResponse as ProjectsAnalyticsResponse,
+  DbHourOfWeekResponse as HourOfWeekResponse,
+  DbSessionShapeResponse as SessionShapeResponse,
+  DbVelocityResponse as VelocityResponse,
+  DbToolsAnalyticsResponse as ToolsAnalyticsResponse,
+  DbSkillsAnalyticsResponse as SkillsAnalyticsResponse,
+  DbTopSessionsResponse as TopSessionsResponse,
+  DbSignalsAnalyticsResponse as SignalsAnalyticsResponse,
+} from "../api/generated/index.js";
 
 vi.mock("../api/runtime.js", () => ({
   callGenerated: vi.fn((request: () => Promise<unknown>) => request()),

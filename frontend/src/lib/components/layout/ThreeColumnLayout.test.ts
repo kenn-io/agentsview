@@ -191,6 +191,9 @@ describe("ThreeColumnLayout", () => {
     setViewportWidth(SIDEBAR_DESKTOP_BREAKPOINT - 1);
     ui.isMobileViewport = true;
     sync.serverVersion = {
+      api_version: 1,
+      data_version: 1,
+      insight_generation_available: false,
       version: "dev",
       commit: "unknown",
       build_date: "",
@@ -215,6 +218,9 @@ describe("ThreeColumnLayout", () => {
     setViewportWidth(SIDEBAR_DESKTOP_BREAKPOINT - 1);
     ui.isMobileViewport = true;
     sync.serverVersion = {
+      api_version: 1,
+      data_version: 1,
+      insight_generation_available: false,
       version: "dev",
       commit: "unknown",
       build_date: "",

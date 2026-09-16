@@ -7,7 +7,7 @@
  * imports: callers pass the current filters in and receive display items plus
  * the block kinds those items actually render.
  */
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 import type { BlockType } from "../stores/ui.svelte.js";
 import { hasVisibleSegments } from "../utils/content-parser.js";
 import { buildDisplayItems, type DisplayItem } from "../utils/display-items.js";

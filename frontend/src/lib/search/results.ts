@@ -1,5 +1,5 @@
 /** Group model matches without consulting mounted or collapsed DOM content. */
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 import type { SearchBlock } from "./block-text.js";
 import type { Match } from "./session-index.js";
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ToolCall } from "../../api/types.js";
+  import type { DbToolCall as ToolCall } from "../../api/generated/index.js";
   import type { DbCallTiming as CallTiming } from "../../api/generated/index.js";
   import ToolBlock from "./ToolBlock.svelte";
   import { formatDuration } from "../../utils/duration.js";

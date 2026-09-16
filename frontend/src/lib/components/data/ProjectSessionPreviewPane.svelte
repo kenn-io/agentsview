@@ -11,10 +11,10 @@
   import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, FunnelIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
   import { data } from "../../stores/data.svelte.js";
-  import type { Message } from "../../api/types.js";
+  import type { DbMessage as Message } from "../../api/generated/index.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import MessageContent from "../content/MessageContent.svelte";
-  import type { ProjectInfo } from "../../api/types/core.js";
+  import type { DbProjectInfo as ProjectInfo } from "../../api/generated/index.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
 
   interface Props {

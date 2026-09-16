@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { SearchService } from "../api/generated/index.js";
 import { ApiError } from "../api/runtime.js";
-import type { SearchResponse } from "../api/types.js";
+import type { SearchResponse } from "../api/generated/index.js";
 import type { DbContentMatch } from "../api/generated/index.js";
 import { SEARCH_MODE_STORAGE_KEY, createSearchStore, type SearchMode } from "./search.svelte.js";
 
