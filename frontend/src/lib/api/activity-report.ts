@@ -1,6 +1,7 @@
 import type { Report, SessionRow } from "./types/activity.js";
 import { ActivityService, type ActivityReportSessionsResponse } from "./generated/index";
-import { callGenerated, orvalRequest } from "./runtime.js";
+import { callGenerated } from "./runtime.js";
+import { consumeEvents } from "./client.js";
 
 export interface ActivityReportQuery {
   preset?: "day" | "week" | "month" | "custom";
@@ -47,67 +48,6 @@ export type ActivitySessionPage = Omit<ActivityReportSessionsResponse, "sessions
   report?: Report;
 };
 
-interface SSEFrame {
-  event: string;
-  data: string;
-}
-
-function parseFrame(frame: string): SSEFrame {
-  let event = "message";
-  const data: string[] = [];
-  for (const line of frame.split("\n")) {
-    if (line.startsWith("event:")) event = line.slice(6).trimStart();
-    if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
-  }
-  return { event, data: data.join("\n") };
-}
-
-function handleFrame(
-  frame: string,
-  onProgress?: (progress: ActivityReportProgress) => void,
-): Report | undefined {
-  const parsed = parseFrame(frame);
-  if (!parsed.data) return undefined;
-  if (parsed.event === "progress") {
-    onProgress?.(JSON.parse(parsed.data) as ActivityReportProgress);
-    return undefined;
-  }
-  if (parsed.event === "report") return JSON.parse(parsed.data) as Report;
-  if (parsed.event === "error") {
-    const payload = JSON.parse(parsed.data) as { error?: string };
-    throw new Error(payload.error ?? "Activity report failed");
-  }
-  return undefined;
-}
-
-async function readReportStream(
-  body: ReadableStream<Uint8Array>,
-  onProgress?: (progress: ActivityReportProgress) => void,
-): Promise<Report> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done }).replaceAll("\r\n", "\n");
-    let boundary: number;
-    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
-      const report = handleFrame(buffer.slice(0, boundary), onProgress);
-      buffer = buffer.slice(boundary + 2);
-      if (report) {
-        await reader.cancel();
-        return report;
-      }
-    }
-    if (done) break;
-  }
-  if (buffer.trim()) {
-    const report = handleFrame(buffer, onProgress);
-    if (report) return report;
-  }
-  throw new Error("Activity report stream ended without a report event");
-}
-
 export async function fetchActivityReport(
   query: ActivityReportQuery,
   signal?: AbortSignal,
@@ -116,13 +56,20 @@ export async function fetchActivityReport(
   const headers = new Headers();
   headers.set("Accept", "text/event-stream, application/json");
   const { gitBranch, ...params } = query;
-  const res = await orvalRequest(
-    ActivityService.getGetApiV1ActivityReportUrl({ ...params, git_branch: gitBranch }),
-    { method: "GET", headers, signal },
+  const res = await ActivityService.getApiV1ActivityReport(
+    { ...params, git_branch: gitBranch },
+    { headers, signal },
   );
   if (res.headers.get("Content-Type")?.includes("text/event-stream")) {
-    if (!res.body) throw new Error("Activity report response has no body");
-    return readReportStream(res.body, onProgress);
+    return consumeEvents<Report>(
+      res,
+      ({ event, data }) => {
+        if (event === "progress") onProgress?.(JSON.parse(data));
+        if (event === "report") return JSON.parse(data);
+        if (event === "error") throw new Error(JSON.parse(data).error ?? "Activity report failed");
+      },
+      "Activity report stream ended without a report event",
+    );
   }
   return (await res.json()) as Report;
 }

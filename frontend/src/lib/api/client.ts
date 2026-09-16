@@ -21,7 +21,7 @@ export interface SyncHandle {
   done: Promise<SyncStats>;
 }
 
-async function consumeEvents<T>(
+export async function consumeEvents<T>(
   response: Response,
   dispatch: (event: EventSourceMessage) => T | undefined,
   missingResult: string,

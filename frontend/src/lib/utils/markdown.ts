@@ -11,7 +11,6 @@ import {
 import DOMPurify from "dompurify";
 import { LRUCache } from "./cache.js";
 import { escapeHtml as escapeHTML } from "@kenn-io/kit-ui";
-import { orvalRequest } from "../api/runtime.js";
 import { AssetsService } from "../api/generated/index.js";
 
 const KNOWN_HTML_TAGS = new Set([
@@ -805,13 +804,6 @@ function getAssetReference(src: string | null): string | undefined {
   }
 }
 
-function getAssetURL(reference: string): string {
-  const filename = reference.startsWith("asset://")
-    ? reference.slice("asset://".length)
-    : reference;
-  return AssetsService.getGetApiV1AssetsByFilenameUrl({ filename });
-}
-
 export function loadAssetImages(node: HTMLElement, _content = "") {
   let destroyed = false;
   const blobURLs = new Set<string>();
@@ -825,8 +817,11 @@ export function loadAssetImages(node: HTMLElement, _content = "") {
         image.dataset.agentsviewAsset = reference;
 
         try {
-          const response = await orvalRequest(getAssetURL(reference));
-          if (!response.ok) throw new Error(`asset request failed: ${response.status}`);
+          const response = await AssetsService.getApiV1AssetsByFilename({
+            filename: reference.startsWith("asset://")
+              ? reference.slice("asset://".length)
+              : reference,
+          });
           const blobURL = URL.createObjectURL(await response.blob());
           if (destroyed || !node.contains(image)) {
             URL.revokeObjectURL(blobURL);
