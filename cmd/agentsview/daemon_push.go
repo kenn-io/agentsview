@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -11,9 +10,18 @@ import (
 	"net/http"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/server"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
+)
+
+type daemonPushTarget int
+
+const (
+	daemonPushPG daemonPushTarget = iota
+	daemonPushDuckDB
+	daemonStartupSync
 )
 
 type daemonPushRequest struct {
@@ -53,7 +61,7 @@ func postDaemonPush[T, P any](
 	ctx context.Context,
 	tr transport,
 	authToken string,
-	path string,
+	target daemonPushTarget,
 	body daemonPushRequest,
 	onProgress func(P),
 ) (T, error) {
@@ -65,25 +73,40 @@ func postDaemonPush[T, P any](
 		if err != nil {
 			return zero, err
 		}
-		req, err := http.NewRequestWithContext(
-			ctx, http.MethodPost, strings.TrimSuffix(tr.URL, "/")+path,
-			bytes.NewReader(data),
-		)
+		var wire apiclient.DaemonPushRequest
+		if err := json.Unmarshal(data, &wire); err != nil {
+			return zero, err
+		}
+		api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
 		if err != nil {
 			return zero, err
 		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "text/event-stream")
-		req.Header.Set("Origin", tr.URL)
-		if authToken != "" {
-			req.Header.Set("Authorization", "Bearer "+authToken)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return zero, err
+		var resp *http.Response
+		var payload []byte
+		switch target {
+		case daemonPushPG:
+			response, requestErr := api.PostAPIV1PushPgStreamWithResponse(ctx, &apiclient.PostAPIV1PushPgRequestOptions{Body: &wire})
+			if response == nil {
+				return zero, requestErr
+			}
+			resp, payload = response.HTTPResponse, response.Body
+		case daemonPushDuckDB:
+			response, requestErr := api.PostAPIV1PushDuckdbStreamWithResponse(ctx, &apiclient.PostAPIV1PushDuckdbRequestOptions{Body: &wire})
+			if response == nil {
+				return zero, requestErr
+			}
+			resp, payload = response.HTTPResponse, response.Body
+		case daemonStartupSync:
+			response, requestErr := api.PostAPIV1SyncStreamWithResponse(ctx, &apiclient.PostAPIV1SyncRequestOptions{Query: &apiclient.PostAPIV1SyncQuery{Wait: new(true), StartupOnly: new(true)}})
+			if response == nil {
+				return zero, requestErr
+			}
+			resp, payload = response.HTTPResponse, response.Body
+		default:
+			return zero, fmt.Errorf("unknown daemon push target: %d", target)
 		}
 		if resp.StatusCode != http.StatusOK {
-			msg, _ := io.ReadAll(resp.Body)
+			msg := payload
 			_ = resp.Body.Close()
 			if !fallbackAttempted && body.WatchBatch != nil &&
 				daemonRejectsWatchScope(resp.StatusCode, msg) {
@@ -101,7 +124,7 @@ func postDaemonPush[T, P any](
 			return parseDaemonPushSSE[T](resp.Body, onProgress)
 		}
 		var out T
-		if err := json.UnmarshalRead(resp.Body, &out); err != nil {
+		if err := json.Unmarshal(payload, &out); err != nil {
 			return zero, err
 		}
 		return out, nil

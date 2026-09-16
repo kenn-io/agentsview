@@ -32,3 +32,16 @@ filter:
       - get-api-v1-projects
       - get-api-v1-sessions-id-usage
       - post-api-v1-data-compact
+      - post-api-v1-embeddings-build
+      - get-api-v1-embeddings-status
+      - get-api-v1-embeddings-generations
+      - post-api-v1-embeddings-generations-id-activate
+      - post-api-v1-embeddings-generations-id-retire
+      - get-api-v1-activity-report
+      - get-api-v1-activity-report-report-id-sessions
+      - get-api-v1-usage-summary-stream
+      - post-api-v1-sync
+      - post-api-v1-resync
+      - post-api-v1-sync-remotes
+      - post-api-v1-push-pg
+      - post-api-v1-push-duckdb

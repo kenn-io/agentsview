@@ -17,6 +17,7 @@ import (
 	stdsync "sync"
 	"time"
 
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -1054,28 +1055,28 @@ func runDaemonSync(
 	full bool,
 	onProgress sync.ProgressFunc,
 ) (sync.SyncStats, error) {
-	endpoint := "/api/v1/sync?wait=true"
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
+	if err != nil {
+		return sync.SyncStats{}, err
+	}
+	var resp *http.Response
+	var body []byte
 	if full {
-		endpoint = "/api/v1/resync"
-	}
-	baseURL := strings.TrimSuffix(tr.URL, "/")
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, baseURL+endpoint, nil,
-	)
-	if err != nil {
-		return sync.SyncStats{}, err
-	}
-	req.Header.Set("Origin", baseURL)
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return sync.SyncStats{}, err
+		response, requestErr := api.PostAPIV1ResyncStreamWithResponse(ctx)
+		if response == nil {
+			return sync.SyncStats{}, requestErr
+		}
+		resp, body = response.HTTPResponse, response.Body
+	} else {
+		response, requestErr := api.PostAPIV1SyncStreamWithResponse(ctx, &apiclient.PostAPIV1SyncRequestOptions{Query: &apiclient.PostAPIV1SyncQuery{Wait: new(true)}})
+		if response == nil {
+			return sync.SyncStats{}, requestErr
+		}
+		resp, body = response.HTTPResponse, response.Body
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(resp.Body)
+		msg := body
 		httpErr := fmt.Errorf(
 			"HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)),
 		)
@@ -1090,12 +1091,16 @@ func runDaemonSync(
 		resp.Header.Get("Content-Type"), "application/json",
 	) {
 		var stats sync.SyncStats
-		if err := json.UnmarshalRead(resp.Body, &stats); err != nil {
+		if err := json.Unmarshal(body, &stats); err != nil {
 			return sync.SyncStats{}, err
 		}
 		return stats, nil
 	}
-	return parseDaemonSyncSSE(resp.Body, onProgress)
+	var streamBody io.Reader = resp.Body
+	if body != nil {
+		streamBody = bytes.NewReader(body)
+	}
+	return parseDaemonSyncSSE(streamBody, onProgress)
 }
 
 func runDaemonRemoteSync(
@@ -1107,49 +1112,35 @@ func runDaemonRemoteSync(
 	includeLocal bool,
 	onProgress sync.ProgressFunc,
 ) ([]remoteHostFailure, error) {
-	body, err := json.Marshal(struct {
-		Full         bool                `json:"full"`
-		IncludeLocal bool                `json:"include_local"`
-		Hosts        []config.RemoteHost `json:"hosts"`
-	}{
-		Full:         full,
-		IncludeLocal: includeLocal,
-		Hosts:        hosts,
-	})
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
 	if err != nil {
 		return nil, err
 	}
-	baseURL := strings.TrimSuffix(tr.URL, "/")
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost,
-		baseURL+"/api/v1/sync/remotes",
-		bytes.NewReader(body),
-	)
-	if err != nil {
+	body := apiclient.RemoteSyncRequest{Full: full, IncludeLocal: includeLocal}
+	for _, host := range hosts {
+		body.Hosts = append(body.Hosts, apiclient.ConfigRemoteHost{Host: host.Host, User: new(host.User), Port: new(int64(host.Port)), Transport: new(string(host.Transport)), URL: new(host.URL), Interval: new(int64(host.Interval))})
+	}
+	response, err := api.PostAPIV1SyncRemotesStreamWithResponse(ctx, &apiclient.PostAPIV1SyncRemotesRequestOptions{Body: &body})
+	if response == nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Origin", baseURL)
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
+	resp := response.HTTPResponse
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(resp.Body)
+		msg := response.Body
 		return nil, fmt.Errorf(
 			"HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)),
 		)
 	}
 	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
-		return parseDaemonRemoteSyncSSE(resp.Body, onProgress)
+		var streamBody io.Reader = resp.Body
+		if response.Body != nil {
+			streamBody = bytes.NewReader(response.Body)
+		}
+		return parseDaemonRemoteSyncSSE(streamBody, onProgress)
 	}
 	var out daemonRemoteSyncResponse
-	if err := json.UnmarshalRead(resp.Body, &out); err != nil {
+	if err := json.Unmarshal(response.Body, &out); err != nil {
 		return nil, err
 	}
 	return daemonRemoteSyncResult(out)

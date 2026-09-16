@@ -488,7 +488,7 @@ func (b daemonArchiveWriteBackend) PGPush(
 	)
 	defer finish()
 	return postDaemonPush[postgres.PushResult](
-		ctx, b.tr, b.appCfg.AuthToken, "/api/v1/push/pg",
+		ctx, b.tr, b.appCfg.AuthToken, daemonPushPG,
 		daemonPushRequest{
 			Full:                   cfg.Full,
 			Projects:               projects,
@@ -631,7 +631,7 @@ func (b daemonArchiveWriteBackend) duckDBPush(
 	)
 	defer finish()
 	return postDaemonPush[duckdbsync.PushResult](
-		ctx, b.tr, b.appCfg.AuthToken, "/api/v1/push/duckdb",
+		ctx, b.tr, b.appCfg.AuthToken, daemonPushDuckDB,
 		daemonPushRequest{
 			Full:            cfg.Full,
 			Projects:        projects,

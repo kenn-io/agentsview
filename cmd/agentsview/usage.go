@@ -9,15 +9,15 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"text/tabwriter"
 	"time"
 
+	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -570,63 +570,95 @@ func fetchHTTPDailyUsage(
 	query dailyUsageQuery,
 ) (db.DailyUsageResult, error) {
 	filter := query.Filter
-	q := url.Values{}
-	q.Set("no_default_range", strconv.FormatBool(query.NoDefaultRange))
-	q.Set("breakdowns", strconv.FormatBool(query.Breakdowns))
-	q.Set("session_counts", strconv.FormatBool(query.SessionCounts))
-	setIfNotEmpty := func(k, v string) {
-		if v != "" {
-			q.Set(k, v)
+	q := apiclient.GetAPIV1UsageSummaryStreamQuery{
+		NoDefaultRange: new(query.NoDefaultRange), Breakdowns: new(query.Breakdowns), SessionCounts: new(query.SessionCounts),
+		IncludeOneShot: new(!filter.ExcludeOneShot), IncludeAutomated: new(!filter.ExcludeAutomated),
+	}
+	if filter.Timezone != "" {
+		q.Timezone = new(filter.Timezone)
+	}
+	if filter.Agent != "" {
+		q.Agent = new(filter.Agent)
+	}
+	if filter.Project != "" {
+		q.Project = new(filter.Project)
+	}
+	if filter.Machine != "" {
+		q.Machine = new(filter.Machine)
+	}
+	if filter.ExcludeProject != "" {
+		q.ExcludeProject = new(filter.ExcludeProject)
+	}
+	if filter.ExcludeAgent != "" {
+		q.ExcludeAgent = new(filter.ExcludeAgent)
+	}
+	if filter.ExcludeModel != "" {
+		q.ExcludeModel = new(filter.ExcludeModel)
+	}
+	if filter.Model != "" {
+		q.Model = new(filter.Model)
+	}
+	if filter.Termination != "" {
+		q.Termination = new(filter.Termination)
+	}
+	if filter.From != "" {
+		parsed, err := time.Parse(time.DateOnly, filter.From)
+		if err != nil {
+			return db.DailyUsageResult{}, err
 		}
+		q.From = &runtime.Date{Time: parsed}
 	}
-	setIfNotEmpty("from", filter.From)
-	setIfNotEmpty("to", filter.To)
-	setIfNotEmpty("timezone", filter.Timezone)
-	setIfNotEmpty("agent", filter.Agent)
-	setIfNotEmpty("project", filter.Project)
-	setIfNotEmpty("machine", filter.Machine)
-	setIfNotEmpty("exclude_project", filter.ExcludeProject)
-	setIfNotEmpty("exclude_agent", filter.ExcludeAgent)
-	setIfNotEmpty("exclude_model", filter.ExcludeModel)
-	setIfNotEmpty("model", filter.Model)
-	setIfNotEmpty("active_since", filter.ActiveSince)
-	setIfNotEmpty("termination", filter.Termination)
+	if filter.To != "" {
+		parsed, err := time.Parse(time.DateOnly, filter.To)
+		if err != nil {
+			return db.DailyUsageResult{}, err
+		}
+		q.To = &runtime.Date{Time: parsed}
+	}
+	if filter.ActiveSince != "" {
+		parsed, err := time.Parse(time.RFC3339, filter.ActiveSince)
+		if err != nil {
+			return db.DailyUsageResult{}, err
+		}
+		q.ActiveSince = &parsed
+	}
 	if filter.MinUserMessages > 0 {
-		q.Set("min_user_messages", fmt.Sprint(filter.MinUserMessages))
+		q.MinUserMessages = new(int64(filter.MinUserMessages))
 	}
-	q.Set("include_one_shot", strconv.FormatBool(!filter.ExcludeOneShot))
-	q.Set("include_automated", strconv.FormatBool(!filter.ExcludeAutomated))
-
-	path := "/api/v1/usage/summary"
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
+	if err != nil {
+		return db.DailyUsageResult{}, err
+	}
+	var resp *http.Response
+	var payload []byte
 	if query.Progress != nil {
-		path += "/stream"
-	}
-	endpoint := strings.TrimSuffix(tr.URL, "/") + path + "?" + q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return db.DailyUsageResult{}, err
-	}
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return db.DailyUsageResult{}, err
+		response, requestErr := api.GetAPIV1UsageSummaryStreamStreamWithResponse(ctx, &apiclient.GetAPIV1UsageSummaryStreamRequestOptions{Query: &q})
+		if response == nil {
+			return db.DailyUsageResult{}, requestErr
+		}
+		resp, payload = response.HTTPResponse, response.Body
+	} else {
+		bufferedQuery := apiclient.GetAPIV1UsageSummaryQuery(q)
+		response, requestErr := api.GetAPIV1UsageSummaryWithResponse(ctx, &apiclient.GetAPIV1UsageSummaryRequestOptions{Query: &bufferedQuery})
+		if response == nil {
+			return db.DailyUsageResult{}, requestErr
+		}
+		resp, payload = response.HTTPResponse, response.Body
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body := payload
 		return db.DailyUsageResult{}, fmt.Errorf(
 			"usage summary: HTTP %d: %s",
 			resp.StatusCode, strings.TrimSpace(string(body)),
 		)
 	}
-	var body io.Reader = resp.Body
+	var body io.Reader = bytes.NewReader(payload)
 	if query.Progress != nil {
 		if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 			return db.DailyUsageResult{}, fmt.Errorf("usage summary: expected a progress stream, received %q", resp.Header.Get("Content-Type"))
 		}
-		data, err := parseDaemonPushSSE[jsontext.Value](body, func(p struct {
+		data, err := parseDaemonPushSSE[jsontext.Value](resp.Body, func(p struct {
 			Detail string `json:"detail"`
 		}) {
 			query.Progress(p.Detail)

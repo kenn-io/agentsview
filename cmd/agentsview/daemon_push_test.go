@@ -97,7 +97,7 @@ func TestPostDaemonPushConsumesSSE(t *testing.T) {
 
 	var progress []postgres.PushProgress
 	result, err := postDaemonPush[postgres.PushResult](
-		context.Background(), transport{URL: ts.URL}, "", "/api/v1/push/pg",
+		context.Background(), transport{URL: ts.URL}, "", daemonPushPG,
 		daemonPushRequest{},
 		func(p postgres.PushProgress) { progress = append(progress, p) },
 	)
@@ -118,7 +118,7 @@ func TestPostDaemonPushJSONFallback(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	result, err := postDaemonPush[postgres.PushResult, postgres.PushProgress](
-		context.Background(), transport{URL: ts.URL}, "", "/api/v1/push/pg",
+		context.Background(), transport{URL: ts.URL}, "", daemonPushPG,
 		daemonPushRequest{}, nil,
 	)
 	require.NoError(t, err)
@@ -153,7 +153,7 @@ func TestDaemonPushWatchTransportRetriesWithoutScopeForOlderSchema(t *testing.T)
 		DeferredRoots:  []string{"/offline"},
 	}
 	result, err := postDaemonPush[postgres.PushResult, postgres.PushProgress](
-		t.Context(), transport{URL: ts.URL}, "", "/api/v1/push/pg",
+		t.Context(), transport{URL: ts.URL}, "", daemonPushPG,
 		daemonPushRequest{WatchBatch: &batch, WatchRecovery: &recovery}, nil,
 	)
 	require.NoError(t, err)
@@ -181,7 +181,7 @@ func TestDaemonPushWatchTransportOmitsScopeForKnownOlderDaemon(t *testing.T) {
 			Runtime: &DaemonRuntime{
 				API: server.ScopedWatchPushAPIVersion - 1,
 			},
-		}, "", "/api/v1/push/pg",
+		}, "", daemonPushPG,
 		daemonPushRequest{WatchBatch: &batch}, nil,
 	)
 	require.NoError(t, err)

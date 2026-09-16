@@ -14,7 +14,9 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -92,39 +94,50 @@ func fetchHTTPActivityReport(
 			ctx, tr, authToken, cfg, activity.Report{},
 		)
 	}
-	q := url.Values{}
-	setIfNotEmpty := func(k, v string) {
-		if v != "" {
-			q.Set(k, v)
+	q := &apiclient.GetAPIV1ActivityReportQuery{}
+	if cfg.Preset != "" {
+		q.Preset = new(apiclient.GetAPIV1ActivityReportQueryPreset(cfg.Preset))
+	}
+	if cfg.Bucket != "" {
+		q.Bucket = new(apiclient.GetAPIV1ActivityReportQueryBucket(cfg.Bucket))
+	}
+	if cfg.From != "" {
+		q.From = new(cfg.From)
+	}
+	if cfg.To != "" {
+		q.To = new(cfg.To)
+	}
+	if cfg.Timezone != "" {
+		q.Timezone = new(cfg.Timezone)
+	}
+	if cfg.Project != "" {
+		q.Project = new(cfg.Project)
+	}
+	if cfg.Agent != "" {
+		q.Agent = new(cfg.Agent)
+	}
+	if cfg.Machine != "" {
+		q.Machine = new(cfg.Machine)
+	}
+	if cfg.Date != "" {
+		date, err := time.Parse(time.DateOnly, cfg.Date)
+		if err != nil {
+			return activity.Report{}, err
 		}
+		q.Date = &runtime.Date{Time: date}
 	}
-	setIfNotEmpty("preset", cfg.Preset)
-	setIfNotEmpty("date", cfg.Date)
-	setIfNotEmpty("from", cfg.From)
-	setIfNotEmpty("to", cfg.To)
-	setIfNotEmpty("timezone", cfg.Timezone)
-	setIfNotEmpty("bucket", cfg.Bucket)
-	setIfNotEmpty("project", cfg.Project)
-	setIfNotEmpty("agent", cfg.Agent)
-	setIfNotEmpty("machine", cfg.Machine)
-
-	endpoint := strings.TrimSuffix(tr.URL, "/") +
-		"/api/v1/activity/report?" + q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
 	if err != nil {
 		return activity.Report{}, err
 	}
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
-	}
-	req.Header.Set("Accept", "text/event-stream, application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
+	response, err := api.GetAPIV1ActivityReportStreamWithResponse(ctx, &apiclient.GetAPIV1ActivityReportRequestOptions{Query: q})
+	if response == nil {
 		return activity.Report{}, err
 	}
+	resp := response.HTTPResponse
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body := response.Body
 		return activity.Report{}, fmt.Errorf(
 			"activity report: HTTP %d: %s",
 			resp.StatusCode, strings.TrimSpace(string(body)),
@@ -140,7 +153,7 @@ func fetchHTTPActivityReport(
 		if err != nil {
 			return activity.Report{}, err
 		}
-	} else if err := json.UnmarshalRead(resp.Body, &r); err != nil {
+	} else if err := json.Unmarshal(response.Body, &r); err != nil {
 		return activity.Report{}, err
 	}
 	if r.Projects == nil {
@@ -183,43 +196,36 @@ func fetchHTTPActivitySessionPage(
 	if err != nil {
 		return activity.Report{}, err
 	}
-	query := url.Values{}
-	query.Set("limit", strconv.Itoa(options.Limit))
+	query := &apiclient.GetAPIV1ActivityReportReportIDSessionsQuery{Limit: new(int64(options.Limit))}
 	if cfg.SessionsCursor != "" {
-		query.Set("cursor", cfg.SessionsCursor)
-		if cfg.SessionsSort != "" {
-			query.Set("sort", string(options.Sort))
-		}
-		if cfg.SessionsDirection != "" {
-			query.Set("direction", options.Direction)
-		}
-	} else {
-		query.Set("sort", string(options.Sort))
-		query.Set("direction", options.Direction)
+		query.Cursor = new(cfg.SessionsCursor)
+	}
+	if cfg.SessionsCursor == "" || cfg.SessionsSort != "" {
+		query.Sort = new(apiclient.GetAPIV1ActivityReportReportIDSessionsQuerySort(options.Sort))
+	}
+	if cfg.SessionsCursor == "" || cfg.SessionsDirection != "" {
+		query.Direction = new(apiclient.GetAPIV1ActivityReportReportIDSessionsQueryDirection(options.Direction))
 	}
 	if options.BucketRange != nil {
-		query.Set("bucket_start", strconv.Itoa(options.BucketRange.Start))
-		query.Set("bucket_end", strconv.Itoa(options.BucketRange.End))
+		query.BucketStart = new(int64(options.BucketRange.Start))
+		query.BucketEnd = new(int64(options.BucketRange.End))
 	}
 	if cfg.SessionsReportID != "" {
-		query.Set("include_report", "true")
+		query.IncludeReport = new(true)
 	}
-	endpoint := strings.TrimSuffix(tr.URL, "/") + "/api/v1/activity/report/" +
-		url.PathEscape(reportID) + "/sessions?" + query.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
 	if err != nil {
 		return activity.Report{}, err
 	}
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
-	}
-	response, err := http.DefaultClient.Do(req)
-	if err != nil {
+	result, err := api.GetAPIV1ActivityReportReportIDSessionsWithResponse(ctx, &apiclient.GetAPIV1ActivityReportReportIDSessionsRequestOptions{
+		PathParams: &apiclient.GetAPIV1ActivityReportReportIDSessionsPath{ReportID: url.PathEscape(reportID)}, Query: query,
+	})
+	if result == nil {
 		return activity.Report{}, err
 	}
-	defer response.Body.Close()
+	response := result.HTTPResponse
 	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(response.Body)
+		body := result.Body
 		return activity.Report{}, fmt.Errorf(
 			"activity sessions: HTTP %d: %s",
 			response.StatusCode, strings.TrimSpace(string(body)),
@@ -233,7 +239,7 @@ func fetchHTTPActivitySessionPage(
 		RefreshRequired bool                  `json:"refresh_required"`
 		Report          *activity.Report      `json:"report"`
 	}
-	if err := json.UnmarshalRead(response.Body, &page); err != nil {
+	if err := json.Unmarshal(result.Body, &page); err != nil {
 		return activity.Report{}, err
 	}
 	if page.Report != nil {

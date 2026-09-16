@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -12,7 +11,6 @@ import (
 	"io"
 	"maps"
 	"net/http"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	kitvec "go.kenn.io/kit/vector"
 
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/vector"
@@ -952,55 +951,96 @@ type daemonAPIError struct {
 
 func (e *daemonAPIError) Error() string { return e.message }
 
-// daemonBuildRequest is the wire form of a CLI-initiated daemon build.
-// include_automated is always sent (no omitempty): the CLI has already
-// resolved the config-plus-flag scope, and the daemon treats an omitted
-// field as "use my configured scope" — which would silently discard an
-// explicit `--include-automated=false` override when the daemon's config
-// says true.
-type daemonBuildRequest struct {
-	Store            string `json:"store,omitempty"`
-	FullRebuild      bool   `json:"full_rebuild,omitempty"`
-	Backstop         bool   `json:"backstop,omitempty"`
-	RepairInvalid    bool   `json:"repair_invalid,omitempty"`
-	IncludeAutomated bool   `json:"include_automated"`
-	Using            string `json:"using,omitempty"`
-}
-
 func (c embeddingsDaemonClient) startBuild(ctx context.Context, req vector.BuildRequest) error {
-	wire := daemonBuildRequest{
-		Store:            req.Store,
-		FullRebuild:      req.FullRebuild,
-		Backstop:         req.Backstop,
-		RepairInvalid:    req.RepairInvalid,
-		IncludeAutomated: req.IncludeAutomated,
-		Using:            req.Using,
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	if err != nil {
+		return err
 	}
-	return c.do(ctx, http.MethodPost, "/api/v1/embeddings/build", wire, nil)
+	response, err := api.PostAPIV1EmbeddingsBuildWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsBuildRequestOptions{Body: &apiclient.EmbeddingsBuildRequest{
+		Store: new(req.Store), FullRebuild: new(req.FullRebuild), Backstop: new(req.Backstop), RepairInvalid: new(req.RepairInvalid),
+		// Always send the resolved scope, including an explicit false override.
+		IncludeAutomated: new(req.IncludeAutomated), Using: new(req.Using),
+	}})
+	if response == nil {
+		return err
+	}
+	return decodeEmbeddingResponse(response.StatusCode, response.Body, nil)
 }
 
 func (c embeddingsDaemonClient) status(ctx context.Context) (vector.BuildStatus, error) {
-	var st vector.BuildStatus
-	err := c.do(ctx, http.MethodGet, c.storePath("/api/v1/embeddings/status"), nil, &st)
-	return st, err
+	var out vector.BuildStatus
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	if err != nil {
+		return out, err
+	}
+	query := &apiclient.GetAPIV1EmbeddingsStatusQuery{}
+	if c.store != "" {
+		query.Store = new(c.store)
+	}
+	response, err := api.GetAPIV1EmbeddingsStatusWithResponse(ctx, &apiclient.GetAPIV1EmbeddingsStatusRequestOptions{Query: query})
+	if response == nil {
+		return out, err
+	}
+	err = decodeEmbeddingResponse(response.StatusCode, response.Body, &out)
+	return out, err
 }
 
 func (c embeddingsDaemonClient) generations(ctx context.Context) ([]vector.GenerationInfo, error) {
-	var body struct {
+	var out struct {
 		Generations []vector.GenerationInfo `json:"generations"`
 	}
-	err := c.do(ctx, http.MethodGet, c.storePath("/api/v1/embeddings/generations"), nil, &body)
-	return body.Generations, err
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	if err != nil {
+		return nil, err
+	}
+	query := &apiclient.GetAPIV1EmbeddingsGenerationsQuery{}
+	if c.store != "" {
+		query.Store = new(c.store)
+	}
+	response, err := api.GetAPIV1EmbeddingsGenerationsWithResponse(ctx, &apiclient.GetAPIV1EmbeddingsGenerationsRequestOptions{Query: query})
+	if response == nil {
+		return nil, err
+	}
+	err = decodeEmbeddingResponse(response.StatusCode, response.Body, &out)
+	return out.Generations, err
 }
 
 func (c embeddingsDaemonClient) activate(ctx context.Context, id int64, force bool) error {
-	path := fmt.Sprintf("/api/v1/embeddings/generations/%d/activate", id)
-	return c.do(ctx, http.MethodPost, c.storePath(path), map[string]bool{"force": force}, nil)
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	if err != nil {
+		return err
+	}
+	query := &apiclient.PostAPIV1EmbeddingsGenerationsIDActivateQuery{}
+	if c.store != "" {
+		query.Store = new(c.store)
+	}
+	response, err := api.PostAPIV1EmbeddingsGenerationsIDActivateWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsGenerationsIDActivateRequestOptions{
+		PathParams: &apiclient.PostAPIV1EmbeddingsGenerationsIDActivatePath{ID: id}, Query: query,
+		Body: &apiclient.EmbeddingsGenerationActionRequest{Force: new(force)},
+	})
+	if response == nil {
+		return err
+	}
+	return decodeEmbeddingResponse(response.StatusCode, response.Body, nil)
 }
 
 func (c embeddingsDaemonClient) retire(ctx context.Context, id int64, force bool) error {
-	path := fmt.Sprintf("/api/v1/embeddings/generations/%d/retire", id)
-	return c.do(ctx, http.MethodPost, c.storePath(path), map[string]bool{"force": force}, nil)
+	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
+	if err != nil {
+		return err
+	}
+	query := &apiclient.PostAPIV1EmbeddingsGenerationsIDRetireQuery{}
+	if c.store != "" {
+		query.Store = new(c.store)
+	}
+	response, err := api.PostAPIV1EmbeddingsGenerationsIDRetireWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsGenerationsIDRetireRequestOptions{
+		PathParams: &apiclient.PostAPIV1EmbeddingsGenerationsIDRetirePath{ID: id}, Query: query,
+		Body: &apiclient.EmbeddingsGenerationActionRequest{Force: new(force)},
+	})
+	if response == nil {
+		return err
+	}
+	return decodeEmbeddingResponse(response.StatusCode, response.Body, nil)
 }
 
 func daemonEmbeddingStore(name string) string {
@@ -1010,59 +1050,14 @@ func daemonEmbeddingStore(name string) string {
 	return name
 }
 
-func (c embeddingsDaemonClient) storePath(path string) string {
-	if c.store == "" {
-		return path
-	}
-	return path + "?store=" + url.QueryEscape(c.store)
-}
-
-// do performs one HTTP call against the daemon's embeddings API,
-// marshaling reqBody (when non-nil) as the request body and decoding the
-// response into out (when non-nil). A non-2xx response becomes a
-// *daemonAPIError carrying the status and the server's "error" message.
-func (c embeddingsDaemonClient) do(
-	ctx context.Context, method, path string, reqBody, out any,
-) error {
-	var bodyReader io.Reader
-	if reqBody != nil {
-		data, err := json.Marshal(reqBody)
-		if err != nil {
-			return err
-		}
-		bodyReader = bytes.NewReader(data)
-	}
-	req, err := http.NewRequestWithContext(
-		ctx, method, strings.TrimSuffix(c.baseURL, "/")+path, bodyReader,
-	)
-	if err != nil {
-		return err
-	}
-	if reqBody != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	// The daemon's CSRF guard rejects mutating requests whose Origin is not
-	// in the allowlist. Setting Origin to the daemon's own baseURL satisfies
-	// that check for the CLI, which has no real browser origin.
-	req.Header.Set("Origin", c.baseURL)
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-
-	resp, err := embeddingsDaemonHTTPClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return &daemonAPIError{status: resp.StatusCode, message: daemonErrorMessage(resp.StatusCode, body)}
+func decodeEmbeddingResponse(status int, body []byte, out any) error {
+	if status >= 300 {
+		return &daemonAPIError{status: status, message: daemonErrorMessage(status, body)}
 	}
 	if out == nil {
 		return nil
 	}
-	return json.UnmarshalRead(resp.Body, out)
+	return json.Unmarshal(body, out)
 }
 
 // daemonErrorMessage extracts the {"error": "..."} message huma's error
