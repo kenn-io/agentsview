@@ -1,7 +1,7 @@
 <!-- ABOUTME: Visual grouping for parallel calls in the Calls section — left rail + header chip + member CallRows. -->
 <script lang="ts">
   import { m } from "../../i18n/index.js";
-  import type { CallTiming } from "../../api/types/timing.js";
+  import type { DbCallTiming as CallTiming } from "../../api/generated/index.js";
   import { formatDuration } from "../../utils/duration.js";
   import { formatNumber } from "../../utils/format.js";
   import CallRow from "./CallRow.svelte";

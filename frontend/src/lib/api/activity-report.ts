@@ -1,6 +1,6 @@
 import type { Report, SessionRow } from "./types/activity.js";
 import { ActivityService, type ActivityReportSessionsResponse } from "./generated/index";
-import { ApiError, authHeaders, callGenerated, getBase, responseErrorMessage } from "./runtime.js";
+import { callGenerated, orvalRequest } from "./runtime.js";
 
 export interface ActivityReportQuery {
   preset?: "day" | "week" | "month" | "custom";
@@ -46,27 +46,6 @@ export type ActivitySessionPage = Omit<ActivityReportSessionsResponse, "sessions
   sessions: SessionRow[];
   report?: Report;
 };
-
-function appendQuery(params: URLSearchParams, key: string, value: unknown): void {
-  if (value === undefined || value === null || value === "") return;
-  params.set(key, String(value));
-}
-
-function reportQuery(query: ActivityReportQuery): URLSearchParams {
-  const params = new URLSearchParams();
-  appendQuery(params, "preset", query.preset);
-  appendQuery(params, "date", query.date);
-  appendQuery(params, "from", query.from);
-  appendQuery(params, "to", query.to);
-  appendQuery(params, "timezone", query.timezone);
-  appendQuery(params, "bucket", query.bucket);
-  appendQuery(params, "project", query.project);
-  appendQuery(params, "git_branch", query.gitBranch);
-  appendQuery(params, "agent", query.agent);
-  appendQuery(params, "machine", query.machine);
-  appendQuery(params, "automation", query.automation);
-  return params;
-}
 
 interface SSEFrame {
   event: string;
@@ -136,13 +115,11 @@ export async function fetchActivityReport(
 ): Promise<Report> {
   const headers = new Headers();
   headers.set("Accept", "text/event-stream, application/json");
-  const res = await fetch(
-    `${getBase()}/activity/report?${reportQuery(query)}`,
-    authHeaders({ method: "GET", headers, signal }),
+  const { gitBranch, ...params } = query;
+  const res = await orvalRequest(
+    ActivityService.getGetApiV1ActivityReportUrl({ ...params, git_branch: gitBranch }),
+    { method: "GET", headers, signal },
   );
-  if (!res.ok) {
-    throw new ApiError(res.status, await responseErrorMessage(res));
-  }
   if (res.headers.get("Content-Type")?.includes("text/event-stream")) {
     if (!res.body) throw new Error("Activity report response has no body");
     return readReportStream(res.body, onProgress);

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Message, Session } from "../../api/types.js";
-  import type { CallTiming, TurnTiming } from "../../api/types/timing.js";
+  import type { DbCallTiming as CallTiming, DbTurnTiming as TurnTiming } from "../../api/generated/index.js";
   import { parseContent, enrichSegments } from "../../utils/content-parser.js";
   import { formatTimestamp, formatTokenUsage } from "../../utils/format.js";
   import { formatDuration } from "../../utils/duration.js";

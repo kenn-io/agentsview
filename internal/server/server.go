@@ -634,38 +634,6 @@ func (s *Server) routes() {
 		s.mux.HandleFunc("/debug/pprof/trace", httppprof.Trace)
 	}
 
-	s.mux.Handle("GET /api/v1/recall/entries", s.withTimeout(
-		"GET /api/v1/recall/entries",
-		s.handleListRecallEntries,
-	))
-	s.mux.Handle("GET /api/v1/recall/entries/{id}", s.withTimeout(
-		"GET /api/v1/recall/entries/{id}",
-		s.handleGetRecallEntry,
-	))
-	s.mux.Handle("GET /api/v1/recall/extraction/status", s.withTimeout(
-		"GET /api/v1/recall/extraction/status",
-		s.handleRecallExtractionStatus,
-	))
-	s.mux.Handle("GET /api/v1/recall/extraction/progress", s.withTimeout(
-		"GET /api/v1/recall/extraction/progress",
-		s.handleRecallExtractionProgress,
-	))
-	s.mux.Handle("POST /api/v1/recall/extraction/activate", s.withTimeout(
-		"POST /api/v1/recall/extraction/activate",
-		s.handleRecallExtractionActivate,
-	))
-	s.mux.Handle("POST /api/v1/recall/extraction/generations/{fingerprint}/retire", s.withTimeout(
-		"POST /api/v1/recall/extraction/generations/{fingerprint}/retire",
-		s.handleRecallExtractionRetire,
-	))
-	s.mux.Handle("POST /api/v1/recall/query", s.withTimeout(
-		"POST /api/v1/recall/query",
-		s.handleQueryRecallEntries,
-	))
-	s.mux.Handle("POST /api/v1/recall/import", s.withTimeout(
-		"POST /api/v1/recall/import",
-		s.handleImportRecallEntries,
-	))
 	s.registerEvalIngestRoutes()
 
 	if s.artifactExchangeRunner != nil {

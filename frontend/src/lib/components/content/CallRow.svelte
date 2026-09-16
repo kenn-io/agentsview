@@ -1,7 +1,7 @@
 <!-- ABOUTME: One row inside the Calls section — call name, args preview, timing bar, duration label. -->
 <script lang="ts">
   import { m } from "../../i18n/index.js";
-  import type { CallTiming } from "../../api/types/timing.js";
+  import type { DbCallTiming as CallTiming } from "../../api/generated/index.js";
   import { formatDuration } from "../../utils/duration.js";
   import { categoryToken } from "../../utils/categoryToken.js";
   import { displayToolName } from "../../utils/toolDisplay.js";

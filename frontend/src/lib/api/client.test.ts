@@ -133,14 +133,7 @@ describe("triggerSync SSE parsing", () => {
   });
 
   it("should reject for non-ok responses", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
-        body: null,
-      }),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 500 })));
 
     const handle = triggerSync();
     activeHandles.push(handle);
@@ -312,15 +305,7 @@ describe("generateInsight SSE parsing", () => {
   });
 
   it("rejects for non-ok response", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
-        body: null,
-        text: () => Promise.resolve(""),
-      }),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 500 })));
 
     const { generateInsight } = await import("./client.js");
     const handle = generateInsight({

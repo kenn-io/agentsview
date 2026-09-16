@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -191,38 +192,34 @@ func httpSessionUsageData(
 	// Request the full breakdown so the remote path matches the
 	// shape returned by the direct store paths, and the same subagent
 	// attribution scope so --server and local agree field for field.
-	endpoint := strings.TrimSuffix(baseURL, "/") +
-		"/api/v1/sessions/" + url.PathEscape(resolvedID) +
-		"/usage?breakdown=true"
+	api, err := apiclient.NewHTTPClient(baseURL, token, sessionUsageHTTPClient)
+	if err != nil {
+		return nil, tokenUseExitErr, err
+	}
+	var subagents *bool
 	if !query.OwnOnly {
-		endpoint += "&subagents=true"
+		subagents = new(true)
 	}
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodGet, endpoint, nil,
-	)
-	if err != nil {
+	response, err := api.GetAPIV1SessionsIDUsageWithResponse(ctx, &apiclient.GetAPIV1SessionsIDUsageRequestOptions{
+		PathParams: &apiclient.GetAPIV1SessionsIDUsagePath{ID: url.PathEscape(resolvedID)},
+		Query:      &apiclient.GetAPIV1SessionsIDUsageQuery{Breakdown: new(true), Subagents: subagents},
+	})
+	if response == nil {
 		return nil, tokenUseExitErr, err
 	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := sessionUsageHTTPClient.Do(req)
-	if err != nil {
-		return nil, tokenUseExitErr, err
-	}
-	defer resp.Body.Close()
+	resp := response.HTTPResponse
 	if resp.StatusCode == http.StatusNotFound {
 		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
 		return nil, tokenUseExitNotFound, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body := response.Body
 		return nil, tokenUseExitErr, fmt.Errorf(
 			"usage: HTTP %d: %s", resp.StatusCode, body,
 		)
 	}
 	var out sessionUsageOutput
-	if err := json.UnmarshalRead(resp.Body, &out); err != nil {
+	if err := json.Unmarshal(response.Body, &out); err != nil {
 		return nil, tokenUseExitErr, err
 	}
 	out.ServerRunning = true

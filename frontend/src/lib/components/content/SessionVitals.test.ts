@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mount, tick, unmount } from "svelte";
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import type { Session } from "../../api/types/core.js";
-import type { SessionTiming } from "../../api/types/timing.js";
+import type { DbSessionTiming as SessionTiming } from "../../api/generated/index.js";
 
 const mocks = vi.hoisted(() => {
   const timing: SessionTiming = {
@@ -42,8 +42,8 @@ const traceSession: Session = {
   cwd: "/repos/agentsview/.worktrees/trace-context",
 };
 
-vi.mock("../../api/timing.js", () => ({
-  fetchSessionTiming: mocks.fetchSessionTiming,
+vi.mock("../../api/generated/sessions/sessions.js", () => ({
+  getApiV1SessionsByIdTiming: mocks.fetchSessionTiming,
 }));
 
 import { ui } from "../../stores/ui.svelte.js";
@@ -372,11 +372,13 @@ describe("SessionVitals", () => {
 
   it("aborts a pending sub-agent timing read when collapsed", async () => {
     const signals: AbortSignal[] = [];
-    mocks.fetchSessionTiming.mockImplementation((sessionId: string, signal?: AbortSignal) => {
-      if (sessionId === "sess-1") return Promise.resolve(mocks.timing);
-      if (signal) signals.push(signal);
-      return new Promise<SessionTiming>(() => {});
-    });
+    mocks.fetchSessionTiming.mockImplementation(
+      ({ id: sessionId }: { id: string }, { signal }: { signal?: AbortSignal }) => {
+        if (sessionId === "sess-1") return Promise.resolve(mocks.timing);
+        if (signal) signals.push(signal);
+        return new Promise<SessionTiming>(() => {});
+      },
+    );
     component = mount(SessionVitals, {
       target: document.body,
       props: { sessionId: "sess-1", session: undefined },
@@ -403,11 +405,13 @@ describe("SessionVitals", () => {
 
   it("aborts a pending sub-agent timing read when unmounted", async () => {
     const signals: AbortSignal[] = [];
-    mocks.fetchSessionTiming.mockImplementation((sessionId: string, signal?: AbortSignal) => {
-      if (sessionId === "sess-1") return Promise.resolve(mocks.timing);
-      if (signal) signals.push(signal);
-      return new Promise<SessionTiming>(() => {});
-    });
+    mocks.fetchSessionTiming.mockImplementation(
+      ({ id: sessionId }: { id: string }, { signal }: { signal?: AbortSignal }) => {
+        if (sessionId === "sess-1") return Promise.resolve(mocks.timing);
+        if (signal) signals.push(signal);
+        return new Promise<SessionTiming>(() => {});
+      },
+    );
     component = mount(SessionVitals, {
       target: document.body,
       props: { sessionId: "sess-1", session: undefined },
@@ -434,13 +438,15 @@ describe("SessionVitals", () => {
 
   it("aborts a pending sub-agent timing read when the parent changes", async () => {
     const signals: AbortSignal[] = [];
-    mocks.fetchSessionTiming.mockImplementation((sessionId: string, signal?: AbortSignal) => {
-      if (sessionId.startsWith("sess-")) {
-        return Promise.resolve(mocks.timing);
-      }
-      if (signal) signals.push(signal);
-      return new Promise<SessionTiming>(() => {});
-    });
+    mocks.fetchSessionTiming.mockImplementation(
+      ({ id: sessionId }: { id: string }, { signal }: { signal?: AbortSignal }) => {
+        if (sessionId.startsWith("sess-")) {
+          return Promise.resolve(mocks.timing);
+        }
+        if (signal) signals.push(signal);
+        return new Promise<SessionTiming>(() => {});
+      },
+    );
     const view = render(SessionVitals, {
       sessionId: "sess-1",
       session: undefined,

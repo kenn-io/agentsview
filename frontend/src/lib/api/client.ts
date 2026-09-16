@@ -1,12 +1,17 @@
 import type { SyncProgress, SyncStats, Insight, GenerateInsightRequest } from "./types.js";
-import type { SessionTiming } from "./types/timing.js";
+import {
+  SyncService,
+  SessionsService,
+  InsightsService,
+  ImportService,
+  type DbSessionTiming as SessionTiming,
+} from "./generated/index.js";
 import {
   ApiError,
-  authHeaders,
   getAuthToken,
-  getBase,
+  getGeneratedBase,
+  orvalRequest,
   isRemoteConnection,
-  responseErrorMessage,
 } from "./runtime.js";
 
 export interface SyncHandle {
@@ -18,13 +23,10 @@ function streamSyncSSE(path: string, onProgress?: (p: SyncProgress) => void): Sy
   const controller = new AbortController();
 
   const done = (async () => {
-    const res = await fetch(
-      `${getBase()}${path}`,
-      authHeaders({
-        method: "POST",
-        signal: controller.signal,
-      }),
-    );
+    const res = await orvalRequest(path, {
+      method: "POST",
+      signal: controller.signal,
+    });
 
     if (!res.ok || !res.body) {
       throw new Error(`Sync request failed: ${res.status}`);
@@ -69,11 +71,11 @@ function streamSyncSSE(path: string, onProgress?: (p: SyncProgress) => void): Sy
 }
 
 export function triggerSync(onProgress?: (p: SyncProgress) => void): SyncHandle {
-  return streamSyncSSE("/sync", onProgress);
+  return streamSyncSSE(SyncService.getPostApiV1SyncUrl(), onProgress);
 }
 
 export function triggerResync(onProgress?: (p: SyncProgress) => void): SyncHandle {
-  return streamSyncSSE("/resync", onProgress);
+  return streamSyncSSE(SyncService.getPostApiV1ResyncUrl(), onProgress);
 }
 
 /**
@@ -151,7 +153,7 @@ export function watchSession(
   onUpdate: () => void,
   onTiming?: (t: SessionTiming) => void,
 ): EventSource {
-  const url = `${getBase()}/sessions/${encodeURIComponent(sessionId)}/watch`;
+  const url = `${getGeneratedBase()}${SessionsService.getGetApiV1SessionsByIdWatchUrl({ id: sessionId })}`;
   const token = getAuthToken();
   // EventSource does not support custom headers, so pass the
   // auth token as a query parameter for remote connections.
@@ -230,7 +232,7 @@ export function watchEvents(
   onEvent: (e: DataChangedEvent) => void,
   opts: WatchEventsOptions = {},
 ): EventSource {
-  const url = `${getBase()}/events`;
+  const url = `${getGeneratedBase()}${SessionsService.getGetApiV1EventsUrl()}`;
   const token = getAuthToken();
   const fullUrl = token ? `${url}?token=${encodeURIComponent(token)}` : url;
   const es = new EventSource(fullUrl);
@@ -298,22 +300,15 @@ export function watchEvents(
  * token in the URL query string.
  */
 export function getExportUrl(sessionId: string): string {
-  return `${getBase()}/sessions/${encodeURIComponent(sessionId)}/export`;
-}
-
-function getInsightExportUrl(insightId: number): string {
-  return `${getBase()}/insights/${insightId}/export`;
+  return `${getGeneratedBase()}${SessionsService.getGetApiV1SessionsByIdExportUrl({ id: sessionId })}`;
 }
 
 /** Get markdown export URL for a session, with optional child depth. */
 export function getMarkdownExportUrl(sessionId: string, depth?: 1 | "all"): string {
   const url = new URL(
-    `${getBase()}/sessions/${encodeURIComponent(sessionId)}/md`,
+    `${getGeneratedBase()}${SessionsService.getGetApiV1SessionsByIdMdUrl({ id: sessionId }, { depth: depth === 1 ? "1" : depth })}`,
     window.location.origin,
   );
-  if (depth !== undefined) {
-    url.searchParams.set("depth", String(depth));
-  }
   if (isRemoteConnection()) {
     return url.toString();
   }
@@ -321,29 +316,35 @@ export function getMarkdownExportUrl(sessionId: string, depth?: 1 | "all"): stri
 }
 
 export function getInsightMarkdownExportUrl(insightId: number): string {
-  return `${getBase()}/insights/${insightId}/md`;
+  return `${getGeneratedBase()}${InsightsService.getGetApiV1InsightsByIdMdUrl({ id: insightId })}`;
 }
 
 /** Download a session export using fetch with auth headers,
  *  avoiding token leakage in the URL for remote connections. */
 export async function downloadExport(sessionId: string): Promise<void> {
-  await downloadAuthenticatedExport(getExportUrl(sessionId), `session-${sessionId}.html`);
+  await downloadAuthenticatedExport(
+    SessionsService.getGetApiV1SessionsByIdExportUrl({ id: sessionId }),
+    `session-${sessionId}.html`,
+  );
 }
 
 export async function downloadInsightExport(insightId: number): Promise<void> {
-  await downloadAuthenticatedExport(getInsightExportUrl(insightId), `insight-${insightId}.html`);
+  await downloadAuthenticatedExport(
+    InsightsService.getGetApiV1InsightsByIdExportUrl({ id: insightId }),
+    `insight-${insightId}.html`,
+  );
 }
 
 async function downloadAuthenticatedExport(url: string, fallbackFilename: string): Promise<void> {
   const token = getAuthToken();
   if (!token) {
     // Local connection — simple navigation is fine.
-    window.open(url, "_blank");
+    window.open(`${getGeneratedBase()}${url}`, "_blank");
     return;
   }
   // Remote connection — use fetch with Authorization header
   // to avoid putting the token in the URL.
-  const res = await fetch(url, authHeaders());
+  const res = await orvalRequest(url);
   if (!res.ok) {
     throw new ApiError(res.status, `Export failed: ${res.status}`);
   }
@@ -379,19 +380,13 @@ export function generateInsight(
   const controller = new AbortController();
 
   const done = (async () => {
-    const res = await fetch(
-      `${getBase()}/insights/generate`,
-      authHeaders({
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(req),
-        signal: controller.signal,
-      }),
-    );
+    const res = await orvalRequest(InsightsService.getPostApiV1InsightsGenerateUrl(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    });
 
-    if (!res.ok) {
-      throw new ApiError(res.status, await responseErrorMessage(res));
-    }
     if (!res.body) {
       throw new Error("Generate request failed: empty response");
     }
@@ -548,14 +543,11 @@ async function readImportSSE(res: Response, cb?: ImportCallbacks): Promise<Impor
 export async function importClaudeAI(file: File, cb?: ImportCallbacks): Promise<ImportStats> {
   const form = new FormData();
   form.append("file", file);
-  const init = authHeaders({ method: "POST", body: form });
-  const headers = new Headers(init.headers);
-  headers.set("Accept", "text/event-stream");
-  const res = await fetch(`${getBase()}/import/claude-ai`, { ...init, headers });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { error?: string }).error ?? `Import failed (${res.status})`);
-  }
+  const res = await orvalRequest(ImportService.getPostApiV1ImportClaudeAiUrl(), {
+    method: "POST",
+    body: form,
+    headers: { Accept: "text/event-stream" },
+  });
   if (res.headers.get("content-type")?.includes("text/event-stream")) {
     return readImportSSE(res, cb);
   }
@@ -565,14 +557,11 @@ export async function importClaudeAI(file: File, cb?: ImportCallbacks): Promise<
 export async function importChatGPT(file: File, cb?: ImportCallbacks): Promise<ImportStats> {
   const form = new FormData();
   form.append("file", file);
-  const init = authHeaders({ method: "POST", body: form });
-  const headers = new Headers(init.headers);
-  headers.set("Accept", "text/event-stream");
-  const res = await fetch(`${getBase()}/import/chatgpt`, { ...init, headers });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error((err as { error?: string }).error ?? `Import failed (${res.status})`);
-  }
+  const res = await orvalRequest(ImportService.getPostApiV1ImportChatgptUrl(), {
+    method: "POST",
+    body: form,
+    headers: { Accept: "text/event-stream" },
+  });
   if (res.headers.get("content-type")?.includes("text/event-stream")) {
     return readImportSSE(res, cb);
   }

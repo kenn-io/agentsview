@@ -5,8 +5,8 @@ const timingMocks = vi.hoisted(() => ({
   fetchSessionTiming: vi.fn(),
 }));
 
-vi.mock("../api/timing.js", () => ({
-  fetchSessionTiming: timingMocks.fetchSessionTiming,
+vi.mock("../api/generated/sessions/sessions.js", () => ({
+  getApiV1SessionsByIdTiming: timingMocks.fetchSessionTiming,
 }));
 
 beforeEach(() => {
@@ -17,7 +17,7 @@ beforeEach(() => {
 describe("SessionTimingStore", () => {
   it("aborts timing when another session replaces it", async () => {
     const signals: AbortSignal[] = [];
-    timingMocks.fetchSessionTiming.mockImplementation((id, signal) => {
+    timingMocks.fetchSessionTiming.mockImplementation(({ id }, { signal }) => {
       signals.push(signal as AbortSignal);
       if (id === "s1") return new Promise(() => {});
       return Promise.resolve({ session_id: id });
@@ -32,7 +32,7 @@ describe("SessionTimingStore", () => {
 
   it("aborts the current timing read on route exit", async () => {
     const signals: AbortSignal[] = [];
-    timingMocks.fetchSessionTiming.mockImplementation((_id, signal) => {
+    timingMocks.fetchSessionTiming.mockImplementation((_params, { signal }) => {
       signals.push(signal as AbortSignal);
       return new Promise(() => {});
     });

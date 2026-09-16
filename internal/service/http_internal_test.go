@@ -41,17 +41,18 @@ func TestHTTPBackendRecallCapabilityRespectsReadOnlyMode(t *testing.T) {
 	}
 }
 
-func TestFilterToQueryKeepsListOptions(t *testing.T) {
+func TestListForwardsListOptions(t *testing.T) {
 	t.Parallel()
-	query := filterToQuery(ListFilter{
-		Timezone:      "America/New_York",
-		Cursor:        "next-page",
-		IncludeSource: true,
-	})
-
-	assert.Equal(t, "America/New_York", query.Get("timezone"))
-	assert.Equal(t, "next-page", query.Get("cursor"))
-	assert.Equal(t, "true", query.Get("include_source"))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "America/New_York", r.URL.Query().Get("timezone"))
+		assert.Equal(t, "next-page", r.URL.Query().Get("cursor"))
+		assert.Equal(t, "true", r.URL.Query().Get("include_source"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sessions":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	_, err := NewHTTPBackend(srv.URL, "", false, "").List(t.Context(), ListFilter{Timezone: "America/New_York", Cursor: "next-page", IncludeSource: true})
+	require.NoError(t, err)
 }
 
 func TestSearchContentUsesLongRunningClient(t *testing.T) {

@@ -7,10 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"strings"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -191,49 +190,27 @@ func runDBCompactDirect(
 func requestDBCompact(
 	ctx context.Context, tr transport, authToken string, options db.CompactOptions,
 ) (db.CompactResult, error) {
-	body, err := json.Marshal(struct {
-		KeepBackup bool `json:"keep_backup,omitempty"`
-	}{KeepBackup: options.KeepBackup})
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
 	if err != nil {
 		return db.CompactResult{}, err
 	}
-	endpoint := strings.TrimSuffix(tr.URL, "/") + "/api/v1/data/compact"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
-	if err != nil {
+	response, err := api.PostAPIV1DataCompactWithResponse(ctx, &apiclient.PostAPIV1DataCompactRequestOptions{Body: &apiclient.DataCompactRequest{KeepBackup: new(options.KeepBackup)}})
+	if response == nil {
 		return db.CompactResult{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	// Mutating API routes require a recognized Origin, including for
-	// loopback callers. The CLI is a trusted local caller, so identify
-	// the daemon origin explicitly instead of weakening the server's
-	// CSRF protection.
-	if parsed, parseErr := url.Parse(tr.URL); parseErr == nil && parsed.Scheme != "" && parsed.Host != "" {
-		parsed.Path = ""
-		parsed.RawPath = ""
-		parsed.RawQuery = ""
-		parsed.Fragment = ""
-		req.Header.Set("Origin", parsed.String())
-	}
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return db.CompactResult{}, err
-	}
-	defer resp.Body.Close()
+	resp := response.HTTPResponse
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		var api struct {
 			Error string `json:"error"`
 		}
-		_ = json.UnmarshalRead(resp.Body, &api)
+		_ = json.Unmarshal(response.Body, &api)
 		if api.Error == "" {
 			api.Error = resp.Status
 		}
 		return db.CompactResult{}, fmt.Errorf("archive compaction: %s", api.Error)
 	}
 	var result db.CompactResult
-	if err := json.UnmarshalRead(resp.Body, &result); err != nil {
+	if err := json.Unmarshal(response.Body, &result); err != nil {
 		return db.CompactResult{}, fmt.Errorf("decode archive compaction result: %w", err)
 	}
 	return result, nil

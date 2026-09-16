@@ -1272,6 +1272,39 @@ components:
         - edge
         - count
       type: object
+    DbExtractProgressStats:
+      additionalProperties: false
+      properties:
+        done:
+          format: int64
+          type: integer
+        entries:
+          format: int64
+          type: integer
+        failed:
+          format: int64
+          type: integer
+        partial:
+          format: int64
+          type: integer
+        pending:
+          format: int64
+          type: integer
+        units_done:
+          format: int64
+          type: integer
+        units_total:
+          format: int64
+          type: integer
+      required:
+        - pending
+        - partial
+        - done
+        - failed
+        - units_done
+        - units_total
+        - entries
+      type: object
     DbHeatmapEntry:
       additionalProperties: false
       properties:
@@ -1888,6 +1921,244 @@ components:
         - duplicate_prompt_count
         - no_code_context_count
         - runaway_tool_loop_count
+      type: object
+    DbRecallEntry:
+      additionalProperties: false
+      properties:
+        agent:
+          type: string
+        body:
+          type: string
+        confidence:
+          format: double
+          type: number
+        created_at:
+          type: string
+        cwd:
+          type: string
+        evidence:
+          items:
+            $ref: "#/components/schemas/DbRecallEvidence"
+          type: array
+        extractor_method:
+          type: string
+        git_branch:
+          type: string
+        id:
+          type: string
+        model:
+          type: string
+        project:
+          type: string
+        provenance_ok:
+          type: boolean
+        review_state:
+          type: string
+        scope:
+          type: string
+        source_episode_id:
+          type: string
+        source_run_id:
+          type: string
+        source_session_id:
+          type: string
+        status:
+          type: string
+        superseded_by_entry_id:
+          type: string
+        supersedes_entry_id:
+          type: string
+        title:
+          type: string
+        transferable:
+          type: boolean
+        trigger:
+          type: string
+        type:
+          type: string
+        uncertainty:
+          type: string
+        updated_at:
+          type: string
+      required:
+        - id
+        - type
+        - scope
+        - status
+        - review_state
+        - title
+        - body
+        - source_session_id
+        - transferable
+        - provenance_ok
+        - created_at
+        - updated_at
+      type: object
+    DbRecallEvidence:
+      additionalProperties: false
+      properties:
+        content_digest:
+          type: string
+        entry_id:
+          type: string
+        id:
+          format: int64
+          type: integer
+        message_end_ordinal:
+          format: int64
+          type: integer
+        message_end_source_uuid:
+          type: string
+        message_start_ordinal:
+          format: int64
+          type: integer
+        message_start_source_uuid:
+          type: string
+        session_id:
+          type: string
+        snippet:
+          type: string
+        tool_use_id:
+          type: string
+      required:
+        - id
+        - entry_id
+        - session_id
+        - message_start_ordinal
+        - message_end_ordinal
+      type: object
+    DbRecallImportItem:
+      additionalProperties: false
+      properties:
+        candidate_id:
+          type: string
+        label:
+          type: string
+        reason:
+          type: string
+        source_session_id:
+          type: string
+        supersedes_entry_id:
+          type: string
+        title:
+          type: string
+      required:
+        - candidate_id
+      type: object
+    DbRecallImportResult:
+      additionalProperties: false
+      properties:
+        imported:
+          format: int64
+          type: integer
+        imported_entries:
+          items:
+            $ref: "#/components/schemas/DbRecallImportItem"
+          type: array
+        skipped:
+          format: int64
+          type: integer
+        skipped_entries:
+          items:
+            $ref: "#/components/schemas/DbRecallImportItem"
+          type: array
+        would_import:
+          format: int64
+          type: integer
+        would_import_entries:
+          items:
+            $ref: "#/components/schemas/DbRecallImportItem"
+          type: array
+      required:
+        - imported
+        - skipped
+      type: object
+    DbRecallResult:
+      additionalProperties: false
+      properties:
+        agent:
+          type: string
+        body:
+          type: string
+        confidence:
+          format: double
+          type: number
+        created_at:
+          type: string
+        cwd:
+          type: string
+        evidence:
+          items:
+            $ref: "#/components/schemas/DbRecallEvidence"
+          type: array
+        extractor_method:
+          type: string
+        git_branch:
+          type: string
+        id:
+          type: string
+        match_reasons:
+          items:
+            type: string
+          type: array
+        matched_terms:
+          items:
+            type: string
+          type: array
+        model:
+          type: string
+        project:
+          type: string
+        provenance_ok:
+          type: boolean
+        review_state:
+          type: string
+        scope:
+          type: string
+        score:
+          format: double
+          type: number
+        score_breakdown:
+          $ref: "#/components/schemas/RecallScoreBreakdown"
+        source_episode_id:
+          type: string
+        source_run_id:
+          type: string
+        source_session_id:
+          type: string
+        status:
+          type: string
+        superseded_by_entry_id:
+          type: string
+        supersedes_entry_id:
+          type: string
+        title:
+          type: string
+        transferable:
+          type: boolean
+        trigger:
+          type: string
+        type:
+          type: string
+        uncertainty:
+          type: string
+        updated_at:
+          type: string
+      required:
+        - score
+        - score_breakdown
+        - id
+        - type
+        - scope
+        - status
+        - review_state
+        - title
+        - body
+        - source_session_id
+        - transferable
+        - provenance_ok
+        - created_at
+        - updated_at
       type: object
     DbRecentEdit:
       additionalProperties: false
@@ -4712,6 +4983,184 @@ components:
         - sha256
         - length
       type: object
+    RecallEntriesResponse:
+      additionalProperties: false
+      properties:
+        entries:
+          items:
+            $ref: "#/components/schemas/DbRecallResult"
+          type: array
+        next_cursor:
+          type: string
+        result_cap:
+          format: int64
+          type: integer
+        trusted_only:
+          type: boolean
+      required:
+        - entries
+        - trusted_only
+        - next_cursor
+      type: object
+    RecallExtractGenerationStatus:
+      additionalProperties: false
+      properties:
+        created_at:
+          type: string
+        fingerprint:
+          type: string
+        model:
+          type: string
+        segmenter:
+          type: string
+        state:
+          type: string
+        updated_at:
+          type: string
+      required:
+        - fingerprint
+        - state
+        - model
+        - segmenter
+        - created_at
+        - updated_at
+      type: object
+    RecallExtractProgressItem:
+      additionalProperties: false
+      properties:
+        agent:
+          type: string
+        generation_fingerprint:
+          type: string
+        last_error:
+          type: string
+        project:
+          type: string
+        retry_at:
+          type: string
+        retry_eligible:
+          type: boolean
+        session_id:
+          type: string
+        session_title:
+          type: string
+        state:
+          enum:
+            - pending
+            - partial
+            - failed
+          type: string
+        unit_cursor:
+          format: int64
+          type: integer
+        units_total:
+          format: int64
+          type: integer
+        updated_at:
+          type: string
+      required:
+        - session_id
+        - generation_fingerprint
+        - state
+        - unit_cursor
+        - units_total
+        - updated_at
+        - session_title
+        - project
+        - agent
+      type: object
+    RecallExtractProgressResponse:
+      additionalProperties: false
+      properties:
+        generation_fingerprint:
+          type: string
+        next_cursor:
+          type: string
+        progress:
+          items:
+            $ref: "#/components/schemas/RecallExtractProgressItem"
+          type: array
+      required:
+        - progress
+      type: object
+    RecallExtractionStatusResponse:
+      additionalProperties: false
+      properties:
+        configured:
+          type: boolean
+        eligible_backlog:
+          format: int64
+          type: integer
+        fingerprint:
+          type: string
+        generations:
+          items:
+            $ref: "#/components/schemas/RecallExtractGenerationStatus"
+          type: array
+        management_available:
+          type: boolean
+        progress_available:
+          type: boolean
+        source_runs:
+          items:
+            type: string
+          type: array
+        stats:
+          $ref: "#/components/schemas/DbExtractProgressStats"
+      required:
+        - configured
+        - management_available
+        - progress_available
+      type: object
+    RecallScoreBreakdown:
+      additionalProperties: false
+      properties:
+        base_score:
+          format: double
+          type: number
+        confidence_bonus:
+          format: double
+          type: number
+        entity_boost:
+          format: double
+          type: number
+        evidence_idf_score:
+          format: double
+          type: number
+        evidence_keyword_overlap:
+          format: int64
+          type: integer
+        identifier_boost:
+          format: double
+          type: number
+        keyword_idf_score:
+          format: double
+          type: number
+        keyword_overlap:
+          format: int64
+          type: integer
+        phrase_boost:
+          format: double
+          type: number
+        temporal_boost:
+          format: double
+          type: number
+        total:
+          format: double
+          type: number
+      required:
+        - keyword_overlap
+        - keyword_idf_score
+        - evidence_keyword_overlap
+        - evidence_idf_score
+        - identifier_boost
+        - phrase_boost
+        - entity_boost
+        - temporal_boost
+        - confidence_bonus
+        - base_score
+        - total
+      type: object
     RemoteSyncRequest:
       additionalProperties: false
       properties:
@@ -4871,6 +5320,261 @@ components:
       required:
         - messages
         - count
+      type: object
+    ServiceRecallContextMeta:
+      additionalProperties: false
+      properties:
+        entry_count:
+          format: int64
+          type: integer
+        included_ids:
+          items:
+            type: string
+          type: array
+        included_match_reasons_by_id:
+          additionalProperties:
+            items:
+              type: string
+            type: array
+          type: object
+        included_types_by_id:
+          additionalProperties:
+            type: string
+          type: object
+        omitted_count:
+          format: int64
+          type: integer
+        prompt_injection_context:
+          type: boolean
+        prompt_injection_context_ids:
+          items:
+            type: string
+          type: array
+        prompt_injection_context_reasons:
+          items:
+            type: string
+          type: array
+        prompt_injection_context_reasons_by_id:
+          additionalProperties:
+            items:
+              type: string
+            type: array
+          type: object
+        source_episode_ids:
+          items:
+            type: string
+          type: array
+        source_run_ids:
+          items:
+            type: string
+          type: array
+        source_session_ids:
+          items:
+            type: string
+          type: array
+        truncated:
+          type: boolean
+        truncated_from:
+          format: int64
+          type: integer
+      required:
+        - entry_count
+        - truncated
+      type: object
+    ServiceRecallQuery:
+      additionalProperties: false
+      properties:
+        agent:
+          type: string
+        context_max_bytes:
+          format: int64
+          type: integer
+        cwd:
+          type: string
+        extractor_method:
+          type: string
+        git_branch:
+          type: string
+        include_context:
+          type: boolean
+        limit:
+          format: int64
+          type: integer
+        mode:
+          type: string
+        project:
+          type: string
+        query:
+          type: string
+        scope:
+          type: string
+        skip_recording:
+          type: boolean
+        source_episode_id:
+          type: string
+        source_run_id:
+          type: string
+        source_session_id:
+          type: string
+        status:
+          type: string
+        superseded_by_entry_id:
+          type: string
+        supersedes_entry_id:
+          type: string
+        surface:
+          type: string
+        trusted_only:
+          type: boolean
+        type:
+          type: string
+      required:
+        - query
+      type: object
+    ServiceRecallQueryResult:
+      additionalProperties: false
+      properties:
+        context:
+          type: string
+        context_entries:
+          items:
+            $ref: "#/components/schemas/DbRecallResult"
+          type: array
+        context_meta:
+          $ref: "#/components/schemas/ServiceRecallContextMeta"
+        context_summary:
+          $ref: "#/components/schemas/ServiceRecallQuerySummary"
+        entries:
+          items:
+            $ref: "#/components/schemas/DbRecallResult"
+          type: array
+        miss_reason:
+          type: string
+        mode:
+          type: string
+        query_id:
+          type: string
+        summary:
+          $ref: "#/components/schemas/ServiceRecallQuerySummary"
+        trusted_only:
+          type: boolean
+      required:
+        - mode
+        - query_id
+        - miss_reason
+        - entries
+        - trusted_only
+      type: object
+    ServiceRecallQuerySummary:
+      additionalProperties: false
+      properties:
+        by_agent:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_cwd:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_evidence:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_extractor:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_git_branch:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_lifecycle:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_match_reason:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_model:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_project:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_provenance_audit:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_scope:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_source_episode:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_source_run:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_source_session:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_status:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_transferability:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        by_type:
+          additionalProperties:
+            format: int64
+            type: integer
+          type: object
+        count:
+          format: int64
+          type: integer
+      required:
+        - count
+        - by_type
+        - by_scope
+        - by_status
+        - by_project
+        - by_agent
+        - by_cwd
+        - by_git_branch
+        - by_match_reason
+        - by_extractor
+        - by_model
+        - by_source_run
+        - by_source_session
+        - by_source_episode
+        - by_transferability
+        - by_provenance_audit
+        - by_evidence
+        - by_lifecycle
       type: object
     ServiceSecretFindingList:
       additionalProperties: false
@@ -12994,6 +13698,665 @@ paths:
       summary: Append a raw upload chunk
       tags:
         - RawSync
+  /api/v1/recall/entries:
+    get:
+      operationId: get-api-v1-recall-entries
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+        - in: query
+          name: project
+          schema:
+            type: string
+        - in: query
+          name: cwd
+          schema:
+            type: string
+        - in: query
+          name: git_branch
+          schema:
+            type: string
+        - in: query
+          name: agent
+          schema:
+            type: string
+        - in: query
+          name: type
+          schema:
+            type: string
+        - in: query
+          name: scope
+          schema:
+            type: string
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: review_state
+          schema:
+            type: string
+        - in: query
+          name: extractor_method
+          schema:
+            type: string
+        - in: query
+          name: source_session_id
+          schema:
+            type: string
+        - in: query
+          name: source_episode_id
+          schema:
+            type: string
+        - in: query
+          name: source_run_id
+          schema:
+            type: string
+        - in: query
+          name: supersedes_entry_id
+          schema:
+            type: string
+        - in: query
+          name: superseded_by_entry_id
+          schema:
+            type: string
+        - in: query
+          name: cursor
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+        - in: query
+          name: trusted_only
+          schema:
+            type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecallEntriesResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+      summary: List recall entries
+      tags:
+        - Recall
+  /api/v1/recall/entries/{id}:
+    get:
+      operationId: get-api-v1-recall-entries-id
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbRecallEntry"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+      summary: Get recall entry
+      tags:
+        - Recall
+  /api/v1/recall/extraction/activate:
+    post:
+      operationId: post-api-v1-recall-extraction-activate
+      responses:
+        "204":
+          description: No content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+      summary: Activate recall extraction
+      tags:
+        - Recall
+  /api/v1/recall/extraction/generations/{fingerprint}/retire:
+    post:
+      operationId: post-api-v1-recall-extraction-generations-fingerprint-retire
+      parameters:
+        - in: path
+          name: fingerprint
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+      summary: Retire recall extraction
+      tags:
+        - Recall
+  /api/v1/recall/extraction/progress:
+    get:
+      operationId: get-api-v1-recall-extraction-progress
+      parameters:
+        - in: query
+          name: generation
+          schema:
+            type: string
+        - in: query
+          name: state
+          schema:
+            type: string
+        - in: query
+          name: cursor
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecallExtractProgressResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+      summary: Get recall extraction progress
+      tags:
+        - Recall
+  /api/v1/recall/extraction/status:
+    get:
+      operationId: get-api-v1-recall-extraction-status
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecallExtractionStatusResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+      summary: Get recall extraction status
+      tags:
+        - Recall
+  /api/v1/recall/import:
+    post:
+      operationId: post-api-v1-recall-import
+      parameters:
+        - in: query
+          name: dry_run
+          schema:
+            type: boolean
+        - in: query
+          name: require_existing_sessions
+          schema:
+            type: boolean
+        - in: query
+          name: allow_placeholder_sessions
+          schema:
+            type: boolean
+        - in: query
+          name: allow_production_import
+          schema:
+            type: boolean
+      requestBody:
+        content:
+          application/x-ndjson:
+            schema:
+              type: string
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbRecallImportResult"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+      summary: Import recall entries
+      tags:
+        - Recall
+  /api/v1/recall/query:
+    post:
+      operationId: post-api-v1-recall-query
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServiceRecallQuery"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceRecallQueryResult"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: API error
+      summary: Query recall entries
+      tags:
+        - Recall
   /api/v1/recent-edits:
     get:
       operationId: get-api-v1-recent-edits

@@ -629,8 +629,10 @@ func TestHTTPBackend_List_InvalidDate(t *testing.T) {
 		Date: "2024/01/15",
 	})
 	require.Error(t, err)
-	// The server rejects invalid dates with 400.
-	assert.Contains(t, err.Error(), "HTTP 400")
+	// Typed query parameters reject invalid dates before sending a request.
+	var parseErr *time.ParseError
+	require.ErrorAs(t, err, &parseErr)
+	assert.Equal(t, "2024/01/15", parseErr.Value)
 }
 
 func TestHTTPBackend_Messages_Roundtrip(t *testing.T) {
@@ -997,7 +999,7 @@ func TestHTTPSearchContent(t *testing.T) {
 			if r.URL.Query().Get("timezone") != "America/New_York" {
 				t.Errorf("timezone = %s", r.URL.Query().Get("timezone"))
 			}
-			assert.Equal(t, []string{"live", "echo"}, r.URL.Query()["exclude_session"])
+			assert.ElementsMatch(t, []string{"live", "echo"}, r.URL.Query()["exclude_session"])
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"matches":[{"session_id":"s1","location":"message"}],"next_cursor":0}`))
 		}))

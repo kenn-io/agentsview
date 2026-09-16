@@ -24,6 +24,29 @@ describe("orvalFetch", () => {
     expect(String(input)).toBe("https://example.test/api/v1/usage/summary");
     expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer secret");
   });
+  it("tests a candidate server with only the supplied credentials", async () => {
+    localStorage.setItem("agentsview-server-url", "https://selected.example.test");
+    setAuthToken("selected-token");
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('{"version":"test"}', { headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { MetadataService } = await import("./generated/index.js");
+    await MetadataService.getApiV1Version({ baseUrl: "https://candidate.example.test" });
+    await MetadataService.getApiV1Version({
+      baseUrl: "https://candidate.example.test",
+      headers: { Authorization: "Bearer candidate-token" },
+    });
+    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
+      "https://candidate.example.test/api/v1/version",
+      "https://candidate.example.test/api/v1/version",
+    ]);
+    expect(new Headers(fetchMock.mock.calls[0]![1]?.headers).get("Authorization")).toBeNull();
+    expect(new Headers(fetchMock.mock.calls[1]![1]?.headers).get("Authorization")).toBe(
+      "Bearer candidate-token",
+    );
+  });
 });
 
 describe("callGenerated", () => {

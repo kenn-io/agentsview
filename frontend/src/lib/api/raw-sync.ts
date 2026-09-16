@@ -1,3 +1,4 @@
+import { RawSyncService } from "./generated/index.js";
 import { orvalRequest } from "./runtime.js";
 
 export interface RawSyncUploadStatus {
@@ -25,11 +26,14 @@ export async function getRawSyncUploadStatus(
   authorization: string,
   signal?: AbortSignal,
 ): Promise<RawSyncUploadStatus> {
-  const response = await orvalRequest(`/api/v1/raw-sync/uploads/${uploadId}`, {
-    headers: { Authorization: authorization },
-    method: "HEAD",
-    signal,
-  });
+  const response = await orvalRequest(
+    RawSyncService.getHeadApiV1RawSyncUploadsByUploadIdUrl({ uploadId }),
+    {
+      headers: { Authorization: authorization },
+      method: "HEAD",
+      signal,
+    },
+  );
   const complete = requiredHeader(response, "Upload-Complete");
   if (complete !== "true" && complete !== "false") {
     throw new Error("Response header Upload-Complete is not a boolean");

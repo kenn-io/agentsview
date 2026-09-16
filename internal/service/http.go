@@ -3,8 +3,6 @@
 package service
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -12,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -21,7 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// errHTTPNotFound is returned by getJSON for 404 responses so callers
+// errHTTPNotFound is returned by the generated client adapter for 404 responses so callers
 // can distinguish "no such resource" from other transport errors
 // without string-matching the status code. Kept unexported since
 // only Get currently consumes it; other paths map status codes
@@ -29,7 +26,7 @@ import (
 var errHTTPNotFound = errors.New("http: not found")
 
 // errHTTPNotImplemented is returned (wrapped in *errNotImplementedBody) by
-// getJSON for 501 responses so callers can map a capability-absent daemon
+// the generated client adapter for 501 responses so callers can map a capability-absent daemon
 // (e.g. search with no FTS index) to a typed sentinel instead of
 // string-matching the status.
 var errHTTPNotImplemented = errors.New("http: not implemented")
@@ -146,7 +143,16 @@ func ProbeHTTPServerCapabilities(
 ) (HTTPServerCapabilities, error) {
 	b := newHTTPBackend(baseURL, token, false, false)
 	var capabilities HTTPServerCapabilities
-	if err := b.getJSON(ctx, "/api/v1/version", &capabilities); err != nil {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return HTTPServerCapabilities{}, err
+	}
+	response, err := api.GetAPIV1VersionWithResponse(ctx)
+	if response == nil {
+		return HTTPServerCapabilities{}, err
+	}
+	err = decodeServiceResponse(response.HTTPResponse, response.Body, &capabilities, err)
+	if err != nil {
 		return HTTPServerCapabilities{},
 			fmt.Errorf("probing server capabilities: %w", err)
 	}
@@ -171,8 +177,15 @@ func (b *httpBackend) Get(
 	ctx context.Context, id string,
 ) (*SessionDetail, error) {
 	var out SessionDetail
-	path := "/api/v1/sessions/" + url.PathEscape(id)
-	err := b.getJSON(ctx, path, &out)
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1SessionsIDWithResponse(ctx, &apiclient.GetAPIV1SessionsIDRequestOptions{PathParams: &apiclient.GetAPIV1SessionsIDPath{ID: url.PathEscape(id)}})
+	if response == nil {
+		return nil, err
+	}
+	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
 	if errors.Is(err, errHTTPNotFound) {
 		// Match directBackend.Get: absent session returns (nil, nil)
 		// so transport swaps stay neutral.
@@ -188,15 +201,24 @@ func (b *httpBackend) Get(
 func (b *httpBackend) FindSessionIDsByPartial(
 	ctx context.Context, partial string, limit int,
 ) ([]string, error) {
-	q := url.Values{}
-	q.Set("partial", partial)
+	q := &apiclient.GetAPIV1SessionIdsResolveQuery{}
+	q.Partial = partial
 	if limit > 0 {
-		q.Set("limit", strconv.Itoa(limit))
+		q.Limit = new(int64(limit))
 	}
 	var out struct {
 		IDs []string `json:"ids"`
 	}
-	if err := b.getJSON(ctx, "/api/v1/session-ids/resolve?"+q.Encode(), &out); err != nil {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1SessionIdsResolveWithResponse(ctx, &apiclient.GetAPIV1SessionIdsResolveRequestOptions{Query: q})
+	if response == nil {
+		return nil, err
+	}
+	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	if err != nil {
 		return nil, err
 	}
 	return out.IDs, nil
@@ -229,9 +251,21 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 func (b *httpBackend) List(
 	ctx context.Context, f ListFilter,
 ) (*SessionList, error) {
-	q := filterToQuery(f)
+	q, err := filterToQuery(f)
+	if err != nil {
+		return nil, err
+	}
 	var out SessionList
-	if err := b.getJSON(ctx, "/api/v1/sessions?"+q.Encode(), &out); err != nil {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1SessionsWithResponse(ctx, &apiclient.GetAPIV1SessionsRequestOptions{Query: q})
+	if response == nil {
+		return nil, err
+	}
+	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	if err != nil {
 		return nil, err
 	}
 	for i := range out.Sessions {
@@ -243,96 +277,144 @@ func (b *httpBackend) List(
 // filterToQuery converts a ListFilter into the URL query params
 // expected by handleListSessions. Field mapping mirrors the
 // server-side parser in internal/server/sessions.go.
-func filterToQuery(f ListFilter) url.Values {
-	q := url.Values{}
-	setIfNotEmpty := func(k, v string) {
-		if v != "" {
-			q.Set(k, v)
-		}
+func filterToQuery(f ListFilter) (*apiclient.GetAPIV1SessionsQuery, error) {
+	q := &apiclient.GetAPIV1SessionsQuery{}
+	if f.Project != "" {
+		q.Project = new(f.Project)
 	}
-	setIfNotEmpty("project", f.Project)
-	setIfNotEmpty("exclude_project", f.ExcludeProject)
-	setIfNotEmpty("machine", f.Machine)
-	setIfNotEmpty("git_branch", f.GitBranch)
-	setIfNotEmpty("agent", f.Agent)
-	setIfNotEmpty("date", f.Date)
-	setIfNotEmpty("date_from", f.DateFrom)
-	setIfNotEmpty("date_to", f.DateTo)
-	setIfNotEmpty("timezone", f.Timezone)
-	setIfNotEmpty("active_since", f.ActiveSince)
+	if f.ExcludeProject != "" {
+		q.ExcludeProject = new(f.ExcludeProject)
+	}
+	if f.Machine != "" {
+		q.Machine = new(f.Machine)
+	}
+	if f.GitBranch != "" {
+		q.GitBranch = new(f.GitBranch)
+	}
+	if f.Agent != "" {
+		q.Agent = new(f.Agent)
+	}
+	if f.Date != "" {
+		parsedDate, err := time.Parse(time.DateOnly, f.Date)
+		if err != nil {
+			return nil, err
+		}
+		q.Date = &runtime.Date{Time: parsedDate}
+	}
+	if f.DateFrom != "" {
+		parsedDateFrom, err := time.Parse(time.DateOnly, f.DateFrom)
+		if err != nil {
+			return nil, err
+		}
+		q.DateFrom = &runtime.Date{Time: parsedDateFrom}
+	}
+	if f.DateTo != "" {
+		parsedDateTo, err := time.Parse(time.DateOnly, f.DateTo)
+		if err != nil {
+			return nil, err
+		}
+		q.DateTo = &runtime.Date{Time: parsedDateTo}
+	}
+	if f.Timezone != "" {
+		q.Timezone = new(f.Timezone)
+	}
+	if f.ActiveSince != "" {
+		parsedActiveSince, err := time.Parse(time.RFC3339, f.ActiveSince)
+		if err != nil {
+			return nil, err
+		}
+		q.ActiveSince = &parsedActiveSince
+	}
 	if f.MinMessages > 0 {
-		q.Set("min_messages", strconv.Itoa(f.MinMessages))
+		q.MinMessages = new(int64(f.MinMessages))
 	}
 	if f.MaxMessages > 0 {
-		q.Set("max_messages", strconv.Itoa(f.MaxMessages))
+		q.MaxMessages = new(int64(f.MaxMessages))
 	}
 	if f.MinUserMessages > 0 {
-		q.Set("min_user_messages", strconv.Itoa(f.MinUserMessages))
+		q.MinUserMessages = new(int64(f.MinUserMessages))
 	}
 	if f.IncludeOneShot {
-		q.Set("include_one_shot", "true")
+		q.IncludeOneShot = new(true)
 	}
 	if f.IncludeAutomated {
-		q.Set("include_automated", "true")
+		q.IncludeAutomated = new(true)
 	}
 	if f.IncludeChildren {
-		q.Set("include_children", "true")
+		q.IncludeChildren = new(true)
 	}
 	if f.IncludeSource {
-		q.Set("include_source", "true")
+		q.IncludeSource = new(true)
 	}
-	setIfNotEmpty("outcome", f.Outcome)
-	setIfNotEmpty("health_grade", f.HealthGrade)
-	setIfNotEmpty("termination", f.Termination)
+	if f.Outcome != "" {
+		q.Outcome = new(f.Outcome)
+	}
+	if f.HealthGrade != "" {
+		q.HealthGrade = new(f.HealthGrade)
+	}
+	if f.Termination != "" {
+		q.Termination = new(f.Termination)
+	}
 	if f.MinToolFailures != nil {
-		q.Set("min_tool_failures", strconv.Itoa(*f.MinToolFailures))
+		q.MinToolFailures = new(int64(*f.MinToolFailures))
 	}
 	if f.HasSecret {
-		q.Set("has_secret", "true")
+		q.HasSecret = new(true)
 	}
 	if f.Starred {
-		q.Set("starred", "true")
+		q.Starred = new(true)
 	}
-	setIfNotEmpty("cursor", f.Cursor)
+	if f.Cursor != "" {
+		q.Cursor = new(f.Cursor)
+	}
 	if f.Limit > 0 {
-		q.Set("limit", strconv.Itoa(f.Limit))
+		q.Limit = new(int64(f.Limit))
 	}
-	setIfNotEmpty("order_by", f.OrderBy)
+	if f.OrderBy != "" {
+		q.OrderBy = new(f.OrderBy)
+	}
 	if f.Descending != nil {
-		q.Set("descending", strconv.FormatBool(*f.Descending))
+		q.Descending = new(*f.Descending)
 	}
-	return q
+	return q, nil
 }
 
 func (b *httpBackend) Messages(
 	ctx context.Context, id string, f MessageFilter,
 ) (*MessageList, error) {
-	q := url.Values{}
+	q := &apiclient.GetAPIV1SessionsIDMessagesQuery{}
 	if f.From != nil {
-		q.Set("from", strconv.Itoa(*f.From))
+		q.From = new(int64(*f.From))
 	}
 	if f.Limit > 0 {
-		q.Set("limit", strconv.Itoa(f.Limit))
+		q.Limit = new(int64(f.Limit))
 	}
 	if f.Direction != "" {
-		q.Set("direction", f.Direction)
+		q.Direction = new(apiclient.GetAPIV1SessionsIDMessagesQueryDirection(f.Direction))
 	}
 	if f.Around != nil {
-		q.Set("around", strconv.Itoa(*f.Around))
+		q.Around = new(int64(*f.Around))
 	}
 	if f.Before != nil {
-		q.Set("before", strconv.Itoa(*f.Before))
+		q.Before = new(int64(*f.Before))
 	}
 	if f.After != nil {
-		q.Set("after", strconv.Itoa(*f.After))
+		q.After = new(int64(*f.After))
 	}
 	if len(f.Roles) > 0 {
-		q.Set("roles", strings.Join(f.Roles, ","))
+		q.Roles = new(strings.Join(f.Roles, ","))
 	}
-	path := "/api/v1/sessions/" + url.PathEscape(id) +
-		"/messages?" + q.Encode()
 	var out MessageList
-	if err := b.getJSON(ctx, path, &out); err != nil {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1SessionsIDMessagesWithResponse(ctx, &apiclient.GetAPIV1SessionsIDMessagesRequestOptions{Query: q, PathParams: &apiclient.GetAPIV1SessionsIDMessagesPath{ID: url.PathEscape(id)}})
+	if response == nil {
+		return nil, err
+	}
+	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	if err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -342,8 +424,16 @@ func (b *httpBackend) ToolCalls(
 	ctx context.Context, id string,
 ) (*ToolCallList, error) {
 	var out ToolCallList
-	path := "/api/v1/sessions/" + url.PathEscape(id) + "/tool-calls"
-	if err := b.getJSON(ctx, path, &out); err != nil {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1SessionsIDToolCallsWithResponse(ctx, &apiclient.GetAPIV1SessionsIDToolCallsRequestOptions{PathParams: &apiclient.GetAPIV1SessionsIDToolCallsPath{ID: url.PathEscape(id)}})
+	if response == nil {
+		return nil, err
+	}
+	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	if err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -361,73 +451,36 @@ func (b *httpBackend) Sync(
 			b.baseURL, db.ErrReadOnly,
 		)
 	}
-	body, err := json.Marshal(in)
+	api, err := b.apiClient(b.longRunningClient)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost,
-		b.baseURL+"/api/v1/sessions/sync",
-		bytes.NewReader(body),
-	)
-	if err != nil {
+	response, err := api.PostAPIV1SessionsSyncWithResponse(ctx, &apiclient.PostAPIV1SessionsSyncRequestOptions{Body: &apiclient.PostAPIV1SessionsSyncBody{ID: new(in.ID), Path: new(in.Path), Subagents: new(in.Subagents)}})
+	if response == nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	// The daemon's CSRF guard rejects mutating requests whose Origin
-	// is not in the allowlist. Setting Origin to the daemon's own
-	// baseURL satisfies that check for the CLI, which has no real
-	// browser origin.
-	req.Header.Set("Origin", b.baseURL)
-	b.addAuth(req)
-	resp, err := b.longRunningClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotImplemented {
-		// Daemon is read-only (pg serve). Surface as the shared
-		// sentinel so CLI callers can errors.Is it.
-		return nil, fmt.Errorf(
-			"sync: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
-		)
-	}
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf(
-			"sync: HTTP %d: %s", resp.StatusCode, msg,
-		)
+	if response.StatusCode == http.StatusNotImplemented {
+		return nil, fmt.Errorf("sync: daemon at %s: %w", b.baseURL, db.ErrReadOnly)
 	}
 	var detail SessionDetail
-	if err := json.UnmarshalRead(resp.Body, &detail); err != nil {
+	if err := decodeServiceResponse(response.HTTPResponse, response.Body, &detail, err); err != nil {
 		return nil, err
 	}
+
 	detail.WebURL = b.sessionWebURL(detail.ID)
 	return &detail, nil
-}
-
-// watchHTTPClient adapts net/http to the generated runtime's context argument.
-type watchHTTPClient struct {
-	*http.Client
-}
-
-func (c watchHTTPClient) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
-	return c.Client.Do(req.WithContext(ctx))
 }
 
 func (b *httpBackend) Watch(
 	ctx context.Context, id string,
 ) (<-chan Event, error) {
-	client, err := apiclient.NewDefaultClient(b.baseURL, runtime.WithHTTPClient(watchHTTPClient{b.longRunningClient}))
+	client, err := b.apiClient(b.longRunningClient)
 	if err != nil {
 		return nil, err
 	}
-	stream, err := client.GetAPIV1SessionsIDWatchStream(ctx,
+	response, err := client.GetAPIV1SessionsIDWatchStreamWithResponse(ctx,
 		&apiclient.GetAPIV1SessionsIDWatchRequestOptions{
 			PathParams: &apiclient.GetAPIV1SessionsIDWatchPath{ID: url.PathEscape(id)},
-		}, func(_ context.Context, req *http.Request) error {
-			b.addAuth(req)
-			return nil
 		})
 	if err != nil {
 		if apiErr, ok := errors.AsType[*runtime.ClientAPIError](err); ok {
@@ -439,6 +492,7 @@ func (b *httpBackend) Watch(
 		return nil, err
 	}
 
+	stream := response.Stream200
 	out := make(chan Event)
 	go func() {
 		defer close(out)
@@ -459,35 +513,42 @@ func (b *httpBackend) Watch(
 func (b *httpBackend) Stats(
 	ctx context.Context, f StatsFilter,
 ) (*SessionStats, error) {
-	q := url.Values{}
-	setIfNotEmpty := func(k, v string) {
-		if v != "" {
-			q.Set(k, v)
-		}
+	q := &apiclient.GetAPIV1SessionStatsQuery{}
+	if f.Since != "" {
+		q.Since = new(f.Since)
 	}
-	setIfNotEmpty("since", f.Since)
-	setIfNotEmpty("until", f.Until)
-	setIfNotEmpty("agent", f.Agent)
-	setIfNotEmpty("timezone", f.Timezone)
+	if f.Until != "" {
+		q.Until = new(f.Until)
+	}
+	if f.Agent != "" {
+		q.Agent = new(f.Agent)
+	}
+	if f.Timezone != "" {
+		q.Timezone = new(f.Timezone)
+	}
 	includeOneShot := f.IncludeOneShot
 	includeAutomated := f.IncludeAutomated
 	if !f.ApplyDefaultVisibility {
 		includeOneShot = true
 		includeAutomated = true
 	}
-	q.Set("include_one_shot", strconv.FormatBool(includeOneShot))
-	q.Set("include_automated", strconv.FormatBool(includeAutomated))
-	for _, p := range f.IncludeProjects {
-		q.Add("include_project", p)
-	}
-	for _, p := range f.ExcludeProjects {
-		q.Add("exclude_project", p)
-	}
-	q.Set("include_git_outcomes", strconv.FormatBool(f.IncludeGitOutcomes))
-	q.Set("include_github_outcomes", strconv.FormatBool(f.IncludeGitHubOutcomes))
+	q.IncludeOneShot = new(includeOneShot)
+	q.IncludeAutomated = new(includeAutomated)
+	q.IncludeProject = append(q.IncludeProject, f.IncludeProjects...)
+	q.ExcludeProject = append(q.ExcludeProject, f.ExcludeProjects...)
+	q.IncludeGitOutcomes = new(f.IncludeGitOutcomes)
+	q.IncludeGithubOutcomes = new(f.IncludeGitHubOutcomes)
 
 	var out SessionStats
-	err := b.getJSON(ctx, "/api/v1/session-stats?"+q.Encode(), &out)
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1SessionStatsWithResponse(ctx, &apiclient.GetAPIV1SessionStatsRequestOptions{Query: q})
+	if response == nil {
+		return nil, err
+	}
+	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
 	if errors.Is(err, errHTTPNotImplemented) {
 		return nil, fmt.Errorf(
 			"stats: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
@@ -502,25 +563,33 @@ func (b *httpBackend) Stats(
 func (b *httpBackend) Search(
 	ctx context.Context, req SearchRequest,
 ) (*SessionSearchResult, error) {
-	q := url.Values{}
-	q.Set("q", req.Query)
+	q := &apiclient.GetAPIV1SearchQuery{}
+	q.Q = req.Query
 	if req.Project != "" {
-		q.Set("project", req.Project)
+		q.Project = new(req.Project)
 	}
 	if req.DateFrom != "" {
-		q.Set("date_from", req.DateFrom)
+		parsedDateFrom, err := time.Parse(time.DateOnly, req.DateFrom)
+		if err != nil {
+			return nil, err
+		}
+		q.DateFrom = &runtime.Date{Time: parsedDateFrom}
 	}
 	if req.DateTo != "" {
-		q.Set("date_to", req.DateTo)
+		parsedDateTo, err := time.Parse(time.DateOnly, req.DateTo)
+		if err != nil {
+			return nil, err
+		}
+		q.DateTo = &runtime.Date{Time: parsedDateTo}
 	}
 	if req.Sort != "" {
-		q.Set("sort", req.Sort)
+		q.Sort = new(apiclient.GetAPIV1SearchQuerySort(req.Sort))
 	}
 	if req.Cursor > 0 {
-		q.Set("cursor", strconv.Itoa(req.Cursor))
+		q.Cursor = new(int64(req.Cursor))
 	}
 	if req.Limit > 0 {
-		q.Set("limit", strconv.Itoa(req.Limit))
+		q.Limit = new(int64(req.Limit))
 	}
 	// GET /api/v1/search responds with {query, results, count, next};
 	// "next" is the int pagination cursor. Decode into a local shape and
@@ -529,7 +598,16 @@ func (b *httpBackend) Search(
 		Results []db.SearchResult `json:"results"`
 		Next    int               `json:"next"`
 	}
-	if err := b.getJSON(ctx, "/api/v1/search?"+q.Encode(), &out); err != nil {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1SearchWithResponse(ctx, &apiclient.GetAPIV1SearchRequestOptions{Query: q})
+	if response == nil {
+		return nil, err
+	}
+	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	if err != nil {
 		if errors.Is(err, errHTTPNotImplemented) {
 			return nil, ErrSearchUnavailable
 		}
@@ -548,68 +626,111 @@ func (b *httpBackend) Search(
 func (b *httpBackend) SearchContent(
 	ctx context.Context, req ContentSearchRequest,
 ) (*ContentSearchResult, error) {
-	q := url.Values{}
-	q.Set("pattern", req.Pattern)
+	q := &apiclient.GetAPIV1SearchContentQuery{}
+	q.Pattern = req.Pattern
 	if req.Mode != "" {
-		q.Set("mode", req.Mode)
+		q.Mode = new(apiclient.GetAPIV1SearchContentQueryMode(req.Mode))
 	}
 	if len(req.Sources) > 0 {
-		q.Set("in", strings.Join(req.Sources, ","))
+		q.In = new(strings.Join(req.Sources, ","))
 	}
 	if req.ExcludeSystem {
-		q.Set("exclude_system", "true")
+		q.ExcludeSystem = new(true)
 	}
 	if req.Reveal {
-		q.Set("reveal", "true")
+		q.Reveal = new(true)
 	}
-	for k, v := range map[string]string{
-		"project":         req.Project,
-		"exclude_project": req.ExcludeProject,
-		"machine":         req.Machine,
-		"git_branch":      req.GitBranch,
-		"agent":           req.Agent,
-		"date":            req.Date,
-		"date_from":       req.DateFrom,
-		"date_to":         req.DateTo,
-		"timezone":        req.Timezone,
-		"active_since":    req.ActiveSince,
-		"scope":           req.Scope,
-	} {
-		if v != "" {
-			q.Set(k, v)
+	if req.Project != "" {
+		q.Project = new(req.Project)
+	}
+	if req.ExcludeProject != "" {
+		q.ExcludeProject = new(req.ExcludeProject)
+	}
+	if req.Machine != "" {
+		q.Machine = new(req.Machine)
+	}
+	if req.GitBranch != "" {
+		q.GitBranch = new(req.GitBranch)
+	}
+	if req.Agent != "" {
+		q.Agent = new(req.Agent)
+	}
+	if req.Date != "" {
+		parsedDate, err := time.Parse(time.DateOnly, req.Date)
+		if err != nil {
+			return nil, err
 		}
+		q.Date = &runtime.Date{Time: parsedDate}
+	}
+	if req.DateFrom != "" {
+		parsedDateFrom, err := time.Parse(time.DateOnly, req.DateFrom)
+		if err != nil {
+			return nil, err
+		}
+		q.DateFrom = &runtime.Date{Time: parsedDateFrom}
+	}
+	if req.DateTo != "" {
+		parsedDateTo, err := time.Parse(time.DateOnly, req.DateTo)
+		if err != nil {
+			return nil, err
+		}
+		q.DateTo = &runtime.Date{Time: parsedDateTo}
+	}
+	if req.Timezone != "" {
+		q.Timezone = new(req.Timezone)
+	}
+	if req.ActiveSince != "" {
+		parsedActiveSince, err := time.Parse(time.RFC3339, req.ActiveSince)
+		if err != nil {
+			return nil, err
+		}
+		q.ActiveSince = &parsedActiveSince
+	}
+	if req.Scope != "" {
+		q.Scope = new(apiclient.GetAPIV1SearchContentQueryScope(req.Scope))
 	}
 	if req.IncludeChildren {
-		q.Set("include_children", "true")
+		q.IncludeChildren = new(true)
 	}
 	if req.IncludeAutomated {
-		q.Set("include_automated", "true")
+		q.IncludeAutomated = new(true)
 	}
 	if req.IncludeOneShot {
-		q.Set("include_one_shot", "true")
+		q.IncludeOneShot = new(true)
 	}
 	for _, id := range req.ExcludeSessionIDs {
 		if id = strings.TrimSpace(id); id != "" {
-			q.Add("exclude_session", id)
+			q.ExcludeSession = append(q.ExcludeSession, id)
 		}
 	}
 	if req.Limit > 0 {
-		q.Set("limit", strconv.Itoa(req.Limit))
+		q.Limit = new(int64(req.Limit))
 	}
 	if req.Cursor > 0 {
-		q.Set("cursor", strconv.Itoa(req.Cursor))
+		q.Cursor = new(int64(req.Cursor))
 	}
 	if req.Context > 0 {
-		q.Set("context", strconv.Itoa(req.Context))
+		q.Context = new(int64(req.Context))
 	}
 	var out ContentSearchResult
-	var opts []func(*http.Request)
+	var editors []runtime.RequestEditorFn
 	if req.Mode == "semantic" || req.Mode == "hybrid" {
-		opts = append(opts, func(r *http.Request) {
+		editors = append(editors, func(_ context.Context, r *http.Request) error {
 			r.Header.Set(SemanticSearchIntentHeader, SemanticSearchIntentValue)
+			return nil
 		})
 	}
-	if err := b.getJSONLong(ctx, "/api/v1/search/content?"+q.Encode(), &out, opts...); err != nil {
+
+	api, err := b.apiClient(b.longRunningClient)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1SearchContentWithResponse(ctx, &apiclient.GetAPIV1SearchContentRequestOptions{Query: q}, editors...)
+	if response == nil {
+		return nil, err
+	}
+	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	if err != nil {
 		if notImpl, ok := errors.AsType[*errNotImplementedBody](err); ok {
 			return nil, wrapSemanticUnavailable(notImpl.message)
 		}
@@ -662,48 +783,90 @@ func wrapSemanticTransient(message string) error {
 func (b *httpBackend) UsageSummary(
 	ctx context.Context, req UsageRequest,
 ) (*UsageSummaryResult, error) {
-	q := url.Values{}
-	for k, v := range map[string]string{
-		"from":                req.From,
-		"to":                  req.To,
-		"timezone":            req.Timezone,
-		"agent":               req.Agent,
-		"project":             req.Project,
-		"machine":             req.Machine,
-		"git_branch":          req.GitBranch,
-		"exclude_project":     req.ExcludeProject,
-		"exclude_project_key": req.ExcludeProjectKey,
-		"exclude_agent":       req.ExcludeAgent,
-		"exclude_model":       req.ExcludeModel,
-		"model":               req.Model,
-		"active_since":        req.ActiveSince,
-		"termination":         req.Termination,
-	} {
-		if v != "" {
-			q.Set(k, v)
+	q := &apiclient.GetAPIV1UsageSummaryQuery{}
+	if req.From != "" {
+		parsedFrom, err := time.Parse(time.DateOnly, req.From)
+		if err != nil {
+			return nil, err
 		}
+		q.From = &runtime.Date{Time: parsedFrom}
+	}
+	if req.To != "" {
+		parsedTo, err := time.Parse(time.DateOnly, req.To)
+		if err != nil {
+			return nil, err
+		}
+		q.To = &runtime.Date{Time: parsedTo}
+	}
+	if req.Timezone != "" {
+		q.Timezone = new(req.Timezone)
+	}
+	if req.Agent != "" {
+		q.Agent = new(req.Agent)
+	}
+	if req.Project != "" {
+		q.Project = new(req.Project)
+	}
+	if req.Machine != "" {
+		q.Machine = new(req.Machine)
+	}
+	if req.GitBranch != "" {
+		q.GitBranch = new(req.GitBranch)
+	}
+	if req.ExcludeProject != "" {
+		q.ExcludeProject = new(req.ExcludeProject)
+	}
+	if req.ExcludeProjectKey != "" {
+		q.ExcludeProjectKey = new(req.ExcludeProjectKey)
+	}
+	if req.ExcludeAgent != "" {
+		q.ExcludeAgent = new(req.ExcludeAgent)
+	}
+	if req.ExcludeModel != "" {
+		q.ExcludeModel = new(req.ExcludeModel)
+	}
+	if req.Model != "" {
+		q.Model = new(req.Model)
+	}
+	if req.ActiveSince != "" {
+		parsedActiveSince, err := time.Parse(time.RFC3339, req.ActiveSince)
+		if err != nil {
+			return nil, err
+		}
+		q.ActiveSince = &parsedActiveSince
+	}
+	if req.Termination != "" {
+		q.Termination = new(req.Termination)
 	}
 	if req.MinUserMessages > 0 {
-		q.Set("min_user_messages", strconv.Itoa(req.MinUserMessages))
+		q.MinUserMessages = new(int64(req.MinUserMessages))
 	}
 	if req.NoDefaultRange {
-		q.Set("no_default_range", "true")
+		q.NoDefaultRange = new(true)
 	}
 	if req.Breakdowns != nil {
-		q.Set("breakdowns", strconv.FormatBool(*req.Breakdowns))
+		q.Breakdowns = new(*req.Breakdowns)
 	}
 	if req.SessionCounts != nil {
-		q.Set("session_counts", strconv.FormatBool(*req.SessionCounts))
+		q.SessionCounts = new(*req.SessionCounts)
 	}
 	// include_one_shot defaults to true on the server, so it must be sent
 	// explicitly to transmit a false value; include_automated defaults to
 	// false. Send both explicitly so the round-trip matches the direct
 	// backend regardless of the daemon's defaults.
-	q.Set("include_one_shot", strconv.FormatBool(req.IncludeOneShot))
-	q.Set("include_automated", strconv.FormatBool(req.IncludeAutomated))
+	q.IncludeOneShot = new(req.IncludeOneShot)
+	q.IncludeAutomated = new(req.IncludeAutomated)
 
 	var out UsageSummaryResult
-	err := b.getJSONLong(ctx, "/api/v1/usage/summary?"+q.Encode(), &out)
+	api, err := b.apiClient(b.longRunningClient)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1UsageSummaryWithResponse(ctx, &apiclient.GetAPIV1UsageSummaryRequestOptions{Query: q})
+	if response == nil {
+		return nil, err
+	}
+	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
 	if errors.Is(err, errHTTPNotImplemented) {
 		// A read-only daemon (pg serve) returns 501 for usage; surface
 		// the shared sentinel so callers can errors.Is it.
@@ -720,57 +883,93 @@ func (b *httpBackend) UsageSummary(
 func (b *httpBackend) UsagePairwiseComparison(
 	ctx context.Context, req UsagePairwiseComparisonRequest,
 ) (*UsagePairwiseComparisonResponse, error) {
-	q := url.Values{}
-	for k, v := range map[string]string{
-		"from":                req.From,
-		"to":                  req.To,
-		"timezone":            req.Timezone,
-		"agent":               req.Agent,
-		"project":             req.Project,
-		"machine":             req.Machine,
-		"git_branch":          req.GitBranch,
-		"exclude_project":     req.ExcludeProject,
-		"exclude_project_key": req.ExcludeProjectKey,
-		"exclude_agent":       req.ExcludeAgent,
-		"exclude_model":       req.ExcludeModel,
-		"active_since":        req.ActiveSince,
-		"termination":         req.Termination,
-	} {
-		if v != "" {
-			q.Set(k, v)
+	q := &apiclient.GetAPIV1UsagePairwiseComparisonQuery{}
+	if req.From != "" {
+		parsedFrom, err := time.Parse(time.DateOnly, req.From)
+		if err != nil {
+			return nil, err
 		}
+		q.From = &runtime.Date{Time: parsedFrom}
+	}
+	if req.To != "" {
+		parsedTo, err := time.Parse(time.DateOnly, req.To)
+		if err != nil {
+			return nil, err
+		}
+		q.To = &runtime.Date{Time: parsedTo}
+	}
+	if req.Timezone != "" {
+		q.Timezone = new(req.Timezone)
+	}
+	if req.Agent != "" {
+		q.Agent = new(req.Agent)
+	}
+	if req.Project != "" {
+		q.Project = new(req.Project)
+	}
+	if req.Machine != "" {
+		q.Machine = new(req.Machine)
+	}
+	if req.GitBranch != "" {
+		q.GitBranch = new(req.GitBranch)
+	}
+	if req.ExcludeProject != "" {
+		q.ExcludeProject = new(req.ExcludeProject)
+	}
+	if req.ExcludeProjectKey != "" {
+		q.ExcludeProjectKey = new(req.ExcludeProjectKey)
+	}
+	if req.ExcludeAgent != "" {
+		q.ExcludeAgent = new(req.ExcludeAgent)
+	}
+	if req.ExcludeModel != "" {
+		q.ExcludeModel = new(req.ExcludeModel)
+	}
+	if req.ActiveSince != "" {
+		parsedActiveSince, err := time.Parse(time.RFC3339, req.ActiveSince)
+		if err != nil {
+			return nil, err
+		}
+		q.ActiveSince = &parsedActiveSince
+	}
+	if req.Termination != "" {
+		q.Termination = new(req.Termination)
 	}
 	if req.LeftDimension != "" {
-		q.Set("left_dimension", req.LeftDimension)
+		q.LeftDimension = req.LeftDimension
 	}
 	if req.LeftValue != "" {
-		q.Set("left_value", req.LeftValue)
+		q.LeftValue = req.LeftValue
 	}
 	if req.RightDimension != "" {
-		q.Set("right_dimension", req.RightDimension)
+		q.RightDimension = req.RightDimension
 	}
 	if req.RightValue != "" {
-		q.Set("right_value", req.RightValue)
+		q.RightValue = req.RightValue
 	}
 	if req.MinUserMessages > 0 {
-		q.Set("min_user_messages", strconv.Itoa(req.MinUserMessages))
+		q.MinUserMessages = new(int64(req.MinUserMessages))
 	}
 	if req.NoDefaultRange {
-		q.Set("no_default_range", "true")
+		q.NoDefaultRange = new(true)
 	}
 	// Include explicit booleans to preserve source defaults.
-	q.Set("include_one_shot", strconv.FormatBool(req.IncludeOneShot))
-	q.Set("include_automated", strconv.FormatBool(req.IncludeAutomated))
+	q.IncludeOneShot = new(req.IncludeOneShot)
+	q.IncludeAutomated = new(req.IncludeAutomated)
 	if req.Model != "" {
-		q.Set("model", req.Model)
+		q.Model = new(req.Model)
 	}
 
 	var out UsagePairwiseComparisonResponse
-	err := b.getJSONLong(
-		ctx,
-		"/api/v1/usage/pairwise-comparison?"+q.Encode(),
-		&out,
-	)
+	api, err := b.apiClient(b.longRunningClient)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1UsagePairwiseComparisonWithResponse(ctx, &apiclient.GetAPIV1UsagePairwiseComparisonRequestOptions{Query: q})
+	if response == nil {
+		return nil, err
+	}
+	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
 	if errors.Is(err, errHTTPNotImplemented) {
 		return nil, fmt.Errorf(
 			"usage pairwise comparison: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
@@ -790,7 +989,16 @@ func (b *httpBackend) ListRecallEntries(
 	}
 	q := recallFilterToQuery(f)
 	var out RecallList
-	if err := b.getJSON(ctx, "/api/v1/recall/entries?"+q.Encode(), &out); err != nil {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1RecallEntriesWithResponse(ctx, &apiclient.GetAPIV1RecallEntriesRequestOptions{Query: q})
+	if response == nil {
+		return nil, err
+	}
+	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	if err != nil {
 		if errors.Is(err, errHTTPNotImplemented) {
 			return nil, fmt.Errorf(
 				"recall list: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
@@ -811,8 +1019,15 @@ func (b *httpBackend) GetRecallEntry(
 	ctx context.Context, id string,
 ) (*db.RecallEntry, error) {
 	var out db.RecallEntry
-	path := "/api/v1/recall/entries/" + url.PathEscape(id)
-	err := b.getJSON(ctx, path, &out)
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1RecallEntriesIDWithResponse(ctx, &apiclient.GetAPIV1RecallEntriesIDRequestOptions{PathParams: &apiclient.GetAPIV1RecallEntriesIDPath{ID: url.PathEscape(id)}})
+	if response == nil {
+		return nil, err
+	}
+	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
 	if errors.Is(err, errHTTPNotFound) {
 		return nil, nil
 	}
@@ -845,12 +1060,20 @@ func (b *httpBackend) QueryRecallEntries(
 		return nil, fmt.Errorf("strict recall recording requires a direct backend")
 	}
 	mode := db.NormalizeRecallQuery(db.RecallQuery{Mode: req.Mode}).Mode
-	post := b.postJSON
+	httpClient := b.client
 	if mode == db.RecallQueryModeVector || mode == db.RecallQueryModeHybrid {
-		post = b.postJSONLong
+		httpClient = b.longRunningClient
 	}
 	var out RecallQueryResult
-	if err := post(ctx, "/api/v1/recall/query", req, &out); err != nil {
+	api, err := b.apiClient(httpClient)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.PostAPIV1RecallQueryWithResponse(ctx, &apiclient.PostAPIV1RecallQueryRequestOptions{Body: &apiclient.PostAPIV1RecallQueryBody{Agent: new(req.Agent), ContextMaxBytes: new(int64(req.ContextMaxBytes)), Cwd: new(req.CWD), ExtractorMethod: new(req.ExtractorMethod), GitBranch: new(req.GitBranch), IncludeContext: new(req.IncludeContext), Limit: new(int64(req.Limit)), Mode: new(req.Mode), Project: new(req.Project), Query: req.Query, Scope: new(req.Scope), SkipRecording: new(req.SkipRecording), SourceEpisodeID: new(req.SourceEpisodeID), SourceRunID: new(req.SourceRunID), SourceSessionID: new(req.SourceSessionID), Status: new(req.Status), SupersededByEntryID: new(req.SupersededByEntryID), SupersedesEntryID: new(req.SupersedesEntryID), Surface: new(req.Surface), TrustedOnly: new(req.TrustedOnly), Type: new(req.Type)}})
+	if response == nil {
+		return nil, err
+	}
+	if err := decodeServiceResponse(response.HTTPResponse, response.Body, &out, err); err != nil {
 		if errors.Is(err, errHTTPNotImplemented) {
 			var notImpl *errNotImplementedBody
 			if (mode == db.RecallQueryModeVector ||
@@ -921,55 +1144,90 @@ func (b *httpBackend) ImportRecallEntries(
 		)
 	}
 	var out db.RecallImportResult
-	path := "/api/v1/recall/import"
-	q := url.Values{}
+	q := &apiclient.PostAPIV1RecallImportQuery{}
 	if opts.DryRun {
-		q.Set("dry_run", "true")
+		q.DryRun = new(true)
 	}
 	if opts.RequireExistingSessions {
-		q.Set("require_existing_sessions", "true")
+		q.RequireExistingSessions = new(true)
 	} else {
-		q.Set("allow_placeholder_sessions", "true")
+		q.AllowPlaceholderSessions = new(true)
 	}
 	if opts.AllowProductionImport {
-		q.Set("allow_production_import", "true")
+		q.AllowProductionImport = new(true)
 	}
-	if encoded := q.Encode(); encoded != "" {
-		path += "?" + encoded
-	}
-	if err := b.postRaw(ctx, path, r, &out); err != nil {
+	api, err := b.apiClient(b.client)
+	if err != nil {
 		return nil, err
 	}
+	response, err := api.PostAPIV1RecallImportWithResponse(ctx, &apiclient.PostAPIV1RecallImportRequestOptions{Query: q}, func(_ context.Context, request *http.Request) error {
+		// Keep imports streaming instead of buffering the JSONL input.
+		request.Body = io.NopCloser(r)
+		request.ContentLength = -1
+		return nil
+	})
+	if response == nil {
+		return nil, err
+	}
+	if response.StatusCode == http.StatusNotImplemented {
+		return nil, fmt.Errorf("daemon at %s is read-only: %w", b.baseURL, db.ErrReadOnly)
+	}
+	if err := decodeServiceResponse(response.HTTPResponse, response.Body, &out, err); err != nil {
+		return nil, err
+	}
+
 	return &out, nil
 }
 
-func recallFilterToQuery(f RecallFilter) url.Values {
-	q := url.Values{}
-	for k, v := range map[string]string{
-		"q":                      f.Query,
-		"project":                f.Project,
-		"cwd":                    f.CWD,
-		"git_branch":             f.GitBranch,
-		"agent":                  f.Agent,
-		"type":                   f.Type,
-		"scope":                  f.Scope,
-		"status":                 f.Status,
-		"extractor_method":       f.ExtractorMethod,
-		"source_session_id":      f.SourceSessionID,
-		"source_episode_id":      f.SourceEpisodeID,
-		"source_run_id":          f.SourceRunID,
-		"supersedes_entry_id":    f.SupersedesEntryID,
-		"superseded_by_entry_id": f.SupersededByEntryID,
-	} {
-		if v != "" {
-			q.Set(k, v)
-		}
+func recallFilterToQuery(f RecallFilter) *apiclient.GetAPIV1RecallEntriesQuery {
+	q := &apiclient.GetAPIV1RecallEntriesQuery{}
+	if f.Query != "" {
+		q.Q = new(f.Query)
+	}
+	if f.Project != "" {
+		q.Project = new(f.Project)
+	}
+	if f.CWD != "" {
+		q.Cwd = new(f.CWD)
+	}
+	if f.GitBranch != "" {
+		q.GitBranch = new(f.GitBranch)
+	}
+	if f.Agent != "" {
+		q.Agent = new(f.Agent)
+	}
+	if f.Type != "" {
+		q.Type = new(f.Type)
+	}
+	if f.Scope != "" {
+		q.Scope = new(f.Scope)
+	}
+	if f.Status != "" {
+		q.Status = new(f.Status)
+	}
+	if f.ExtractorMethod != "" {
+		q.ExtractorMethod = new(f.ExtractorMethod)
+	}
+	if f.SourceSessionID != "" {
+		q.SourceSessionID = new(f.SourceSessionID)
+	}
+	if f.SourceEpisodeID != "" {
+		q.SourceEpisodeID = new(f.SourceEpisodeID)
+	}
+	if f.SourceRunID != "" {
+		q.SourceRunID = new(f.SourceRunID)
+	}
+	if f.SupersedesEntryID != "" {
+		q.SupersedesEntryID = new(f.SupersedesEntryID)
+	}
+	if f.SupersededByEntryID != "" {
+		q.SupersededByEntryID = new(f.SupersededByEntryID)
 	}
 	if f.Limit > 0 {
-		q.Set("limit", strconv.Itoa(f.Limit))
+		q.Limit = new(f.Limit)
 	}
 	if f.TrustedOnly {
-		q.Set("trusted_only", "true")
+		q.TrustedOnly = new(true)
 	}
 	return q
 }
@@ -977,27 +1235,53 @@ func recallFilterToQuery(f RecallFilter) url.Values {
 func (b *httpBackend) ListSecrets(
 	ctx context.Context, f SecretListFilter,
 ) (*SecretFindingList, error) {
-	q := url.Values{}
-	for k, v := range map[string]string{
-		"project": f.Project, "agent": f.Agent,
-		"date_from": f.DateFrom, "date_to": f.DateTo,
-		"rule": f.Rule, "confidence": f.Confidence,
-	} {
-		if v != "" {
-			q.Set(k, v)
+	q := &apiclient.GetAPIV1SecretsQuery{}
+	if f.Project != "" {
+		q.Project = new(f.Project)
+	}
+	if f.Agent != "" {
+		q.Agent = new(f.Agent)
+	}
+	if f.DateFrom != "" {
+		parsedDateFrom, err := time.Parse(time.DateOnly, f.DateFrom)
+		if err != nil {
+			return nil, err
 		}
+		q.DateFrom = &runtime.Date{Time: parsedDateFrom}
+	}
+	if f.DateTo != "" {
+		parsedDateTo, err := time.Parse(time.DateOnly, f.DateTo)
+		if err != nil {
+			return nil, err
+		}
+		q.DateTo = &runtime.Date{Time: parsedDateTo}
+	}
+	if f.Rule != "" {
+		q.Rule = new(f.Rule)
+	}
+	if f.Confidence != "" {
+		q.Confidence = new(f.Confidence)
 	}
 	if f.Reveal {
-		q.Set("reveal", "true")
+		q.Reveal = new(true)
 	}
 	if f.Limit > 0 {
-		q.Set("limit", strconv.Itoa(f.Limit))
+		q.Limit = new(int64(f.Limit))
 	}
 	if f.Cursor > 0 {
-		q.Set("cursor", strconv.Itoa(f.Cursor))
+		q.Cursor = new(int64(f.Cursor))
 	}
 	var out SecretFindingList
-	if err := b.getJSON(ctx, "/api/v1/secrets?"+q.Encode(), &out); err != nil {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1SecretsWithResponse(ctx, &apiclient.GetAPIV1SecretsRequestOptions{Query: q})
+	if response == nil {
+		return nil, err
+	}
+	err = decodeServiceResponse(response.HTTPResponse, response.Body, &out, err)
+	if err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -1011,38 +1295,43 @@ func (b *httpBackend) ScanSecrets(
 		return nil, fmt.Errorf("scan: daemon at %s is read-only: %w",
 			b.baseURL, db.ErrReadOnly)
 	}
-	q := url.Values{}
+	q := &apiclient.PostAPIV1SecretsScanQuery{}
 	if in.Backfill {
-		q.Set("backfill", "true")
+		q.Backfill = new(true)
 	}
-	for k, v := range map[string]string{
-		"project": in.Project, "agent": in.Agent,
-		"date_from": in.DateFrom, "date_to": in.DateTo,
-	} {
-		if v != "" {
-			q.Set(k, v)
+	if in.Project != "" {
+		q.Project = new(in.Project)
+	}
+	if in.Agent != "" {
+		q.Agent = new(in.Agent)
+	}
+	if in.DateFrom != "" {
+		parsedDateFrom, err := time.Parse(time.DateOnly, in.DateFrom)
+		if err != nil {
+			return nil, err
 		}
+		q.DateFrom = &runtime.Date{Time: parsedDateFrom}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		b.baseURL+"/api/v1/secrets/scan?"+q.Encode(), nil)
+	if in.DateTo != "" {
+		parsedDateTo, err := time.Parse(time.DateOnly, in.DateTo)
+		if err != nil {
+			return nil, err
+		}
+		q.DateTo = &runtime.Date{Time: parsedDateTo}
+	}
+	api, err := b.apiClient(b.longRunningClient)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Origin", b.baseURL)
-	b.addAuth(req)
-	resp, err := (&http.Client{Timeout: 0}).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotImplemented {
+	response, err := api.PostAPIV1SecretsScanStreamWithResponse(ctx, &apiclient.PostAPIV1SecretsScanRequestOptions{Query: q})
+	if response != nil && response.StatusCode == http.StatusNotImplemented {
 		return nil, fmt.Errorf("scan: daemon at %s: %w", b.baseURL, db.ErrReadOnly)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("scan: HTTP %d", resp.StatusCode)
+	if err != nil {
+		return nil, err
 	}
-	return parseScanStream(resp.Body, progress)
+	defer response.Stream200.Close()
+	return parseScanStream(response.Stream200, progress)
 }
 
 // parseScanStream decodes the scan SSE stream: progress ticks invoke the
@@ -1051,20 +1340,21 @@ func (b *httpBackend) ScanSecrets(
 // canceled context, daemon crash) is reported as an error rather than a
 // zero-value success.
 func parseScanStream(
-	r io.Reader, progress func(SecretScanProgress),
+	stream *runtime.Stream[[]byte], progress func(SecretScanProgress),
 ) (*SecretScanSummary, error) {
 	var summary SecretScanSummary
 	var scanErr, decodeErr error
 	var gotSummary bool
-	readErr := parseSSE(r, func(ev Event) bool {
-		switch ev.Event {
+	for stream.Next() {
+		ev := stream.Event()
+		switch ev.Type {
 		case "progress":
 			var p SecretScanProgress
-			if json.Unmarshal([]byte(ev.Data), &p) == nil && progress != nil {
+			if json.Unmarshal(ev.Data, &p) == nil && progress != nil {
 				progress(p)
 			}
 		case "summary":
-			if err := json.Unmarshal([]byte(ev.Data), &summary); err != nil {
+			if err := json.Unmarshal(ev.Data, &summary); err != nil {
 				decodeErr = fmt.Errorf("scan: decoding summary: %w", err)
 			} else {
 				gotSummary = true
@@ -1072,8 +1362,8 @@ func parseScanStream(
 		case "error":
 			scanErr = fmt.Errorf("scan: %s", ev.Data)
 		}
-		return true
-	})
+	}
+	readErr := stream.Err()
 	switch {
 	case scanErr != nil:
 		// The server explicitly reported failure; prefer that over a
@@ -1092,180 +1382,24 @@ func parseScanStream(
 	}
 }
 
-// parseSSE reads a Server-Sent Events stream and invokes emit for
-// each complete event. emit returns false to stop parsing (e.g. on
-// context cancel). It returns any read error from the underlying
-// stream, so callers can tell a truncated/broken stream apart from a
-// clean end; a voluntary stop (emit returning false) returns nil.
-func parseSSE(r io.Reader, emit func(Event) bool) error {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	var event, data string
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			if event != "" {
-				if !emit(Event{Event: event, Data: data}) {
-					return nil
-				}
-			}
-			event, data = "", ""
-			continue
-		}
-		if strings.HasPrefix(line, "event: ") {
-			event = line[len("event: "):]
-		} else if strings.HasPrefix(line, "data: ") {
-			data = line[len("data: "):]
-		}
-	}
-	return scanner.Err()
+func (b *httpBackend) apiClient(client *http.Client) (*apiclient.Client, error) {
+	return apiclient.NewHTTPClient(b.baseURL, b.token, client)
 }
 
-// addAuth attaches the bearer token to req when the backend was
-// constructed with one. Safe to call on a request without a token
-// configured (no-op).
-func (b *httpBackend) addAuth(req *http.Request) {
-	if b.token != "" {
-		req.Header.Set("Authorization", "Bearer "+b.token)
-	}
-}
-
-func (b *httpBackend) getJSON(
-	ctx context.Context, path string, out any, opts ...func(*http.Request),
-) error {
-	return b.getJSONWithClient(ctx, b.client, path, out, opts...)
-}
-
-func (b *httpBackend) getJSONLong(
-	ctx context.Context, path string, out any, opts ...func(*http.Request),
-) error {
-	return b.getJSONWithClient(ctx, b.longRunningClient, path, out, opts...)
-}
-
-func (b *httpBackend) getJSONWithClient(
-	ctx context.Context,
-	client *http.Client,
-	path string,
-	out any,
-	opts ...func(*http.Request),
-) error {
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodGet, b.baseURL+path, nil,
-	)
-	if err != nil {
-		return err
-	}
-	b.addAuth(req)
-	for _, opt := range opts {
-		opt(req)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
+func decodeServiceResponse(response *http.Response, body []byte, out any, err error) error {
+	switch response.StatusCode {
+	case http.StatusNotFound:
 		return errHTTPNotFound
-	}
-	if resp.StatusCode == http.StatusNotImplemented {
-		body, _ := io.ReadAll(resp.Body)
+	case http.StatusNotImplemented:
 		return &errNotImplementedBody{message: notImplementedMessage(body)}
-	}
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(resp.Body)
-		return &httpStatusError{
-			method: http.MethodGet, path: path,
-			statusCode: resp.StatusCode, body: msg,
+	case http.StatusOK:
+		if err != nil {
+			return err
 		}
+		return json.Unmarshal(body, out)
+	default:
+		return &httpStatusError{method: response.Request.Method, path: response.Request.URL.RequestURI(), statusCode: response.StatusCode, body: body}
 	}
-	return json.UnmarshalRead(resp.Body, out)
-}
-
-func (b *httpBackend) postJSON(
-	ctx context.Context, path string, in any, out any,
-) error {
-	return b.postJSONWithClient(ctx, b.client, path, in, out)
-}
-
-func (b *httpBackend) postJSONLong(
-	ctx context.Context, path string, in any, out any,
-) error {
-	return b.postJSONWithClient(ctx, b.longRunningClient, path, in, out)
-}
-
-func (b *httpBackend) postJSONWithClient(
-	ctx context.Context, client *http.Client, path string, in any, out any,
-) error {
-	body, err := json.Marshal(in)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, b.baseURL+path, bytes.NewReader(body),
-	)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Origin", b.baseURL)
-	b.addAuth(req)
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return errHTTPNotFound
-	}
-	if resp.StatusCode == http.StatusNotImplemented {
-		body, _ := io.ReadAll(resp.Body)
-		return &errNotImplementedBody{message: notImplementedMessage(body)}
-	}
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(resp.Body)
-		return &httpStatusError{
-			method: http.MethodPost, path: path,
-			statusCode: resp.StatusCode, body: msg,
-		}
-	}
-	return json.UnmarshalRead(resp.Body, out)
-}
-
-func (b *httpBackend) postRaw(
-	ctx context.Context, path string, in io.Reader, out any,
-) error {
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, b.baseURL+path, in,
-	)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-ndjson")
-	req.Header.Set("Origin", b.baseURL)
-	b.addAuth(req)
-	resp, err := b.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return errHTTPNotFound
-	}
-	if resp.StatusCode == http.StatusNotImplemented {
-		// A read-only (pg serve) daemon returns 501 for write endpoints.
-		// Surface the shared sentinel so callers can errors.Is it, matching
-		// Sync and ScanSecrets.
-		return fmt.Errorf(
-			"daemon at %s is read-only: %w", b.baseURL, db.ErrReadOnly,
-		)
-	}
-	if resp.StatusCode != http.StatusOK {
-		msg, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf(
-			"POST %s: HTTP %d: %s", path, resp.StatusCode, msg,
-		)
-	}
-	return json.UnmarshalRead(resp.Body, out)
 }
 
 // sessionWebURL mirrors the browser router: agent prefix and opaque session ID

@@ -1,18 +1,7 @@
 const SERVER_URL_KEY = "agentsview-server-url";
 const AUTH_TOKEN_KEY = "agentsview-auth-token";
 
-export function getBase(): string {
-  const server = getServerUrl();
-  if (server) return `${server}/api/v1`;
-  const baseEl = document.querySelector("base[href]");
-  if (baseEl) {
-    const base = new URL(document.baseURI).pathname.replace(/\/$/, "");
-    return `${base}/api/v1`;
-  }
-  return "/api/v1";
-}
-
-function getGeneratedBase(): string {
+export function getGeneratedBase(): string {
   const server = getServerUrl();
   if (server) return server;
   const baseEl = document.querySelector("base[href]");
@@ -56,15 +45,6 @@ export function isRemoteConnection(): boolean {
   return getServerUrl() !== "";
 }
 
-export function authHeaders(init?: RequestInit): RequestInit {
-  const token = getAuthToken();
-  if (!token) return init ?? {};
-
-  const headers = new Headers(init?.headers);
-  headers.set("Authorization", `Bearer ${token}`);
-  return { ...init, headers };
-}
-
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -74,33 +54,6 @@ export class ApiError extends Error {
     super(message);
     this.name = "ApiError";
   }
-}
-
-function apiErrorMessage(status: number, body: string): string {
-  const text = body.trim();
-  if (!text) return `API ${status}`;
-
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    if (
-      parsed !== null &&
-      typeof parsed === "object" &&
-      "error" in parsed &&
-      typeof parsed.error === "string" &&
-      parsed.error
-    ) {
-      return parsed.error;
-    }
-  } catch {
-    // Plain-text error body.
-  }
-
-  return text;
-}
-
-export async function responseErrorMessage(res: Response): Promise<string> {
-  const body = await res.text().catch(() => "");
-  return apiErrorMessage(res.status, body);
 }
 
 function generatedHeaders(init?: HeadersInit): Headers {
@@ -142,10 +95,18 @@ function generatedErrorCode(err: unknown): string | undefined {
   return undefined;
 }
 
-export async function orvalRequest(url: string, options: RequestInit = {}): Promise<Response> {
-  const response = await fetch(`${getGeneratedBase()}${url}`, {
-    ...options,
-    headers: generatedHeaders(options.headers),
+export type ApiRequestOptions = RequestInit & {
+  baseUrl?: string;
+};
+
+export async function orvalRequest(
+  url: string,
+  options: ApiRequestOptions = {},
+): Promise<Response> {
+  const { baseUrl, ...init } = options;
+  const response = await fetch(`${baseUrl ?? getGeneratedBase()}${url}`, {
+    ...init,
+    headers: baseUrl === undefined ? generatedHeaders(init.headers) : init.headers,
   });
   if (response.ok) return response;
 
@@ -158,12 +119,12 @@ export async function orvalRequest(url: string, options: RequestInit = {}): Prom
   }
   throw new ApiError(
     response.status,
-    generatedErrorMessage(error) || `API ${response.status}`,
+    body.trim() ? generatedErrorMessage(error) : `API ${response.status}`,
     generatedErrorCode(error),
   );
 }
 
-export async function orvalFetch<T>(url: string, options: RequestInit): Promise<T> {
+export async function orvalFetch<T>(url: string, options: ApiRequestOptions): Promise<T> {
   const response = await orvalRequest(url, options);
   if ([204, 205, 304].includes(response.status)) return undefined as T;
 

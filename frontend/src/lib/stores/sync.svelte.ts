@@ -3,7 +3,7 @@ import { MetadataService, SyncService } from "../api/generated/index";
 import { ApiError, isRemoteConnection } from "../api/runtime.js";
 import { events } from "./events.svelte.js";
 import type { SyncProgress, SyncStats, Stats, VersionInfo } from "../api/types.js";
-import type { SessionTiming } from "../api/types/timing.js";
+import type { DbSessionTiming as SessionTiming } from "../api/generated/index.js";
 
 type SyncCompleteListener = () => void;
 

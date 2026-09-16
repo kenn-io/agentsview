@@ -417,8 +417,8 @@ type recallExtractionStatusResponse struct {
 	Fingerprint         string                          `json:"fingerprint,omitempty"`
 	Generations         []recallExtractGenerationStatus `json:"generations,omitempty"`
 	SourceRuns          []string                        `json:"source_runs,omitempty"`
-	Stats               db.ExtractProgressStats         `json:"stats"`
-	EligibleBacklog     int                             `json:"eligible_backlog"`
+	Stats               db.ExtractProgressStats         `json:"stats" required:"false"`
+	EligibleBacklog     int                             `json:"eligible_backlog" required:"false"`
 }
 
 func (s *Server) recallExtractionLifecycleController(
@@ -509,7 +509,7 @@ type recallExtractProgressCursor struct {
 type recallExtractProgressItem struct {
 	SessionID             string `json:"session_id"`
 	GenerationFingerprint string `json:"generation_fingerprint"`
-	State                 string `json:"state"`
+	State                 string `json:"state" enum:"pending,partial,failed"`
 	UnitCursor            int    `json:"unit_cursor"`
 	UnitsTotal            int    `json:"units_total"`
 	LastError             string `json:"last_error,omitempty"`

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Message } from "../../api/types.js";
-  import type { CallTiming, TurnTiming } from "../../api/types/timing.js";
+  import type { DbCallTiming as CallTiming, DbTurnTiming as TurnTiming } from "../../api/generated/index.js";
   import { formatTimestamp } from "../../utils/format.js";
   import { formatDuration } from "../../utils/duration.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
