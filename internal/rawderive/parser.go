@@ -20,6 +20,10 @@ import (
 type ParsedManifest struct {
 	Outcome   parser.ParseOutcome
 	Tombstone bool
+	// ReplaceSessionContent requests full content replacement for emitted
+	// sessions only. Unlike Outcome.ForceReplace, it does not authorize
+	// removing archived sessions absent from this source generation.
+	ReplaceSessionContent bool
 }
 
 // ProviderParser dispatches materialized sources through registered provider
@@ -281,9 +285,13 @@ func (p *ProviderParser) parseRawSnapshotSessions(
 	materialized *Materialization,
 	sessions []parser.SourceRef,
 ) (ParsedManifest, error) {
-	// One physical SQLite snapshot replaces the provider's whole logical
-	// session set for this source generation.
-	aggregate := parser.ParseOutcome{ResultSetComplete: true, ForceReplace: true}
+	// Full content snapshots are not necessarily authoritative membership
+	// lists: archive providers retain sessions deleted in the source app.
+	aggregate := parser.ParseOutcome{
+		ResultSetComplete: true,
+		ForceReplace: provider.Capabilities().Source.ExplicitDeletionOnly !=
+			parser.CapabilitySupported,
+	}
 	if len(sessions) == 0 {
 		aggregate.SkipReason = parser.SkipNoSession
 		return ParsedManifest{Outcome: aggregate}, nil
@@ -330,7 +338,7 @@ func (p *ProviderParser) parseRawSnapshotSessions(
 		aggregate.ResultSetComplete = aggregate.ResultSetComplete && outcome.ResultSetComplete
 	}
 	rewriteParseOutcome(&aggregate, paths, materialized.Root())
-	return ParsedManifest{Outcome: aggregate}, nil
+	return ParsedManifest{Outcome: aggregate, ReplaceSessionContent: true}, nil
 }
 
 // sameMaterializedEntryFile reports whether a validated provider plan entry

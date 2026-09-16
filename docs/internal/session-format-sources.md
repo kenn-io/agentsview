@@ -3100,10 +3100,14 @@ schemas keep their existing ordering behavior.
   covering metadata-only edits. Raw-sync audits re-read the project registry,
   and raw snapshots carry the registry-derived project path in the database's
   logical manifest path because the database does not store it. Source row
-  deletion is not authoritative. Archived sessions remain active until the
-  user deletes them in AgentsView. A malformed `parts` value fails that
-  session's parse rather than degrading silently, matching the goose parser's
-  policy.
+  deletion is not authoritative. Crush's pinned
+  [session deletion service](https://github.com/charmbracelet/crush/blob/ce980ada68444b7591d8dfa631af7e94b2aba0b3/internal/session/session.go#L138-L168)
+  physically removes session messages, files, and the session row
+  (reverified 2026-09-16). Raw derivation requests full content replacement
+  for emitted sessions separately from membership replacement, including when
+  the next snapshot is empty. Archived sessions remain active until the user
+  deletes them in AgentsView. A malformed `parts` value fails that session's
+  parse rather than degrading silently, matching the goose parser's policy.
 
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
