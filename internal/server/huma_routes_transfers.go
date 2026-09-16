@@ -21,13 +21,14 @@ func (s *Server) describeTransferRoutes() {
 		{"/api/v1/remote-sync/archive", "Download remote source archive", "RemoteSync", "application/x-tar", reflect.TypeFor[remotesync.ArchiveRequest](), reflect.TypeFor[string]()},
 		{"/api/v1/artifacts/exchange", "Exchange artifacts with a local folder", "Artifacts", "application/json", reflect.TypeFor[ArtifactExchangeRequest](), reflect.TypeFor[artifact.SyncResult]()},
 	} {
+		success := &huma.Response{Description: "OK", Content: map[string]*huma.MediaType{route.responseType: {Schema: schemas.Schema(route.response, true, "")}}}
 		op := &huma.Operation{OperationID: operationID(http.MethodPost, route.path), Method: http.MethodPost, Path: route.path, Summary: route.summary, Tags: []string{route.tag},
 			RequestBody: &huma.RequestBody{Required: true, Content: map[string]*huma.MediaType{"application/json": {Schema: schemas.Schema(route.request, true, "")}}},
-			Responses:   map[string]*huma.Response{"200": {Description: "OK", Content: map[string]*huma.MediaType{route.responseType: {Schema: schemas.Schema(route.response, true, "")}}}},
+			Responses:   map[string]*huma.Response{"200": success},
 		}
 		if route.tag == "RemoteSync" {
 			op.Parameters = []*huma.Param{{Name: remotesync.ProtocolHeader, In: "header", Required: true, Schema: &huma.Schema{Type: "string"}}}
-			op.Responses["200"].Headers = map[string]*huma.Param{remotesync.ProtocolHeader: {Schema: &huma.Schema{Type: "string"}}}
+			success.Headers = map[string]*huma.Param{remotesync.ProtocolHeader: {Schema: &huma.Schema{Type: "string"}}}
 		}
 		for _, status := range []string{"400", "401", "403", "404", "405", "413", "426", "500", "501", "502", "503"} {
 			op.Responses[status] = &huma.Response{Description: "Request failed", Content: map[string]*huma.MediaType{"text/plain": {Schema: &huma.Schema{Type: "string"}}}}
