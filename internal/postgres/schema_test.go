@@ -587,6 +587,7 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 		"model_pricing_bands":                             true,
 		"genai_pricing":                                   true,
 		"source_archives":                                 true,
+		"duplicate_group_members":                         true,
 		"source_project_identity_observations":            true,
 		"source_project_identity_observation_scopes":      true,
 		"source_session_project_identity_snapshots":       true,
@@ -627,6 +628,7 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 		"model_pricing_bands":                             true,
 		"genai_pricing":                                   true,
 		"source_archives":                                 true,
+		"duplicate_group_members":                         true,
 		"source_project_identity_observations":            true,
 		"source_project_identity_observation_scopes":      true,
 		"source_session_project_identity_snapshots":       true,
@@ -852,6 +854,20 @@ func TestCheckSchemaCompatRequiresSessionAliases(t *testing.T) {
 	assert.Contains(t, err.Error(), "session_aliases table missing")
 }
 
+func TestCheckSchemaCompatRequiresDuplicateGroupMembers(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "from duplicate_group_members",
+		err: errors.New(
+			`ERROR: relation "duplicate_group_members" does not exist (SQLSTATE 42P01)`),
+	}}
+
+	err := CheckSchemaCompat(context.Background(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate_group_members table missing")
+}
+
 func TestCheckSchemaCompatRequiresProjectIdentityObservations(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.queryErrors = []schemaProbeQueryError{{
@@ -939,8 +955,9 @@ func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
 		},
 	})
 	state.existingTables = map[string]bool{
-		"model_pricing":       true,
-		"cursor_usage_events": true,
+		"model_pricing":           true,
+		"duplicate_group_members": true,
+		"cursor_usage_events":     true,
 	}
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
@@ -1010,6 +1027,7 @@ func TestSyncEnsureSchemaRunsDDLWhenMappingTableMissing(t *testing.T) {
 		"model_pricing_bands":                       true,
 		"genai_pricing":                             true,
 		"source_archives":                           true,
+		"duplicate_group_members":                   true,
 		"source_project_identity_observations":      true,
 		"source_session_project_identity_snapshots": true,
 		"cursor_usage_events":                       true,
@@ -1027,6 +1045,49 @@ func TestSyncEnsureSchemaRunsDDLWhenMappingTableMissing(t *testing.T) {
 	assert.Contains(t, strings.ToLower(state.executedSQL()),
 		"create table",
 		"fallback must create the missing mapping table")
+}
+
+func TestSyncEnsureSchemaRunsDDLWhenDuplicateGroupMembersMissing(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {
+			"has_total_output_tokens",
+			"has_peak_context_tokens",
+		},
+		"messages": {
+			"has_context_tokens",
+			"has_output_tokens",
+		},
+	})
+	// Read-compatible with every other push table and the dedup index
+	// present, but duplicate_group_members is absent: the push fast path
+	// must fall back to EnsureSchema so membership rewrites and the
+	// aggregate usage suppression join have a table to touch.
+	state.existingTables = map[string]bool{
+		"model_pricing":                                   true,
+		"model_pricing_bands":                             true,
+		"genai_pricing":                                   true,
+		"source_archives":                                 true,
+		"source_project_identity_observations":            true,
+		"source_project_identity_observation_scopes":      true,
+		"source_session_project_identity_snapshots":       true,
+		"source_session_project_identity_snapshot_scopes": true,
+		"source_worktree_project_mappings":                true,
+		"source_worktree_project_mapping_scopes":          true,
+		"cursor_usage_events":                             true,
+	}
+	state.existingIndexes = map[string]bool{
+		"idx_cursor_usage_events_dedup":   true,
+		"idx_tool_result_events_terminal": true,
+	}
+	syncer := &Sync{pg: pg, schema: "agentsview"}
+
+	require.NoError(t, syncer.EnsureSchema(context.Background()))
+
+	assert.Greater(t, state.execCount(), 0,
+		"missing duplicate_group_members must fall back to migration DDL")
+	assert.Contains(t, strings.ToLower(state.executedSQL()),
+		"create table if not exists duplicate_group_members",
+		"fallback must create the missing duplicate membership table")
 }
 
 func TestSyncEnsureSchemaRunsDDLWhenDedupIndexMissing(t *testing.T) {

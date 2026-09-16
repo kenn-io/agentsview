@@ -2756,6 +2756,19 @@ func CheckSchemaCompat(
 		)
 	}
 	rows.Close()
+	// Session lists, session detail, and aggregate usage reads join or
+	// probe duplicate_group_members for duplicate-role suppression and
+	// decoration, so the derived table is required like session_aliases.
+	rows, err = db.QueryContext(ctx,
+		`SELECT session_id, group_key, role, canonical_id,
+			member_count, computed_at
+		 FROM duplicate_group_members LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"duplicate_group_members table missing required columns: %w", err,
+		)
+	}
+	rows.Close()
 	rows, err = db.QueryContext(ctx,
 		`SELECT key, value FROM sync_metadata LIMIT 0`)
 	if err != nil {
@@ -2786,7 +2799,11 @@ func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 // checkPushSchemaCompat), model_pricing (always queried by syncModelPricing)
 // or cursor_usage_events (written by syncCursorUsageEvents), so probe those
 // explicitly. It also requires the cursor dedup index, which the cursor usage
-// insert relies on for ON CONFLICT dedup. When any of these is missing the
+// insert relies on for ON CONFLICT dedup, and duplicate_group_members,
+// which pushes rewrite wholesale and aggregate reads join (CheckSchemaCompat
+// probes it too, but keep the table check here so a push against a schema
+// created before duplicate groups takes the EnsureSchema path instead of a
+// later missing-relation error mid-push). When any of these is missing the
 // caller must run EnsureSchema so push migrates the schema instead of failing
 // or duplicating rows.
 func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
@@ -2806,6 +2823,7 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		!pgHasTable(ctx, db, "source_session_project_identity_snapshot_scopes") ||
 		!pgHasTable(ctx, db, "source_worktree_project_mappings") ||
 		!pgHasTable(ctx, db, "source_worktree_project_mapping_scopes") ||
+		!pgHasTable(ctx, db, "duplicate_group_members") ||
 		!pgHasTable(ctx, db, "cursor_usage_events") {
 		return false
 	}
