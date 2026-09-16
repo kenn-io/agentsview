@@ -611,3 +611,17 @@ func TestActivityReportGolden(t *testing.T) {
 
 	assertCatalogGolden(t, "activity_report_v8.json", []byte(stdout))
 }
+
+func TestActivityPageClearsPreviousContinuationCursor(t *testing.T) {
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSONResponse(w, `{"report_id":"report-a","sessions":[],"total":0}`)
+	}))
+	defer endpoint.Close()
+
+	report, err := fetchHTTPActivitySessionPage(t.Context(), transport{URL: endpoint.URL}, "",
+		ActivityReportConfig{SessionsLimit: 200},
+		activity.Report{ReportID: "report-a", SessionsNextCursor: "previous-page"})
+
+	require.NoError(t, err)
+	assert.Empty(t, report.SessionsNextCursor)
+}

@@ -370,9 +370,9 @@ export const getGetApiV1SessionsByIdMdUrl = (
 export const getApiV1SessionsByIdMd = async (
   { id }: GetApiV1SessionsByIdMdPathParameters,
   params?: GetApiV1SessionsByIdMdParams,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<Blob> => {
-  return orvalFetch<Blob>(getGetApiV1SessionsByIdMdUrl({ id }, params), {
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getGetApiV1SessionsByIdMdUrl({ id }, params), {
     ...options,
     method: "GET",
   });

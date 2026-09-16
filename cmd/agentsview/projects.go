@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -62,6 +63,9 @@ func fetchHTTPProjects(
 	}
 	if err != nil {
 		return nil, err
+	}
+	if len(response.Body) == 0 {
+		return nil, io.ErrUnexpectedEOF
 	}
 	return response.JSON200.Projects, nil
 }

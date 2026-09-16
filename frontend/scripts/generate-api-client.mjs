@@ -130,6 +130,7 @@ const apiDocument = JSON.parse(
 const rawResponseMediaTypes = new Set([
   "text/event-stream",
   "text/html",
+  "text/markdown",
   "application/octet-stream",
   "application/x-tar",
 ]);

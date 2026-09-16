@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/json/v2"
 	"go.kenn.io/agentsview/internal/db"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -80,4 +83,15 @@ func TestDBCompactResultJSONNewline(t *testing.T) {
 	var result db.CompactResult
 	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
 	require.Equal(t, byte('\n'), output.Bytes()[output.Len()-1])
+}
+
+func TestRequestDBCompactRejectsEmptySuccess(t *testing.T) {
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer endpoint.Close()
+
+	_, err := requestDBCompact(t.Context(), transport{URL: endpoint.URL}, "", db.CompactOptions{})
+
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 }

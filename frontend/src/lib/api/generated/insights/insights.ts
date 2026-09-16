@@ -147,9 +147,9 @@ export const getGetApiV1InsightsByIdMdUrl = ({ id }: GetApiV1InsightsByIdMdPathP
  */
 export const getApiV1InsightsByIdMd = async (
   { id }: GetApiV1InsightsByIdMdPathParameters,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<Blob> => {
-  return orvalFetch<Blob>(getGetApiV1InsightsByIdMdUrl({ id }), {
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getGetApiV1InsightsByIdMdUrl({ id }), {
     ...options,
     method: "GET",
   });

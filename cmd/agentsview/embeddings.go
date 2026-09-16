@@ -984,6 +984,9 @@ func (c embeddingsDaemonClient) status(ctx context.Context) (vector.BuildStatus,
 	if err := embeddingResponseError(response.StatusCode, response.Body, err); err != nil {
 		return out, err
 	}
+	if len(response.Body) == 0 {
+		return out, io.ErrUnexpectedEOF
+	}
 	return *response.JSON200, nil
 }
 
@@ -1002,6 +1005,9 @@ func (c embeddingsDaemonClient) generations(ctx context.Context) ([]vector.Gener
 	}
 	if err := embeddingResponseError(response.StatusCode, response.Body, err); err != nil {
 		return nil, err
+	}
+	if len(response.Body) == 0 {
+		return nil, io.ErrUnexpectedEOF
 	}
 	return response.JSON200.Generations, nil
 }

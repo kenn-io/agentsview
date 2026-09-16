@@ -222,6 +222,9 @@ func httpSessionUsageData(
 	if err != nil {
 		return nil, tokenUseExitErr, err
 	}
+	if len(response.Body) == 0 {
+		return nil, tokenUseExitErr, io.ErrUnexpectedEOF
+	}
 	wire := response.JSON200
 	out := sessionUsageOutput{
 		SessionID: wire.SessionID, Agent: wire.Agent, Project: wire.Project,

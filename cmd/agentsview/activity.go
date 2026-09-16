@@ -234,6 +234,9 @@ func fetchHTTPActivitySessionPage(
 	if err != nil {
 		return activity.Report{}, err
 	}
+	if len(result.Body) == 0 {
+		return activity.Report{}, io.ErrUnexpectedEOF
+	}
 	page := result.JSON200
 	if page.Report != nil {
 		return *page.Report, nil
@@ -244,6 +247,7 @@ func fetchHTTPActivitySessionPage(
 		)
 	}
 	report.BySession = page.Sessions
+	report.SessionsNextCursor = ""
 	if page.NextCursor != nil {
 		report.SessionsNextCursor = *page.NextCursor
 	}
@@ -426,6 +430,7 @@ func resolveActivityReport(
 	}
 	report := artifacts.Report
 	report.BySession = page.Sessions
+	report.SessionsNextCursor = ""
 	report.SessionsTotal = int(page.Total)
 	if page.HasNext {
 		payload, marshalErr := json.Marshal(newCLIActivitySessionCursor(

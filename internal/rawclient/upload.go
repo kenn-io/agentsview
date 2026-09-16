@@ -45,6 +45,9 @@ func (c *Client) MissingObjects(
 	if err != nil {
 		return nil, err
 	}
+	if len(response.Body) == 0 {
+		return nil, io.ErrUnexpectedEOF
+	}
 	out := response.JSON200
 	lastPosition := -1
 	missing := make([]rawsync.ObjectRef, 0, len(out.Missing))

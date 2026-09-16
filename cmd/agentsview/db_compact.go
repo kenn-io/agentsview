@@ -212,6 +212,9 @@ func requestDBCompact(
 	if err != nil {
 		return db.CompactResult{}, fmt.Errorf("decode archive compaction result: %w", err)
 	}
+	if len(response.Body) == 0 {
+		return db.CompactResult{}, fmt.Errorf("decode archive compaction result: %w", io.ErrUnexpectedEOF)
+	}
 	return *response.JSON200, nil
 }
 
