@@ -39,26 +39,16 @@ func (c *Client) MissingObjects(
 		positions[object] = len(unique)
 		unique = append(unique, object)
 	}
-	wireObjects := make([]apiclient.RawsyncObjectRef, 0, len(unique))
-	for _, object := range unique {
-		wireObjects = append(wireObjects, apiclient.RawsyncObjectRef{Sha256: object.SHA256, Length: object.Length})
-	}
-	resp, err := c.do(ctx, func(api *apiclient.Client) error {
-		_, err := api.PostAPIV1RawSyncObjectsMissingWithResponse(ctx, &apiclient.PostAPIV1RawSyncObjectsMissingRequestOptions{Body: &apiclient.RawSyncMissingObjectsInputBody{Provider: string(provider), Objects: wireObjects}})
-		return err
+	response, err := c.do(ctx, func(api *apiclient.Client) (*apiclient.PostAPIV1RawSyncObjectsMissingResp, error) {
+		return api.PostAPIV1RawSyncObjectsMissingWithResponse(ctx, &apiclient.PostAPIV1RawSyncObjectsMissingRequestOptions{Body: &apiclient.RawSyncMissingObjectsInputBody{Provider: string(provider), Objects: unique}})
 	})
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	var out apiclient.RawSyncMissingObjectsResponse
-	if err := jsonDecode(resp.Body, &out); err != nil {
-		return nil, fmt.Errorf("rawclient: decode missing objects: %w", err)
-	}
+	out := response.JSON200
 	lastPosition := -1
 	missing := make([]rawsync.ObjectRef, 0, len(out.Missing))
-	for _, wire := range out.Missing {
-		object := rawsync.ObjectRef{SHA256: wire.Sha256, Length: wire.Length}
+	for _, object := range out.Missing {
 		canonical, err := rawsync.NewObjectRef(object.SHA256, object.Length)
 		position, requested := positions[object]
 		if err != nil || canonical != object || !requested || position <= lastPosition {
@@ -84,20 +74,14 @@ func (c *Client) UploadObject(
 	object rawsync.ObjectRef,
 	content io.ReaderAt,
 ) error {
-	resp, err := c.do(ctx, func(api *apiclient.Client) error {
-		_, err := api.PostAPIV1RawSyncUploadsWithResponse(ctx, &apiclient.PostAPIV1RawSyncUploadsRequestOptions{Body: &apiclient.RawSyncUploadStartInputBody{Provider: string(provider), Object: apiclient.RawsyncObjectRef{Sha256: object.SHA256, Length: object.Length}}})
-		return err
+	response, err := c.do(ctx, func(api *apiclient.Client) (*apiclient.PostAPIV1RawSyncUploadsResp, error) {
+		return api.PostAPIV1RawSyncUploadsWithResponse(ctx, &apiclient.PostAPIV1RawSyncUploadsRequestOptions{Body: &apiclient.RawSyncUploadStartInputBody{Provider: string(provider), Object: object}})
 	})
 	if err != nil {
 		return err
 	}
-	var session apiclient.RawSyncUploadResponse
-	if err := jsonDecode(resp.Body, &session); err != nil {
-		resp.Body.Close()
-		return fmt.Errorf("rawclient: decode upload session: %w", err)
-	}
-	resp.Body.Close()
-	if err := validateUploadIdentity(session, object, ""); err != nil {
+	session := response.JSON200
+	if err := validateUploadIdentity(*session, object, ""); err != nil {
 		return err
 	}
 	if err := validateUploadProgress(session.Offset, session.Complete, object.Length); err != nil {
@@ -181,8 +165,8 @@ func (c *Client) appendChunk(
 	if int64(len(chunk)) > c.chunkBytes {
 		return 0, false, fmt.Errorf("rawclient: chunk of %d bytes exceeds upload chunk size %d", len(chunk), c.chunkBytes)
 	}
-	resp, err := c.do(ctx, func(api *apiclient.Client) error {
-		_, err := api.PatchAPIV1RawSyncUploadsUploadIDWithResponse(ctx, &apiclient.PatchAPIV1RawSyncUploadsUploadIDRequestOptions{
+	response, err := c.do(ctx, func(api *apiclient.Client) (*apiclient.PatchAPIV1RawSyncUploadsUploadIDResp, error) {
+		return api.PatchAPIV1RawSyncUploadsUploadIDWithResponse(ctx, &apiclient.PatchAPIV1RawSyncUploadsUploadIDRequestOptions{
 			PathParams: &apiclient.PatchAPIV1RawSyncUploadsUploadIDPath{UploadID: url.PathEscape(uploadID)},
 		}, func(_ context.Context, req *http.Request) error {
 			req.Header.Set("Upload-Offset", strconv.FormatInt(offset, 10))
@@ -192,24 +176,19 @@ func (c *Client) appendChunk(
 			req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(chunk)), nil }
 			return nil
 		})
-		return err
 	})
 	if err != nil {
 		return 0, false, err
 	}
-	defer resp.Body.Close()
-	var out apiclient.RawSyncUploadResponse
-	if err := jsonDecode(resp.Body, &out); err != nil {
-		return 0, false, fmt.Errorf("rawclient: decode upload append: %w", err)
-	}
-	if err := validateUploadIdentity(out, object, uploadID); err != nil {
+	out := response.JSON200
+	if err := validateUploadIdentity(*out, object, uploadID); err != nil {
 		return 0, false, err
 	}
 	if err := validateUploadProgress(out.Offset, out.Complete, object.Length); err != nil {
 		return 0, false, err
 	}
 	next, complete := out.Offset, out.Complete
-	if headerOffset, headerComplete, ok := uploadProgress(resp.Header); ok {
+	if headerOffset, headerComplete, ok := uploadProgress(response.HTTPResponse.Header); ok {
 		next, complete = headerOffset, headerComplete
 	}
 	if err := validateUploadProgress(next, complete, object.Length); err != nil {
@@ -229,7 +208,7 @@ func validateUploadIdentity(
 	object rawsync.ObjectRef,
 	uploadID string,
 ) error {
-	if response.Object.Sha256 != object.SHA256 || response.Object.Length != object.Length {
+	if response.Object.SHA256 != object.SHA256 || response.Object.Length != object.Length {
 		return fmt.Errorf("rawclient: upload response identifies a different object")
 	}
 	if uploadID != "" {

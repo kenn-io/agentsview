@@ -15,6 +15,7 @@ import (
 	db "go.kenn.io/agentsview/internal/db"
 	export "go.kenn.io/agentsview/internal/export"
 	money "go.kenn.io/agentsview/internal/money"
+	rawsync "go.kenn.io/agentsview/internal/rawsync"
 	service "go.kenn.io/agentsview/internal/service"
 	vector "go.kenn.io/agentsview/internal/vector"
 )
@@ -18477,59 +18478,9 @@ func (r RawsyncEntry) Validate() error {
 	return errors
 }
 
-type RawsyncManifest struct {
-	CaptureID             string         `json:"capture_id" validate:"required"`
-	CapturedAt            time.Time      `json:"captured_at" validate:"required"`
-	ConfiguredRootID      string         `json:"configured_root_id" validate:"required"`
-	Entries               []RawsyncEntry `json:"entries,omitempty"`
-	ExpectedParentReceipt *string        `json:"expected_parent_receipt,omitempty"`
-	Kind                  string         `json:"kind" validate:"required"`
-	Provider              string         `json:"provider" validate:"required"`
-	SchemaVersion         int64          `json:"schema_version"`
-	SourceKey             string         `json:"source_key" validate:"required"`
-}
+type RawsyncManifest = rawsync.Manifest
 
-func (r RawsyncManifest) Validate() error {
-	var errors runtime.ValidationErrors
-	if err := typesValidator.Var(r.CaptureID, "required"); err != nil {
-		errors = errors.Append("CaptureID", err)
-	}
-	if err := typesValidator.Var(r.CapturedAt, "required"); err != nil {
-		errors = errors.Append("CapturedAt", err)
-	}
-	if err := typesValidator.Var(r.ConfiguredRootID, "required"); err != nil {
-		errors = errors.Append("ConfiguredRootID", err)
-	}
-	for i, item := range r.Entries {
-		if v, ok := any(item).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append(fmt.Sprintf("Entries[%d]", i), err)
-			}
-		}
-	}
-	if err := typesValidator.Var(r.Kind, "required"); err != nil {
-		errors = errors.Append("Kind", err)
-	}
-	if err := typesValidator.Var(r.Provider, "required"); err != nil {
-		errors = errors.Append("Provider", err)
-	}
-	if err := typesValidator.Var(r.SourceKey, "required"); err != nil {
-		errors = errors.Append("SourceKey", err)
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
-}
-
-type RawsyncObjectRef struct {
-	Length int64  `json:"length"`
-	Sha256 string `json:"sha256" validate:"required"`
-}
-
-func (r RawsyncObjectRef) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(r))
-}
+type RawsyncObjectRef = rawsync.ObjectRef
 
 type RecallEntriesResponse struct {
 	Entries     []DBRecallResult `json:"entries" validate:"required"`

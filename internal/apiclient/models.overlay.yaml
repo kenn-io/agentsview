@@ -189,3 +189,15 @@ actions:
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/db
         name: db
+  - target: $.components.schemas.RawsyncManifest
+    update:
+      x-go-type: rawsync.Manifest
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/rawsync
+        name: rawsync
+  - target: $.components.schemas.RawsyncObjectRef
+    update:
+      x-go-type: rawsync.ObjectRef
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/rawsync
+        name: rawsync

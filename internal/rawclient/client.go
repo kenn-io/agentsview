@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
@@ -167,43 +168,54 @@ func refuseRedirects(*http.Request, []*http.Request) error {
 
 // do invokes a generated operation, retrying once with a refreshed scoped
 // token after an unauthorized response.
-func (c *Client) do(ctx context.Context, operation func(*apiclient.Client) error) (*http.Response, error) {
+func (c *Client) do[T any](ctx context.Context, operation func(*apiclient.Client) (T, error)) (T, error) {
+	var zero T
 	for attempt := 0; ; attempt++ {
 		token, err := c.tokens.token(ctx)
 		if err != nil {
-			return nil, err
+			return zero, err
 		}
-		resp, err := c.rawRequest(operation, token)
+		resp, err := c.request(operation, token)
 		if err == nil {
 			return resp, nil
 		}
 		var apiErr APIError
 		if attempt >= 1 || !AsAPIError(err, &apiErr) || apiErr.Status != http.StatusUnauthorized {
-			return nil, err
+			return zero, err
 		}
 		c.tokens.invalidate()
 	}
 }
 
-func (c *Client) rawRequest(operation func(*apiclient.Client) error, token string) (*http.Response, error) {
-	resp, err := apiclient.RawRequest(c.baseURL.String(), c.httpClient, operation, func(_ context.Context, req *http.Request) error {
-		if token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
-		}
-		return nil
-	})
+func (c *Client) request[T any](operation func(*apiclient.Client) (T, error), token string) (T, error) {
+	var zero T
+	api, err := apiclient.NewDefaultClient(c.baseURL.String(),
+		runtime.WithHTTPClient(rawHTTPTransport{c.httpClient}),
+		runtime.WithRequestEditorFn(func(_ context.Context, req *http.Request) error {
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+			return nil
+		}))
+	if err != nil {
+		return zero, err
+	}
+	return operation(api)
+}
+
+// Bound error reads before the generated runtime buffers the response. Successful
+// responses pass through to its generated JSON decoder.
+type rawHTTPTransport struct{ *http.Client }
+
+func (t rawHTTPTransport) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
+	resp, err := t.Client.Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
-		_ = resp.Body.Close()
-		return nil, decodeAPIError(resp.StatusCode, errBody)
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		return nil, decodeAPIError(resp.StatusCode, body)
 	}
 	return resp, nil
-}
-
-// jsonDecode decodes a JSON response body into dst with encoding/json/v2.
-func jsonDecode(body io.Reader, dst any) error {
-	return json.UnmarshalRead(body, dst)
 }

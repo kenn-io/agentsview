@@ -143,7 +143,7 @@ func (s *uploadScript) handler(t *testing.T) http.Handler {
 			var in struct {
 				Object rawsync.ObjectRef `json:"object"`
 			}
-			if !assert.NoError(t, jsonDecode(r.Body, &in)) {
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &in)) {
 				http.Error(w, "bad upload start", http.StatusBadRequest)
 				return
 			}

@@ -3,6 +3,7 @@ package rawclient
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -55,7 +56,7 @@ func TestCommitManifestDecodesReceipt(t *testing.T) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/api/v1/raw-sync/manifests", r.URL.Path)
 		var sent rawsync.Manifest
-		if assert.NoError(t, jsonDecode(r.Body, &sent)) {
+		if assert.NoError(t, json.UnmarshalRead(r.Body, &sent)) {
 			assert.Equal(t, manifest, sent)
 		}
 		w.Header().Set("Content-Type", "application/json")

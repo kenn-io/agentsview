@@ -80,24 +80,19 @@ func (p *tokenProvider) cached() (string, bool) {
 }
 
 // exchange trades the device credential for a fresh scoped token and caches
-// it. It goes through rawRequest, never do: do prefetches an avdt token and
+// it. It goes through request, never do: do prefetches an avdt token and
 // would recurse into this provider.
 func (p *tokenProvider) exchange(ctx context.Context) (string, error) {
-	resp, err := p.client.rawRequest(func(api *apiclient.Client) error {
-		_, err := api.PostAPIV1RawSyncTokensWithResponse(ctx, &apiclient.PostAPIV1RawSyncTokensRequestOptions{
+	response, err := p.client.request(func(api *apiclient.Client) (*apiclient.PostAPIV1RawSyncTokensResp, error) {
+		return api.PostAPIV1RawSyncTokensWithResponse(ctx, &apiclient.PostAPIV1RawSyncTokensRequestOptions{
 			Body:   &apiclient.RawSyncTokenInputBody{Scopes: tokenScopes},
 			Header: &apiclient.PostAPIV1RawSyncTokensHeaders{Authorization: new("Bearer " + p.credential), XAgentsViewDeviceID: new(p.deviceID)},
 		})
-		return err
 	}, "")
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-	var issued apiclient.RawSyncTokenResponse
-	if err := jsonDecode(resp.Body, &issued); err != nil {
-		return "", fmt.Errorf("rawclient: decode token response: %w", err)
-	}
+	issued := response.JSON200
 	if issued.Token == "" || issued.DeviceID != p.deviceID {
 		return "", fmt.Errorf("rawclient: token response identity mismatch")
 	}
