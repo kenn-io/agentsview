@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -192,11 +193,30 @@ func TestRestartDaemonAfterUpdateArgsKeepsLegacyNonLoopbackWithAuthConfig(t *tes
 	}, args)
 }
 
-func TestApplyServeRestartPortKeepsFallbackImplicit(t *testing.T) {
-	got := applyServeRestartPort(config.Config{
-		Port: 8080, PortExplicit: true,
-	}, 18080)
+func TestApplyServeRestartPortPreservesConfiguredURLRewrite(t *testing.T) {
+	listener, runtimePort := heldLoopbackPort(t)
+	defer listener.Close()
+	configuredPort := runtimePort - 1
+	publicURL := fmt.Sprintf("https://viewer.example.test:%d", configuredPort)
 
-	assert.Equal(t, 18080, got.Port)
-	assert.False(t, got.PortExplicit)
+	cfg, requestedPort := applyServeRestartPort(config.Config{
+		Host:          "127.0.0.1",
+		Port:          configuredPort,
+		PortExplicit:  true,
+		PublicURL:     publicURL,
+		PublicOrigins: []string{publicURL},
+	}, runtimePort)
+	assert.Equal(t, runtimePort, cfg.Port)
+	assert.False(t, cfg.PortExplicit)
+	assert.Equal(t, configuredPort, requestedPort)
+
+	got, err := prepareServeRuntimeConfig(cfg, serveRuntimeOptions{
+		RequestedPort: requestedPort,
+	})
+	require.NoError(t, err)
+	assert.NotEqual(t, runtimePort, got.Port)
+	assert.Equal(t, fmt.Sprintf(
+		"https://viewer.example.test:%d", got.Port,
+	), got.PublicURL)
+	assert.Equal(t, []string{got.PublicURL}, got.PublicOrigins)
 }

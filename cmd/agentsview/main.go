@@ -131,7 +131,7 @@ func applyServeMemoryLimit() {
 	debug.SetMemoryLimit(serveMemoryLimitBytes)
 }
 
-func runServe(cfg config.Config, opts serveOptions) {
+func runServe(cfg config.Config, opts serveOptions, requestedPort int) {
 	start := time.Now()
 	setupLogFile(cfg.DataDir)
 	applyServeMemoryLimit()
@@ -485,7 +485,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 
 	rtOpts := serveRuntimeOptions{
 		Mode:           "serve",
-		RequestedPort:  cfg.Port,
+		RequestedPort:  requestedPort,
 		OnCaddyStarted: startupProgress.SetCaddyProcess,
 	}
 	preparedCfg, prepErr := prepareServeRuntimeConfig(cfg, rtOpts)
