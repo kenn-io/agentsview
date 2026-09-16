@@ -64,7 +64,7 @@ func resolveRecallEntryService(
 	if err != nil {
 		return nil, nil, err
 	}
-	return service.NewHTTPBackend(remote, token, false), func() {}, nil
+	return service.NewHTTPBackend(remote, token, false, ""), func() {}, nil
 }
 
 // resolveWritableRecallEntryService is the write-capable counterpart of
@@ -83,7 +83,7 @@ func resolveWritableRecallEntryService(
 	if err != nil {
 		return nil, nil, err
 	}
-	return service.NewHTTPBackend(remote, token, false), func() {}, nil
+	return service.NewHTTPBackend(remote, token, false, ""), func() {}, nil
 }
 
 func newRecallListCommand() *cobra.Command {

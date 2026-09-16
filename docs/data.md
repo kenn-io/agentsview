@@ -32,6 +32,14 @@ by classification rules.
 Selecting a row opens the project workspace. Unknown `project_key` deep links
 show the full inventory with a non-blocking notice.
 
+The optional date picker limits the sessions used for project counts, folder
+suggestions, and session previews. Choose a calendar month such as August, a
+custom range, or **All time** to remove the filter. Dates use your browser's
+timezone and include sessions whose activity overlaps the range. The governed
+session total is archive-wide and is hidden while a date filter is active.
+Folder rules still apply across all dates; this filter changes what you browse,
+not which sessions a rule can correct.
+
 ![Observed folders for a selected project](/docs/assets/generated/screenshots/data-workspace.png)
 
 ## Create A Project Mapping
@@ -61,6 +69,25 @@ selected project, the selection follows the new name. If mappings changed
 between preview and apply, the apply is rejected and a fresh preview is
 required.
 
+Session previews appear below the correction controls. Their header contains
+previous/next navigation and a filter button to include automated sessions,
+which are hidden by default. Navigation loads another page of session records
+only when needed, and loads transcript messages only for the selected session.
+Sessions without stored messages remain available for mapping, with a notice
+instead of a transcript. Collapse folder suggestions to give previews more room.
+
+During a bulk correction, the Save button shows the number of completed
+corrections and a progress bar. Each correction applies separately. Overlapping
+previews count each matched or changing session once. If the rules also match
+projects outside your selection, Save first asks you to confirm. Folder
+suggestions stay grouped by project, then machine, with larger session groups
+first within each machine.
+
+Bulk saves stop if another rule edit or a change to the affected sessions makes
+the reviewed impact stale. The editor refreshes the impact and asks you to
+confirm again. Corrections already saved remain applied; their expected effects
+do not interrupt the rest of the batch.
+
 ## Rules
 
 The **Rules** toggle shows the worktree mapping rules for one machine at a time,
@@ -81,65 +108,97 @@ from the writable archive that ingests the machine's sessions.
 
 ## Storage maintenance
 
-The local archive has four separate maintenance paths:
+Choose what to retain before reclaiming disk space. Removing content and
+shrinking the SQLite file are separate operations.
 
-- `agentsview db compact` reclaims SQLite free pages and truncates the WAL. It
-  preserves all live rows and has no effect on future tool-result growth.
-- `result_content_blocked_categories` followed by `agentsview sync --full`
-  applies the current result filtering to source-backed sessions that can be
-  reparsed. Orphaned and trashed sessions whose source files are gone cannot
-  be filtered this way.
-- `tool_result_images = "drop"` removes supported inline `input_image` blocks
-  during future ingestion and full resyncs. `agentsview db strip --images`
-  applies the same projection to existing rows, including parent, trashed, and
-  source-missing sessions selected by its filters. It leaves provider
-  transcripts and standalone image files unchanged. The daemon exposes the
-  same work as `POST /api/v1/data/strip-images/preview` and
-  `POST /api/v1/data/strip-images`, both localhost-only and both taking the
-  same project and date selection; the apply takes the foreground archive
-  maintenance barrier and refuses with 409 while another maintenance pass
-  holds it, rather than queuing behind it. The stored placeholder records
-  version `1`, readable text, media type, decoded byte size, and an empty
-  `sha256` field. Configure this policy in `config.toml` or under **Settings >
-  Archive content**, which writes the same key; the daemon applies a change to
-  its own ingestion after a restart. Already stored rows keep the policy they
-  were written under. The default `keep` policy preserves the existing provider
-  decoding behavior.
-- [`archive_content`](/docs/configuration/#archive-content) followed by a daemon
-  restart and `agentsview sync --full` applies a whole-archive storage policy.
-  Unlike category filtering, the rebuild also projects orphaned and trashed
-  sessions onto the policy, so dropped tool payloads or transcript text leave
-  the archive entirely.
-- `agentsview db migrate --images` moves retained inline tool-result image
-  payloads from currently stored rows out of SQLite and into
-  `{dataDir}/assets`. Each payload is written as a content-addressed file
-  named `<sha256hex><ext>` before any row commits. An existing object must
-  have the expected byte count and SHA-256 digest. Missing or corrupt objects
-  are replaced while the source bytes remain available. A later keep-mode
-  reparse or full resync can restore inline bytes from provider source files.
-  The inline block is replaced with an `agentsview_image` placeholder whose
-  `image_ref` field holds the `asset://` reference. Only the four passive
-  media types are migrated (`image/png`, `image/jpeg`, `image/webp`,
-  `image/gif`). SVG payloads stay inline. A separate serving host needs the
-  matching `{dataDir}/assets` directory with the copied database content.
-  After migration, back up `{dataDir}/assets` together with the archive. Run
-  `db compact` separately to measure SQLite file-space reclamation.
-- Transparent compression or deduplication of live tool-result payloads is a
-  separate storage-format change and is not part of `db compact`.
+| What you want                                | What to use                                                                                                                                       |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Keep images outside SQLite                   | Set `tool_result_images = "offload"` for future imports. Run `db migrate --images` for stored images. Back up `assets/` with the archive.         |
+| Keep image descriptions without image access | Set `tool_result_images = "drop"` for future imports. Run `db strip --images` for stored results. Neither deletes asset files.                    |
+| Omit results from selected tool categories   | Set `result_content_blocked_categories`, then run `sync --full`. This needs the source files.                                                     |
+| Keep transcripts or reporting metadata only  | Set `archive_content`, restart the daemon, then run `sync --full`. The rebuild also applies the policy to copied sessions whose sources are gone. |
+| Reclaim SQLite free space after cleanup      | Run `db compact`. It preserves stored rows and does not change retention settings.                                                                |
 
-Compaction and full resync share the archive maintenance barrier, and the daemon
-enforces it: a compaction requested while a sync, resync, or another compaction
-is running fails immediately with a conflict rather than queueing. The compact
-command reports the database, WAL, SHM, freelist, staging requirement, and final
-reclaimed bytes separately; its result must not be combined with savings from
-filtering or a future compression implementation. See
-[`agentsview db compact`](/docs/commands/#agentsview-db-compact) for the staging
-space model and interrupted-compaction recovery.
+Change these settings in `config.toml`. **Settings > Archive content** also lets
+you choose the image policy. Restart the daemon to apply a changed policy to new
+imports. Existing rows stay as they are until you resync or run the matching
+maintenance command. See [Archive content](/docs/configuration/#archive-content)
+for what each policy retains and which source files are needed to recover
+removed content.
+
+### Remove archived images
+
+Use the image cleanup control in **Settings > Tool-result images** to preview
+and remove images from stored tool results. Filter by project or a cutoff date.
+The date uses each session's end time, then its start time, then its creation
+time when earlier fields are missing. Selected sessions can include parents,
+trashed sessions, and sessions whose sources are gone. Provider transcripts and
+standalone image files stay unchanged.
+
+![Stored tool-result image cleanup preview](/docs/assets/generated/screenshots/settings-image-cleanup.png)
+
+The command-line equivalent is
+[`agentsview db strip --images`](/docs/commands/#agentsview-db-strip-images).
+Preview with `--dry-run`. Stop the daemon before applying changes through the
+CLI, then start it again afterward. The Settings control runs through the daemon
+and does not need this stop/start sequence.
+
+Cleanup replaces supported inline images and offloaded image references with
+readable text descriptions. These keep the media type and decoded byte size. New
+placeholders use version `1` and an empty `sha256` unless a hash was already
+present. Removing an offloaded reference clears `image_ref` and preserves its
+hash, but does not delete the asset file.
+
+The daemon exposes preview and apply as `POST /api/v1/data/strip-images/preview`
+and `POST /api/v1/data/strip-images`. Both routes require localhost and accept
+the same project and date selection. Apply returns HTTP 409 if another archive
+maintenance operation holds the write barrier. It does not queue behind that
+operation.
 
 ### Ingest-time image offload
 
-Set `tool_result_images = "offload"` to move supported inline tool-result PNG, JPEG, WebP, and GIF payloads into `{dataDir}/assets/<sha256hex><ext>` during ingestion. Restart the daemon after changing the setting. Each asset write completes before SQLite can commit its `agentsview_image` placeholder and `image_ref`. Unsupported media and malformed data remain inline. Archives that omit tool content write no image assets. `keep` retains inline content; `drop` retains the existing readable placeholder without an asset.
+Set `tool_result_images = "offload"` to keep supported tool-result images in
+`{dataDir}/assets` instead of embedding their bytes in SQLite. Restart the
+daemon after changing the setting. Supported formats are PNG, JPEG, WebP, and
+GIF. Unsupported media and malformed data stay inline. Archives that omit tool
+content write no image assets.
 
-If an asset write fails, ingestion and copied-session resync keep the original inline content. Retry retained inline payloads with `agentsview db migrate --images` after restoring access to the asset directory. Complete unreferenced objects from a failed database transaction remain available for reuse; the store does not automatically remove them. Back up the asset directory with the archive and copy both to another local serving host.
+To move images already in the archive, use
+[`agentsview db migrate --images`](/docs/commands/#agentsview-db-migrate-images).
+Preview first, stop the daemon, apply the migration, and start the daemon again.
+This preserves image access; `db strip --images` removes that access.
 
-PostgreSQL and CockroachDB preserve the placeholder and reference text but cannot resolve the local asset. DuckDB, artifact exports, and the normalized Markdown server session export at `/api/v1/sessions/{id}/md` carry the stored content. The HTML export keeps its existing contract. The raw `agentsview session export` command streams provider source bytes, so its output retains the original inline payloads.
+AgentsView names each asset `<sha256hex><ext>` from its content hash and writes
+it before saving the reference in SQLite. An existing asset is reused only if
+its byte count and hash match. A missing or corrupt asset can be replaced while
+the inline source bytes remain available. Stored `agentsview_image` blocks use
+`image_ref` for the `asset://` reference.
+
+If an asset write fails during ingestion or copied-session resync, AgentsView
+keeps the original inline content. Restore access to the asset directory, then
+retry with `db migrate --images`. A failed database transaction can leave
+complete unreferenced assets on disk; a retry reuses matching files. There is no
+automatic cleanup of unreferenced assets. Both CLI image commands report
+sessions committed before a later failure.
+
+Back up `assets/` with the database. A separate local serving host needs both.
+PostgreSQL and CockroachDB retain the references but cannot resolve local image
+assets. DuckDB and normalized Markdown session exports carry the stored content.
+Artifact exports carry references without asset files; artifact imports replace
+those references with readable descriptions. HTML export keeps its own
+[export behavior](/docs/usage/#session-export). The raw
+`agentsview session export` command streams provider source bytes, including
+original inline payloads.
+
+### Reclaim free space
+
+Image cleanup reports stored-content and decoded-image byte counts. These are
+content measurements, not reclaimed disk space. Run
+[`agentsview db compact`](/docs/commands/#agentsview-db-compact) afterward to
+reclaim free SQLite pages and truncate the write-ahead log (WAL).
+
+Compaction reports database, WAL, SHM, free-page, staging, and reclaimed sizes
+separately. Do not add its reported savings to the content byte counts. A
+compaction requested while sync, resync, or another compaction holds the archive
+maintenance barrier fails with a conflict instead of queuing. See the command
+reference for staging requirements and interrupted-compaction recovery.

@@ -30,7 +30,7 @@ func TestHTTPBackendStats(t *testing.T) {
 			}`))
 		}))
 	t.Cleanup(srv.Close)
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := service.NewHTTPBackend(srv.URL, "", false, "")
 
 	stats, err := svc.Stats(context.Background(), service.StatsFilter{
 		Since:                 "2026-04-01",
@@ -71,7 +71,7 @@ func TestHTTPBackendStatsDisablesDefaultVisibilityWithExplicitIncludes(t *testin
 			_, _ = w.Write([]byte(`{"schema_version":1,"totals":{"sessions_all":2}}`))
 		}))
 	t.Cleanup(srv.Close)
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := service.NewHTTPBackend(srv.URL, "", false, "")
 
 	stats, err := svc.Stats(context.Background(), service.StatsFilter{
 		Since: "28d",

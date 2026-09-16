@@ -123,7 +123,7 @@ func (t TargetSet) isFileScoped(agent parser.AgentType) bool {
 // full-archive flow, and new file-scoped agents default to sanitized
 // until added here.
 func verbatimFileScopedAgent(agent parser.AgentType) bool {
-	return agent == parser.AgentRooCode || agent == parser.AgentKiloLegacy ||
+	return agent == parser.AgentRooCode || agent == parser.AgentCline || agent == parser.AgentKiloLegacy ||
 		agent == parser.AgentCursor || agent == parser.AgentVSCodeCopilot || agent == parser.AgentEvener
 }
 
@@ -144,7 +144,7 @@ func snapshotFileScopedAgent(agent parser.AgentType) bool {
 // remaining copies instead of failing the sync. Agents without this
 // trait drop the root entirely when nothing is discovered.
 func emptyFileScopeAgent(agent parser.AgentType) bool {
-	return agent == parser.AgentCursor || agent == parser.AgentVSCodeCopilot || agent == parser.AgentEvener
+	return agent == parser.AgentCursor || agent == parser.AgentVSCodeCopilot || agent == parser.AgentEvener || agent == parser.AgentCline
 }
 
 // HasSanitizedFileScopedAgents reports whether any agent's export is

@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 )
 
-// siblingMetadataFileInfo stats a companion file that contributes to a JSONL
-// source's freshness fingerprint, returning (nil, nil) when the file is absent
-// or is a directory so callers can skip it without treating it as an error.
+// siblingMetadataFileInfo preserves the legacy companion behavior: a symlink
+// to a regular companion is followed. Providers that require strict symlink
+// rejection must use siblingMetadataFileInfoStrict instead.
 func siblingMetadataFileInfo(path string) (os.FileInfo, error) {
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
@@ -17,7 +17,24 @@ func siblingMetadataFileInfo(path string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stat %s: %w", path, err)
 	}
-	if info.IsDir() {
+	if !info.Mode().IsRegular() {
+		return nil, nil
+	}
+	return info, nil
+}
+
+// siblingMetadataFileInfoStrict inspects the directory entry itself and never
+// follows a symlink. It is used by providers whose companion files are part of
+// a security-sensitive source boundary.
+func siblingMetadataFileInfoStrict(path string) (os.FileInfo, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return nil, nil
 	}
 	return info, nil

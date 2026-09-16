@@ -3,10 +3,9 @@ title: Activity
 description: Activity, concurrency, and session-time reporting in AgentsView
 ---
 
-The **Activity** page is a top-level view for understanding when agents were
-actually active, how much work overlapped, and which projects, models, agents,
-machines, and sessions contributed to a time window. Open it from the
-**Activity** button in the header or directly at `/activity`.
+Use **Activity** to see when agents ran, how much work overlapped, and what it
+cost. Break down a period by project, model, agent, machine, or session. Open it
+from the **Activity** button in the header or directly at `/activity`.
 
 ![Default daily Activity view](/docs/assets/generated/screenshots/activity-page.png)
 
@@ -193,13 +192,21 @@ See [CLI Reference](/docs/commands/#agentsview-activity-report) and
 
 ### JSON Contract
 
-`agentsview activity report --json` and `/api/v1/activity/report` share one
-versioned JSON contract. Schema version 7 contains a bounded first session page,
-`sessions_total`, `sessions_next_cursor`, and a signed self-describing
-`report_id`; it no longer contains the message-sized `intervals` array. The CLI
-and HTTP report use the same `schema_version` and move in lockstep; if the CLI
-report changes in a way that requires a schema bump, the HTTP report bumps with
-it.
+`agentsview activity report --json` and `/api/v1/activity/report` emit schema
+version 8. The report contains a bounded first page of sessions,
+`sessions_total`, `sessions_next_cursor`, and a signed `report_id` that keeps
+later pages tied to the report. It does not include the old `intervals` array.
+The CLI and HTTP API use the same schema version and change together.
+
+Version 8 separates interactive, subagent, and automated sessions in session
+counts, agent-minutes, costs, and concurrency. The three class counts sum to
+`totals.sessions`; total usage and cost accounting is unchanged. Buckets include
+independent `max_interactive_agents`, `max_subagent_agents`, and
+`max_automated_agents` values, while the `*_at_peak` fields describe the split
+at the combined `max_agents` peak. The report includes `interactive_peak`,
+`subagent_peak`, and `automated_peak`, each with its own count and timestamp.
+Session rows include `is_subagent`, which takes precedence over `is_automated`
+when assigning the visible class.
 
 Clients may request progress from the report route with
 `Accept: text/event-stream`. The stream sends `progress` events for loading
@@ -233,16 +240,6 @@ automatically reaggregate it.
 Version 7 applies provider-specific billing identity to computed usage and
 preserves reported cost rows and custom pricing overrides. Costs from v6 and v7
 must not be compared as the same billing semantics.
-
-Version 8 separates interactive, subagent, and automated sessions in session
-counts, agent-minutes, costs, and concurrency. The three class counts sum to
-`totals.sessions`; total usage and cost accounting is unchanged. Buckets include
-independent `max_interactive_agents`, `max_subagent_agents`, and
-`max_automated_agents` values, while the `*_at_peak` fields describe the split
-at the combined `max_agents` peak. The report includes `interactive_peak`,
-`subagent_peak`, and `automated_peak`, each with its own count and timestamp.
-Session rows include `is_subagent`, which takes precedence over `is_automated`
-when assigning the visible class.
 
 Each project, branch, agent, or machine filter is limited to 1,024 UTF-8 bytes,
 with a 3,072-byte combined limit. The server also validates the fully encoded

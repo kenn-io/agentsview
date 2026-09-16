@@ -114,12 +114,6 @@ describe("registerShortcuts", () => {
   });
 
   describe("Escape handling", () => {
-    it("should close active modal on Escape", () => {
-      ui.activeModal = "commandPalette";
-      fireKey("Escape");
-      expect(ui.activeModal).toBeNull();
-    });
-
     it("should close shortcuts modal on Escape", () => {
       ui.activeModal = "shortcuts";
       fireKey("Escape");
@@ -139,7 +133,7 @@ describe("registerShortcuts", () => {
     });
 
     it("should prioritize closing modal over deselecting session", () => {
-      ui.activeModal = "commandPalette";
+      ui.activeModal = "shortcuts";
       sessions.activeSessionId = "s1";
 
       fireKey("Escape");

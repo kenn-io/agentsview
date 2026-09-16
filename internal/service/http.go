@@ -77,6 +77,7 @@ func notImplementedMessage(body []byte) string {
 
 type httpBackend struct {
 	baseURL           string
+	browserURL        string
 	client            *http.Client
 	longRunningClient *http.Client
 	readOnly          bool
@@ -98,9 +99,14 @@ type HTTPServerCapabilities struct {
 // Sync returns a clear error without making the HTTP round-trip.
 // token, when non-empty, is attached as `Authorization: Bearer ...`
 // on every request so the backend works against daemons running
-// with require_auth=true.
-func NewHTTPBackend(baseURL, token string, readOnly bool) SessionService {
-	return newHTTPBackend(baseURL, token, readOnly, !readOnly)
+// with require_auth=true. browserURL selects the browser-facing address;
+// an empty value uses baseURL.
+func NewHTTPBackend(baseURL, token string, readOnly bool, browserURL string) SessionService {
+	b := newHTTPBackend(baseURL, token, readOnly, !readOnly)
+	if browserURL != "" {
+		b.browserURL = browserURL
+	}
+	return b
 }
 
 // NewHTTPBackendForServer constructs a backend whose advertised capabilities
@@ -122,6 +128,7 @@ func newHTTPBackend(
 ) *httpBackend {
 	return &httpBackend{
 		baseURL:           strings.TrimSuffix(baseURL, "/"),
+		browserURL:        baseURL,
 		client:            &http.Client{Timeout: 30 * time.Second},
 		longRunningClient: &http.Client{Timeout: 0},
 		readOnly:          readOnly,
@@ -160,6 +167,7 @@ func (b *httpBackend) Get(
 	if err != nil {
 		return nil, err
 	}
+	out.WebURL = b.sessionWebURL(out.ID)
 	return &out, nil
 }
 
@@ -187,6 +195,9 @@ func (b *httpBackend) List(
 	var out SessionList
 	if err := b.getJSON(ctx, "/api/v1/sessions?"+q.Encode(), &out); err != nil {
 		return nil, err
+	}
+	for i := range out.Sessions {
+		out.Sessions[i].WebURL = b.sessionWebURL(out.Sessions[i].ID)
 	}
 	return &out, nil
 }
@@ -353,6 +364,7 @@ func (b *httpBackend) Sync(
 	if err := json.UnmarshalRead(resp.Body, &detail); err != nil {
 		return nil, err
 	}
+	detail.WebURL = b.sessionWebURL(detail.ID)
 	return &detail, nil
 }
 
@@ -482,6 +494,9 @@ func (b *httpBackend) Search(
 		}
 		return nil, err
 	}
+	for i := range out.Results {
+		out.Results[i].WebURL = b.sessionWebURL(out.Results[i].SessionID)
+	}
 	results := out.Results
 	if results == nil {
 		results = []db.SearchResult{}
@@ -558,6 +573,9 @@ func (b *httpBackend) SearchContent(
 			return nil, wrapSemanticUnavailable(notImpl.message)
 		}
 		return nil, err
+	}
+	for i := range out.Matches {
+		out.Matches[i].WebURL = b.sessionWebURL(out.Matches[i].SessionID)
 	}
 	return &out, nil
 }
@@ -1207,4 +1225,27 @@ func (b *httpBackend) postRaw(
 		)
 	}
 	return json.UnmarshalRead(resp.Body, out)
+}
+
+// sessionWebURL mirrors the browser router: agent prefix and opaque session ID
+// are separate path segments. The selected HTTP backend owns these IDs.
+func (b *httpBackend) sessionWebURL(id string) string {
+	if id == "" {
+		return ""
+	}
+	prefix, rest, found := strings.Cut(id, ":")
+	path := url.PathEscape(prefix)
+	if found {
+		path += "/" + url.PathEscape(rest)
+	}
+	base, err := url.Parse(b.browserURL)
+	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
+		return ""
+	}
+	base.User = nil
+	base.RawQuery = ""
+	base.ForceQuery = false
+	base.Fragment = ""
+	base.RawFragment = ""
+	return strings.TrimRight(base.String(), "/") + "/sessions/" + path
 }

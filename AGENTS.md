@@ -73,6 +73,38 @@ commands. Do not copy their catalogues into this file.
 - Keep pull request titles and descriptions in sync with the current diff.
 - Do not post pull request or issue comments unless the user asks.
 
+## Documentation
+
+- Write for the person trying to use or maintain AgentsView. Lead with the
+  outcome, name who does what, use short sentences, and explain unfamiliar
+  terms.
+- Organize around reader questions. Put purpose and current capabilities first;
+  separate limitations and future work. Use only the sections the topic needs.
+- Give each bullet one main idea. Use numbered steps for sequences, paragraphs
+  for rationale, and tables or diagrams when they clarify a comparison or
+  flow.
+- State rules directly. Preserve exact commands, field names, authorization
+  checks, limits, and failure behavior when simplifying the wording.
+- Give each fact an owning guide or reference and link to it elsewhere. Update
+  that section instead of appending a narrative of the latest change. Indexes
+  should route readers, not repeat implementation status.
+- Describe current architecture separately from approved but unbuilt work,
+  proposals, and historical decisions. Preserve rationale, approvals, and
+  active exceptions with their removal conditions. Label superseded designs
+  and keep them outside normal navigation.
+- Keep the website, its Markdown companions, README, and documentation on
+  message. Distinguish the latest release from newer `main` functionality.
+  Follow [docs/README.md](docs/README.md) for the publishing layout and
+  checks.
+- Verify release notes against the release tags and source. Credit contributors
+  from merged pull requests or commit history; do not infer contributions from
+  names or issue participation alone.
+- Regenerate the full screenshot set for every release and store it on the
+  `docs-generated-assets` orphan branch. Add captures for new visible
+  features, inspect the images, and preview the assembled website locally
+  before opening the release documentation pull request. Follow
+  `docs/screenshots/README.md`.
+
 ## Definition of Done
 
 - Follow every focused guide matched by the task routes above.

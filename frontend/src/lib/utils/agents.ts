@@ -22,6 +22,7 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
   },
   { name: "kilo", color: "var(--accent-purple)", label: "Kilo" },
   { name: "kilo-legacy", color: "var(--accent-purple)", label: "Kilo (legacy)" },
+  { name: "cline", color: "var(--accent-violet)", label: "Cline" },
   { name: "openhands", color: "var(--accent-teal)", label: "OpenHands" },
   { name: "cursor", color: "var(--accent-black)" },
   { name: "cursor-ide", color: "var(--accent-black)", label: "Cursor IDE" },

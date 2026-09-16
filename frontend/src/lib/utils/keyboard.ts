@@ -149,6 +149,9 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
 
     // Esc — always works
     if (e.key === "Escape") {
+      // The palette handles Escape after its nested popovers have had a
+      // chance to claim it at document level.
+      if (ui.activeModal === "commandPalette") return;
       handleEscape();
       return;
     }

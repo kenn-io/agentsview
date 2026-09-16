@@ -207,6 +207,77 @@ describe("SearchStore", () => {
     },
   );
 
+  it.each(["fulltext", "semantic", "hybrid"] as const)(
+    "reruns %s with the selected dates and removes bounds for All time",
+    async (mode) => {
+      const store = createSearchStore(memoryStorage());
+      store.setMode(mode);
+      searchService.getApiV1Search.mockResolvedValue(fullTextResponse("needle"));
+      searchService.getApiV1SearchContent.mockResolvedValue({ matches: [] });
+      const request =
+        mode === "fulltext" ? searchService.getApiV1Search : searchService.getApiV1SearchContent;
+
+      store.search("needle", "alpha");
+      await runDebounce();
+      store.setRange({ mode: "custom", from: "2026-07-01", to: "2026-07-14" });
+      await flushMicrotasks();
+
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          project: "alpha",
+          date_from: "2026-07-01",
+          date_to: "2026-07-14",
+          ...(mode === "fulltext"
+            ? {}
+            : {
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+              }),
+        }),
+        expect.anything(),
+      );
+
+      store.setRange({ mode: "relative", days: 0 });
+      await flushMicrotasks();
+      const params = request.mock.calls.at(-1)![0];
+      expect(params).not.toHaveProperty("date_from");
+      expect(params).not.toHaveProperty("date_to");
+      expect(request).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("cancels the previous range request and keeps the range across retries and mode changes", async () => {
+    const store = createSearchStore(memoryStorage());
+    store.setMode("semantic");
+    const old = deferred<{ matches: DbContentMatch[] }>();
+    searchService.getApiV1SearchContent.mockReturnValueOnce(old.promise);
+    searchService.getApiV1SearchContent.mockRejectedValueOnce(new Error("timeout"));
+    store.search("needle");
+    await runDebounce();
+    const oldSignal = searchService.getApiV1SearchContent.mock.calls[0]![1]!.signal!;
+
+    store.setRange({ mode: "calendar", unit: "day", anchor: "2026-07-04" });
+    await flushMicrotasks();
+    expect(oldSignal.aborted).toBe(true);
+    old.resolve({ matches: [contentMatch("out-of-range", 1, 0.9)] });
+    await flushMicrotasks();
+    expect(store.results).toEqual([]);
+    expect(store.error?.kind).toBe("timeout");
+
+    searchService.getApiV1SearchContent.mockResolvedValue({
+      matches: [contentMatch("in-range", 4, 0.8)],
+    });
+    store.retry();
+    await flushMicrotasks();
+    store.setMode("hybrid");
+    await flushMicrotasks();
+    expect(searchService.getApiV1SearchContent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ mode: "hybrid", date_from: "2026-07-04", date_to: "2026-07-04" }),
+      expect.anything(),
+    );
+    expect(store.results[0]?.session_id).toBe("in-range");
+  });
+
   it("deduplicates ranked content results in response order and truncates to 30", async () => {
     const store = createSearchStore(memoryStorage({ [SEARCH_MODE_STORAGE_KEY]: "semantic" }));
     const matches = [

@@ -1884,7 +1884,7 @@ func TestEnsureBackgroundServePreservesNoSyncWhenReplacingOlderDaemon(
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "1.0.0", false, false, true,
+		dir, host, port, "1.0.0", "", false, false, true,
 	)
 	require.NoError(t, err)
 
@@ -1946,7 +1946,7 @@ func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(
 			writeRuntime: func(t *testing.T, dir, host string, port int) {
 				t.Helper()
 				_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-					dir, host, port, "1.0.0", false, false, true,
+					dir, host, port, "1.0.0", "", false, false, true,
 				)
 				require.NoError(t, err)
 			},
@@ -2034,7 +2034,7 @@ func TestRunServeBackgroundConfigOnlyDoesNotAdoptReplacedDaemonNoSync(
 			writeRuntime: func(t *testing.T, dir, host string, port int) {
 				t.Helper()
 				_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-					dir, host, port, "1.0.0", false, false, true,
+					dir, host, port, "1.0.0", "", false, false, true,
 				)
 				require.NoError(t, err)
 			},
@@ -2462,7 +2462,7 @@ func TestRunServeBackgroundKeepsInvocationNoSyncWhenReplacingSyncingDaemon(
 	dir := runtimeTestDir(t)
 	oldHost, oldPort := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, oldHost, oldPort, "1.0.0", false, false, false,
+		dir, oldHost, oldPort, "1.0.0", "", false, false, false,
 	)
 	require.NoError(t, err)
 	setTestVersion(t, "1.1.0")

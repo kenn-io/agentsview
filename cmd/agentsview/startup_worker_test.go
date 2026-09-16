@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
@@ -246,6 +248,79 @@ func TestStartupWorkerPublishesEnrichedResyncProgress(t *testing.T) {
 
 	_, err := runStartupSyncViaWorker(t.Context(), cfg, progress)
 	require.NoError(t, err)
+}
+
+func TestStartupWorkerReportsDatabaseUpgradeBeforeSync(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	database, err := db.Open(cfg.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	// Reproduce the archive shape before reasoning effort and result indexes.
+	archive, err := sql.Open("sqlite3", cfg.DBPath)
+	require.NoError(t, err)
+	defer archive.Close()
+	_, err = archive.Exec(`ALTER TABLE messages DROP COLUMN reasoning_effort;
+		DROP INDEX idx_tool_result_events_summary; PRAGMA user_version = 96;`)
+	require.NoError(t, err)
+
+	logFile, err := os.Create(serveLogPath(cfg.DataDir))
+	require.NoError(t, err)
+	defer logFile.Close()
+	origStdout := os.Stdout
+	os.Stdout = logFile
+	defer func() { os.Stdout = origStdout }()
+	// All transitions happen inside the detail throttle window.
+	now, _ := fakeClock(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	progress := newStartupStateWriter(cfg.DataDir, now)
+	var details []string
+	restore := stubLaunchSyncWorker(t, func(
+		ctx context.Context, cfg config.Config, mode string, onLine func(workerLine),
+	) (workerResult, error) {
+		var result workerResult
+		err := runSyncWorkerStartup(ctx, cfg, mode, func(line workerLine) {
+			if line.Result != nil {
+				result = *line.Result
+			}
+		}, func(p syncpkg.Progress) {
+			onLine(workerLine{Progress: &p})
+			if p.Phase != "opening_database" {
+				// Release the probe before the worker swaps archive files.
+				require.NoError(t, archive.Close())
+				return
+			}
+			details = append(details, p.Detail)
+			state := readStartupState(cfg.DataDir)
+			require.NotNil(t, state)
+			assert.Equal(t, "opening database", state.Phase)
+			assert.Equal(t, p.Detail, state.Detail, "publish each stage immediately")
+			output, err := os.ReadFile(logFile.Name())
+			require.NoError(t, err)
+			assert.Contains(t, string(output), p.Detail, "log the stage before doing its work")
+			if p.Detail == "Updating database schema and indexes" {
+				var count int
+				require.NoError(t, archive.QueryRow(`SELECT count(*) FROM sqlite_master
+					WHERE name = 'idx_tool_result_events_summary'`).Scan(&count))
+				assert.Zero(t, count, "announce index construction before it runs")
+			}
+		})
+		return result, err
+	})
+	defer restore()
+	result, err := runStartupSyncViaWorker(t.Context(), cfg, progress)
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.Synced)
+	assert.Contains(t, details, "Opening database")
+	assert.Contains(t, details, "Database upgrade requires full resync")
+	assert.Contains(t, details, "Updating database schema and indexes")
+	assert.Contains(t, details, "Adding column messages.reasoning_effort")
+	output, err := os.ReadFile(logFile.Name())
+	require.NoError(t, err)
+	assert.Contains(t, string(output), "Updating database schema and indexes completed in ")
+	assert.Contains(t, string(output), "Adding column messages.reasoning_effort completed in ")
+	assert.NotContains(t, string(output), "Database upgrade requires full resync completed",
+		"announcing a required resync must not report that it completed")
+	assert.NotContains(t, string(output), "Running initial sync",
+		"a known full resync must not be presented as incremental sync")
 }
 
 // TestStartupWorkerOutcomeDiscriminatesSpawnFromRanFailed pins the Finding 1

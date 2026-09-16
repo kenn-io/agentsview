@@ -36,8 +36,10 @@
     session?: Session | null;
     isSubagentContext?: boolean;
     searchOrdinal?: number;
+    compact?: boolean;
+    allowMutations?: boolean;
   }
-  let { message, session, isSubagentContext = false, searchOrdinal }: Props = $props();
+  let { message, session, isSubagentContext = false, searchOrdinal, compact = false, allowMutations = true }: Props = $props();
   let copied = $state(false);
   let segments = $derived(enrichSegments(
     parseContent(message.content, message.has_tool_use, message.id, message.content_length),
@@ -203,7 +205,7 @@
       pinTimer = setTimeout(() => { pinFeedback = ""; }, 1500);
     } catch { /* Preserve the existing non-blocking pin interaction. */ }
   }
-  let canForkFromMessage = $derived(owningSession?.agent === "claude" &&
+  let canForkFromMessage = $derived(allowMutations && owningSession?.agent === "claude" &&
     !(owningSession?.id ?? "").includes("~") && !(sync.readOnly && isRemoteConnection()));
   async function handleForkFromHere() {
     if (!canForkFromMessage) return;
@@ -233,17 +235,19 @@
   }
 </script>
 
-<div class="message" class:is-user={isUser} style:border-left-color={accentColor} style:background={roleBg}>
+<div class="message" class:is-user={isUser} class:compact style:border-left-color={accentColor} style:background={roleBg}>
   <div class="message-header">
     <span class="role-icon" style:background={accentColor} style:color={accentForeground}>{roleIcon}</span>
     <span class="role-label" style:color={accentColor}>{roleLabel}</span>
     <CopyButton revealOnHover {copied} ariaLabel={m.message_content_copy_message()}
       copiedAriaLabel={m.message_content_copied_message()} title={m.message_content_copy_message()}
       copiedTitle={m.message_content_copied()} onclick={handleCopy} />
+    {#if allowMutations}
     <button type="button" class="pin-btn" class:pinned
       title={pinned ? m.message_content_unpin_message() : m.message_content_pin_message()} onclick={handleTogglePin}>
       <PinIcon size="14" strokeWidth="1.8" aria-hidden="true" />
     </button>
+    {/if}
     {#if canForkFromMessage}
       <button type="button" class="pin-btn fork-btn" title={m.session_breadcrumb_resume_session()}
         aria-label={m.session_breadcrumb_resume_session()} onclick={handleForkFromHere}>
@@ -420,4 +424,10 @@
   .markdown :global(th) { background: var(--bg-inset); font-weight: 600; }
   .markdown :global(img) { max-width: 100%; border-radius: var(--radius-sm); }
   .markdown :global(strong) { font-weight: 600; }
+  .message.compact { padding: 9px 10px; }
+  .compact .message-header { gap: 6px; margin-bottom: 6px; }
+  .compact .role-icon { width: 18px; height: 18px; font-size: 10px; }
+  .compact .role-label { font-size: 11px; }
+  .compact .timestamp { font-size: 10px; }
+  .compact .text-content { font-size: 12px; line-height: 1.55; }
 </style>

@@ -38,6 +38,7 @@ expected_assets=(
   "screenshots/import-modal-chatgpt.png"
   "screenshots/import-modal-claude.png"
   "screenshots/in-session-search.png"
+  "screenshots/in-session-search-results.png"
   "screenshots/quality.png"
   "screenshots/layout-compact.png"
   "screenshots/layout-stream.png"
@@ -50,6 +51,7 @@ expected_assets=(
   "screenshots/recall-generated-insights.png"
   "screenshots/recent-edits.png"
   "screenshots/resync-modal.png"
+  "screenshots/remote-resume-command.png"
   "screenshots/search-grouped.png"
   "screenshots/search-results.png"
   "screenshots/semantic-search-setup.png"
@@ -64,8 +66,11 @@ expected_assets=(
   "screenshots/session-vital-signs.png"
   "screenshots/settings-embeddings.png"
   "screenshots/settings-chart-colors.png"
+  "screenshots/settings-agent-homes.png"
   "screenshots/settings-remote.png"
+  "screenshots/settings-image-cleanup.png"
   "screenshots/settings.png"
+  "screenshots/settings-archive-content.png"
   "screenshots/shortcuts-modal.png"
   "screenshots/signal-panel.png"
   "screenshots/skill-trends.png"
@@ -102,7 +107,7 @@ usage() {
 Usage: $(basename "$0") [--source DIR] [--skip-generate] [--push]
 
 Update the local $assets_branch branch to a single orphan commit containing
-generated CLI/TUI screenshots. By default this regenerates screenshots first.
+generated UI screenshots. By default this regenerates screenshots first.
 Pass --source DIR to import existing screenshots instead.
 EOF
 }
@@ -198,10 +203,15 @@ done
 
 git -C "$asset_repo" init --quiet
 git -C "$asset_repo" add .
+cat > "$tmp_root/commit-message" <<'EOF'
+docs: refresh generated screenshots
+
+Keep documentation images aligned with the current interface.
+EOF
 git -C "$asset_repo" \
   -c user.name="${GIT_AUTHOR_NAME:-agentsview docs bot}" \
   -c user.email="${GIT_AUTHOR_EMAIL:-docs-bot@example.invalid}" \
-  commit -m "docs generated assets" >/dev/null
+  commit --file "$tmp_root/commit-message" >/dev/null
 asset_commit="$(git -C "$asset_repo" rev-parse HEAD)"
 git -C "$asset_repo" update-ref refs/heads/assets "$asset_commit"
 git -C "$repo_root" fetch "$asset_repo" "+refs/heads/assets:refs/heads/$assets_branch" >/dev/null

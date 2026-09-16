@@ -71,7 +71,7 @@ func resolveService(
 		if err != nil {
 			return nil, nil, err
 		}
-		return service.NewHTTPBackend(remote, token, false),
+		return service.NewHTTPBackend(remote, token, false, ""),
 			func() {}, nil
 	}
 	cfg, err := config.LoadPFlags(cmd.Flags())
@@ -145,7 +145,7 @@ func resolveWritableServiceWithIntent(
 		if err != nil {
 			return nil, nil, err
 		}
-		return service.NewHTTPBackend(remote, token, false),
+		return service.NewHTTPBackend(remote, token, false, ""),
 			func() {}, nil
 	}
 	if pgReadRequested(cmd) {

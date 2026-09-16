@@ -481,8 +481,9 @@ persisted to localStorage and serialized into the URL.
 
 ### Direct Session Links
 
-Each session has a shareable URL. Click the session ID in the detail header to
-copy the link, or use the URL bar directly:
+Click **Copy link to session** in the detail header to copy a shareable URL.
+Clicking the **Session ID** copies only the ID. You can also bookmark the
+current URL:
 
 ```
 /sessions/550e8400-e29b-41d4-a716-446655440000
@@ -532,6 +533,12 @@ display in a scrollable list with virtual rendering for large sessions.
 The session detail header shows the session name, agent, project, a health grade
 badge, and a copyable **Session ID**. Click the ID to copy it to the clipboard
 for sharing or lookup. Click the grade badge to toggle the signal panel.
+
+The model badge shows the model used most often in assistant messages. For
+Claude Code and Codex, it also shows recorded reasoning effort, such as `high`,
+when that value is the most common effort for the displayed model. Effort is a
+model setting, not a measured token count. Upgrading resyncs existing sessions
+to populate it when the source files remain available.
 
 If a parser skipped malformed source lines while still recovering the session,
 the header shows a malformed-lines badge with the persisted count (for example
@@ -746,6 +753,12 @@ current position are shown in the search bar.
 Use the arrow buttons or `Enter` / `Shift+Enter` to jump between matches. The
 matching message scrolls into view and the search term is highlighted. Press
 `Esc` to close the search bar.
+
+Click **Show search results** to open matching snippets grouped by message.
+Select a snippet to jump to its occurrence. The overview rail beside the
+transcript shows where matches appear throughout the session.
+
+![In-session search results and overview rail](/docs/assets/generated/screenshots/in-session-search-results.png)
 
 Search follows the transcript's active scope. Block-type filters (see
 [Block-Type Filtering](#block-type-filtering)) and Focused mode both narrow what
@@ -1013,10 +1026,15 @@ Local Codex sessions add **Open in Codex Desktop**, which deep-links to the
 stored thread. Local Claude sessions add **Open in Claude Code**, which opens a
 new Code session for the stored working directory; when the native Claude
 Desktop opener is detected, it remains available as a separate resume target.
-Desktop deep links are intentionally hidden for remote sessions because a local
-desktop app cannot open another machine's transcript or directory.
 
 ![Session resume menu](/docs/assets/generated/screenshots/session-resume-menu.png)
+
+For supported remote sessions, choose **Copy command** and paste the resume
+command into a shell on the machine that owns the transcript. Launching a
+terminal, opening an editor, and native agent desktop links are local-session
+actions.
+
+![Copy command in a remote session's Resume menu](/docs/assets/generated/screenshots/remote-resume-command.png)
 
 The `agentsview session list --resume` and `--active` CLI modes use the same
 recent-activity signal to produce a compact terminal table for picking up
@@ -1045,8 +1063,8 @@ ______________________________________________________________________
 
 Press `e` or open the export menu in the header to download the current session
 as a standalone HTML file. The exported file includes styled message rendering
-and works offline. As of 0.30.0, the export ships with a **Normal / Focused**
-radio toggle in the document header so the recipient can flip into
+and works offline. The export includes a **Normal / Focused** radio toggle in
+the document header so the recipient can flip into
 [focused mode](#focused-transcript-mode) — only user prompts and final assistant
 responses — without re-running the export.
 
@@ -1178,16 +1196,18 @@ organized into sections:
 
 ![Settings page](/docs/assets/generated/screenshots/settings.png)
 
-| Section           | What You Can Configure                                                                                                                                                                                    |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Language          | Interface language (English, French, Japanese, Korean, Simplified Chinese, or Traditional Chinese)                                                                                                        |
-| Appearance        | Theme (light/dark), high-contrast mode, chart colors, message layout, zoom, block visibility                                                                                                              |
-| Date ranges       | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality                                                                                                  |
-| Agent Directories | Custom paths for each agent's session files. For Devin CLI, point at the local root that contains `cli/` (for example a redacted `.../Application Support/devin` path), not copied config or OAuth files. |
-| Terminal          | Default terminal emulator for session resume                                                                                                                                                              |
-| Embeddings        | Current semantic-index build phase, progress, throughput, ETA, last result, and local generations                                                                                                         |
-| GitHub            | Personal access token for Gist publishing                                                                                                                                                                 |
-| Remote Access     | Remote connections toggle, auth token, connect to remote server                                                                                                                                           |
+| Section            | What You Can Configure                                                                                   |
+| ------------------ | -------------------------------------------------------------------------------------------------------- |
+| Language           | Interface language (English, French, Japanese, Korean, Simplified Chinese, or Traditional Chinese)       |
+| Appearance         | Theme (light/dark), high-contrast mode, chart colors, message layout, zoom, block visibility             |
+| Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality |
+| Session Providers  | Enable session providers, inspect their session directories, and add alternate agent homes               |
+| Archive content    | Choose whether future imports keep, drop, or offload tool-result images                                  |
+| Tool-result images | Preview and remove images from stored tool results                                                       |
+| Terminal           | Default terminal emulator for session resume                                                             |
+| Embeddings         | Current semantic-index build phase, progress, throughput, ETA, last result, and local generations        |
+| GitHub             | Personal access token for Gist publishing                                                                |
+| Remote Access      | Remote connections toggle, auth token, connect to remote server                                          |
 
 ![Embedding build progress](/docs/assets/generated/screenshots/settings-embeddings.png)
 

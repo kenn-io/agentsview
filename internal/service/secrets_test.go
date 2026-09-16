@@ -36,7 +36,7 @@ func TestHTTPBackendScanSecretsStream(t *testing.T) {
 			f.Flush()
 		}))
 	defer ts.Close()
-	svc := service.NewHTTPBackend(ts.URL, "", false)
+	svc := service.NewHTTPBackend(ts.URL, "", false, "")
 	var ticks []service.SecretScanProgress
 	sum, err := svc.ScanSecrets(context.Background(),
 		service.SecretScanInput{Backfill: true},

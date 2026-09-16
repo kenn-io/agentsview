@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,6 +43,42 @@ func TestDataProjectsEndpoint(t *testing.T) {
 	require.Len(t, inv.Projects, 2)
 }
 
+func TestDataProjectsDateRangeAppliesToFoldersAndPreviews(t *testing.T) {
+	te := setup(t)
+	for _, fixture := range []struct{ id, cwd, started string }{
+		{"august", "/work/august", "2026-08-15T12:00:00Z"},
+		{"september", "/work/september", "2026-09-15T12:00:00Z"},
+	} {
+		te.seedSession(t, fixture.id, "alpha", 1, func(s *db.Session) {
+			s.Cwd = fixture.cwd
+			s.StartedAt = &fixture.started
+			s.EndedAt = &fixture.started
+		})
+	}
+	const dates = "date_from=2026-08-01&date_to=2026-08-31&timezone=UTC"
+	w := te.get(t, "/api/v1/data/projects?"+dates)
+	assertStatus(t, w, http.StatusOK)
+	var inv db.ProjectInventory
+	decodeInto(t, w, &inv)
+	require.Len(t, inv.Projects, 1)
+	assert.Equal(t, 1, inv.TotalSessions)
+	key := url.QueryEscape(inv.Projects[0].ProjectKey)
+	w = te.get(t, "/api/v1/data/project-reclassification/candidates?project_label=alpha&project_key="+key+"&"+dates)
+	assertStatus(t, w, http.StatusOK)
+	var folders struct {
+		Candidates []db.WorktreeReclassificationCandidate `json:"candidates"`
+	}
+	decodeInto(t, w, &folders)
+	require.Len(t, folders.Candidates, 1)
+	assert.Equal(t, "/work/august", folders.Candidates[0].SuggestedPrefix)
+	w = te.get(t, "/api/v1/data/projects/"+url.PathEscape(inv.Projects[0].ProjectKey)+"/sessions?"+dates)
+	assertStatus(t, w, http.StatusOK)
+	var page db.SessionPage
+	decodeInto(t, w, &page)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "august", page.Sessions[0].ID)
+}
+
 func TestDataProjectRulesEndpoint(t *testing.T) {
 	te := setup(t)
 	require.NoError(t, te.db.SetSyncState(db.MachineAliasKeyPrefix+"old-workstation", "ws"))
@@ -64,6 +102,98 @@ func TestDataProjectRulesEndpoint(t *testing.T) {
 	require.Len(t, rules.Rules, 1)
 	assert.Equal(t, "/work", rules.Rules[0].PathPrefix)
 	assert.Equal(t, 1, rules.Rules[0].GovernedSessions)
+}
+
+func TestDataProjectSessionsEndpointUsesExactOpaqueIdentity(t *testing.T) {
+	te := setup(t)
+	const targetLabel = "https://one.example/project"
+	const otherLabel = "https://two.example/project"
+	te.seedSession(t, "target-root", targetLabel, 1, func(s *db.Session) {
+		s.Machine = "host-a.example"
+		s.Cwd = "/srv/projects/project-a"
+	})
+	te.seedSession(t, "target-child", targetLabel, 1, func(s *db.Session) {
+		s.Machine = "host-a.example"
+		s.Cwd = "/srv/projects/project-a"
+		s.ParentSessionID = new("target-root")
+		s.RelationshipType = "subagent"
+	})
+	te.seedSession(t, "other-child", otherLabel, 1, func(s *db.Session) {
+		s.Machine = "host-a.example"
+		s.Cwd = "/srv/projects/project-b"
+		s.ParentSessionID = new("target-root")
+		s.RelationshipType = "subagent"
+	})
+
+	projects, err := te.db.BuildProjectIdentityMap(
+		context.Background(), []string{targetLabel, otherLabel},
+	)
+	require.NoError(t, err)
+	require.Empty(t, export.SafeProjectDisplayLabel(targetLabel))
+	require.Empty(t, export.SafeProjectDisplayLabel(otherLabel),
+		"the transport labels deliberately collide after sanitization")
+
+	w := te.get(t, "/api/v1/data/projects/"+
+		url.PathEscape(projects[targetLabel].ProjectKey)+"/sessions")
+	assertStatus(t, w, http.StatusOK)
+	var page db.SessionPage
+	decodeInto(t, w, &page)
+	require.Len(t, page.Sessions, 2)
+	assert.ElementsMatch(t, []string{"target-root", "target-child"}, []string{
+		page.Sessions[0].ID, page.Sessions[1].ID,
+	})
+}
+
+func TestDataProjectSessionsPaginationAndAutomation(t *testing.T) {
+	te := setup(t)
+	for i := range 25 {
+		te.seedSession(t, fmt.Sprintf("preview-%02d", i), "project-a", 1)
+	}
+	te.seedSession(t, "automated-preview", "project-a", 1, func(s *db.Session) {
+		s.IsAutomated = true
+	})
+	identities, err := te.db.BuildProjectIdentityMap(context.Background(), []string{"project-a"})
+	require.NoError(t, err)
+	endpoint := "/api/v1/data/projects/" + url.PathEscape(identities["project-a"].ProjectKey) + "/sessions"
+	w := te.get(t, endpoint+"?limit=20")
+	assertStatus(t, w, http.StatusOK)
+	var first db.SessionPage
+	decodeInto(t, w, &first)
+	require.Len(t, first.Sessions, 20)
+	assert.Equal(t, 25, first.Total)
+	require.NotEmpty(t, first.NextCursor)
+	w = te.get(t, endpoint+"?limit=20&cursor="+url.QueryEscape(first.NextCursor))
+	assertStatus(t, w, http.StatusOK)
+	var last db.SessionPage
+	decodeInto(t, w, &last)
+	require.Len(t, last.Sessions, 5)
+	assert.Empty(t, last.NextCursor)
+	ids := make(map[string]bool)
+	for _, session := range append(first.Sessions, last.Sessions...) {
+		assert.False(t, session.IsAutomated)
+		ids[session.ID] = true
+	}
+	assert.Len(t, ids, 25)
+	w = te.get(t, endpoint+"?include_automated=true")
+	assertStatus(t, w, http.StatusOK)
+	var all db.SessionPage
+	decodeInto(t, w, &all)
+	assert.Equal(t, 26, all.Total)
+	assert.Len(t, all.Sessions, 26)
+}
+
+func TestDataProjectSessionsIncludesEmptySessionsForMapping(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "empty-preview", "empty-project", 0)
+	identities, err := te.db.BuildProjectIdentityMap(context.Background(), []string{"empty-project"})
+	require.NoError(t, err)
+	w := te.get(t, "/api/v1/data/projects/"+url.PathEscape(identities["empty-project"].ProjectKey)+"/sessions")
+	assertStatus(t, w, http.StatusOK)
+	var page db.SessionPage
+	decodeInto(t, w, &page)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "empty-preview", page.Sessions[0].ID)
+	assert.Equal(t, 1, page.Total)
 }
 
 func TestDataProjectRulesDefaultsToLocalMachine(t *testing.T) {

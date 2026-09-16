@@ -172,11 +172,11 @@ func TestPGProjectInventoryMatchesSQLite(t *testing.T) {
 	_, err := sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push")
 
-	localInv, err := localDB.GetProjectInventory(ctx)
+	localInv, err := localDB.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "local GetProjectInventory")
 
 	pgStore := &Store{pg: pg}
-	pgInv, err := pgStore.GetProjectInventory(ctx)
+	pgInv, err := pgStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "pg GetProjectInventory")
 
 	assert.Equal(t, localInv.TotalProjects, pgInv.TotalProjects)
@@ -214,6 +214,36 @@ func TestPGProjectInventoryMatchesSQLite(t *testing.T) {
 		"misc has no rule targeting it by raw label, only gamma is resolved to")
 }
 
+func TestPGGovernedCountExcludesAssignedSiblingEvidence(t *testing.T) {
+	const schema = "agentsview_project_inventory_assignment_test"
+	syncer, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
+	sharedPath := t.TempDir() + "/sessions.jsonl"
+	seedInventorySession(t, localDB, "assigned-reference", "alpha", func(s *db.Session) {
+		s.Machine = "m1"
+		s.Cwd = "/w/a/run"
+		s.FilePath = &sharedPath
+	})
+	seedInventorySession(t, localDB, "empty-cwd", "misc", func(s *db.Session) {
+		s.Machine = "m1"
+		s.FilePath = &sharedPath
+	})
+	_, err := localDB.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
+		Machine: "m1", PathPrefix: "/w/a", Project: "alpha", Enabled: true,
+	})
+	require.NoError(t, err)
+	_, err = localDB.AssignSessionProject(ctx, "assigned-reference", "alpha")
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	localInv, err := localDB.GetProjectInventory(ctx, db.ProjectDateFilter{})
+	require.NoError(t, err)
+	pgInv, err := (&Store{pg: pg}).GetProjectInventory(ctx, db.ProjectDateFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, localInv.GovernedSessions)
+	assert.Equal(t, localInv.GovernedSessions, pgInv.GovernedSessions)
+}
+
 func TestPGProjectInventoryKeepsSanitizedLabelCollisionsDistinct(t *testing.T) {
 	const schema = "agentsview_project_inventory_private_paths_test"
 	syncer, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
@@ -224,7 +254,7 @@ func TestPGProjectInventoryKeepsSanitizedLabelCollisionsDistinct(t *testing.T) {
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err, "Push")
 
-	inv, err := (&Store{pg: pg}).GetProjectInventory(ctx)
+	inv, err := (&Store{pg: pg}).GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err)
 	require.Len(t, inv.Projects, 2)
 	assert.Equal(t, 2, inv.TotalProjects)
@@ -257,7 +287,7 @@ func TestPGProjectInventoryIgnoresUnattributedSessions(t *testing.T) {
 	require.NoError(t, err, "Push")
 
 	pgStore := &Store{pg: pg}
-	before, err := pgStore.GetProjectInventory(ctx)
+	before, err := pgStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "GetProjectInventory before")
 	require.Equal(t, 2, before.GovernedSessions,
 		"alpha-1 and gamma-dynamic governed before provenance is cleared")
@@ -266,7 +296,7 @@ func TestPGProjectInventoryIgnoresUnattributedSessions(t *testing.T) {
 		`UPDATE sessions SET source_archive_id = '' WHERE id = 'alpha-1'`)
 	require.NoError(t, err, "clear provenance")
 
-	after, err := pgStore.GetProjectInventory(ctx)
+	after, err := pgStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "GetProjectInventory after")
 
 	assert.Equal(t, before.GovernedSessions-1, after.GovernedSessions,
@@ -361,7 +391,7 @@ func TestPGProjectInventoryCrossArchiveIsolation(t *testing.T) {
 	require.NoError(t, err, "seed archive C session")
 
 	pgStore := &Store{pg: pg}
-	inv, err := pgStore.GetProjectInventory(ctx)
+	inv, err := pgStore.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err, "GetProjectInventory")
 
 	byLabel := map[string]db.ProjectInventoryRow{}

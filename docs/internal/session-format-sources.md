@@ -325,6 +325,12 @@ add an archived or maintained mirror without replacing the original identity.
   skill names from recorded paths without consulting worker-local `SKILL.md`
   frontmatter or the local parse cache; local parsing retains frontmatter
   lookup. `TestHostedSkillInferenceKeepsNamesLexical` covers this boundary.
+  Reverified 2026-08-22 against
+  local sessions launched from repository-local
+  `REPO/.claude/worktrees/<generated-name>` worktrees: the transcript retains
+  the generated worktree path after that checkout is deleted, so Agentsview
+  recognizes the anchored layout and attributes it to `REPO`. Evidence remains
+  `no-public-source`.
 
 ## OpenClaude (`openclaude`)
 
@@ -789,7 +795,9 @@ add an archived or maintained mirror without replacing the original identity.
 - **Format:** Workspace-scoped session directories containing `summary.json`, a
   derived `chat_history.jsonl` model-message cache, and an authoritative
   `updates.jsonl` stream of timestamped ACP and xAI session notifications.
+
 - **Evidence:** `source`.
+
 - **Upstream:** Clone `https://github.com/xai-org/grok-build.git` at
   `d71f6e0c1f5acc5469e503e192fe14824e6f8c90`. The
   [session guide](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-pager/docs/user-guide/17-sessions.md)
@@ -803,12 +811,14 @@ add an archived or maintained mirror without replacing the original identity.
   Agentsview maps timestamped `tool_call` and terminal `tool_call_update`
   records to the existing tool-result event model, so Activity can use tool
   completion time without adding derived transcript messages.
+
 - **Usage and cost:** Durable `turn_completed` updates may carry per-model
   input, output, cache-read, cache-creation, and reasoning tokens plus
   optional `costUsdTicks` (10^10 ticks per USD), as defined by the
   [notification schema](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/extensions/notification.rs).
   Agentsview emits one usage event per prompt and model, subtracts cache
   reads from the full input count, and uses reported cost ticks when present.
+
 - **Automation:** The first-party
   [headless guide](https://github.com/xai-org/grok-build/blob/d92c5b0b8582fda358de1f97446aa74af44a464f/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)
   defines prompt flags as non-interactive invocation. The producer
@@ -826,6 +836,7 @@ add an archived or maintained mirror without replacing the original identity.
   supplies it. Agentsview treats only an explicit true value in a valid,
   session-associated file as durable automation evidence; file presence, a
   missing field, or a missing file does not classify a session as automated.
+
 - **Agentsview:** `internal/parser/grok.go`, `internal/parser/grok_provider.go`,
   colocated tests, and the sanitized upstream-generated fixtures in
   `internal/parser/testdata/grok-build`.
@@ -1302,6 +1313,43 @@ schemas keep their existing ordering behavior.
 - **Agentsview:** `internal/parser/roocode.go` and
   `internal/parser/roocode_provider.go`; observed older Roo/Cline message
   variants remain covered by the parser's colocated fixtures.
+
+## Cline CLI (`cline`)
+
+- **Format:** One session directory per task under
+  `~/.cline/data/sessions/<id>/` containing `<id>.json` (session metadata and
+  aggregate usage) and `<id>.messages.json` (transcript array with text,
+  thinking, tool_use, and tool_result blocks).
+- **Evidence:** `source`.
+- **Upstream:** Clone `https://github.com/cline/cline.git` at
+  `595f1dbf2ea819e987afeadb4ed4dd9a0ae9a55e`. The pinned
+  [session persistence](https://github.com/cline/cline/blob/595f1dbf2ea819e987afeadb4ed4dd9a0ae9a55e/sdk/packages/core/src/session/services/persistence-service.ts)
+  and
+  [conversation store](https://github.com/cline/cline/blob/595f1dbf2ea819e987afeadb4ed4dd9a0ae9a55e/sdk/packages/core/src/session/stores/conversation-store.ts)
+  persist metadata to `<sessionId>/<sessionId>.json` and structured messages
+  to `<sessionId>/<sessionId>.messages.json`.
+- **Usage and cost:** `<id>.json` persists cumulative `inputTokens`,
+  `outputTokens`, `cacheReadTokens`, and `cacheWriteTokens` along with
+  `totalCost` in the `metadata.usage` / `metadata.aggregateUsage` object.
+  Individual assistant messages also carry per-turn `metrics` (input, output,
+  cache read/write tokens). Agentsview consumes the reported cost, including
+  explicit zero, and tracks the peak context window across turns.
+- **Agentsview:** `internal/parser/cline.go` and
+  `internal/parser/cline_provider.go`. User input in `<id>.messages.json` is
+  wrapped in `<user_input mode="...">` envelopes and can contain internal
+  `<mode_notice>` blocks upon mode switching. Agentsview strips these wrapper
+  and notice tags across all turns so operator prompts and session names
+  remain clean human text and empty approvals do not persist empty bubbles.
+  Teammate transcripts live in
+  `<sessionDir>/<subagent>__<taskSuffix>.messages.json`, one file per
+  `team_run_task` run. Each file becomes one subagent session whose ID is the
+  `sessionId` Cline writes into the payload
+  (`<parent>__teamtask__<subagent>__<nonce>`), linked to the parent through
+  `origin.parentThreadId`. A continued run writes a new file that repeats the
+  earlier messages; both files stay separate sessions, matching Cline's own
+  session store. A `team_run_task` call is linked to its teammate session only
+  when that subagent has a single transcript. Deleted teammate transcripts are
+  tombstoned through complete-source ownership reconciliation.
 
 ## OpenHands (`openhands`)
 

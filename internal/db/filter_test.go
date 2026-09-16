@@ -30,6 +30,28 @@ func TestPruneFilterZeroValue(t *testing.T) {
 	requireErrContains(t, err, "at least one filter is required")
 }
 
+func TestSessionFilterIncludesEmptyForProjectMapping(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "empty", "mapping", func(s *Session) { s.MessageCount = 0 })
+	insertSession(t, d, "populated", "mapping", func(s *Session) { s.MessageCount = 2 })
+	for _, includeEmpty := range []bool{false, true} {
+		page, err := d.ListSessions(context.Background(), SessionFilter{
+			ProjectLabels: []string{"mapping"}, IncludeEmpty: includeEmpty,
+		})
+		require.NoError(t, err)
+		ids := make([]string, len(page.Sessions))
+		for i, session := range page.Sessions {
+			ids[i] = session.ID
+		}
+		want := []string{"populated"}
+		if includeEmpty {
+			want = append(want, "empty")
+		}
+		assert.ElementsMatch(t, want, ids)
+		assert.Equal(t, len(want), page.Total)
+	}
+}
+
 func TestSessionFilterDateFields(t *testing.T) {
 	d := testDB(t)
 	sessionSet(t, d)
@@ -1559,6 +1581,23 @@ func TestSidebarSessionIndexComputesIsTeammate(t *testing.T) {
 		"teammate IsTeammate = false, want true")
 	require.False(t, rows["normal"].IsTeammate,
 		"normal IsTeammate = true, want false")
+}
+
+func TestSidebarSessionIndexCarriesProjectAssignment(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	displayName := "Named sidebar session"
+	insertSession(t, d, "assigned", "automatic", func(s *Session) {
+		s.DisplayName = &displayName
+	})
+	_, err := d.AssignSessionProject(ctx, "assigned", "manual")
+	require.NoError(t, err)
+
+	index, err := d.GetSidebarSessionIndex(ctx, SessionFilter{})
+	require.NoError(t, err)
+	require.Len(t, index.Sessions, 1)
+	assert.Equal(t, "manual", index.Sessions[0].Project)
+	assert.True(t, index.Sessions[0].ProjectAssigned)
 }
 
 func requireSidebarIndexIDs(

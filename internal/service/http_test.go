@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -95,7 +96,7 @@ func newHTTPBackendEnv(
 func (e *httpBackendEnv) Backend(
 	token string, readOnly bool,
 ) service.SessionService {
-	return service.NewHTTPBackend(e.BaseURL, token, readOnly)
+	return service.NewHTTPBackend(e.BaseURL, token, readOnly, "")
 }
 
 // SeedSession seeds a session into the env's DB.
@@ -302,7 +303,7 @@ func TestHTTPBackend_ListRecallEntriesRejectsNegativeLimitLocally(t *testing.T) 
 	}))
 	t.Cleanup(srv.Close)
 
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := service.NewHTTPBackend(srv.URL, "", false, "")
 	_, err := svc.ListRecallEntries(context.Background(), service.RecallFilter{
 		Limit: -1,
 	})
@@ -322,7 +323,7 @@ func TestHTTPBackend_ListRecallEntriesIncludesSourceEpisodeIDParam(t *testing.T)
 	}))
 	t.Cleanup(srv.Close)
 
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := service.NewHTTPBackend(srv.URL, "", false, "")
 	_, err := svc.ListRecallEntries(context.Background(), service.RecallFilter{
 		SourceEpisodeID: "recall-session:chunk:0001",
 	})
@@ -340,7 +341,7 @@ func TestHTTPBackend_ListRecallEntriesIncludesTrustedOnlyParam(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := service.NewHTTPBackend(srv.URL, "", false, "")
 	list, err := svc.ListRecallEntries(context.Background(), service.RecallFilter{
 		TrustedOnly: true,
 	})
@@ -366,7 +367,7 @@ func TestHTTPBackend_QueryRecallEntriesRejectsNegativeLimitLocally(t *testing.T)
 	}))
 	t.Cleanup(srv.Close)
 
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := service.NewHTTPBackend(srv.URL, "", false, "")
 	_, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query: "cwd",
 		Limit: -1,
@@ -389,7 +390,7 @@ func TestHTTPBackend_QueryRecallEntriesIncludesSourceEpisodeID(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := service.NewHTTPBackend(srv.URL, "", false, "")
 	_, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query:           "cwd",
 		SourceEpisodeID: "recall-session:chunk:0001",
@@ -411,7 +412,7 @@ func TestHTTPBackend_QueryRecallEntriesTransportsSkipRecording(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := service.NewHTTPBackend(srv.URL, "", false, "")
 	result, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query: "read only recall", SkipRecording: true,
 	})
@@ -430,7 +431,7 @@ func TestHTTPBackend_QueryRecallEntriesRejectsNegativeContextMaxBytesLocally(t *
 	}))
 	t.Cleanup(srv.Close)
 
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := service.NewHTTPBackend(srv.URL, "", false, "")
 	_, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query:           "cwd",
 		IncludeContext:  true,
@@ -469,7 +470,7 @@ func TestHTTPBackend_QueryRecallEntriesBuildsMissingSummaries(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := service.NewHTTPBackend(srv.URL, "", false, "")
 	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query:          "cwd failed reads",
 		IncludeContext: true,
@@ -513,7 +514,7 @@ func TestHTTPBackend_QueryRecallEntriesRejectsInconsistentContextEntries(t *test
 	}))
 	t.Cleanup(srv.Close)
 
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := service.NewHTTPBackend(srv.URL, "", false, "")
 	_, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query:          "cwd failed reads",
 		IncludeContext: true,
@@ -540,7 +541,7 @@ func TestHTTPBackend_QueryRecallEntriesRejectsMissingContextRecallEntryRows(t *t
 	}))
 	t.Cleanup(srv.Close)
 
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := service.NewHTTPBackend(srv.URL, "", false, "")
 	_, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query:          "cwd failed reads",
 		IncludeContext: true,
@@ -565,7 +566,7 @@ func TestHTTPBackend_QueryRecallEntriesReportsTrustedOnlyFallback(t *testing.T) 
 	}))
 	t.Cleanup(srv.Close)
 
-	svc := service.NewHTTPBackend(srv.URL, "", false)
+	svc := service.NewHTTPBackend(srv.URL, "", false, "")
 	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query:       "cwd failed reads",
 		TrustedOnly: true,
@@ -780,7 +781,7 @@ func TestHTTPBackend_ImportRecallEntries_RemoteReadOnly(t *testing.T) {
 		}))
 	defer srv.Close()
 
-	be := service.NewHTTPBackend(srv.URL, "", false)
+	be := service.NewHTTPBackend(srv.URL, "", false, "")
 	_, err := be.ImportRecallEntries(
 		context.Background(),
 		strings.NewReader(""),
@@ -850,7 +851,7 @@ func TestHTTPBackend_QueryRecallVector501PreservesSemanticCause(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	be := service.NewHTTPBackend(srv.URL, "", false)
+	be := service.NewHTTPBackend(srv.URL, "", false, "")
 	_, err := be.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query: "retry policy",
 		Mode:  "VECTOR",
@@ -886,7 +887,7 @@ func TestHTTPBackend_QueryRecallRejectsResponseModeMismatch(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	be := service.NewHTTPBackend(srv.URL, "", false)
+	be := service.NewHTTPBackend(srv.URL, "", false, "")
 	_, err := be.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query: "retry policy", Mode: db.RecallQueryModeHybrid,
 	})
@@ -964,7 +965,7 @@ func TestHTTPSearchContent(t *testing.T) {
 			_, _ = w.Write([]byte(`{"matches":[{"session_id":"s1","location":"message"}],"next_cursor":0}`))
 		}))
 	defer srv.Close()
-	be := service.NewHTTPBackend(srv.URL, "", true)
+	be := service.NewHTTPBackend(srv.URL, "", true, "")
 	res, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
 		Pattern: "needle", Timezone: "America/New_York", Limit: 50,
 		ExcludeSessionIDs: []string{"live", "echo"},
@@ -984,7 +985,7 @@ func TestHTTPSearchContentSemanticSetsIntentHeader(t *testing.T) {
 			_, _ = w.Write([]byte(`{"matches":[],"next_cursor":0}`))
 		}))
 	defer srv.Close()
-	be := service.NewHTTPBackend(srv.URL, "", true)
+	be := service.NewHTTPBackend(srv.URL, "", true, "")
 
 	_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
 		Pattern: "needle", Mode: "semantic", Limit: 50,
@@ -1004,7 +1005,7 @@ func TestHTTPImportRecallEntriesPassesAllowProductionImport(t *testing.T) {
 			_, _ = w.Write([]byte(`{"imported":0,"skipped":0}`))
 		}))
 	defer srv.Close()
-	be := service.NewHTTPBackend(srv.URL, "", false)
+	be := service.NewHTTPBackend(srv.URL, "", false, "")
 
 	_, err := be.ImportRecallEntries(
 		context.Background(),
@@ -1073,7 +1074,7 @@ func TestHTTPSearchContent_501PreservesCauseDetail(t *testing.T) {
 		}))
 	defer srv.Close()
 
-	be := service.NewHTTPBackend(srv.URL, "", true)
+	be := service.NewHTTPBackend(srv.URL, "", true, "")
 	_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{Pattern: "needle"})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, service.ErrSemanticUnavailable)
@@ -1110,7 +1111,7 @@ func TestHTTPSearchContent_501PreservesBackendSpecificReason(t *testing.T) {
 				}))
 			defer srv.Close()
 
-			be := service.NewHTTPBackend(srv.URL, "", true)
+			be := service.NewHTTPBackend(srv.URL, "", true, "")
 			_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
 				Pattern: "needle", Mode: "semantic",
 			})
@@ -1136,7 +1137,7 @@ func TestHTTPSearchContent_501IdenticalToSentinelDoesNotDuplicate(t *testing.T) 
 		}))
 	defer srv.Close()
 
-	be := service.NewHTTPBackend(srv.URL, "", true)
+	be := service.NewHTTPBackend(srv.URL, "", true, "")
 	_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{Pattern: "needle"})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, service.ErrSemanticUnavailable)
@@ -1152,7 +1153,7 @@ func TestNewHTTPBackend_TrimsTrailingSlash(t *testing.T) {
 	// Caller passes a baseURL with trailing slash; constructor
 	// must normalize so the concatenated path does not have a
 	// double slash.
-	svc := service.NewHTTPBackend(env.BaseURL+"/", "", false)
+	svc := service.NewHTTPBackend(env.BaseURL+"/", "", false, "")
 	detail, err := svc.Get(context.Background(), "trim-s")
 	require.NoError(t, err)
 	assert.Equal(t, "trim-s", detail.ID)
@@ -1192,4 +1193,60 @@ func TestHTTPBackend_AuthToken(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "401")
 	})
+}
+
+func TestHTTPBackendSessionBrowserLinks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/base/api/v1/sessions":
+			fmt.Fprint(w, `{"sessions":[{"id":"codex:session:42"}]}`)
+		case "/base/api/v1/sessions/codex:session:42", "/base/api/v1/sessions/sync":
+			fmt.Fprint(w, `{"id":"codex:session:42"}`)
+		case "/base/api/v1/search":
+			fmt.Fprint(w, `{"results":[{"session_id":"codex:session:42"}]}`)
+		case "/base/api/v1/search/content":
+			fmt.Fprint(w, `{"matches":[{"session_id":"codex:session:42"}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	svc := service.NewHTTPBackend(server.URL+"/base", "", false, "")
+	want := server.URL + "/base/sessions/codex/session:42"
+	detail, err := svc.Get(t.Context(), "codex:session:42")
+	require.NoError(t, err)
+	assert.Equal(t, want, detail.WebURL)
+	synced, err := svc.Sync(t.Context(), service.SyncInput{ID: "codex:session:42"})
+	require.NoError(t, err)
+	assert.Equal(t, want, synced.WebURL)
+	list, err := svc.List(t.Context(), service.ListFilter{})
+	require.NoError(t, err)
+	require.Len(t, list.Sessions, 1)
+	assert.Equal(t, want, list.Sessions[0].WebURL)
+	hits, err := svc.Search(t.Context(), service.SearchRequest{Query: "example"})
+	require.NoError(t, err)
+	require.Len(t, hits.Results, 1)
+	assert.Equal(t, want, hits.Results[0].WebURL)
+	content, err := svc.SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "example"})
+	require.NoError(t, err)
+	require.Len(t, content.Matches, 1)
+	assert.Equal(t, want, content.Matches[0].WebURL)
+}
+
+func TestHTTPBackendBrowserLinksOmitCredentials(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, password, ok := r.BasicAuth()
+		assert.True(t, ok)
+		assert.Equal(t, "example-user", user)
+		assert.Equal(t, "example-password", password)
+		fmt.Fprint(w, `{"id":"codex:session:42"}`)
+	}))
+	defer server.Close()
+	endpoint, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	endpoint.User = url.UserPassword("example-user", "example-password")
+	svc := service.NewHTTPBackend(endpoint.String(), "", false, "")
+	detail, err := svc.Get(t.Context(), "codex:session:42")
+	require.NoError(t, err)
+	assert.Equal(t, server.URL+"/sessions/codex/session:42", detail.WebURL)
 }

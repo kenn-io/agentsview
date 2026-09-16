@@ -116,6 +116,12 @@ is ready. Canceling that wait with `Ctrl+C` leaves the child running. Use
 slow. If startup state remains stuck, follow the error's guidance to verify the
 owning process before terminating it manually and retrying.
 
+Startup reports database opening, schema and index updates, and column
+migrations before that work begins. These steps appear in the terminal and
+`serve.log`, which also records their elapsed times. An upgrade that requires a
+full resync is announced as soon as the database version or schema check detects
+it. Session counters begin after database preparation finishes.
+
 ______________________________________________________________________
 
 ### `agentsview serve`
@@ -469,10 +475,10 @@ ______________________________________________________________________
 
 ### `agentsview db compact`
 
-Rebuild the local SQLite archive into a staged, verified database and reclaim
-free pages. The command also truncates the WAL. It does not compress or
-deduplicate live tool-result payloads, so it does not change future growth from
-those payloads.
+Reclaim unused space in the local SQLite archive. The command writes and checks
+a compacted database before replacing the original, and truncates the
+write-ahead log (WAL). It preserves stored sessions and does not change what
+future imports retain.
 
 ```bash
 agentsview db compact [flags]
@@ -503,9 +509,11 @@ space. For a large archive, use a separate volume with enough capacity:
 
 ```bash
 agentsview db compact --dry-run
+agentsview daemon stop  # required for --staging-dir
 agentsview db compact \
   --staging-dir /mnt/cache/data-cache/agentsview-compact \
   --keep-backup --yes
+agentsview daemon start
 ```
 
 When a writable daemon is running, the command sends the request to that
@@ -530,25 +538,29 @@ ______________________________________________________________________
 
 ### `agentsview db strip --images`
 
-Remove supported inline image payloads from stored tool-result rows. The
-command requires `--images`; it uses the existing direct maintenance write
-owner and confirmation prompt. It never changes provider source files or
-standalone image files. Run `db compact` separately when you need measured
-SQLite file-space reclamation. Changed sessions are automatically rescanned for
-secrets so detections reflect the remaining content.
+Replace supported inline images and offloaded image references in stored tool
+results with text descriptions. The command requires `--images` and asks for
+confirmation. It never changes provider source files or standalone image files.
+Run `db compact` separately when you need measured SQLite file-space
+reclamation. Changed sessions are automatically rescanned for secrets so
+detections reflect the remaining content.
+
+Preview with `--dry-run`. Before applying changes, run `agentsview daemon stop`.
+The CLI writes directly to the archive and refuses while a writable daemon owns
+it. It does not start a daemon. Restart the daemon after the command finishes.
 
 ```bash
 agentsview db strip --images [flags]
 ```
 
-| Flag        | Default | Description                                         |
-| ----------- | ------- | --------------------------------------------------- |
-| `--images`  | `false` | Required image cleanup operation                    |
-| `--project` |         | Sessions whose project contains this substring     |
-| `--before`  |         | Sessions that ended before this date (`YYYY-MM-DD`) |
-| `--dry-run` | `false` | Preview selected sessions and byte counts           |
-| `--yes`     | `false` | Skip confirmation                                   |
-| `--format`  | `human` | Use `json` for machine-readable output              |
+| Flag        | Default | Description                                                                                                          |
+| ----------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
+| `--images`  | `false` | Required image cleanup operation                                                                                     |
+| `--project` |         | Sessions whose project contains this substring                                                                       |
+| `--before`  |         | Before this date (`YYYY-MM-DD`), using end time, then start time, then creation time when earlier fields are missing |
+| `--dry-run` | `false` | Preview selected sessions and byte counts                                                                            |
+| `--yes`     | `false` | Skip confirmation                                                                                                    |
+| `--format`  | `human` | Use `json` for machine-readable output                                                                               |
 
 JSON apply requires `--yes`. Preview and a declined confirmation leave the
 archive unchanged. Reported stored-content bytes and decoded image bytes are
@@ -568,22 +580,29 @@ whose `image_ref` field holds the `asset://` reference. The
 `GET /api/v1/assets/{filename}` route and `renderMarkdown` resolve these
 references from the local assets directory.
 
-The image appears when a tool result's output is switched to formatted mode and
-every other block in that result is a text block. Raw mode shows the stored
-text, including the markdown reference, as it always has, and so does a result
-that still holds an unmigrated image block, such as an SVG or an `image/bmp`
-payload beside a migrated PNG. Under `require_auth` the asset route rejects the
-browser's image request, because an `img` element sends no `Authorization`
-header. Chat-imported images already carry that limit.
+The image appears in formatted tool output alongside text and other supported
+inline or offloaded images. Raw mode shows the stored text, including the
+markdown reference, as it always has, and so does a result that still holds an
+unmigrated image block, such as an SVG or an `image/bmp` payload beside a
+migrated PNG. Under `require_auth` the asset route rejects the browser's image
+request, because an `img` element sends no `Authorization` header. Chat-imported
+images already carry that limit.
 
-Migration changes currently stored rows. A later keep-mode reparse or full
-resync can restore inline bytes from provider source files. The
-`tool_result_images = "drop"` policy keeps supported images projected during
-future ingestion and full resync. The command requires `--images` and never
-changes provider source files. A separate serving host needs the matching
-`{dataDir}/assets` directory as well as the copied database content. Run
-`db compact` separately to measure SQLite file-space reclamation after
+Migration updates images already in the archive. Set
+`tool_result_images = "offload"` and restart the daemon to store future
+supported images in the same asset directory. With `keep`, a later reparse or
+full resync can restore inline images from provider source files. With `drop`,
+ingestion and full resync replace images with text descriptions.
+`db strip --images` also removes offloaded references from selected results.
+Neither operation deletes asset files. The migration command requires `--images`
+and never changes provider source files. A separate serving host needs the
+matching `{dataDir}/assets` directory as well as the copied database content.
+Run `db compact` separately to measure SQLite file-space reclamation after
 migration. Back up the `{dataDir}/assets` directory together with the archive.
+
+The raw `agentsview session export` command still streams provider source bytes.
+See [image storage](/docs/data/#ingest-time-image-offload) for export and
+remote-backend limits.
 
 If a session transaction fails after writing assets, its rows remain unchanged
 but complete, unreferenced asset files remain on disk. Retrying the migration
@@ -602,18 +621,25 @@ non-canonical `image/jpg` spelling. `db strip --images` is broader and replaces
 any `image/*` payload with a placeholder, so the two commands do not select the
 same rows.
 
+Preview with `--dry-run`. Before applying changes, run `agentsview daemon stop`.
+The CLI writes directly to the archive and refuses while a writable daemon owns
+it. It does not start a daemon. Restart the daemon after the command finishes.
+
 ```bash
-agentsview db migrate --images [flags]
+agentsview db migrate --images --dry-run
+agentsview daemon stop
+agentsview db migrate --images
+agentsview daemon start
 ```
 
-| Flag        | Default | Description                                         |
-| ----------- | ------- | --------------------------------------------------- |
-| `--images`  | `false` | Required image migration operation                  |
-| `--project` |         | Sessions whose project contains this substring      |
-| `--before`  |         | Sessions that ended before this date (`YYYY-MM-DD`) |
-| `--dry-run` | `false` | Preview selected sessions and byte counts           |
-| `--yes`     | `false` | Skip confirmation                                   |
-| `--format`  | `human` | Use `json` for machine-readable output              |
+| Flag        | Default | Description                                                                                                          |
+| ----------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
+| `--images`  | `false` | Required image migration operation                                                                                   |
+| `--project` |         | Sessions whose project contains this substring                                                                       |
+| `--before`  |         | Before this date (`YYYY-MM-DD`), using end time, then start time, then creation time when earlier fields are missing |
+| `--dry-run` | `false` | Preview selected sessions and byte counts                                                                            |
+| `--yes`     | `false` | Skip confirmation                                                                                                    |
+| `--format`  | `human` | Use `json` for machine-readable output                                                                               |
 
 JSON apply requires `--yes`. Preview and a declined confirmation leave the
 archive and assets directory unchanged. Reported stored-content bytes and
@@ -1290,24 +1316,29 @@ ______________________________________________________________________
 
 ### `agentsview export hour|day|digest`
 
-Export canonical UTC-hour activity and usage documents, coherent UTC-day
-snapshots, or compact date-range digests from the local archive. See
-[Reporting Export](/docs/reporting-export/) for the v3 wire schema, quiet-hour
-semantics, snapshot guarantee, and digest rules.
+Export hourly activity and usage, complete days, or digests that identify
+changed hours from the local SQLite archive. A digest is a checksum of the
+exported content. See [Reporting Export](/docs/reporting-export/) for the JSON
+fields, version rules, and correction workflow.
 
 ```bash
 agentsview export hour 2026-07-28-13
 agentsview export day 2026-07-28
+agentsview export day --schema-version 4 --bucket 1m 2026-07-28
 agentsview export digest --from 2026-06-28 --to 2026-07-27
 ```
 
 Hour and date keys must be exact, zero-padded UTC values. Open and future hours
 are rejected. The current UTC date contains only closed hours and has no day
-digest. Digest ranges are inclusive and limited to 31 dates. Integrations should
-validate the emitted `schema_version: 3` and content digest before accepting a
-document. Version 3 is the default and the only accepted `--schema-version`;
-versions 1 and 2 are no longer emitted. Update consumers and refresh stored
-digests when upgrading.
+digest. Digest ranges include both dates and are limited to 31 days.
+
+Version 3 is the default. Use `--schema-version 4` to group activity and usage
+by project, agent, model, and activity category together. Version 4 also accepts
+repeatable `--project-key` filters and a `--bucket` duration, such as `1m`,
+`5m`, or `15m`. The duration must be a positive whole-minute divisor of one
+hour. Version 3 rejects both options. Versions 1 and 2 are no longer available.
+Validate your chosen `schema_version` and content digest before accepting a
+document. Refresh saved digests when changing versions.
 
 ______________________________________________________________________
 
@@ -1445,7 +1476,13 @@ and operational guidance.
 agentsview mcp
 agentsview mcp --http 127.0.0.1:8085
 agentsview mcp --server http://127.0.0.1:8080
+agentsview mcp status --json
 ```
+
+`agentsview mcp status --json` lists local HTTP MCP listeners without starting
+one; stdio connections do not appear. See
+[listener discovery](/docs/mcp/#discover-running-http-listeners) for endpoint
+fields and token-file paths.
 
 By default, `agentsview mcp` speaks stdio, which is the expected transport for
 local MCP clients such as Claude Desktop, Claude Code, and Codex.
@@ -1578,6 +1615,7 @@ agentsview help
 | `COWORK_DIR`                      | (platform-specific)                                  | Claude Desktop cowork sessions directory                                                            |
 | `CODEX_SESSIONS_DIR`              | `~/.codex/sessions`                                  | Codex sessions directory                                                                            |
 | `CODEX_HOME`                      | unset                                                | Codex home that re-roots the default `sessions/` and `archived_sessions/` discovery paths           |
+| `CLINE_DIR`                       | `~/.cline`                                           | Cline sessions directory (discovers under `<root>/data/sessions/` or direct sessions root)          |
 | `COMMANDCODE_PROJECTS_DIR`        | `~/.commandcode/projects`                            | Command Code projects directory                                                                     |
 | `COPILOT_DIR`                     | `~/.copilot`                                         | Copilot CLI sessions directory                                                                      |
 | `CORTEX_DIR`                      | `~/.snowflake/cortex/conversations`                  | Cortex Code conversations directory                                                                 |
@@ -1653,7 +1691,3 @@ profile or pass them inline:
 ```bash
 AGENTSVIEW_DATA_DIR=/tmp/av-test agentsview serve
 ```
-
-### Ingest-time image offload
-
-Set `tool_result_images = "offload"` to offload supported tool-result images on future ingestion. Run `agentsview db migrate --images` to retry retained inline images after an asset-write failure. The raw `agentsview session export` command continues to stream provider source bytes. See [image storage](/docs/data/#ingest-time-image-offload) for backup and remote-backend limits.

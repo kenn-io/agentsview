@@ -4,6 +4,18 @@
 
 export type GetApiV1DataProjectReclassificationCandidatesParams = {
   /**
+   * Session activity range start, inclusive
+   */
+  date_from?: string;
+  /**
+   * Session activity range end, inclusive
+   */
+  date_to?: string;
+  /**
+   * Timezone for date bounds
+   */
+  timezone?: string;
+  /**
    * Project display label
    */
   project_label?: string;

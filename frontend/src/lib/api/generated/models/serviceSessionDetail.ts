@@ -49,6 +49,7 @@ export interface ServiceSessionDetail {
   parser_malformed_lines?: number;
   peak_context_tokens: number;
   project: string;
+  project_assigned?: boolean;
   quality_signals?: DbQualitySignals;
   relationship_type?: string;
   secret_leak_count: number;
@@ -65,4 +66,5 @@ export interface ServiceSessionDetail {
   transcript_fidelity?: string;
   transcript_revision?: string;
   user_message_count: number;
+  web_url?: string;
 }

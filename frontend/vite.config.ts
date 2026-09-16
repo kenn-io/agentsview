@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite-plus";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { paraglideVitePlugin } from "@inlang/paraglide-js";
@@ -46,83 +47,92 @@ function requestOriginMatchesLoopbackDevServer(
   }
 }
 
-export default defineConfig({
-  fmt: {},
-  lint: {
-    jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
-    rules: {
-      "vite-plus/prefer-vite-plus-imports": "error",
+export default defineConfig(({ command }) => {
+  // Builds and checks also compile translations. Keep their generated output
+  // separate from the runtime watched by an open development page.
+  const liveDevelopment = command === "serve" && !process.env.VITEST;
+  const devTranslations = fileURLToPath(new URL("./.paraglide/dev/", import.meta.url));
+  return {
+    fmt: {},
+    lint: {
+      jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
+      rules: {
+        "vite-plus/prefer-vite-plus-imports": "error",
+      },
+      options: {
+        typeAware: true,
+        typeCheck: true,
+      },
     },
-    options: {
-      typeAware: true,
-      typeCheck: true,
+    base: "/",
+    optimizeDeps: {
+      exclude: ["@kenn-io/kit-ui"],
     },
-  },
-  base: "/",
-  optimizeDeps: {
-    exclude: ["@kenn-io/kit-ui"],
-  },
-  plugins: [
-    svelte(),
-    paraglideVitePlugin({
-      project: "./project.inlang",
-      outdir: "./src/lib/paraglide",
-      emitTsDeclarations: true,
-      strategy: ["localStorage", "preferredLanguage", "baseLocale"],
-      localStorageKey: "agentsview-locale",
-    }),
-  ],
-  define: {
-    "import.meta.env.VITE_BUILD_COMMIT": JSON.stringify(gitCommit()),
-  },
-  resolve: {
-    conditions: ["browser"],
-  },
-  server: {
-    proxy: {
-      "/api": {
-        target: apiTarget,
-        changeOrigin: true,
-        configure(proxy) {
-          proxy.on("proxyReq", (proxyReq, req) => {
-            const origin = req.headers.origin;
-            if (
-              requestOriginMatchesLoopbackDevServer(
-                typeof origin === "string" ? origin : undefined,
-                req.headers.host,
-              )
-            ) {
-              proxyReq.setHeader("Origin", apiTargetOrigin);
-            }
-          });
+    plugins: [
+      svelte(),
+      paraglideVitePlugin({
+        project: "./project.inlang",
+        outdir: liveDevelopment ? devTranslations : "./src/lib/paraglide",
+        emitTsDeclarations: true,
+        strategy: ["localStorage", "preferredLanguage", "baseLocale"],
+        localStorageKey: "agentsview-locale",
+      }),
+    ],
+    define: {
+      "import.meta.env.VITE_BUILD_COMMIT": JSON.stringify(gitCommit()),
+    },
+    resolve: {
+      conditions: ["browser"],
+      alias: liveDevelopment
+        ? [{ find: /^(\.\.\/)+paraglide\//, replacement: devTranslations }]
+        : [],
+    },
+    server: {
+      proxy: {
+        "/api": {
+          target: apiTarget,
+          changeOrigin: true,
+          configure(proxy) {
+            proxy.on("proxyReq", (proxyReq, req) => {
+              const origin = req.headers.origin;
+              if (
+                requestOriginMatchesLoopbackDevServer(
+                  typeof origin === "string" ? origin : undefined,
+                  req.headers.host,
+                )
+              ) {
+                proxyReq.setHeader("Origin", apiTargetOrigin);
+              }
+            });
+          },
         },
       },
     },
-  },
-  build: {
-    outDir: "dist",
-    emptyOutDir: true,
-    // The SPA is served from the local embedded Go binary, so chunk size
-    // carries no network cost. Heavy libraries (mermaid, shiki, katex,
-    // cytoscape) are already lazy chunks; the main entry sits just above
-    // the default 500 kB threshold.
-    chunkSizeWarningLimit: 1200,
-    rolldownOptions: {
-      checks: {
-        // Plugin time is dominated by vite-plus's internal vitest-resolver
-        // plugin, which we cannot act on from this config.
-        pluginTimings: false,
+    build: {
+      outDir: "dist",
+      emptyOutDir: true,
+      // The SPA is served from the local embedded Go binary, so chunk size
+      // carries no network cost. Heavy libraries (mermaid, shiki, katex,
+      // cytoscape) are already lazy chunks; the main entry sits just above
+      // the default 500 kB threshold.
+      chunkSizeWarningLimit: 1200,
+      rolldownOptions: {
+        checks: {
+          // Plugin time is dominated by vite-plus's internal vitest-resolver
+          // plugin, which we cannot act on from this config.
+          pluginTimings: false,
+        },
       },
     },
-  },
-  test: {
-    environment: "jsdom",
-    exclude: ["e2e/**", "node_modules/**"],
-    setupFiles: ["./src/vitest-setup.ts"],
-    server: {
-      deps: {
-        inline: ["svelte"],
+    test: {
+      environment: "jsdom",
+      exclude: ["e2e/**", "node_modules/**"],
+      setupFiles: ["./src/vitest-setup.ts"],
+      server: {
+        deps: {
+          inline: ["svelte"],
+        },
       },
     },
-  },
+  };
 });

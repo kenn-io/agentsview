@@ -22,6 +22,7 @@ func (readOnlyDataSpy) GetMachineAliases(context.Context) (map[string]string, er
 
 func (readOnlyDataSpy) GetProjectInventory(
 	_ context.Context,
+	_ db.ProjectDateFilter,
 ) (db.ProjectInventory, error) {
 	return db.ProjectInventory{}, db.ErrReadOnly
 }

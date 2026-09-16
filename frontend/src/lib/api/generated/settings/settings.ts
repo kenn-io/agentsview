@@ -4,11 +4,16 @@
 import type {
   ApplyWorktreeMappingsRequest,
   ApplyWorktreeMappingsResponse,
+  DbClearedSessionProjectAssignment,
+  DbSessionProjectAssignment,
   DbWorktreeProjectMapping,
   DbWorktreeReclassificationPreview,
+  DeleteApiV1SettingsSessionProjectAssignmentsBySessionIdPathParameters,
   DeleteApiV1SettingsWorktreeMappingsByIdPathParameters,
   GetApiV1SettingsWorktreeMappingsParams,
+  PutApiV1SettingsSessionProjectAssignmentsBySessionIdPathParameters,
   PutApiV1SettingsWorktreeMappingsByIdPathParameters,
+  SessionProjectAssignmentRequest,
   SettingsResponse,
   SettingsUpdateRequest,
   WorktreeMappingRequest,
@@ -52,8 +57,19 @@ export const putApiV1Settings = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return orvalFetch<SettingsResponse>(getPutApiV1SettingsUrl(), {
     ...options,
@@ -61,6 +77,72 @@ export const putApiV1Settings = async (
     headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
     body: JSON.stringify(settingsUpdateRequest),
   });
+};
+
+export const getDeleteApiV1SettingsSessionProjectAssignmentsBySessionIdUrl = ({
+  sessionId,
+}: DeleteApiV1SettingsSessionProjectAssignmentsBySessionIdPathParameters) => {
+  return `/api/v1/settings/session-project-assignments/${encodeURIComponent(String(sessionId))}`;
+};
+
+/**
+ * @summary Use automatic project assignment for one session
+ */
+export const deleteApiV1SettingsSessionProjectAssignmentsBySessionId = async (
+  { sessionId }: DeleteApiV1SettingsSessionProjectAssignmentsBySessionIdPathParameters,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<DbClearedSessionProjectAssignment> => {
+  return orvalFetch<DbClearedSessionProjectAssignment>(
+    getDeleteApiV1SettingsSessionProjectAssignmentsBySessionIdUrl({ sessionId }),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getPutApiV1SettingsSessionProjectAssignmentsBySessionIdUrl = ({
+  sessionId,
+}: PutApiV1SettingsSessionProjectAssignmentsBySessionIdPathParameters) => {
+  return `/api/v1/settings/session-project-assignments/${encodeURIComponent(String(sessionId))}`;
+};
+
+/**
+ * @summary Assign one session to a project
+ */
+export const putApiV1SettingsSessionProjectAssignmentsBySessionId = async (
+  { sessionId }: PutApiV1SettingsSessionProjectAssignmentsBySessionIdPathParameters,
+  sessionProjectAssignmentRequest: SessionProjectAssignmentRequest,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<DbSessionProjectAssignment> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return orvalFetch<DbSessionProjectAssignment>(
+    getPutApiV1SettingsSessionProjectAssignmentsBySessionIdUrl({ sessionId }),
+    {
+      ...options,
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
+      body: JSON.stringify(sessionProjectAssignmentRequest),
+    },
+  );
 };
 
 export const getGetApiV1SettingsWorktreeMappingsUrl = (
@@ -110,8 +192,19 @@ export const postApiV1SettingsWorktreeMappings = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return orvalFetch<DbWorktreeProjectMapping>(getPostApiV1SettingsWorktreeMappingsUrl(), {
     ...options,
@@ -137,8 +230,19 @@ export const postApiV1SettingsWorktreeMappingsApply = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return orvalFetch<ApplyWorktreeMappingsResponse>(getPostApiV1SettingsWorktreeMappingsApplyUrl(), {
     ...options,
@@ -164,8 +268,19 @@ export const postApiV1SettingsWorktreeMappingsPreview = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return orvalFetch<DbWorktreeReclassificationPreview>(
     getPostApiV1SettingsWorktreeMappingsPreviewUrl(),
@@ -194,8 +309,19 @@ export const postApiV1SettingsWorktreeMappingsReclassify = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return orvalFetch<WorktreeReclassificationApplyResponse>(
     getPostApiV1SettingsWorktreeMappingsReclassifyUrl(),
@@ -246,8 +372,19 @@ export const putApiV1SettingsWorktreeMappingsById = async (
   ): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
-    if (Array.isArray(h)) return Object.fromEntries(h);
-    return h;
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
   };
   return orvalFetch<DbWorktreeProjectMapping>(getPutApiV1SettingsWorktreeMappingsByIdUrl({ id }), {
     ...options,

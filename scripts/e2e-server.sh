@@ -71,7 +71,9 @@ else
     echo "Building server..."
     restore_pricing_snapshot
     SERVER="$TMPDIR/agentsview"
-    cd "$ROOT/frontend" && npm run build
+    cd "$ROOT/frontend" && \
+      VITE_PROJECT_MAPPING_WORKSPACE="${VITE_PROJECT_MAPPING_WORKSPACE:-true}" \
+      npm run build
     rm -rf "$ROOT/internal/web/dist"
     cp -r "$ROOT/frontend/dist" "$ROOT/internal/web/dist"
     printf '%s\n' \

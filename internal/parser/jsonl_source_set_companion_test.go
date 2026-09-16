@@ -88,6 +88,61 @@ func TestJSONLSourceSetCompanionFingerprintHashChanges(t *testing.T) {
 		"companion content must be mixed into the fingerprint hash")
 }
 
+func symlinkOrSkip(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+}
+
+func TestJSONLSourceSetCompanionSymlinkPolicy(t *testing.T) {
+	tests := []struct {
+		name   string
+		strict bool
+	}{
+		{name: "legacy follow", strict: false},
+		{name: "strict reject", strict: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			transcript := filepath.Join(root, "session.jsonl")
+			target := filepath.Join(t.TempDir(), "session.meta")
+			companion := transcript + ".meta"
+			writeFile(t, transcript, `{"line":1}`+"\n")
+			writeFile(t, target, "v1")
+			symlinkOrSkip(t, target, companion)
+
+			opts := []JSONLOption{
+				WithContentHashing(),
+				WithCompanionFiles(companionFor),
+			}
+			if tc.strict {
+				opts = append(opts, WithRejectSymlinkCompanions())
+			}
+			set := NewJSONLSourceSet(AgentClaude, []string{root}, opts...)
+			sources, err := set.Discover(ctx)
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+
+			before, err := set.Fingerprint(ctx, sources[0])
+			require.NoError(t, err)
+			writeFile(t, target, "v2")
+			after, err := set.Fingerprint(ctx, sources[0])
+			require.NoError(t, err)
+
+			if tc.strict {
+				assert.Equal(t, before, after,
+					"strict mode must exclude symlinked companion content")
+			} else {
+				assert.NotEqual(t, before.Hash, after.Hash,
+					"legacy mode must follow symlinked companion content")
+			}
+		})
+	}
+}
+
 func TestJSONLSourceSetCompanionChangedPathMapsToTranscript(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

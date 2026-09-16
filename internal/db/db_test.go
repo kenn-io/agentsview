@@ -1075,6 +1075,11 @@ func TestCurrentDataVersionPositAssistantProviderIdentity(t *testing.T) {
 		"Posit Assistant provider identity requires re-parsing usage rows")
 }
 
+func TestCurrentDataVersionClaudeRepoLocalWorktrees(t *testing.T) {
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 109,
+		"Claude repository-local worktrees must reparse archives from v0.43.0 at data version 108")
+}
+
 func TestCurrentDataVersionAntigravityCLICwdAndWorktreeProject(t *testing.T) {
 	assert.GreaterOrEqual(t, CurrentDataVersion(), 96,
 		"version 96 is the data-version boundary for Antigravity CLI cwd and worktree project recovery")

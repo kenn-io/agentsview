@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 # Build and run the dockerized screenshot pipeline.
 #
@@ -106,7 +107,9 @@ TOOL_OUTPUT_TARGET=$(sqlite3 -separator $'\t' "$CONTEXT/test-sessions.db" \
   "SELECT tc.session_id, m.ordinal
    FROM tool_calls tc
    JOIN messages m ON m.id = tc.message_id
+   JOIN sessions s ON s.id = tc.session_id
    WHERE COALESCE(tc.result_content, '') != ''
+     AND COALESCE(s.parent_session_id, '') = ''
      AND trim(tc.result_content) NOT LIKE '[%'
      AND trim(tc.result_content) NOT LIKE '{%'
    ORDER BY CASE WHEN tc.result_content LIKE '%\`\`\`%'
@@ -142,6 +145,7 @@ CODE_BLOCK_SESSION_ID=$(sqlite3 "$CONTEXT/test-sessions.db" \
      AND COALESCE(m.is_system, 0) = 0
      AND m.content NOT LIKE '[%'
      AND s.message_count <= 12
+     AND COALESCE(s.parent_session_id, '') = ''
    ORDER BY length(m.content), m.session_id
    LIMIT 1" 2>/dev/null || true)
 if [ -n "$CODE_BLOCK_SESSION_ID" ]; then

@@ -417,9 +417,13 @@ function nextScannerToken(
     ) {
       return { kind: "protected", start: offset, end: inputEnd };
     }
-    const tag = scanner.tokenizer.tag(rest);
-    if (tag) {
-      const raw = tag.raw;
+    const markedTag = scanner.tokenizer.tag(rest);
+    const fallbackTag = new RegExp(`^${XML_TAG_ESCAPE_RE.source}`).exec(rest)?.[0];
+    if (!markedTag && fallbackTag && isProtectedAutolink(fallbackTag)) {
+      return { kind: "protected", start: offset, end: offset + fallbackTag.length };
+    }
+    const raw = markedTag?.raw ?? fallbackTag;
+    if (raw) {
       if (raw.startsWith("<!--") || /^<!|^<\?/i.test(raw)) {
         return { kind: "protected", start: offset, end: inputEnd };
       }
