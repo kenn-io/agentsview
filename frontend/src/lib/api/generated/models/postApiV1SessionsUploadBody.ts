@@ -3,5 +3,5 @@
  */
 
 export type PostApiV1SessionsUploadBody = {
-  file: Blob;
+  file: Blob | File;
 };

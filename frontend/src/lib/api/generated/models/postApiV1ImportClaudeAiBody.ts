@@ -3,5 +3,5 @@
  */
 
 export type PostApiV1ImportClaudeAiBody = {
-  file: Blob;
+  file: Blob | File;
 };
