@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func canonicalTestDir(path string) string {
@@ -70,6 +71,35 @@ func TestResumeCommandAugure(t *testing.T) {
 
 	cmd = resumeCommand("augure", resumeAgents["augure"], "run-1", "ossington-5")
 	assert.Equal(t, "augure resume run-1 -m ossington-5", cmd)
+}
+
+// TestResumeRawSessionIDUsesIDPrefix covers remapped sessions: the raw ID
+// is derived from the ID's own prefix (parser registry), never from the
+// remapped display agent, so `augure resume` receives the raw codex ID.
+func TestResumeRawSessionIDUsesIDPrefix(t *testing.T) {
+	// A codex session remapped onto augure keeps its codex:<id> form; the
+	// augure command must receive the raw codex ID.
+	assert.Equal(t,
+		"019eb791-cf7d-75c1-8439-9ed74c122d99",
+		resumeRawSessionID("augure",
+			"codex:019eb791-cf7d-75c1-8439-9ed74c122d99"),
+		"the ID prefix must be stripped, not the remapped agent prefix")
+
+	// An augure-prefixed session served by the augure agent is unchanged.
+	assert.Equal(t, "abc123", resumeRawSessionID("augure", "augure:abc123"))
+
+	// Remote Claude IDs carry a claude: prefix even though the registry
+	// prefix is empty; the serving-agent prefix is the fallback.
+	assert.Equal(t, "abc-123", resumeRawSessionID("claude", "claude:abc-123"))
+
+	// Unprefixed (local Claude-style) IDs pass through.
+	assert.Equal(t, "plain-id", resumeRawSessionID("claude", "plain-id"))
+
+	// Host-qualified remote IDs keep the same strip behavior: AgentByPrefix
+	// sees the host-stripped form.
+	host, raw := parser.StripHostPrefix("somehost~codex:abc")
+	assert.Equal(t, "somehost", host)
+	assert.Equal(t, "abc", resumeRawSessionID("augure", raw))
 }
 
 func TestCommandWithCleanup(t *testing.T) {

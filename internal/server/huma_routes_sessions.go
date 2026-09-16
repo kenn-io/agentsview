@@ -1301,8 +1301,7 @@ func (s *Server) humaResumeSession(
 			},
 		}, nil
 	}
-	prefix := string(session.Agent) + ":"
-	rawID = strings.TrimPrefix(rawID, prefix)
+	rawID = resumeRawSessionID(string(session.Agent), rawID)
 	if s.db.ReadOnly() && !req.CommandOnly {
 		return nil, apiError(http.StatusNotImplemented,
 			"session launch not available in remote mode")

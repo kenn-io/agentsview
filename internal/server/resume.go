@@ -57,6 +57,24 @@ var resumeAgents = map[string]string{
 
 const syntheticModel = "<synthetic>"
 
+// resumeRawSessionID strips the session ID's agent prefix, determined
+// from the ID itself rather than the serving agent. Remap rules relabel
+// sessions without renaming them, so a codex-prefixed ID served as an
+// augure session must resume with the raw codex ID; the serving agent
+// only selects the resume command. Registry prefixes cover every
+// prefixed agent; the serving agent's own prefix is the fallback for
+// remote IDs ("host~claude:<id>") whose agent has no registry prefix.
+func resumeRawSessionID(sessionAgent, rawID string) string {
+	if def, ok := parser.AgentByPrefix(rawID); ok && def.IDPrefix != "" {
+		return strings.TrimPrefix(rawID, def.IDPrefix)
+	}
+	if prefix := sessionAgent + ":"; prefix != ":" &&
+		strings.HasPrefix(rawID, prefix) {
+		return strings.TrimPrefix(rawID, prefix)
+	}
+	return rawID
+}
+
 func resumeCommand(agent, tmpl, rawID, model string) string {
 	cmd := fmt.Sprintf(tmpl, shellQuote(rawID))
 	if !resumeAgentNeedsModel(agent) {

@@ -769,6 +769,10 @@ func TestRemoteSyncExcludedCapability(t *testing.T) {
 	// Omnigent's chat.db co-locates transcripts with authentication
 	// secrets, so its source tree never leaves the machine.
 	assert.True(t, excluded[AgentOmnigent])
+	// Augure Desktop's roots hold the raw state.db (plus WAL/journal)
+	// alongside non-transcript application state, so the store never
+	// leaves the machine either.
+	assert.True(t, excluded[AgentAugureDesktop])
 	assert.False(t, excluded[AgentClaude])
 	assert.False(t, excluded[AgentCodex])
 }
@@ -776,6 +780,7 @@ func TestRemoteSyncExcludedCapability(t *testing.T) {
 func TestRemoteSyncExcludedAgent(t *testing.T) {
 	assert.True(t, RemoteSyncExcludedAgent(AgentTrae))
 	assert.True(t, RemoteSyncExcludedAgent(AgentOmnigent))
+	assert.True(t, RemoteSyncExcludedAgent(AgentAugureDesktop))
 	assert.False(t, RemoteSyncExcludedAgent(AgentClaude))
 	assert.False(t, RemoteSyncExcludedAgent(AgentType("unknown-agent")))
 }

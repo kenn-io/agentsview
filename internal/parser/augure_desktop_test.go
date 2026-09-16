@@ -254,6 +254,7 @@ func TestAugureDesktopRegistryEntry(t *testing.T) {
 		"AppData/Local/augure-desktop",
 	}, def.DefaultDirs)
 	assert.True(t, def.FileBased)
-	assert.False(t, def.RemoteSyncExcluded,
-		"matches the Hermes remote-sync posture (not excluded)")
+	assert.True(t, def.RemoteSyncExcluded,
+		"roots hold raw state.db/WAL plus app state; excluded until a "+
+			"safe allowlisted export exists")
 }

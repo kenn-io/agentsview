@@ -735,6 +735,12 @@ var Registry = []AgentDef{
 		},
 		IDPrefix:  "augure-desktop:",
 		FileBased: true,
+		// The fork's roots hold the raw state.db (plus WAL/journal files)
+		// alongside non-transcript application state; copying or sanitizing
+		// the store can retain deleted pages and unrelated state. Remote
+		// sync stays disabled until there is a fresh, allowlisted export
+		// schema, matching the Omnigent chat.db precedent.
+		RemoteSyncExcluded: true,
 	},
 	{
 		Type:        AgentGrok,
