@@ -407,6 +407,70 @@ func TestStopDaemonProcessTerminatesAndCleansRecord(t *testing.T) {
 		"runtime record must be removed after stop")
 }
 
+func TestStopDaemonRuntimeForUpgradeChecksExplicitPortBeforeStop(t *testing.T) {
+	requirePOSIXSignals(t, "uses a child process to observe replacement signals")
+	for _, tt := range []struct {
+		name        string
+		explicit    bool
+		ownEndpoint bool
+		wildcard    bool
+		host        string
+		otherHost   string
+		ephemeral   bool
+		wantError   bool
+	}{
+		{name: "occupied explicit port preserves incumbent", explicit: true, wantError: true},
+		{name: "incumbent endpoint can be replaced", explicit: true, ownEndpoint: true},
+		{name: "incumbent wildcard can narrow to loopback", explicit: true, ownEndpoint: true, wildcard: true},
+		{name: "same endpoint through localhost", explicit: true, ownEndpoint: true, host: "localhost"},
+		{name: "widening preserves incumbent on shared port", explicit: true, ownEndpoint: true, host: "0.0.0.0", otherHost: "127.0.0.2", wantError: true},
+		{name: "implicit port retains fallback"},
+		{name: "explicit zero retains automatic selection", explicit: true, ephemeral: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := runtimeTestDir(t)
+			pid, _ := startReapedSleepProcess(t)
+			endpoint := newPingDaemonWithPID(t, pid)
+			writeRuntimeRecordFixture(t, dir, runtimeRecordForEndpoint(
+				endpoint, withRuntimePID(pid),
+			))
+			rt := FindDaemonRuntime(dir)
+			require.NotNil(t, rt)
+			if tt.wildcard {
+				rt.Host = "0.0.0.0"
+			}
+			listener, port := heldLoopbackPort(t)
+			t.Cleanup(func() { listener.Close() })
+			if tt.ownEndpoint {
+				port = endpoint.Port
+			} else if tt.ephemeral {
+				port = 0
+			}
+			if tt.otherHost != "" {
+				other, err := net.Listen("tcp", net.JoinHostPort(tt.otherHost, strconv.Itoa(port)))
+				if err != nil {
+					t.Skipf("second loopback address unavailable: %v", err)
+				}
+				t.Cleanup(func() { other.Close() })
+			}
+			cfg := config.Config{DataDir: dir, Host: endpoint.Host, Port: port, PortExplicit: tt.explicit}
+			if tt.host != "" {
+				cfg.Host = tt.host
+			}
+			err := stopDaemonRuntimeForUpgradeImpl(cfg, rt)
+			if tt.wantError {
+				assert.ErrorContains(t, err, "requested port")
+				assert.True(t, daemon.ProcessAlive(pid), "failed preflight must leave the incumbent running")
+				assert.FileExists(t, rt.Record.SourcePath)
+				return
+			}
+			require.NoError(t, err)
+			assert.False(t, daemon.ProcessAlive(pid))
+			assert.NoFileExists(t, rt.Record.SourcePath)
+		})
+	}
+}
+
 func TestStopDaemonProcessKeepsRecordWhenProcessSurvives(t *testing.T) {
 	requirePOSIXSignals(t, "relies on POSIX zombie semantics for ProcessAlive")
 	dir := runtimeTestDir(t)

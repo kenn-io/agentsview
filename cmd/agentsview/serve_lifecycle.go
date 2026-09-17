@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -322,6 +323,26 @@ func stopDaemonRuntimeForUpgradeImpl(
 			"cannot confirm pid %d is the recorded agentsview daemon",
 			rt.Record.PID,
 		)
+	}
+	// Reject a known port collision before taking down the incumbent. Its
+	// own bind endpoint, including a wildcard bind, is replaceable.
+	if cfg.PortExplicit && cfg.Port != 0 {
+		reusesEndpoint := cfg.Port == rt.Port && cfg.Host == rt.Host
+		if cfg.Port == rt.Port && !reusesEndpoint {
+			port := strconv.Itoa(cfg.Port)
+			requested, requestedErr := net.ResolveTCPAddr("tcp", net.JoinHostPort(cfg.Host, port))
+			incumbent, incumbentErr := net.ResolveTCPAddr("tcp", net.JoinHostPort(rt.Host, port))
+			if requestedErr == nil && incumbentErr == nil {
+				reusesEndpoint = (requested.IP.Equal(incumbent.IP) && requested.Zone == incumbent.Zone) ||
+					len(incumbent.IP) == 0 || incumbent.IP.IsUnspecified()
+			}
+		}
+		// A wider bind may also overlap an unrelated listener on the same port.
+		if !reusesEndpoint {
+			if _, err := prepareServeRuntimeConfig(cfg, serveRuntimeOptions{}); err != nil {
+				return err
+			}
+		}
 	}
 	if err := stopDaemonProcess(rt.Record, serveStopGraceTimeout); err != nil {
 		return fmt.Errorf("stopping pid %d: %w", rt.Record.PID, err)

@@ -168,6 +168,11 @@ in `config.toml` is busy. An explicit nonzero `--port` exits when that port is
 occupied. Use `--port 0` to select any available port. For a supervised daemon
 that must keep a fixed port, pass `--port` in its launch command.
 
+When replacing a running daemon, an occupied explicit port is rejected before
+the daemon stops. The daemon's existing host and port can be reused, including
+narrowing a wildcard bind to loopback. To widen a bind on the same explicit port,
+stop the daemon first with `agentsview daemon stop`.
+
 `agentsview update` preserves the original `--port` choice recorded by the
 running daemon, including `0`. Without an explicit port, restart tries the
 previous listening port and retains automatic fallback. See
