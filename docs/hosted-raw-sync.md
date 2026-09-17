@@ -45,7 +45,7 @@ The tracked delivery sequence and production acceptance criteria live in
 | HTTP raw transport     | Available     | Missing-object negotiation, resumable upload, and manifest commit; status is local only                                      |
 | Laptop capture         | Available     | Watching, bounded audits, safe SQLite snapshots, durable spooling, checkpoints, retries, and local status                    |
 | Server derivation      | Not available | Accepted generations are not yet parsed into PostgreSQL sessions or embeddings                                               |
-| Operations and cutover | Partial        | `pg serve` cleans due upload sessions and spool stages at startup and every 15 minutes; accepted-generation retention, disaster rebuilds, and migration from `pg push` remain future work |
+| Operations and cutover | Partial       | `pg serve` cleans due upload sessions and spool stages at startup and every 15 minutes; accepted-generation retention, disaster rebuilds, and migration from `pg push` remain future work |
 
 ### Work still in development
 

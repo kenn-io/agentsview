@@ -320,7 +320,7 @@ func CheckRawSyncWritePrivileges(
 	ctx context.Context, db *sql.DB, schema string,
 ) (bool, error) {
 	missing, err := checkRawSyncWritePrivileges(ctx, db, schema)
-	return missing == "", err
+	return missing == "" && err == nil, err
 }
 
 // CanWriteRawSyncSchema reports whether the current role can use every table

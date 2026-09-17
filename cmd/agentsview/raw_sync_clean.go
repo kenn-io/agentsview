@@ -12,8 +12,6 @@ import (
 
 const rawSyncCleanUploadsCompletion = "Raw upload cleanup pass completed."
 
-var runRawSyncCleanUploadsCLI = runRawSyncCleanUploads
-
 func newRawSyncCleanUploadsCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:          "clean-uploads",
@@ -22,7 +20,7 @@ func newRawSyncCleanUploadsCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := runRawSyncCleanUploadsCLI(); err != nil {
+			if err := runRawSyncCleanUploads(); err != nil {
 				return fmt.Errorf("raw-sync clean-uploads: %w", err)
 			}
 			_, err := fmt.Fprintln(cmd.OutOrStdout(), rawSyncCleanUploadsCompletion)
