@@ -96,7 +96,7 @@ func assertTimingPayload(t *testing.T, payload []byte, sessionID string, measure
 		tool, unattributed = 2000, 4000
 	}
 	assert.Equal(t, tool, got.ToolDurationMs)
-	assert.Equal(t, map[string]any{"thinking_ms": float64(0), "generation_ms": float64(0), "tool_ms": float64(tool), "unattributed_ms": float64(unattributed)}, raw["activity_totals"])
+	assert.Equal(t, map[string]any{"tool_ms": float64(tool), "unattributed_ms": float64(unattributed)}, raw["activity_totals"])
 	assert.Equal(t, db.ActivityTotals{ToolMs: tool, UnattributedMs: unattributed}, got.ActivityTotals)
 	require.Len(t, got.Activity, 2)
 	assert.Positive(t, got.Activity[0].MessageID)
@@ -105,9 +105,6 @@ func assertTimingPayload(t *testing.T, payload []byte, sessionID string, measure
 	assert.Equal(t, int64(6000), got.Activity[0].DurationMs)
 	assert.Equal(t, tool, got.Activity[0].ToolMs)
 	assert.Equal(t, unattributed, got.Activity[0].UnattributedMs)
-	assert.Zero(t, got.Activity[0].ThinkingMs)
-	assert.Zero(t, got.Activity[0].GenerationMs)
-	assert.Equal(t, "message_only", got.Activity[0].Precision)
 	assert.False(t, got.Activity[0].Running)
 	require.Len(t, got.Turns, 1)
 	require.Len(t, got.Turns[0].Calls, 1)

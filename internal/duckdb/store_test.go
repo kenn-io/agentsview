@@ -4492,7 +4492,7 @@ func TestGetSessionTimingActivityTimingParity(t *testing.T) {
 		{name: "measured thinking followed by tool", executions: []execution{{"Bash", "02", "04", new(int64(2000))}}, wantDuration: 6000, wantTool: 2000, wantUnattributed: 4000, wantCategories: []db.CategoryTotal{{Category: "Bash", DurationMs: 2000, CallCount: 1}}},
 		{name: "missing execution", executions: []execution{{category: "Bash"}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Bash", CallCount: 1}}},
 		{name: "same and cross category overlap", executions: []execution{{"Bash", "02", "04", new(int64(2000))}, {"Bash", "03", "05", new(int64(2000))}, {"Read", "04", "06", new(int64(2000))}}, wantDuration: 6000, wantTool: 4000, wantUnattributed: 2000, wantCategories: []db.CategoryTotal{{Category: "Bash", DurationMs: 3000, CallCount: 2}, {Category: "Read", DurationMs: 2000, CallCount: 1}}},
-		{name: "stale session end", staleEnd: true, executions: []execution{{"Bash", "02", "04", new(int64(2000))}}, wantDuration: 4000, wantTool: 2000, wantUnattributed: 2000, wantCategories: []db.CategoryTotal{{Category: "Bash", DurationMs: 2000, CallCount: 1}}},
+		{name: "stale session end", staleEnd: true, executions: []execution{{"Bash", "02", "04", new(int64(2000))}}, wantDuration: 1000, wantUnattributed: 1000, wantCategories: []db.CategoryTotal{{Category: "Bash", CallCount: 1}}},
 		{name: "no visible prompt", noPrompt: true, executions: []execution{{"Bash", "02", "04", new(int64(2000))}}, wantTool: 2000, wantCategories: []db.CategoryTotal{{Category: "Bash", DurationMs: 2000, CallCount: 1}}},
 		{name: "system and tool result carriers", carriers: true, executions: []execution{{"Bash", "02", "04", new(int64(2000))}}, wantDuration: 6000, wantTool: 2000, wantUnattributed: 4000, wantCategories: []db.CategoryTotal{{Category: "Bash", DurationMs: 2000, CallCount: 1}}},
 		{name: "open child", openChild: true, executions: []execution{{category: "Task"}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Task", CallCount: 1}}},
@@ -4600,9 +4600,6 @@ func TestGetSessionTimingActivityTimingParity(t *testing.T) {
 			assert.Equal(t, tc.wantDuration, got.Activity[0].DurationMs)
 			assert.Equal(t, tc.wantTool, got.Activity[0].ToolMs)
 			assert.Equal(t, tc.wantUnattributed, got.Activity[0].UnattributedMs)
-			assert.Zero(t, got.Activity[0].ThinkingMs)
-			assert.Zero(t, got.Activity[0].GenerationMs)
-			assert.Equal(t, "message_only", got.Activity[0].Precision)
 			assert.False(t, got.Activity[0].Running)
 		})
 	}

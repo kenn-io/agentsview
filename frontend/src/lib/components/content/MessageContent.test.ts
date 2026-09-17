@@ -2,7 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount, type ComponentProps } from "svelte";
 import type { Session } from "../../api/types.js";
-import type { DbMessage as Message, DbSessionTiming as SessionTiming } from "../../api/generated/index.js";
+import type {
+  DbMessage as Message,
+  DbSessionTiming as SessionTiming,
+} from "../../api/generated/index.js";
 import { setLocale } from "../../i18n/index.js";
 import MessageContent from "./MessageContent.svelte";
 
@@ -186,8 +189,6 @@ describe("MessageContent", () => {
         by_category: [],
         activity: [],
         activity_totals: {
-          thinking_ms: 0,
-          generation_ms: 0,
           tool_ms: duration ?? 0,
           unattributed_ms: 6000 - (duration ?? 0),
         },

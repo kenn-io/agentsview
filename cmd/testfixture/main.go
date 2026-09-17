@@ -453,7 +453,7 @@ func generateContent(role string, idx, total int) string {
 	)
 }
 
-// Bash has execution endpoints, and the linked Task has a closed child session interval.
+// Copilot emits execution endpoints; the linked Task has a closed child interval.
 func createDurationShowcaseFixture(
 	database *db.DB, start time.Time,
 ) error {
@@ -485,7 +485,7 @@ func createDurationShowcaseFixture(
 		ID:               subagentID,
 		Project:          project,
 		Machine:          "test-machine",
-		Agent:            "claude",
+		Agent:            "copilot",
 		StartedAt:        new(subStart.Format(time.RFC3339Nano)),
 		EndedAt:          new(subEnd.Format(time.RFC3339Nano)),
 		MessageCount:     len(subAgentMessages),
@@ -522,7 +522,7 @@ func createDurationShowcaseFixture(
 		ID:               parentID,
 		Project:          project,
 		Machine:          "test-machine",
-		Agent:            "claude",
+		Agent:            "copilot",
 		Cwd:              "/workspace/مشروع/.worktrees/שלוםfeaturewithalongcheckoutnamefortooltipwrappingwithoutbreakopportunities",
 		StartedAt:        new(t0.Format(time.RFC3339Nano)),
 		EndedAt:          new(endParent.Format(time.RFC3339Nano)),

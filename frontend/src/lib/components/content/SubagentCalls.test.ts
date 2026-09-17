@@ -22,7 +22,7 @@ describe("SubagentCalls measured timing", () => {
         slowest_call: null,
         by_category: [],
         activity: [],
-        activity_totals: { thinking_ms: 0, generation_ms: 0, tool_ms: 2000, unattributed_ms: 4000 },
+        activity_totals: { tool_ms: 2000, unattributed_ms: 4000 },
         running,
         turns: [
           {

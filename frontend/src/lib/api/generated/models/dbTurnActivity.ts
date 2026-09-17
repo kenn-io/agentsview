@@ -4,13 +4,10 @@
 
 export interface DbTurnActivity {
   duration_ms: number;
-  generation_ms: number;
   message_id: number;
   ordinal: number;
-  precision: string;
   running: boolean;
   started_at: string;
-  thinking_ms: number;
   tool_ms: number;
   unattributed_ms: number;
 }

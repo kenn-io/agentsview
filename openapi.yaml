@@ -815,12 +815,6 @@ components:
     DbActivityTotals:
       additionalProperties: false
       properties:
-        generation_ms:
-          format: int64
-          type: integer
-        thinking_ms:
-          format: int64
-          type: integer
         tool_ms:
           format: int64
           type: integer
@@ -828,8 +822,6 @@ components:
           format: int64
           type: integer
       required:
-        - thinking_ms
-        - generation_ms
         - tool_ms
         - unattributed_ms
       type: object
@@ -4059,24 +4051,16 @@ components:
         duration_ms:
           format: int64
           type: integer
-        generation_ms:
-          format: int64
-          type: integer
         message_id:
           format: int64
           type: integer
         ordinal:
           format: int64
           type: integer
-        precision:
-          type: string
         running:
           type: boolean
         started_at:
           type: string
-        thinking_ms:
-          format: int64
-          type: integer
         tool_ms:
           format: int64
           type: integer
@@ -4088,11 +4072,8 @@ components:
         - ordinal
         - started_at
         - duration_ms
-        - thinking_ms
-        - generation_ms
         - tool_ms
         - unattributed_ms
-        - precision
         - running
       type: object
     DbTurnTiming:

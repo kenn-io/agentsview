@@ -41,9 +41,13 @@
   });
 
   let timing = $derived(sessionTiming.timing);
+  let measuredCategories = $derived(new Set(
+    timing?.turns.flatMap((turn) => turn.calls)
+      .filter((call) => call.duration_ms != null)
+      .map((call) => call.category),
+  ));
+  let toolTimeMeasured = $derived(timing?.tool_call_count === 0 || measuredCategories.size > 0);
   let activityKinds: { kind: ActivityKind; label: string }[] = $derived([
-    { kind: "thinking", label: m.session_vitals_activity_thinking() },
-    { kind: "generation", label: m.session_vitals_activity_generation() },
     { kind: "tool", label: m.session_vitals_activity_tool() },
     { kind: "unattributed", label: m.session_vitals_activity_unattributed() },
   ]);
@@ -198,7 +202,7 @@
     if (kind !== "unattributed") return activity[`${kind}_ms`];
     return Math.max(
       0,
-      durationMs - activity.thinking_ms - activity.generation_ms - activity.tool_ms,
+      durationMs - activity.tool_ms,
     );
   }
 
@@ -387,7 +391,7 @@
           <div>
             <div class="lbl">{m.session_vitals_tool_time()}</div>
             <div class="val">
-              {formatDuration(timing.tool_duration_ms)}
+              {toolTimeMeasured ? formatDuration(timing.tool_duration_ms) : m.session_vitals_not_measured()}
             </div>
           </div>
           <div>
@@ -431,7 +435,7 @@
         {#each activityKinds as { kind, label } (kind)}
           <span>
             <span class="legend-dot" style="background: {activityToken(kind)};"></span>
-            {label} · {formatDuration(activityTotal(kind))}
+            {label} · {kind === "tool" && !toolTimeMeasured ? m.session_vitals_not_measured() : formatDuration(activityTotal(kind))}
           </span>
         {/each}
       </div>
@@ -497,7 +501,7 @@
                 style="width: {(cat.duration_ms / Math.max(timing.tool_duration_ms, 1)) * 100}%; background: {categoryToken(cat.category)};"
               ></span>
             </span>
-            <span class="agg-val">{formatDuration(cat.duration_ms)}</span>
+            <span class="agg-val">{measuredCategories.has(cat.category) ? formatDuration(cat.duration_ms) : m.session_vitals_not_measured()}</span>
           </button>
         {/each}
       </section>

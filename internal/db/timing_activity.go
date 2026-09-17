@@ -6,8 +6,6 @@ import (
 )
 
 type ActivityTotals struct {
-	ThinkingMs     int64 `json:"thinking_ms"`
-	GenerationMs   int64 `json:"generation_ms"`
 	ToolMs         int64 `json:"tool_ms"`
 	UnattributedMs int64 `json:"unattributed_ms"`
 }
@@ -17,11 +15,8 @@ type TurnActivity struct {
 	Ordinal        int    `json:"ordinal"`
 	StartedAt      string `json:"started_at"`
 	DurationMs     int64  `json:"duration_ms"`
-	ThinkingMs     int64  `json:"thinking_ms"`
-	GenerationMs   int64  `json:"generation_ms"`
 	ToolMs         int64  `json:"tool_ms"`
 	UnattributedMs int64  `json:"unattributed_ms"`
-	Precision      string `json:"precision"`
 	Running        bool   `json:"running"`
 }
 
@@ -57,12 +52,13 @@ func measuredCallInterval(call CallRow) (activityInterval, bool) {
 	return executionInterval(call)
 }
 
-// assembleTurnActivity shares clipped evidence with call labels and category totals.
-func assembleTurnActivity(out *SessionTiming, sess *Session, turns []TurnRow, calls []CallRow, now time.Time) []*activityInterval {
-	out.Activity = []TurnActivity{}
+// activityPrompts returns visible user prompts in timestamp order.
+func activityPrompts(turns []TurnRow) ([]TurnActivity, []int64) {
+	activity := []TurnActivity{}
 	var starts []int64
 	for _, row := range turns {
-		if row.Role != "user" || row.IsSystem || row.IsSystemPrefixed || row.SourceSubtype == "tool_result" || row.ContentLength <= 0 {
+		if row.Role != "user" || row.IsSystem || row.IsSystemPrefixed ||
+			row.SourceSubtype == "tool_result" || row.ContentLength <= 0 {
 			continue
 		}
 		start, ok := timingTimestamp(row.Timestamp)
@@ -70,54 +66,52 @@ func assembleTurnActivity(out *SessionTiming, sess *Session, turns []TurnRow, ca
 			continue
 		}
 		starts = append(starts, start)
-		out.Activity = append(out.Activity, TurnActivity{
-			MessageID: row.MessageID, Ordinal: int(row.Ordinal), StartedAt: row.Timestamp,
-			Precision: "message_only",
+		activity = append(activity, TurnActivity{
+			MessageID: row.MessageID, Ordinal: int(row.Ordinal),
+			StartedAt: row.Timestamp,
 		})
 	}
+
+	return activity, starts
+}
+
+// assembleTurnActivity clips aggregates to the session, retaining raw call evidence.
+func assembleTurnActivity(
+	out *SessionTiming, sess *Session, turns []TurnRow, calls []CallRow, now time.Time,
+) []*activityInterval {
+	var starts []int64
+	out.Activity, starts = activityPrompts(turns)
 
 	var lower, upper int64
 	var hasLower, hasUpper bool
 	if sess.StartedAt != nil {
 		lower, hasLower = timingTimestamp(*sess.StartedAt)
 	}
-	if len(starts) > 0 {
+	if !hasLower && len(starts) > 0 {
 		lower, hasLower = starts[0], true
 	}
 	if sess.EndedAt != nil {
 		upper, hasUpper = timingTimestamp(*sess.EndedAt)
 	}
+	if out.Running {
+		upper, hasUpper = now.UnixMilli(), true
+	}
+	if len(starts) > 0 && !hasUpper {
+		upper, hasUpper = starts[len(starts)-1], true
+	}
+
+	var measured []activityInterval
+	byCategory := map[string][]activityInterval{}
+	counts := map[string]int{}
 	intervals := make([]*activityInterval, len(calls))
 	for i, call := range calls {
+		counts[call.Category]++
 		interval, ok := measuredCallInterval(call)
 		if !ok {
 			continue
 		}
 		intervals[i] = &interval
-		if !hasUpper || interval.end > upper {
-			upper, hasUpper = interval.end, true
-		}
-	}
-	if out.Running {
-		upper, hasUpper = now.UnixMilli(), true
-	}
-	if len(starts) > 0 && (!hasUpper || upper < starts[len(starts)-1]) {
-		upper, hasUpper = starts[len(starts)-1], true
-	}
-
-	var measured []activityInterval
-	var measuredTotals []activityInterval
-	byCategory := map[string][]activityInterval{}
-	counts := map[string]int{}
-	for i, call := range calls {
-		counts[call.Category]++
-		interval := intervals[i]
-		if interval == nil {
-			continue
-		}
-		measuredTotals = append(measuredTotals, *interval)
-		byCategory[call.Category] = append(byCategory[call.Category], *interval)
-		clipped := *interval
+		clipped := interval
 		if hasLower {
 			clipped.start = max(clipped.start, lower)
 		}
@@ -128,15 +122,16 @@ func assembleTurnActivity(out *SessionTiming, sess *Session, turns []TurnRow, ca
 			continue
 		}
 		measured = append(measured, clipped)
+		byCategory[call.Category] = append(byCategory[call.Category], clipped)
 	}
-	out.ToolDurationMs = activityUnionMs(measuredTotals)
-	out.ActivityTotals.ToolMs = activityUnionMs(measured)
+	out.ToolDurationMs = activityUnionMs(measured)
 	if len(starts) == 0 {
 		out.ActivityTotals.ToolMs = out.ToolDurationMs
 	}
 	for category, count := range counts {
 		out.ByCategory = append(out.ByCategory, CategoryTotal{
-			Category: category, CallCount: count, DurationMs: activityUnionMs(byCategory[category]),
+			Category: category, CallCount: count,
+			DurationMs: activityUnionMs(byCategory[category]),
 		})
 	}
 	sort.Slice(out.ByCategory, func(i, j int) bool {
@@ -149,23 +144,27 @@ func assembleTurnActivity(out *SessionTiming, sess *Session, turns []TurnRow, ca
 		return intervals
 	}
 	for i := range out.Activity {
-		end := upper
+		start, end := starts[i], upper
+		if hasLower {
+			start = max(start, lower)
+		}
 		if i+1 < len(starts) {
-			end = starts[i+1]
+			end = min(end, starts[i+1])
 		}
 		row := &out.Activity[i]
-		row.DurationMs = end - starts[i]
+		row.DurationMs = max(0, end-start)
 		row.Running = out.Running && i == len(starts)-1
 		var clipped []activityInterval
 		for _, interval := range measured {
-			start, stop := max(interval.start, starts[i]), min(interval.end, end)
-			if stop > start {
-				clipped = append(clipped, activityInterval{start, stop})
+			lo, hi := max(interval.start, start), min(interval.end, end)
+			if hi > lo {
+				clipped = append(clipped, activityInterval{lo, hi})
 			}
 		}
 		row.ToolMs = activityUnionMs(clipped)
 		// Message content has no stored endpoints for thinking or generation.
 		row.UnattributedMs = row.DurationMs - row.ToolMs
+		out.ActivityTotals.ToolMs += row.ToolMs
 		out.ActivityTotals.UnattributedMs += row.UnattributedMs
 	}
 	return intervals

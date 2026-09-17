@@ -61,8 +61,6 @@ test.describe("Session Vital Signs", () => {
     const timing = await response.json();
     expect(timing.tool_duration_ms).toBe(140_000);
     expect(timing.activity_totals).toEqual({
-      thinking_ms: 0,
-      generation_ms: 0,
       tool_ms: 140_000,
       unattributed_ms: 35_000,
     });
@@ -70,21 +68,15 @@ test.describe("Session Vital Signs", () => {
       expect.objectContaining({
         ordinal: 0,
         duration_ms: 139_000,
-        thinking_ms: 0,
-        generation_ms: 0,
         tool_ms: 120_000,
         unattributed_ms: 19_000,
-        precision: "message_only",
         running: false,
       }),
       expect.objectContaining({
         ordinal: 5,
         duration_ms: 36_000,
-        thinking_ms: 0,
-        generation_ms: 0,
         tool_ms: 20_000,
         unattributed_ms: 16_000,
-        precision: "message_only",
         running: false,
       }),
     ]);

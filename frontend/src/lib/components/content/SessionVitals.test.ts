@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import type { Session } from "../../api/types/core.js";
@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => {
     by_category: [],
     turns: [],
     activity: [],
-    activity_totals: { thinking_ms: 0, generation_ms: 0, tool_ms: 0, unattributed_ms: 0 },
+    activity_totals: { tool_ms: 0, unattributed_ms: 0 },
     running: false,
   };
 
@@ -106,13 +106,40 @@ describe("SessionVitals", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([
+    { duration: null, label: "Not measured" },
+    { duration: 0, label: "0ms" },
+  ])(
+    "distinguishes $label from missing timing and keeps its category filter",
+    async ({ duration, label }) => {
+      const timing = timingWithCall();
+      timing.tool_duration_ms = 0;
+      timing.turns[0]!.calls[0]!.duration_ms = duration;
+      timing.by_category = [{ category: "Bash", duration_ms: 0, call_count: 1 }];
+      mocks.fetchSessionTiming.mockResolvedValue(timing);
+      component = mount(SessionVitals, {
+        target: document.body,
+        props: { sessionId: "sess-1", session: traceSession },
+      });
+      await tick();
+      await tick();
+
+      expect(document.querySelectorAll(".stat-grid .val")[1]?.textContent?.trim()).toBe(label);
+      const category = [...document.querySelectorAll<HTMLButtonElement>(".agg-row")].find(
+        (row) => row.querySelector(".agg-name")?.textContent?.trim() === "Bash",
+      );
+      expect(category?.querySelector(".agg-val")?.textContent?.trim()).toBe(label);
+      category!.click();
+      await tick();
+      expect(document.querySelector(".filter-chip")?.textContent).toContain("Bash");
+    },
+  );
+
   it("renders measured activity and unattributed time and jumps to the prompt", async () => {
     const timing = timingWithCall();
     timing.total_duration_ms = 6000;
     timing.tool_duration_ms = 2000;
     timing.activity_totals = {
-      thinking_ms: 0,
-      generation_ms: 0,
       tool_ms: 2000,
       unattributed_ms: 4000,
     };
@@ -122,11 +149,8 @@ describe("SessionVitals", () => {
         ordinal: 4,
         started_at: "2026-07-14T12:00:00Z",
         duration_ms: 6000,
-        thinking_ms: 0,
-        generation_ms: 0,
         tool_ms: 2000,
         unattributed_ms: 4000,
-        precision: "message_only",
         running: false,
       },
     ];
@@ -157,12 +181,7 @@ describe("SessionVitals", () => {
     expect(row?.getAttribute("aria-label")).toBe("Turn 1 · 6.0s");
     expect(
       [...row!.querySelectorAll(".activity-track > span")].map((el) => el.getAttribute("title")),
-    ).toEqual([
-      "Thinking · 0ms",
-      "Generation · 0ms",
-      "Tool execution · 2.0s",
-      "Unattributed · 4.0s",
-    ]);
+    ).toEqual(["Tool execution · 2.0s", "Unattributed · 4.0s"]);
     expect(
       parseFloat(row!.querySelector<HTMLElement>('[data-activity-kind="tool"]')!.style.width),
     ).toBeCloseTo(33.3333);
@@ -206,18 +225,15 @@ describe("SessionVitals", () => {
       ...mocks.timing,
       total_duration_ms: 6000,
       running: true,
-      activity_totals: { thinking_ms: 0, generation_ms: 0, tool_ms: 0, unattributed_ms: 6000 },
+      activity_totals: { tool_ms: 0, unattributed_ms: 6000 },
       activity: [
         {
           message_id: 1,
           ordinal: 0,
           started_at: "2026-07-14T12:00:00Z",
           duration_ms: 6000,
-          thinking_ms: 0,
-          generation_ms: 0,
           tool_ms: 0,
           unattributed_ms: 6000,
-          precision: "message_only",
           running: true,
         },
       ],
@@ -235,8 +251,6 @@ describe("SessionVitals", () => {
     expect(document.querySelector<HTMLElement>('[data-activity-kind="tool"]')?.style.width).toBe(
       "0%",
     );
-    expect(document.querySelector(".activity-totals")?.textContent).toContain("Thinking · 0ms");
-    expect(document.querySelector(".activity-totals")?.textContent).toContain("Generation · 0ms");
   });
 
   it("updates a running activity from live time", async () => {
@@ -245,18 +259,15 @@ describe("SessionVitals", () => {
       ...mocks.timing,
       total_duration_ms: 1000,
       running: true,
-      activity_totals: { thinking_ms: 0, generation_ms: 0, tool_ms: 1000, unattributed_ms: 0 },
+      activity_totals: { tool_ms: 1000, unattributed_ms: 0 },
       activity: [
         {
           message_id: 1,
           ordinal: 0,
           started_at: new Date(startMs).toISOString(),
           duration_ms: 1000,
-          thinking_ms: 0,
-          generation_ms: 0,
           tool_ms: 1000,
           unattributed_ms: 0,
-          precision: "message_only",
           running: true,
         },
       ],
@@ -275,15 +286,8 @@ describe("SessionVitals", () => {
     expect(row?.getAttribute("aria-label")).toBe("Turn 1 · 5.0s");
     expect(
       [...row!.querySelectorAll(".activity-track > span")].map((el) => el.getAttribute("title")),
-    ).toEqual([
-      "Thinking · 0ms",
-      "Generation · 0ms",
-      "Tool execution · 1.0s",
-      "Unattributed · 4.0s",
-    ]);
-    expect(row!.querySelector<HTMLElement>('[data-activity-kind="tool"]')!.style.width).toBe(
-      "20%",
-    );
+    ).toEqual(["Tool execution · 1.0s", "Unattributed · 4.0s"]);
+    expect(row!.querySelector<HTMLElement>('[data-activity-kind="tool"]')!.style.width).toBe("20%");
     expect(
       row!.querySelector<HTMLElement>('[data-activity-kind="unattributed"]')!.style.width,
     ).toBe("80%");

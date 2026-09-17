@@ -3,8 +3,6 @@
  */
 
 export interface DbActivityTotals {
-  generation_ms: number;
-  thinking_ms: number;
   tool_ms: number;
   unattributed_ms: number;
 }
