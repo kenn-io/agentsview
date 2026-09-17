@@ -35,6 +35,12 @@ jobs:
         with:
           cache: go
 
+      - name: Prepare SQLite header
+        if: runner.os == 'Linux'
+        run: |
+          make sqlite-vec-header
+          echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
+
       - name: Install lint tools
         run: |
           make lint-tools
