@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	"go.kenn.io/agentsview/internal/signals"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // maxSQLVars is the maximum bind variables per IN clause to stay
@@ -4921,9 +4922,9 @@ func truncateExcerpt(s string, max int) string {
 		return s
 	}
 	if max <= 3 {
-		return s[:max]
+		return stringutil.SafeTruncate(s, max)
 	}
-	return s[:max-3] + "..."
+	return stringutil.SafeTruncate(s, max-3) + "..."
 }
 
 func spaceReplacer(s string) string {

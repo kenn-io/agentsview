@@ -170,6 +170,36 @@ func writeIncompatibleDaemonRuntime(
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
 }
 
+// writeNewerDataVersionDaemonRuntime writes a runtime record for a daemon
+// that matches this client's API version but was already upgraded to a
+// newer data version than this binary knows about, simulating a client
+// (e.g. a long-running pg push --watch process) still running an older
+// binary after the daemon it talks to has been restarted post-upgrade.
+func writeNewerDataVersionDaemonRuntime(
+	t *testing.T, dir, host string, port int, daemonVersion string,
+) {
+	t.Helper()
+	meta := map[string]string{
+		runtimeHost:        host,
+		runtimePort:        strconv.Itoa(port),
+		runtimeReadOnly:    "false",
+		runtimeAPIVersion:  strconv.Itoa(daemonAPIVersion),
+		runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion() + 1),
+	}
+	rec := daemon.RuntimeRecord{
+		PID:       os.Getpid(),
+		Network:   daemon.NetworkTCP,
+		Address:   net.JoinHostPort(host, strconv.Itoa(port)),
+		Service:   daemonService,
+		Version:   daemonVersion,
+		StartedAt: time.Now(),
+		Metadata:  meta,
+	}
+	_, err := writeRuntimeRecordForTest(dir, rec)
+	require.NoError(t, err)
+	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+}
+
 // setTestVersion overrides the package build version for the duration of
 // the test and restores it on cleanup.
 func setTestVersion(t *testing.T, value string) {
@@ -796,6 +826,81 @@ func TestEnsureTransport_ArchiveWriteDoesNotDowngradeNewerDaemon(t *testing.T) {
 	assert.Equal(t, "http://"+net.JoinHostPort(host, strconv.Itoa(port)), tr.URL)
 }
 
+// TestEnsureTransport_ArchiveWriteNewerDaemonDataVersionHintsRestart covers a
+// long-running archive-write process (e.g. `pg push --watch`, installed as
+// `agentsview pg service`) that is still running an older binary after an
+// upgrade: it finds a live daemon already on a newer data version, correctly
+// refuses to replace it (that would downgrade the daemon), and must surface
+// the same actionable restart guidance the read-intent path already gives,
+// not the bare "data version ... incompatible" message.
+func TestEnsureTransport_ArchiveWriteNewerDaemonDataVersionHintsRestart(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	host, port := testPingServer(t)
+	writeNewerDataVersionDaemonRuntime(t, dir, host, port, "1.0.0")
+
+	setTestVersion(t, "1.1.0")
+	forbidStopDaemonRuntimeForUpgrade(t,
+		"a client with an older compiled data version must not replace a "+
+			"daemon already on a newer one")
+	forbidStartBackgroundServeForTransport(t,
+		"a client with an older compiled data version must not replace a "+
+			"daemon already on a newer one")
+
+	cfg := config.Config{DataDir: dir}
+	_, err := ensureTransport(
+		&cfg, transportIntentArchiveWrite, 100*time.Millisecond,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "data version")
+	assert.Contains(t, err.Error(), "newer than this agentsview binary")
+	assert.Contains(t, err.Error(), "pg service")
+	assert.NotContains(t, err.Error(), "older agentsview version")
+}
+
+// TestEnsureTransport_ReadNewerDaemonDataVersionHintsClientUpgrade covers a
+// read command on an older binary that finds a daemon already on a newer
+// data version. It must not tell the user to restart the daemon, which is
+// the healthy side; it must point at upgrading the client.
+func TestEnsureTransport_ReadNewerDaemonDataVersionHintsClientUpgrade(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	host, port := testPingServer(t)
+	writeNewerDataVersionDaemonRuntime(t, dir, host, port, "1.0.0")
+
+	setTestVersion(t, "1.1.0")
+	forbidStopDaemonRuntimeForUpgrade(t,
+		"a read client must not replace a daemon on a newer data version")
+	forbidStartBackgroundServeForTransport(t,
+		"a read client must not replace a daemon on a newer data version")
+
+	cfg := config.Config{DataDir: dir}
+	_, err := ensureTransport(&cfg, transportIntentRead, 100*time.Millisecond)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "data version")
+	assert.Contains(t, err.Error(), "newer than this agentsview binary")
+	assert.NotContains(t, err.Error(), "older agentsview version")
+}
+
+// TestAppendDaemonCompatibilityHintPicksDirection pins the two hint
+// directions: an older daemon or archive keeps the daemon-restart guidance,
+// while a daemon that is ahead of the client gets the client-upgrade one.
+func TestAppendDaemonCompatibilityHintPicksDirection(t *testing.T) {
+	base := errors.New("daemon data version 1 is incompatible with client data version 2")
+
+	older := appendDaemonCompatibilityHint(transport{}, base)
+	require.ErrorIs(t, older, base)
+	assert.Contains(t, older.Error(), "older agentsview version")
+	assert.Contains(t, older.Error(), "agentsview daemon restart")
+	assert.NotContains(t, older.Error(), "newer than this agentsview binary")
+
+	ahead := appendDaemonCompatibilityHint(
+		transport{DirectDaemonAhead: true}, base,
+	)
+	require.ErrorIs(t, ahead, base)
+	assert.Contains(t, ahead.Error(), "newer than this agentsview binary")
+	assert.Contains(t, ahead.Error(), "pg push --watch")
+	assert.NotContains(t, ahead.Error(), "older agentsview version")
+}
+
 func TestShouldUpgradeDaemonRuntimeTreatsMissingDaemonVersionAsOlderRelease(t *testing.T) {
 	rt := &DaemonRuntime{}
 
@@ -1097,6 +1202,33 @@ func TestEnsureTransportContextCancelDuringStartupWait(t *testing.T) {
 		ctx, &cfg, transportIntentArchiveWrite, 100*time.Millisecond,
 	)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+// TestEnsureTransport_ArchiveWriteNoDaemonEnvNamesIncompatibleDaemon covers
+// a writer running with AGENTSVIEW_NO_DAEMON=1 that finds a live daemon on a
+// newer data version. The env var forbids replacing the daemon, so the write
+// must fail, and the error must name the data-version mismatch rather than
+// claim the daemon is not responding.
+func TestEnsureTransport_ArchiveWriteNoDaemonEnvNamesIncompatibleDaemon(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	host, port := testPingServer(t)
+	writeNewerDataVersionDaemonRuntime(t, dir, host, port, "1.0.0")
+
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+	setTestVersion(t, "1.1.0")
+	forbidStopDaemonRuntimeForUpgrade(t,
+		"AGENTSVIEW_NO_DAEMON must not replace an incompatible daemon")
+	forbidStartBackgroundServeForTransport(t,
+		"AGENTSVIEW_NO_DAEMON must not start a replacement daemon")
+
+	cfg := config.Config{DataDir: dir}
+	_, err := ensureTransport(
+		&cfg, transportIntentArchiveWrite, 100*time.Millisecond,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "data version")
+	assert.Contains(t, err.Error(), "refusing to write directly")
+	assert.NotContains(t, err.Error(), "not responding")
 }
 
 func TestEnsureTransport_ArchiveWriteNoDaemonEnvUsesDirect(t *testing.T) {

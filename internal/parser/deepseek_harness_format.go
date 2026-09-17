@@ -22,13 +22,21 @@ import (
 )
 
 const (
-	deepSeekHarnessFormatVersion = 0
-	deepSeekHarnessMaxSafeInt    = int64(1<<53 - 1)
-	deepSeekHarnessMaxWindow     = 8 << 20
-	deepSeekHarnessDecoderMemory = 64 << 20
+	// deepSeekHarnessOldestFormatVersion and deepSeekHarnessNewestFormatVersion
+	// bound the released log generations Agentsview interprets. Generation zero
+	// keeps the original suffix-only filename (session.jsonl[.zstd]); later
+	// generations add a lowercase .vN component (session.vN.jsonl[.zstd]).
+	deepSeekHarnessOldestFormatVersion = 0
+	deepSeekHarnessNewestFormatVersion = 3
+	deepSeekHarnessMaxSafeInt          = int64(1<<53 - 1)
+	deepSeekHarnessMaxWindow           = 8 << 20
+	deepSeekHarnessDecoderMemory       = 64 << 20
 )
 
 type deepSeekHarnessHeader struct {
+	Version         int64
+	IsSeeded        bool
+	HasIsSeeded     bool
 	ID              string
 	CreatedAt       int64
 	Cwd             string
@@ -72,33 +80,41 @@ func (err deepSeekHarnessUnsupportedError) Error() string {
 	return err.message
 }
 
-// Released version-0 inventory; see the pinned provenance in session-format-sources.md.
+// deepSeekHarnessKnownEvents is the union of the released generation-0 and
+// generation-3 inventories plus the compatibility events introduced between
+// them; see the pinned provenance in session-format-sources.md.
 var deepSeekHarnessKnownEvents = map[string]struct{}{
 	"agent-preset/selected": {}, "agent/inbox/spliced": {},
 	"approval/asked": {}, "approval/decided": {}, "approval/policy": {},
-	"assistant/chunk": {}, "assistant/message": {},
+	"assistant/attempt": {}, "assistant/chunk": {}, "assistant/message": {},
 	"command/done": {}, "command/run": {},
 	"compaction/end": {}, "compaction/prune": {}, "compaction/start": {},
-	"compaction/summary": {}, "feedback/record": {}, "goal/change": {},
+	"compaction/summary": {}, "deliverables/presented": {},
+	"feedback/message-delete": {}, "feedback/message-put": {},
+	"feedback/record": {}, "goal/change": {},
 	"hook/invoked": {}, "hook/result": {}, "llm/retry": {},
-	"llm/retry-started": {}, "model/selection": {}, "permission/preset": {}, "plan/mode": {},
+	"llm/retry-started": {}, "model/selection": {},
+	"permission/preset": {}, "plan/mode": {},
 	"request/context": {}, "request/header": {}, "sandbox/mode": {},
-	"schedule/change": {}, "session/end-seed": {}, "session/title": {},
-	"session-log-deepseek/delivery-accepted": {},
-	"session/title-llm-request":              {}, "step/end": {}, "step/start": {},
-	"subagent/descriptor": {}, "subagent/model-selection-policy": {},
+	"schedule/change": {}, "session-log-deepseek/delivery-accepted": {},
+	"session/end-seed": {}, "session/title": {},
+	"session/title-llm-request": {}, "step/end": {}, "step/start": {},
+	"subagent/catalog": {}, "subagent/descriptor": {},
+	"subagent/model-selection-policy": {}, "system/message": {},
 	"team/member": {}, "team/message/delivered": {},
 	"team/message/queued": {}, "team/task": {}, "todo/write": {},
 	"tool-workflow/agent-end": {}, "tool-workflow/agent-start": {},
 	"tool-workflow/run-end": {}, "tool-workflow/run-start": {},
 	"tool/call": {}, "tool/code-dispatch": {},
-	"tool/code-dispatch-start": {}, "tool/result": {},
+	"tool/code-dispatch-start": {}, "tool/ptc-dispatch": {},
+	"tool/ptc-dispatch-start": {}, "tool/result": {},
 	"turn/end": {}, "turn/start": {}, "user/message": {},
 	"web/deepseek-search-llm-request": {},
 }
 
 var deepSeekHarnessSurfaceEvents = map[string]struct{}{
-	"user/message": {}, "assistant/message": {}, "tool/result": {},
+	"system/message": {}, "user/message": {}, "assistant/message": {},
+	"tool/result": {},
 }
 
 func scanDeepSeekHarnessLog(
@@ -514,7 +530,10 @@ func parseDeepSeekHarnessHeader(line []byte) (deepSeekHarnessHeader, error) {
 		return deepSeekHarnessHeader{}, errors.New("invalid DeepSeek Harness header: version is not a number")
 	}
 	numericVersion, numericErr := strconv.ParseFloat(version.String(), 64)
-	if numericErr != nil || numericVersion != deepSeekHarnessFormatVersion {
+	if numericErr != nil ||
+		numericVersion != math.Trunc(numericVersion) ||
+		numericVersion < deepSeekHarnessOldestFormatVersion ||
+		numericVersion > deepSeekHarnessNewestFormatVersion {
 		return deepSeekHarnessHeader{}, deepSeekHarnessUnsupportedError{message: fmt.Sprintf(
 			"unsupported DeepSeek Harness session format version %s", version,
 		)}
@@ -542,7 +561,17 @@ func parseDeepSeekHarnessHeader(line []byte) (deepSeekHarnessHeader, error) {
 		return deepSeekHarnessHeader{}, fmt.Errorf("invalid DeepSeek Harness header: %w", err)
 	}
 	header := deepSeekHarnessHeader{
-		ID: id, CreatedAt: createdAt, DelegationDepth: depth,
+		Version: int64(numericVersion), ID: id, CreatedAt: createdAt,
+		DelegationDepth: depth,
+	}
+	if raw, ok := fields["isSeeded"]; ok {
+		if err := json.Unmarshal(raw, &header.IsSeeded); err != nil {
+			return deepSeekHarnessHeader{}, errors.New("DeepSeek Harness header has invalid isSeeded")
+		}
+		header.HasIsSeeded = true
+	}
+	if header.Version >= 2 && !header.HasIsSeeded {
+		return deepSeekHarnessHeader{}, errors.New("DeepSeek Harness header is missing isSeeded")
 	}
 	if raw, ok := fields["cwd"]; ok {
 		header.Cwd, err = deepSeekHarnessString(raw)
@@ -582,6 +611,13 @@ func parseDeepSeekHarnessHeader(line []byte) (deepSeekHarnessHeader, error) {
 func validateDeepSeekHarnessPathIdentity(
 	path string, header deepSeekHarnessHeader,
 ) error {
+	pathVersion, versionOK := deepSeekHarnessPathVersion(path)
+	if !versionOK || pathVersion != header.Version {
+		return fmt.Errorf(
+			"DeepSeek Harness header version %d does not match source path",
+			header.Version,
+		)
+	}
 	encodedID := filepath.Base(filepath.Dir(path))
 	if encodeDeepSeekHarnessSegment(header.ID) != encodedID {
 		return fmt.Errorf("DeepSeek Harness header id does not match source path")
@@ -707,17 +743,23 @@ func validateDeepSeekHarnessSurfaceOp(raw jsontext.Value) error {
 	if err != nil {
 		return errors.New("invalid surface operation")
 	}
-	if !deepSeekHarnessExactKeys(fields, "op", "start", "end") {
-		return errors.New("invalid surface replacement")
+	startKey, endKey := "start", "end"
+	if !deepSeekHarnessExactKeys(fields, "op", startKey, endKey) {
+		// Generation 3 canonicalized envelope replacements to the explicit
+		// startSeq/endSeq coordinate names.
+		startKey, endKey = "startSeq", "endSeq"
+		if !deepSeekHarnessExactKeys(fields, "op", startKey, endKey) {
+			return errors.New("invalid surface replacement")
+		}
 	}
 	op, err := deepSeekHarnessRequiredString(fields, "op")
 	if err != nil || op != "replace" {
 		return errors.New("invalid surface replacement")
 	}
-	if _, err := deepSeekHarnessRequiredSafeInt(fields, "start", true); err != nil {
+	if _, err := deepSeekHarnessRequiredSafeInt(fields, startKey, true); err != nil {
 		return err
 	}
-	if _, err := deepSeekHarnessRequiredSafeInt(fields, "end", true); err != nil {
+	if _, err := deepSeekHarnessRequiredSafeInt(fields, endKey, true); err != nil {
 		return err
 	}
 	return nil

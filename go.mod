@@ -34,6 +34,7 @@ require (
 	go.kenn.io/docbank v0.14.0
 	go.kenn.io/kit v0.24.2-0.20260908151812-b9d6bb63077d
 	go.yaml.in/yaml/v3 v3.0.5
+	golang.org/x/exp v0.0.0-20260603202125-055de637280b
 	golang.org/x/mod v0.41.0
 	golang.org/x/net v0.58.0
 	golang.org/x/perf v0.0.0-20260615155930-9e4b9ddef5b6
@@ -185,7 +186,6 @@ require (
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.6 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
-	golang.org/x/exp v0.0.0-20260603202125-055de637280b // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260811182544-a038080d80e5 // indirect
 	golang.org/x/text v0.41.0 // indirect

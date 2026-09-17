@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // geminiInsightModel is the model passed to the gemini CLI
@@ -163,10 +165,11 @@ func truncateLogLine(line string, maxBytes int) string {
 	if maxBytes <= 0 || len(line) <= maxBytes {
 		return line
 	}
-	omitted := len(line) - maxBytes
+	prefix := stringutil.SafeTruncate(line, maxBytes)
+	omitted := len(line) - len(prefix)
 	return fmt.Sprintf(
 		"%s... [truncated %d bytes]",
-		line[:maxBytes], omitted,
+		prefix, omitted,
 	)
 }
 

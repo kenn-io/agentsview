@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // resumeActiveWindow flags a session as in-flight when its last activity
@@ -164,15 +164,9 @@ func collapseWhitespace(s string) string {
 // truncateRunes cuts s to at most max runes on a rune boundary, returning
 // the (possibly shortened) string and whether truncation occurred.
 func truncateRunes(s string, max int) (string, bool) {
-	if max <= 0 || utf8.RuneCountInString(s) <= max {
+	if max <= 0 {
 		return s, false
 	}
-	n := 0
-	for i := range s {
-		if n == max {
-			return s[:i], true
-		}
-		n++
-	}
-	return s, false
+	prefix := stringutil.TruncateRunes(s, max, "")
+	return prefix, len(prefix) < len(s)
 }

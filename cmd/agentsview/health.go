@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // HealthConfig configures the `health` command.
@@ -406,9 +407,9 @@ func truncate(s string, n int) string {
 		return s
 	}
 	if n <= 1 {
-		return s[:n]
+		return stringutil.SafeTruncate(s, n)
 	}
-	return s[:n-1] + "…"
+	return stringutil.SafeTruncate(s, n-1) + "…"
 }
 
 func shortID(id string) string {

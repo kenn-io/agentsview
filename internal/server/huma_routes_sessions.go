@@ -22,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sessionwatch"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 func (s *Server) registerSessionRoutes() {
@@ -709,7 +710,7 @@ func (s *Server) humaPublishSession(
 	filename := session.Project + "-" + formatDateShort(session.StartedAt) + ".html"
 	first := ""
 	if session.FirstMessage != nil {
-		first = truncateStr(*session.FirstMessage, 100)
+		first = stringutil.TruncateRunes(*session.FirstMessage, 100, "...")
 	}
 	description := fmt.Sprintf("Agent session: %s - %s", session.Project, first)
 	gist, err := createGist(ctx, token, filename, description, htmlContent, !in.Secret)

@@ -1374,3 +1374,92 @@ func TestFormatVSCodeCopilotToolCallsRecordsRenderings(t *testing.T) {
 	assert.Contains(t, text, calls[0].Rendering)
 	assert.Contains(t, text, calls[1].Rendering)
 }
+
+func TestParseVSCodeCopilotSession_AssistantMessageModel(t *testing.T) {
+	tests := []struct {
+		name         string
+		requestsJSON string
+		wantModels   []string
+	}{
+		{
+			name: "metadata resolved model and modelId fallback",
+			requestsJSON: `{
+				"requestId": "r1",
+				"message": {"text": "First"},
+				"response": [{"value": "answer one"}],
+				"timestamp": 1755340000000,
+				"modelId": "copilot/claude-opus-4.8",
+				"result": {"metadata": {
+					"promptTokens": 35875,
+					"outputTokens": 221,
+					"resolvedModel": "claude-opus-4-8"
+				}}
+			},
+			{
+				"requestId": "r2",
+				"message": {"text": "Second"},
+				"response": [{"value": "answer two"}],
+				"timestamp": 1755345000000,
+				"modelId": "copilot/claude-opus-4.8"
+			}`,
+			wantModels: []string{"claude-opus-4-8", "claude-opus-4-8"},
+		},
+		{
+			name: "model follows the turn that produced the response",
+			requestsJSON: `{
+				"requestId": "r1",
+				"message": {"text": "First"},
+				"response": [{"value": "answer one"}],
+				"timestamp": 1755340000000,
+				"modelId": "copilot/claude-opus-4.8"
+			},
+			{
+				"requestId": "r2",
+				"message": {"text": "Second"},
+				"response": [{"value": "answer two"}],
+				"timestamp": 1755345000000,
+				"modelId": "copilot/gpt-5"
+			}`,
+			wantModels: []string{"claude-opus-4-8", "gpt-5"},
+		},
+		{
+			name: "turn without a model",
+			requestsJSON: `{
+				"requestId": "r1",
+				"message": {"text": "First"},
+				"response": [{"value": "answer one"}],
+				"timestamp": 1755340000000
+			}`,
+			wantModels: []string{""},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sessionJSON := `{
+				"version": 3,
+				"sessionId": "model-1",
+				"creationDate": 1755340000000,
+				"lastMessageDate": 1755350000000,
+				"requests": [` + tc.requestsJSON + `]
+			}`
+
+			dir := t.TempDir()
+			path := filepath.Join(dir, "model.json")
+			require.NoError(t, os.WriteFile(path, []byte(sessionJSON), 0644))
+
+			_, msgs, err := parseVSCodeCopilotTestSession(t, path, "proj", "local")
+			require.NoError(t, err)
+			require.Len(t, msgs, 2*len(tc.wantModels), "user and assistant per turn")
+
+			for i, want := range tc.wantModels {
+				user := msgs[2*i]
+				assistant := msgs[2*i+1]
+				assert.Equal(t, RoleUser, user.Role, "turn %d user role", i)
+				assert.Empty(t, user.Model, "turn %d user model", i)
+				assert.Equal(t, RoleAssistant, assistant.Role, "turn %d assistant role", i)
+				assert.Equal(t, want, assistant.Model, "turn %d assistant model", i)
+			}
+		})
+	}
+}

@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 type evenerHeader struct {
@@ -241,7 +243,7 @@ func parseEvenerSession(ctx context.Context, path, machine string) (*ParsedSessi
 		if msg.Role == RoleUser && msg.Content != "" {
 			sess.UserMessageCount++
 			if sess.FirstMessage == "" {
-				sess.FirstMessage = truncateFirstMessage(msg.Content)
+				sess.FirstMessage = stringutil.TruncateRunes(msg.Content, 300, "")
 			}
 		}
 		if msg.Timestamp.After(sess.EndedAt) {

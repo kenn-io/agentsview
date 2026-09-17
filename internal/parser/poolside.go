@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 const poolsideIDPrefix = "poolside:"
@@ -543,7 +544,7 @@ func parsePoolsideSession(
 	for _, msg := range messages {
 		if msg.Role == RoleUser && !msg.IsSystem &&
 			strings.TrimSpace(msg.Content) != "" {
-			firstMsg = truncateFirstMessage(msg.Content)
+			firstMsg = stringutil.TruncateRunes(msg.Content, 300, "")
 			break
 		}
 	}

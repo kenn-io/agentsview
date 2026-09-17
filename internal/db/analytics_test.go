@@ -3,11 +3,13 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -4818,6 +4820,124 @@ func TestBuildSignalExamplesUsesObservedOrdinal(t *testing.T) {
 				t.Fatalf("MessageOrdinal = %d, want %d",
 					*examples[0].MessageOrdinal, tt.want)
 			}
+		})
+	}
+}
+
+// TestBuildSignalExamplesExcerptStaysRuneAligned pins the excerpt that
+// reaches the API to whole characters. The 180-byte budget cuts at byte
+// 177, so content whose 177th byte is a continuation byte used to come
+// back as invalid UTF-8 and encoding/json rewrote the split character
+// into U+FFFD.
+func TestBuildSignalExamplesExcerptStaysRuneAligned(t *testing.T) {
+	tests := []struct {
+		name string
+		// content is the message body the panel draws its
+		// excerpt from.
+		content string
+		// minBytes guards against backing up further than the
+		// widest rune: a truncated excerpt spends 3 bytes on the
+		// ellipsis and gives up at most 3 more to reach a
+		// boundary.
+		minBytes int
+	}{
+		{
+			// The ten-byte lead shifts byte 177 into the middle
+			// of a three-byte character.
+			name:     "han after ascii lead",
+			content:  "Fix this: " + strings.Repeat("这个函数返回错误的结果", 8),
+			minBytes: 177,
+		},
+		{
+			name:     "han without lead",
+			content:  strings.Repeat("这个函数返回错误的结果", 8),
+			minBytes: 177,
+		},
+		{
+			name:     "emoji after ascii lead",
+			content:  "Broken: " + strings.Repeat("🙂", 80),
+			minBytes: 177,
+		},
+		{
+			name:     "cyrillic after ascii lead",
+			content:  "Error: " + strings.Repeat("ошибка ", 40),
+			minBytes: 177,
+		},
+		{
+			name:     "ascii only",
+			content:  strings.Repeat("retry the failing build ", 20),
+			minBytes: 177,
+		},
+		{
+			name:     "short content is untouched",
+			content:  "这个函数返回错误的结果",
+			minBytes: 33,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			examples := BuildSignalExamples(
+				[]SignalRow{{ID: "excerpt", Outcome: "errored"}},
+				map[string][]SignalMessage{"excerpt": {{
+					SessionID: "excerpt",
+					Ordinal:   0,
+					Role:      "assistant",
+					Content:   tt.content,
+				}}},
+				"outcome_errored",
+			)
+			require.Len(t, examples, 1)
+
+			excerpt := examples[0].Excerpt
+			assert.True(t, utf8.ValidString(excerpt),
+				"excerpt must stay valid UTF-8: %q", excerpt)
+			assert.LessOrEqual(t, len(excerpt), 180,
+				"excerpt must respect the byte budget")
+			assert.GreaterOrEqual(t, len(excerpt), tt.minBytes,
+				"excerpt must not give up more than one rune: %q", excerpt)
+			assert.True(t, strings.HasPrefix(
+				strings.TrimSpace(tt.content),
+				strings.TrimSuffix(excerpt, "..."),
+			), "excerpt must stay a prefix of the message")
+
+			encoded, err := json.Marshal(examples[0])
+			require.NoError(t, err)
+			assert.NotContains(t, string(encoded), "\ufffd",
+				"response must not carry replacement characters")
+		})
+	}
+}
+
+func TestTruncateExcerptNeverSplitsRunes(t *testing.T) {
+	tests := []struct {
+		name string
+		s    string
+		max  int
+		want string
+	}{
+		{name: "ascii fits", s: "hello", max: 10, want: "hello"},
+		{name: "ascii truncates", s: "abcdefghij", max: 8, want: "abcde..."},
+		{
+			name: "multibyte backs up to a boundary",
+			s:    "日本語のテキスト",
+			max:  11,
+			want: "日本...",
+		},
+		{
+			name: "budget below one character yields nothing",
+			s:    "日本語",
+			max:  2,
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateExcerpt(tt.s, tt.max)
+			assert.Equal(t, tt.want, got)
+			assert.True(t, utf8.ValidString(got),
+				"result must stay valid UTF-8: %q", got)
 		})
 	}
 }

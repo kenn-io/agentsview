@@ -1194,27 +1194,6 @@ func TestSanitizeFilename(t *testing.T) {
 	}
 }
 
-func TestTruncateStr(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name string
-		in   string
-		max  int
-		want string
-	}{
-		{"Short", "hi", 10, "hi"},
-		{"Exact", "hello", 5, "hello"},
-		{"Long", "hello world", 5, "hello..."},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := truncateStr(tt.in, tt.max)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 // TestExportTemplateValid ensures the template parses and
 // renders without error for a minimal input.
 func TestExportTemplateValid(t *testing.T) {

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // SessionTiming is the payload of GET /api/v1/sessions/{id}/timing.
@@ -585,8 +587,5 @@ func makeInputPreview(category, toolName, inputJSON string) string {
 	}
 
 	const maxLen = 100
-	if r := []rune(raw); len(r) > maxLen {
-		raw = string(r[:maxLen]) + "…"
-	}
-	return raw
+	return stringutil.TruncateRunes(raw, maxLen, "…")
 }

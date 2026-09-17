@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"time"
+
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // This file is the single centralized validation and sanitization pass
@@ -419,19 +421,8 @@ func ClampModel(p *string) bool {
 	if len(*p) <= MaxModelLen {
 		return false
 	}
-	cut := MaxModelLen
-	// Back up to a rune boundary so we never split a multibyte rune.
-	for cut > 0 && !utf8RuneStart((*p)[cut]) {
-		cut--
-	}
-	*p = (*p)[:cut]
+	*p = stringutil.SafeTruncate(*p, MaxModelLen)
 	return true
-}
-
-// utf8RuneStart reports whether b is the first byte of a UTF-8
-// encoded rune (i.e. not a continuation byte 0b10xxxxxx).
-func utf8RuneStart(b byte) bool {
-	return b&0xC0 != 0x80
 }
 
 // ClampParsedTokens bounds a token count to [0, maxPlausibleTokens] and

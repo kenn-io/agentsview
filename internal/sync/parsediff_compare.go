@@ -35,6 +35,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // maxRenderedValueRunes caps rendered string values in FieldDiff;
@@ -345,8 +346,8 @@ func appendScalarSessionDiff(
 	}
 	d := FieldDiff{
 		Field:  field,
-		Stored: truncateRunes(renderNullableScalar(sv), maxRenderedValueRunes),
-		Parsed: truncateRunes(renderNullableScalar(pv), maxRenderedValueRunes),
+		Stored: stringutil.TruncateRunes(renderNullableScalar(sv), maxRenderedValueRunes, "..."),
+		Parsed: stringutil.TruncateRunes(renderNullableScalar(pv), maxRenderedValueRunes, "..."),
 	}
 	markIncrementalHistory(&d, agent)
 	return append(diffs, d)
@@ -486,15 +487,7 @@ func renderTextValue(ptr *string, sanitized string) string {
 	if ptr == nil {
 		return "(null)"
 	}
-	return truncateRunes(sanitized, maxRenderedValueRunes)
-}
-
-func truncateRunes(s string, limit int) string {
-	if utf8.RuneCountInString(s) <= limit {
-		return s
-	}
-	runes := []rune(s)
-	return string(runes[:limit]) + "..."
+	return stringutil.TruncateRunes(sanitized, maxRenderedValueRunes, "...")
 }
 
 // messageTokenFingerprintTwin is the in-memory twin of

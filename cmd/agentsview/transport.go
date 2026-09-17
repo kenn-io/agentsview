@@ -72,6 +72,7 @@ type transport struct {
 	ReadOnly           bool // daemon runtime ReadOnly flag (true for pg serve)
 	DirectReadOnly     bool // writable daemon owns DB but is not reachable
 	DirectIncompatible bool // live daemon owns DB but cannot serve this client
+	DirectDaemonAhead  bool // that daemon runs a newer API or data version than this client
 	DirectReason       string
 	Runtime            *DaemonRuntime
 }
@@ -160,14 +161,17 @@ func detectTransportContext(
 	if IsLocalDaemonActive(dataDir, authToken) {
 		reason := errLocalDaemonUnreachable.Error()
 		incompatible := false
-		if _, err := FindIncompatibleDaemonRuntime(dataDir, authToken); err != nil {
+		ahead := false
+		if rt, err := FindIncompatibleDaemonRuntime(dataDir, authToken); err != nil {
 			reason = err.Error()
 			incompatible = true
+			ahead = daemonRuntimeAhead(rt)
 		}
 		return transport{
 			Mode:               transportDirect,
 			DirectReadOnly:     true,
 			DirectIncompatible: incompatible,
+			DirectDaemonAhead:  ahead,
 			DirectReason:       reason,
 		}, nil
 	}
@@ -288,8 +292,8 @@ func ensureTransportContext(
 				if tr.DirectReason == errLocalDaemonUnreachable.Error() {
 					return transport{}, errLocalDaemonUnreachable
 				}
-				return transport{}, appendDaemonRestartUpgradeHint(
-					errors.New(tr.DirectReason),
+				return transport{}, appendDaemonCompatibilityHint(
+					tr, errors.New(tr.DirectReason),
 				)
 			}
 			return transport{}, errLocalDaemonUnreachable
@@ -304,6 +308,17 @@ func ensureTransportContext(
 		return transportFromRuntime(rt), nil
 	}
 	if daemonAutostartDisabled() {
+		if tr.DirectIncompatible {
+			// AGENTSVIEW_NO_DAEMON never replaces a live daemon, so a
+			// client that cannot talk to the one it found has no path
+			// forward. Name the real reason instead of letting the
+			// write backend report the daemon as "not responding".
+			return transport{}, fmt.Errorf(
+				"local daemon owns the SQLite archive but cannot serve "+
+					"this client: %s; refusing to write directly",
+				tr.DirectReason,
+			)
+		}
 		return tr, nil
 	}
 	if tr.DirectReadOnly {
@@ -311,7 +326,9 @@ func ensureTransportContext(
 			if tr.DirectReason == errLocalDaemonUnreachable.Error() {
 				return transport{}, errLocalDaemonUnreachable
 			}
-			return transport{}, errors.New(tr.DirectReason)
+			return transport{}, appendDaemonCompatibilityHint(
+				tr, errors.New(tr.DirectReason),
+			)
 		}
 		return transport{}, errLocalDaemonUnreachable
 	}
@@ -408,6 +425,14 @@ func shouldUpgradeIncompatibleDaemonRuntime(
 	return true
 }
 
+// daemonRuntimeAhead reports whether the live daemon speaks a newer API or
+// data version than this client. In that case the daemon is fine and this
+// client is the stale side, so restart guidance must point at the client.
+func daemonRuntimeAhead(rt *DaemonRuntime) bool {
+	return rt != nil &&
+		(rt.API > daemonAPIVersion || rt.Data > db.CurrentDataVersion())
+}
+
 func guardDaemonAutoStartConfig(cfg config.Config) error {
 	host := strings.TrimSpace(cfg.Host)
 	if host == "" || cfg.RequireAuth || isLoopbackHost(host) {
@@ -502,7 +527,17 @@ func directIncompatibleDaemonError(tr transport) error {
 	if reason == "" {
 		reason = "local daemon is incompatible with this agentsview client"
 	}
-	return appendDaemonRestartUpgradeHint(errors.New(reason))
+	return appendDaemonCompatibilityHint(tr, errors.New(reason))
+}
+
+// appendDaemonCompatibilityHint picks the guidance that matches which side
+// of the daemon/client pair is stale. A daemon that is ahead of this client
+// must not be restarted; the client needs the newer binary instead.
+func appendDaemonCompatibilityHint(tr transport, err error) error {
+	if tr.DirectDaemonAhead {
+		return fmt.Errorf("%w\n\n%s", err, staleClientUpgradeHint())
+	}
+	return appendDaemonRestartUpgradeHint(err)
 }
 
 // newPGReadService builds a read-only SessionService over the

@@ -466,11 +466,13 @@ keeps its default directories.
 | Zencoder              | `~/.zencoder/sessions/`                                                                                                                                          | JSONL per session                                                                                                                                             |
 
 DeepSeek Harness sessions are read from its default JSONL persistence backend,
-including plain `session.jsonl` and multi-frame `session.jsonl.zstd` files.
-`DSH_HOME` re-roots the default `<home>/sessions` path; set
-`DEEPSEEK_HARNESS_SESSIONS_DIR` or `agents.deepseek-harness.dirs` to point
-directly at one or more session roots. The optional SQLite persistence backend
-is not supported.
+including the released `session.jsonl[.zstd]` generation-0 layout and the
+`session.vN.jsonl[.zstd]` generation layout used by later releases. When a
+session directory retains multiple immutable generations, Agentsview reads the
+numerically newest canonical generation. `DSH_HOME` re-roots the default
+`<home>/sessions` path; set `DEEPSEEK_HARNESS_SESSIONS_DIR` or
+`agents.deepseek-harness.dirs` to point directly at one or more session roots.
+The optional SQLite persistence backend is not supported.
 
 Prime Agent support targets the current flat session layout in v0.7.0. That
 release migrates the older per-project layout when Prime Agent opens its session

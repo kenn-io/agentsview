@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // ErrContextOverflow reports a prompt the server rejected as too large for
@@ -691,15 +692,7 @@ func (c *Client) responseDetail(raw []byte) string {
 		return "(response body withheld: endpoint URL carries " +
 			"credential material)"
 	}
-	detail := stripControls(string(raw))
-	if len(detail) > 200 {
-		cut := 200
-		for cut > 0 && !utf8.RuneStart(detail[cut]) {
-			cut--
-		}
-		detail = detail[:cut]
-	}
-	return detail
+	return stringutil.SafeTruncate(stripControls(string(raw)), 200)
 }
 
 // transportErrorDetail prepares a transport-layer error's text for error
@@ -745,12 +738,7 @@ func stripControls(s string) string {
 // finish_reason or entry field can approach the transport limit, and these
 // errors persist into per-session failure rows.
 func boundedToken(value string, maxRunes int) string {
-	value = stripControls(value)
-	runes := []rune(value)
-	if len(runes) <= maxRunes {
-		return value
-	}
-	return string(runes[:maxRunes]) + "…(truncated)"
+	return stringutil.TruncateRunes(stripControls(value), maxRunes, "…(truncated)")
 }
 
 // parseEntries decodes and validates distilled content against the same

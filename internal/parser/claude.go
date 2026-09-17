@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 var (
@@ -2442,8 +2443,8 @@ func readClaudePersistedToolResultContext(
 			return "", false, nil
 		}
 		if len(b) > maxPersistedToolResultSize {
-			b = b[:maxPersistedToolResultSize]
-			b = append(b, "\n\n[agentsview: persisted tool result truncated at 16 MiB]"...)
+			return stringutil.SafeTruncate(string(b), maxPersistedToolResultSize) +
+				"\n\n[agentsview: persisted tool result truncated at 16 MiB]", true, nil
 		}
 		return string(b), true, nil
 	}
@@ -2879,17 +2880,7 @@ func ExtractCwdFromSession(path string) string {
 }
 
 func truncate(s string, maxLen int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= maxLen {
-		return s
-	}
-	// Truncate at a valid rune boundary to avoid producing
-	// invalid UTF-8.
-	r := []rune(s)
-	if len(r) <= maxLen {
-		return s
-	}
-	return string(r[:maxLen]) + "..."
+	return stringutil.TruncateRunes(strings.TrimSpace(s), maxLen, "...")
 }
 
 // extractRenameName returns the argument of a Claude Code /rename

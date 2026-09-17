@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	recall "go.kenn.io/agentsview/internal/recall"
 	"go.kenn.io/agentsview/internal/secrets"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 const (
@@ -974,11 +975,7 @@ func boundedLastError(err error) string {
 	if len(msg) <= maxStoredErrorBytes {
 		return msg
 	}
-	cut := maxStoredErrorBytes - len(marker)
-	for cut > 0 && !utf8.RuneStart(msg[cut]) {
-		cut--
-	}
-	return msg[:cut] + marker
+	return stringutil.SafeTruncate(msg, maxStoredErrorBytes-len(marker)) + marker
 }
 
 func (m *Manager) discardSessionOutput(

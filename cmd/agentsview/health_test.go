@@ -125,6 +125,8 @@ func TestTruncate(t *testing.T) {
 		{"exact length unchanged", "hello", 5, "hello"},
 		{"over limit ellipsized", "hello world", 5, "hell…"},
 		{"single char limit", "abc", 1, "a"},
+		{"multibyte boundary", "a\u65e5\u672cz", 4, "a…"},
+		{"single byte cannot fit rune", "\u65e5", 1, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

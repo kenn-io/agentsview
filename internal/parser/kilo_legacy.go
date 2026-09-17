@@ -34,6 +34,7 @@ import (
 
 	"github.com/ccoveille/go-safecast/v2"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 // kiloLegacyDefaultDirs returns the platform-specific default
@@ -387,7 +388,7 @@ func parseKiloLegacySession(
 	}
 	sessionName := firstMsg
 	if len(sessionName) > 80 {
-		sessionName = sessionName[:77] + "..."
+		sessionName = stringutil.SafeTruncate(sessionName, 77) + "..."
 	}
 	if sessionName == "" {
 		sessionName = projectHint

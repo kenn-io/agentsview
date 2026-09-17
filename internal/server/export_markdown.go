@@ -11,6 +11,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 type exportMarkdownOptions struct {
@@ -567,7 +568,7 @@ func truncateMarkdownFallback(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return s[:max] + "…"
+	return stringutil.SafeTruncate(s, max) + "…"
 }
 
 func capLines(text string, max int) string {

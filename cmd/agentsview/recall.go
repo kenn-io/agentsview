@@ -20,6 +20,7 @@ import (
 	corerecall "go.kenn.io/agentsview/internal/recall"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/servicehttp"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 func newRecallCommand() *cobra.Command {
@@ -1484,11 +1485,7 @@ func printRecallEvidenceDetailsHuman(w io.Writer, evidence []db.RecallEvidence) 
 
 func recallEvidenceSnippet(snippet string) string {
 	snippet = strings.Join(strings.Fields(snippet), " ")
-	if len([]rune(snippet)) <= recallEvidenceSnippetMaxChars {
-		return snippet
-	}
-	runes := []rune(snippet)
-	return string(runes[:recallEvidenceSnippetMaxChars]) + "..."
+	return stringutil.TruncateRunes(snippet, recallEvidenceSnippetMaxChars, "...")
 }
 
 func formatRecallEntryMatchedTerms(terms []string) string {

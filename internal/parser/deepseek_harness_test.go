@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -773,7 +774,7 @@ func TestDeepSeekHarnessSourceEventSeqs(t *testing.T) {
 func TestDeepSeekHarnessFormatErrorsAndCrashTails(t *testing.T) {
 	t.Run("foreign version", func(t *testing.T) {
 		records := deepSeekHarnessCompleteFixture("foreign", nil)
-		records[0].(map[string]any)["version"] = 1
+		records[0].(map[string]any)["version"] = 4
 		path := writeDeepSeekHarnessFixture(t, t.TempDir(), "foreign", deepSeekHarnessFixtureCwd, "plain", records)
 		_, err := parseDeepSeekHarnessSession(t.Context(), path, "")
 		require.Error(t, err)
@@ -812,6 +813,16 @@ func TestDeepSeekHarnessFormatErrorsAndCrashTails(t *testing.T) {
 		_, err := parseDeepSeekHarnessSession(t.Context(), path, "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "delegationDepth")
+	})
+
+	t.Run("generation filename mismatch", func(t *testing.T) {
+		records := deepSeekHarnessV3Fixture("generation-mismatch")
+		path := writeDeepSeekHarnessFixture(
+			t, t.TempDir(), "generation-mismatch", deepSeekHarnessFixtureCwd, "plain", records,
+		)
+		_, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "header version 3 does not match source path")
 	})
 
 	t.Run("path identity", func(t *testing.T) {
@@ -1424,6 +1435,390 @@ func writeDeepSeekHarnessFixture(
 	dir := filepath.Join(root, "--workspace-example--", encodedID)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	name := "session.jsonl"
+	if compression == "zstd" {
+		name += ".zstd"
+	}
+	path := filepath.Join(dir, name)
+	lines := make([][]byte, 0, len(records))
+	for _, record := range records {
+		line, err := json.Marshal(record)
+		require.NoError(t, err)
+		lines = append(lines, append(line, '\n'))
+	}
+	if compression == "plain" {
+		require.NoError(t, os.WriteFile(path, bytes.Join(lines, nil), 0o600))
+		return path
+	}
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderCRC(true))
+	require.NoError(t, err)
+	defer encoder.Close()
+	var encoded []byte
+	for start := 0; start < len(lines); {
+		end := start + 4
+		if start == 0 {
+			end = 1
+		}
+		if end > len(lines) {
+			end = len(lines)
+		}
+		encoded = encoder.EncodeAll(bytes.Join(lines[start:end], nil), encoded)
+		start = end
+	}
+	require.NoError(t, os.WriteFile(path, encoded, 0o600))
+	return path
+}
+
+func TestDeepSeekHarnessV3SessionParses(t *testing.T) {
+	records := deepSeekHarnessV3Fixture("v3-session")
+	path := writeDeepSeekHarnessVersionedFixture(
+		t, t.TempDir(), "v3-session", deepSeekHarnessFixtureCwd, "zstd", 3, records,
+	)
+	result, err := parseDeepSeekHarnessSession(t.Context(), path, "fixture-host")
+	require.NoError(t, err)
+
+	session := result.Session
+	assert.Equal(t, "deepseek-harness:v3-session", session.ID)
+	assert.Equal(t, "3", session.SourceVersion)
+	assert.Equal(t, "minimal", session.AgentLabel)
+	assert.Equal(t, "V3 title", session.SessionName)
+	assert.Equal(t, TerminationAwaitingUser, session.TerminationStatus)
+	assert.False(t, session.IsTruncated)
+
+	require.Len(t, result.Messages, 4)
+	system := result.Messages[0]
+	assert.Equal(t, RoleSystem, system.Role)
+	assert.True(t, system.IsSystem)
+	assert.Equal(t, "plugin", system.SourceType)
+	assert.Equal(t, "You are a helpful software engineer assistant.", system.Content)
+
+	user := result.Messages[1]
+	assert.Equal(t, RoleUser, user.Role)
+	assert.False(t, user.IsSystem)
+	assert.Equal(t, "hello\n[file]", user.Content)
+
+	assistant := result.Messages[2]
+	assert.Equal(t, RoleAssistant, assistant.Role)
+	assert.Equal(t, "answer", assistant.Content)
+	assert.Equal(t, "think", assistant.ThinkingText)
+	assert.Equal(t, "deepseek-v4-flash", assistant.Model)
+	assert.Equal(t, "stop", assistant.StopReason)
+	assert.Equal(t, 12, assistant.ContextTokens)
+	assert.Equal(t, 5, assistant.OutputTokens)
+
+	carrier := result.Messages[3]
+	assert.True(t, carrier.IsSystem)
+	require.Len(t, carrier.ToolResults, 1)
+	assert.Equal(t, "call-1", carrier.ToolResults[0].ToolUseID)
+	assert.Contains(t, carrier.ToolResults[0].ContentRaw, "output")
+
+	require.Len(t, result.UsageEvents, 1)
+	usage := result.UsageEvents[0]
+	assert.Equal(t, 10, usage.InputTokens)
+	assert.Equal(t, 5, usage.OutputTokens)
+	assert.Equal(t, 2, usage.CacheReadInputTokens)
+	assert.Equal(t, 1, usage.ReasoningTokens)
+	assert.Equal(t, "deepseek-v4-flash", usage.Model)
+	require.NotNil(t, usage.MessageOrdinal)
+	assert.Equal(t, 2, *usage.MessageOrdinal)
+}
+
+func TestDeepSeekHarnessProviderPrefersNewestGeneration(t *testing.T) {
+	root := t.TempDir()
+	v0Path := writeDeepSeekHarnessFixture(
+		t, root, "generation-pick", deepSeekHarnessFixtureCwd, "zstd",
+		deepSeekHarnessCompleteFixture("generation-pick", nil),
+	)
+	v3Path := writeDeepSeekHarnessVersionedFixture(
+		t, root, "generation-pick", deepSeekHarnessFixtureCwd, "zstd", 3,
+		deepSeekHarnessV3Fixture("generation-pick"),
+	)
+	provider, ok := NewProvider(
+		AgentDeepSeekHarness,
+		ProviderConfig{Roots: []string{root}},
+	)
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, v3Path, discovered[0].DisplayPath)
+
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "deepseek-harness:generation-pick", outcome.Results[0].Result.Session.ID)
+	assert.Equal(t, "3", outcome.Results[0].Result.Session.SourceVersion)
+	assert.NotEqual(t, v0Path, discovered[0].DisplayPath)
+}
+
+func TestDeepSeekHarnessProviderIgnoresUnsupportedGeneration(t *testing.T) {
+	root := t.TempDir()
+	v3Path := writeDeepSeekHarnessVersionedFixture(
+		t, root, "future-gen", deepSeekHarnessFixtureCwd, "zstd", 3,
+		deepSeekHarnessV3Fixture("future-gen"),
+	)
+	futureRecords := deepSeekHarnessV3Fixture("future-gen")
+	futureHeader, ok := futureRecords[0].(map[string]any)
+	require.True(t, ok)
+	futureHeader["version"] = deepSeekHarnessNewestFormatVersion + 1
+	writeDeepSeekHarnessVersionedFixture(
+		t, root, "future-gen", deepSeekHarnessFixtureCwd, "zstd",
+		deepSeekHarnessNewestFormatVersion+1, futureRecords,
+	)
+	provider, ok := NewProvider(
+		AgentDeepSeekHarness,
+		ProviderConfig{Roots: []string{root}},
+	)
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, v3Path, discovered[0].DisplayPath)
+
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "3", outcome.Results[0].Result.Session.SourceVersion)
+}
+
+func TestDeepSeekHarnessRejectsUnsupportedGenerationByPath(t *testing.T) {
+	records := deepSeekHarnessV3Fixture("future-only")
+	header, ok := records[0].(map[string]any)
+	require.True(t, ok)
+	header["version"] = deepSeekHarnessNewestFormatVersion + 1
+	path := writeDeepSeekHarnessVersionedFixture(
+		t, t.TempDir(), "future-only", deepSeekHarnessFixtureCwd, "plain",
+		deepSeekHarnessNewestFormatVersion+1, records,
+	)
+
+	_, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported DeepSeek Harness session format version")
+}
+
+func TestDeepSeekHarnessV3AllowsLegacyTurnRestart(t *testing.T) {
+	records := []any{
+		deepSeekHarnessV3Header("v3-restart", deepSeekHarnessFixtureCwd),
+		deepSeekHarnessFixtureEvent(0, "turn/start", map[string]any{"turn": 1}, nil),
+		deepSeekHarnessFixtureEvent(1, "step/start", map[string]any{"turn": 1, "step": 1}, nil),
+		deepSeekHarnessFixtureEvent(2, "user/message", deepSeekHarnessUser("first prompt", "user"), "append"),
+		deepSeekHarnessFixtureEvent(3, "assistant/message", deepSeekHarnessAssistantDataMap(1, 1, "first answer", nil), "append"),
+		deepSeekHarnessFixtureEvent(4, "step/end", map[string]any{"turn": 1, "step": 1}, nil),
+		deepSeekHarnessFixtureEvent(5, "agent/inbox/spliced", map[string]any{
+			"target": "next-turn", "start": 0,
+			"inserted": []any{map[string]any{
+				"role": "user", "id": "inbox-1",
+				"source":  map[string]any{"kind": "user"},
+				"content": []any{map[string]any{"type": "text", "text": "continue"}},
+			}},
+		}, nil),
+		deepSeekHarnessFixtureEvent(6, "turn/start", map[string]any{"turn": 2}, nil),
+		deepSeekHarnessFixtureEvent(7, "step/start", map[string]any{"turn": 2, "step": 1}, nil),
+		deepSeekHarnessFixtureEvent(8, "user/message", deepSeekHarnessUser("second prompt", "user"), "append"),
+		deepSeekHarnessFixtureEvent(9, "assistant/message", deepSeekHarnessAssistantDataMap(2, 1, "second answer", nil), "append"),
+		deepSeekHarnessFixtureEvent(10, "step/end", map[string]any{"turn": 2, "step": 1}, nil),
+		deepSeekHarnessFixtureEvent(11, "turn/end", deepSeekHarnessTurnEnd(2, "completed"), nil),
+	}
+	path := writeDeepSeekHarnessVersionedFixture(
+		t, t.TempDir(), "v3-restart", deepSeekHarnessFixtureCwd, "plain", 3, records,
+	)
+	result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+	require.NoError(t, err)
+	require.Len(t, result.Messages, 4)
+	assert.Equal(t, "first prompt", result.Messages[0].Content)
+	assert.Equal(t, "first answer", result.Messages[1].Content)
+	assert.Equal(t, "second prompt", result.Messages[2].Content)
+	assert.Equal(t, "second answer", result.Messages[3].Content)
+	assert.Equal(t, TerminationAwaitingUser, result.Session.TerminationStatus)
+}
+
+func TestDeepSeekHarnessV3SeedCutExcludesInheritedTranscript(t *testing.T) {
+	header := deepSeekHarnessV3Header("v3-seed", deepSeekHarnessFixtureCwd)
+	header["isSeeded"] = true
+	header["parentSession"] = "parent"
+	header["delegationDepth"] = 1
+	records := []any{
+		header,
+		deepSeekHarnessFixtureEvent(0, "turn/start", map[string]any{"turn": 1}, nil),
+		deepSeekHarnessFixtureEvent(1, "step/start", map[string]any{"turn": 1, "step": 1}, nil),
+		deepSeekHarnessFixtureEvent(2, "user/message", deepSeekHarnessUser("parent prompt", "user"), "append"),
+		deepSeekHarnessFixtureEvent(3, "assistant/message", deepSeekHarnessAssistantDataMap(1, 1, "parent answer", nil), "append"),
+		deepSeekHarnessFixtureEvent(4, "step/end", map[string]any{"turn": 1, "step": 1}, nil),
+		deepSeekHarnessFixtureEvent(5, "session/end-seed", map[string]any{"inherited": true}, nil),
+		deepSeekHarnessFixtureEvent(6, "agent/inbox/spliced", map[string]any{
+			"target": "next-turn", "start": 0,
+			"inserted": []any{map[string]any{
+				"role": "user", "id": "inbox-child",
+				"source":  map[string]any{"kind": "user"},
+				"content": []any{map[string]any{"type": "text", "text": "child context"}},
+			}},
+		}, nil),
+		deepSeekHarnessFixtureEvent(7, "turn/start", map[string]any{"turn": 2}, nil),
+		deepSeekHarnessFixtureEvent(8, "step/start", map[string]any{"turn": 2, "step": 1}, nil),
+		deepSeekHarnessFixtureEvent(9, "user/message", deepSeekHarnessUser("child prompt", "user"), "append"),
+		deepSeekHarnessFixtureEvent(10, "assistant/message", deepSeekHarnessAssistantDataMap(2, 1, "child answer", nil), "append"),
+		deepSeekHarnessFixtureEvent(11, "step/end", map[string]any{"turn": 2, "step": 1}, nil),
+		deepSeekHarnessFixtureEvent(12, "turn/end", deepSeekHarnessTurnEnd(2, "completed"), nil),
+	}
+	path := writeDeepSeekHarnessVersionedFixture(
+		t, t.TempDir(), "v3-seed", deepSeekHarnessFixtureCwd, "plain", 3, records,
+	)
+	result, err := parseDeepSeekHarnessSession(t.Context(), path, "")
+	require.NoError(t, err)
+	assert.Equal(t, "deepseek-harness:parent", result.Session.ParentSessionID)
+	assert.Equal(t, "3", result.Session.SourceVersion)
+	require.Len(t, result.Messages, 2)
+	assert.Equal(t, "child prompt", result.Messages[0].Content)
+	assert.Equal(t, "child answer", result.Messages[1].Content)
+	assert.Empty(t, result.UsageEvents)
+	assert.Equal(t, TerminationAwaitingUser, result.Session.TerminationStatus)
+}
+
+func deepSeekHarnessV3Header(id, cwd string) map[string]any {
+	return map[string]any{
+		"type": "session", "version": 3, "id": id,
+		"createdAt": 1700000000000, "cwd": cwd,
+		"isSeeded": false, "delegationDepth": 0, "agentPreset": "minimal",
+	}
+}
+
+func deepSeekHarnessV3Fixture(id string) []any {
+	usage := deepSeekHarnessUsageMap(10, 5, 2, 0, 1)
+	records := []any{
+		deepSeekHarnessV3Header(id, deepSeekHarnessFixtureCwd),
+		deepSeekHarnessFixtureEvent(0, "model/selection", map[string]any{
+			"provider": "deepseek-official", "model": "deepseek-v4-flash",
+			"reasoningEffort": "high",
+		}, nil),
+		deepSeekHarnessFixtureEvent(1, "turn/start", map[string]any{"turn": 1}, nil),
+		deepSeekHarnessFixtureEvent(2, "step/start", map[string]any{"turn": 1, "step": 1}, nil),
+		deepSeekHarnessFixtureEvent(3, "system/message", map[string]any{
+			"turn": 1, "step": 1,
+			"message": map[string]any{
+				"id": "sys-1", "role": "system",
+				"source": map[string]any{"kind": "plugin", "plugin": "@deepseek-ai/dsh-system-prompt"},
+				"content": []any{map[string]any{
+					"type": "text", "text": "You are a helpful software engineer assistant.",
+				}},
+			},
+		}, "append"),
+		deepSeekHarnessFixtureEvent(4, "user/message", map[string]any{
+			"id": "u1", "role": "user", "source": map[string]any{"kind": "user"},
+			"content": []any{
+				map[string]any{"type": "text", "text": "hello"},
+				map[string]any{"type": "file", "attachment": map[string]any{"id": "file-1"}},
+			},
+		}, "append"),
+		deepSeekHarnessFixtureEvent(5, "request/header", map[string]any{
+			"header": map[string]any{"config": map[string]any{
+				"provider": "deepseek-official", "model": "deepseek-v4-flash",
+			}},
+			"reason": "initial",
+		}, nil),
+		deepSeekHarnessFixtureEvent(6, "assistant/attempt", map[string]any{
+			"turn": 1, "step": 1,
+			"stream": []any{map[string]any{
+				"type": "chunk", "time": 1700000000007,
+				"chunk": map[string]any{
+					"type": "finish",
+					"reason": map[string]any{
+						"kind":    "error",
+						"failure": map[string]any{"message": "transient", "code": "TRANSPORT"},
+					},
+				},
+			}},
+		}, nil),
+		deepSeekHarnessFixtureEvent(7, "assistant/message", map[string]any{
+			"turn": 1, "step": 1,
+			"message": map[string]any{
+				"id": "a1", "role": "assistant",
+				"source": map[string]any{
+					"kind": "model", "provider": "deepseek-official",
+					"model": "deepseek-v4-flash",
+				},
+				"content": []any{
+					map[string]any{"type": "reasoning", "text": "think"},
+					map[string]any{"type": "text", "text": "answer"},
+				},
+			},
+			"stream": []any{
+				map[string]any{"type": "chunk", "time": 1700000000008, "chunk": map[string]any{
+					"type": "usage", "usage": usage,
+				}},
+				map[string]any{"type": "chunk", "time": 1700000000009, "chunk": map[string]any{
+					"type": "finish", "reason": map[string]any{"kind": "stop"},
+				}},
+			},
+		}, "append"),
+		deepSeekHarnessFixtureEvent(8, "tool/call", map[string]any{
+			"turn": 1, "step": 1, "callId": "call-1",
+			"name": "bash", "arguments": "{}",
+		}, nil),
+		deepSeekHarnessFixtureEvent(9, "tool/ptc-dispatch-start", map[string]any{
+			"rootCallId": "call-1", "parentCallId": "call-1",
+			"subCallId": "call-1:code:1", "name": "glob",
+			"arguments": map[string]any{"pattern": "*"},
+		}, nil),
+		deepSeekHarnessFixtureEvent(10, "tool/ptc-dispatch", map[string]any{
+			"rootCallId": "call-1", "parentCallId": "call-1",
+			"subCallId": "call-1:code:1", "name": "glob",
+			"arguments": map[string]any{"pattern": "*"}, "isError": false,
+			"content": []any{map[string]any{"type": "text", "text": "ok"}},
+		}, nil),
+		deepSeekHarnessFixtureEvent(11, "deliverables/presented", map[string]any{
+			"turn": 1, "callId": "call-1",
+			"files": []any{map[string]any{"path": "/tmp/out.txt", "description": "out"}},
+		}, nil),
+		deepSeekHarnessFixtureEvent(12, "tool/result", map[string]any{
+			"turn": 1, "step": 1,
+			"message": map[string]any{
+				"id": "tr1", "role": "user",
+				"source": map[string]any{"kind": "tool", "callId": "call-1"},
+				"content": []any{map[string]any{
+					"type": "tool-result", "toolCallId": "call-1", "isError": false,
+					"content": []any{map[string]any{"type": "text", "text": "output"}},
+				}},
+			},
+			"meta": map[string]any{"durationMs": 3},
+		}, "append"),
+		deepSeekHarnessFixtureEvent(13, "step/end", map[string]any{"turn": 1, "step": 1}, nil),
+		deepSeekHarnessFixtureEvent(14, "turn/end", deepSeekHarnessTurnEnd(1, "completed"), nil),
+		deepSeekHarnessFixtureEvent(15, "session/title", map[string]any{
+			"title": "V3 title", "messageSeqs": []int{4},
+			"source": map[string]any{"kind": "fallback"},
+		}, nil),
+		deepSeekHarnessFixtureEvent(16, "subagent/catalog", map[string]any{
+			"version": 0, "childId": "child-1", "childCreatedAt": 1700000000000,
+			"mode": "continuable", "label": "child",
+		}, nil),
+		deepSeekHarnessFixtureEvent(17, "system/message", map[string]any{
+			"turn": 1, "step": 1,
+			"message": map[string]any{
+				"id": "sys-2", "role": "system",
+				"source": map[string]any{"kind": "plugin", "plugin": "@deepseek-ai/dsh-system-prompt"},
+				"content": []any{map[string]any{
+					"type": "text", "text": "replacement prompt",
+				}},
+			},
+		}, map[string]any{"op": "replace", "startSeq": 3, "endSeq": 3}),
+	}
+	records[len(records)-1].(map[string]any)["sourceEventSeqs"] = []int{3}
+	return records
+}
+
+func writeDeepSeekHarnessVersionedFixture(
+	t *testing.T, root, id, cwd, compression string, version int64, records []any,
+) string {
+	t.Helper()
+	require.Equal(t, deepSeekHarnessFixtureCwd, cwd)
+	encodedID := encodeDeepSeekHarnessSegment(id)
+	dir := filepath.Join(root, "--workspace-example--", encodedID)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	name := "session.jsonl"
+	if version > 0 {
+		name = "session.v" + strconv.FormatInt(version, 10) + ".jsonl"
+	}
 	if compression == "zstd" {
 		name += ".zstd"
 	}
