@@ -278,8 +278,14 @@ WITH required_table_privileges(table_name, privilege) AS (
         ELSE pg_get_serial_sequence(table_name, 'id')
     END
     FROM job_table
+), required_tables AS (
+    SELECT DISTINCT table_name
+    FROM required_table_privileges
 )
-SELECT COALESCE(string_agg(reason, ', ' ORDER BY reason), '')
+SELECT COALESCE(string_agg(reason, ', ' ORDER BY reason), ''),
+    COALESCE((SELECT bool_and(
+        to_regclass(format('%I.%I', $1::text, table_name)) IS NOT NULL
+    ) FROM required_tables), false)
 FROM (
     SELECT privilege || ' ON ' || table_name AS reason
     FROM required_table_privileges
@@ -300,18 +306,20 @@ FROM (
 
 func checkRawSyncWritePrivileges(
 	ctx context.Context, db *sql.DB, schema string,
-) (string, error) {
+) (string, bool, error) {
 	if db == nil {
-		return "", errors.New("raw sync write probe requires a PostgreSQL connection")
+		return "", false, errors.New("raw sync write probe requires a PostgreSQL connection")
 	}
 	if strings.TrimSpace(schema) == "" {
-		return "", errors.New("raw sync write probe requires a schema")
+		return "", false, errors.New("raw sync write probe requires a schema")
 	}
 	var missing string
-	if err := db.QueryRowContext(ctx, rawSyncWritePrivilegeSQL, schema).Scan(&missing); err != nil {
-		return "", fmt.Errorf("probing raw sync write privileges: %w", err)
+	var allTablesExist bool
+	if err := db.QueryRowContext(ctx, rawSyncWritePrivilegeSQL, schema).
+		Scan(&missing, &allTablesExist); err != nil {
+		return "", false, fmt.Errorf("probing raw sync write privileges: %w", err)
 	}
-	return missing, nil
+	return missing, allTablesExist, nil
 }
 
 // CheckRawSyncWritePrivileges verifies that the current role can use every
@@ -319,25 +327,11 @@ func checkRawSyncWritePrivileges(
 func CheckRawSyncWritePrivileges(
 	ctx context.Context, db *sql.DB, schema string,
 ) error {
-	missing, err := checkRawSyncWritePrivileges(ctx, db, schema)
+	missing, allTablesExist, err := checkRawSyncWritePrivileges(ctx, db, schema)
 	if err != nil {
 		return err
 	}
 	if missing != "" {
-		var allTablesExist bool
-		if err := db.QueryRowContext(ctx, `
-			SELECT COALESCE(bool_and(
-				to_regclass(format('%I.%I', $1::text, table_name)) IS NOT NULL
-			), false)
-			FROM unnest(ARRAY[
-				'raw_devices', 'raw_device_tokens', 'raw_upload_sessions',
-				'raw_objects', 'raw_manifests', 'raw_manifest_entries',
-				'raw_manifest_objects', 'raw_source_heads', 'raw_ingest_jobs'
-			]) AS required(table_name)`,
-			schema,
-		).Scan(&allTablesExist); err != nil {
-			return fmt.Errorf("checking raw sync schema: %w", err)
-		}
 		if !allTablesExist {
 			return errors.New("raw sync schema is not provisioned")
 		}
@@ -353,7 +347,7 @@ func CheckRawSyncWritePrivileges(
 func CanWriteRawSyncSchema(
 	ctx context.Context, db *sql.DB, schema string,
 ) (bool, error) {
-	missing, err := checkRawSyncWritePrivileges(ctx, db, schema)
+	missing, _, err := checkRawSyncWritePrivileges(ctx, db, schema)
 	if err != nil {
 		return false, err
 	}
