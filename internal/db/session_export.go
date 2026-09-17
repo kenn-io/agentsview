@@ -1000,15 +1000,17 @@ func sessionExportClaudeSnapshotPeers(
 	const snapshotKeyChunk = maxSQLVars / 2
 	for i := 0; i < len(keys); i += snapshotKeyChunk {
 		end := min(i+snapshotKeyChunk, len(keys))
-		predicates := make([]string, 0, end-i)
+		tuples := make([]string, 0, end-i)
 		args := make([]any, 0, (end-i)*2)
 		for _, key := range keys[i:end] {
-			predicates = append(predicates,
-				"(m.claude_message_id = ? AND m.claude_request_id = ?)")
+			tuples = append(tuples, "(?, ?)")
 			args = append(args, key.messageID, key.requestID)
 		}
 		rowsSQL := usageRowsSQLWithWhere(
-			usageMessageEligibility+" AND ("+strings.Join(predicates, " OR ")+")",
+			usageMessageEligibility+
+				" AND m.claude_message_id != '' AND m.claude_request_id != ''"+
+				" AND (m.claude_message_id, m.claude_request_id) IN (VALUES "+
+				strings.Join(tuples, ", ")+")",
 			usageEventEligibility+" AND 1 = 0")
 		query := usageRowSelectFromRows(rowsSQL) + `
 			ORDER BY u.session_id ASC, u.ts ASC,

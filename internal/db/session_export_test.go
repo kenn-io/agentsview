@@ -1327,6 +1327,125 @@ func TestSessionSummaryExportSelectsClaudeSnapshotAcrossPages(t *testing.T) {
 	assert.False(t, peerUsage.HasCost)
 }
 
+type capturedSessionExportQuery struct {
+	query string
+	args  []any
+}
+
+type sessionExportQueryCapture struct {
+	inner   sessionExportQuerier
+	queries []capturedSessionExportQuery
+}
+
+func (c *sessionExportQueryCapture) QueryContext(
+	ctx context.Context, query string, args ...any,
+) (*sql.Rows, error) {
+	c.queries = append(c.queries, capturedSessionExportQuery{
+		query: query,
+		args:  append([]any(nil), args...),
+	})
+	return c.inner.QueryContext(ctx, query, args...)
+}
+
+func (c *sessionExportQueryCapture) QueryRowContext(
+	ctx context.Context, query string, args ...any,
+) *sql.Row {
+	return c.inner.QueryRowContext(ctx, query, args...)
+}
+
+func TestSessionExportClaudeSnapshotPeersUsesSnapshotIndex(t *testing.T) {
+	d := testSessionExportDB(t)
+	ctx := context.Background()
+	const pairCount = maxSQLVars/2 + 1
+
+	pageRows := make([]usageScanRow, 0, pairCount)
+	for i := range pairCount {
+		pageRows = append(pageRows, usageScanRow{
+			sessionID:       fmt.Sprintf("page-%03d", i),
+			claudeMessageID: fmt.Sprintf("message-%03d", i),
+			claudeRequestID: fmt.Sprintf("request-%03d", i),
+		})
+	}
+	pageRows[0].sessionID = "page-owned"
+
+	for _, id := range []string{
+		"page-owned", "peer-first", "peer-last", "cross-pair", "unmatched",
+		"empty-message", "empty-request",
+	} {
+		insertExportSession(t, d, Session{
+			ID: id, Project: "snapshot-index", Machine: "local", Agent: "claude",
+			StartedAt: Ptr("2026-05-01T10:00:00Z"),
+			EndedAt:   Ptr("2026-05-01T10:01:00Z"),
+		})
+	}
+	message := func(sessionID, messageID, requestID string) Message {
+		return Message{
+			SessionID:       sessionID,
+			Ordinal:         0,
+			Role:            "assistant",
+			Timestamp:       "2026-05-01T10:00:00Z",
+			Model:           "model-computed",
+			ClaudeMessageID: messageID,
+			ClaudeRequestID: requestID,
+			TokenUsage:      jsontext.Value(`{"input_tokens":1,"output_tokens":1}`),
+		}
+	}
+	insertMessages(t, d,
+		message("page-owned", "message-000", "request-000"),
+		message("peer-first", "message-001", "request-001"),
+		message("peer-last", "message-250", "request-250"),
+		message("cross-pair", "message-001", "request-002"),
+		message("unmatched", "message-outside", "request-outside"),
+		message("empty-message", "", "request-001"),
+		message("empty-request", "message-001", ""),
+	)
+
+	capture := &sessionExportQueryCapture{inner: d.getReader()}
+	peers, err := sessionExportClaudeSnapshotPeers(
+		ctx, capture, pageRows, []string{"page-owned"},
+	)
+	require.NoError(t, err)
+	require.Len(t, capture.queries, 2)
+	require.Len(t, capture.queries[0].args, maxSQLVars)
+	require.Len(t, capture.queries[1].args, 2)
+
+	for i, captured := range capture.queries {
+		assert.Contains(t, captured.query, "m.claude_message_id != ''")
+		assert.Contains(t, captured.query, "m.claude_request_id != ''")
+		assert.Contains(t, captured.query,
+			"(m.claude_message_id, m.claude_request_id) IN (VALUES")
+
+		planRows, planErr := d.getReader().QueryContext(
+			ctx, "EXPLAIN QUERY PLAN "+captured.query, captured.args...,
+		)
+		require.NoError(t, planErr)
+		defer planRows.Close()
+		details := explainQueryPlanDetails(t, planRows)
+		plan := strings.Join(details, "\n")
+		t.Logf("captured production query %d: args=%d plan=%s",
+			i+1, len(captured.args), strings.Join(details, " | "))
+		assert.Contains(t, plan,
+			"SEARCH m USING INDEX idx_messages_claude_snapshot (claude_message_id=? AND claude_request_id=?)",
+			"query %d must use both Claude snapshot identity columns", i)
+	}
+
+	require.Len(t, peers, 2)
+	gotIDs := make([]string, 0, len(peers))
+	for _, peer := range peers {
+		gotIDs = append(gotIDs, peer.sessionID)
+	}
+	assert.Equal(t, []string{"peer-first", "peer-last"}, gotIDs)
+	assert.NotContains(t, gotIDs, "page-owned")
+	assert.NotContains(t, gotIDs, "cross-pair")
+	assert.NotContains(t, gotIDs, "empty-message")
+	assert.NotContains(t, gotIDs, "empty-request")
+	assert.NotContains(t, gotIDs, "unmatched")
+	assert.Equal(t, "message-001", peers[0].claudeMessageID)
+	assert.Equal(t, "request-001", peers[0].claudeRequestID)
+	assert.Equal(t, "message-250", peers[1].claudeMessageID)
+	assert.Equal(t, "request-250", peers[1].claudeRequestID)
+}
+
 func TestSessionExportCopilotReportedCostReplacesSessionEstimates(t *testing.T) {
 	d := testSessionExportDB(t)
 	ctx := context.Background()
