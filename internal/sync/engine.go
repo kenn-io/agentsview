@@ -11867,7 +11867,9 @@ func (e *Engine) processProviderFile(
 	// A rejected checkpoint forbids resuming from its cursor, but does not
 	// invalidate a matching full-source hash. In particular, device numbers
 	// can change across boots without changing the transcript.
-	if !forceSourceCwdParse && (!incForceReplace || codexForceFullParse) && !e.forceParseRequested(file) {
+	// A fingerprint awaiting its parse-derived hash cannot prove freshness.
+	if !forceSourceCwdParse && !e.forceParseRequested(file) &&
+		(!incForceReplace || codexForceFullParse && fingerprint.Hash != "") {
 		dbFresh, metadataVerified := e.providerSourceFreshnessByDB(
 			file, fingerprint, providerSemantics,
 		)

@@ -179,8 +179,16 @@ func TestCodexCheckpointMissingHonorsMatchingSkipEntry(t *testing.T) {
 }
 
 func TestCodexCheckpointDeviceChangeVerifiesContentBeforeReparsing(t *testing.T) {
-	for _, changed := range []bool{false, true} {
-		t.Run(strconv.FormatBool(changed), func(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		changed     bool
+		missingHash bool
+	}{
+		{name: "unchanged"},
+		{name: "changed", changed: true},
+		{name: "changed without stored hash", changed: true, missingHash: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
 			const uuid = "019eb791-cf7d-75c1-8439-9ed74c122c11"
 			root := writeCodexParityRoot(t, uuid)
 			path := filepath.Join(root, "2024", "01", "01",
@@ -203,9 +211,16 @@ func TestCodexCheckpointDeviceChangeVerifiesContentBeforeReparsing(t *testing.T)
 			// longer authorize an append, but the transcript may be unchanged.
 			cp.FileDevice++
 			require.NoError(t, database.UpsertParserCheckpoint(*cp, blobs))
+			if tt.missingHash {
+				session, err := database.GetSessionFull(t.Context(), cp.SessionID)
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				session.FileHash = nil
+				require.NoError(t, database.UpsertSession(*session))
+			}
 			require.NoError(t, database.DeleteProviderStatHash(t.Context(), parser.AgentCodex, path))
 			wantMessage, wantSynced := "run the suite", 0
-			if changed {
+			if tt.changed {
 				info, err := os.Stat(path)
 				require.NoError(t, err)
 				content, err := os.ReadFile(path)
@@ -219,11 +234,11 @@ func TestCodexCheckpointDeviceChangeVerifiesContentBeforeReparsing(t *testing.T)
 			t.Cleanup(fresh.Close)
 			stats := fresh.SyncAll(t.Context(), nil)
 			require.Zero(t, stats.Failed)
-			require.Equal(t, wantSynced, stats.Synced)
 			messages, err := database.GetAllMessages(t.Context(), cp.SessionID)
 			require.NoError(t, err)
 			require.NotEmpty(t, messages)
 			require.Equal(t, wantMessage, messages[0].Content)
+			require.Equal(t, wantSynced, stats.Synced)
 			require.Zero(t, fresh.SyncAll(t.Context(), nil).Synced)
 		})
 	}
