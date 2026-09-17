@@ -21,7 +21,7 @@ func TestRawSyncCleanUploadsHelp(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Contains(t, help, "Run one bounded server upload cleanup pass")
-	assert.Contains(t, help, "configured PostgreSQL data directory")
+	assert.Contains(t, help, "configured PostgreSQL target and AgentsView data directory")
 }
 
 func TestRawSyncCleanUploadsRejectsArguments(t *testing.T) {

@@ -111,7 +111,7 @@ func TestRawSyncCleanUploadsRequiresWritableSchema(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Empty(t, output)
-	assert.Contains(t, err.Error(), "raw-sync schema is not writable")
+	assert.Contains(t, err.Error(), "raw sync write privileges missing")
 	assert.NotContains(t, logs.String(), "pg serve")
 	_, statErr := os.Stat(filepath.Join(dataDir, "raw-upload-spool"))
 	assert.ErrorIs(t, statErr, os.ErrNotExist)

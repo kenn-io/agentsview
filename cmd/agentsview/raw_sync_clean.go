@@ -16,7 +16,7 @@ func newRawSyncCleanUploadsCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:          "clean-uploads",
 		Short:        "Run one bounded server upload cleanup pass",
-		Long:         "Run one bounded server upload cleanup pass against the configured PostgreSQL data directory.",
+		Long:         "Run one bounded server upload cleanup pass against the configured PostgreSQL target and AgentsView data directory.",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

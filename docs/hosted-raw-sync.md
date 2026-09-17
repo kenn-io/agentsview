@@ -101,10 +101,13 @@ agentsview raw-sync clean-uploads
 The command uses the effective PostgreSQL target and data directory paired with
 `pg serve`, so an operator can run it while the server is stopped or when
 cleanup should happen immediately. A short-lived command starts a fresh spool
-cursor, so repeat invocations may revisit entries preserved by an earlier pass.
-It checks that the target has the provisioned raw-sync schema and write
-privileges before creating the upload spool. It reports `Raw upload cleanup
-pass completed.` only after the cleanup store closes successfully.
+cursor, so each invocation inspects at most the first 128 entries returned by
+the spool directory. Repeating the command can revisit the same preserved
+entries. Entries beyond that window require the running server, which keeps its
+cursor between passes. The command checks that the target has the provisioned
+raw-sync schema and write privileges before creating the upload spool. It
+reports `Raw upload cleanup pass completed.` only after the cleanup store
+closes successfully.
 
 ## HTTP control plane
 

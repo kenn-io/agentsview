@@ -320,7 +320,13 @@ func CheckRawSyncWritePrivileges(
 	ctx context.Context, db *sql.DB, schema string,
 ) (bool, error) {
 	missing, err := checkRawSyncWritePrivileges(ctx, db, schema)
-	return missing == "" && err == nil, err
+	if err != nil {
+		return false, err
+	}
+	if missing != "" {
+		return false, fmt.Errorf("raw sync write privileges missing: %s", missing)
+	}
+	return true, nil
 }
 
 // CanWriteRawSyncSchema reports whether the current role can use every table
