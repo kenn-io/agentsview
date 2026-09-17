@@ -130,6 +130,16 @@ func TestExportDigestReturnsOrderedMultiDateRange(t *testing.T) {
 	assert.False(t, digest.Days[2].Complete)
 	assert.Empty(t, digest.Days[2].DayDigest)
 	assert.Len(t, digest.Days[2].HourDigests, 14)
+	for i, date := range []string{"2026-07-27", "2026-07-28", "2026-07-29"} {
+		dayOut, dayStderr, err := executeExportSessionsCommand(
+			newExportReportingTestRoot(now), "export", "day", date,
+		)
+		require.NoError(t, err)
+		assert.Empty(t, dayStderr)
+		var day export.ReportingDay
+		require.NoError(t, json.Unmarshal([]byte(dayOut), &day))
+		assertDigestDayMatchesReportingDay(t, digest.Days[i], day)
+	}
 }
 
 func TestExportDigestRejectsReversedRange(t *testing.T) {
@@ -147,6 +157,28 @@ func TestExportDigestRejectsReversedRange(t *testing.T) {
 	assert.Empty(t, stdout)
 	assert.Empty(t, stderr)
 	assert.Contains(t, err.Error(), "--from must not be after --to")
+}
+
+func TestExportDigestRejects32DateRangeBeforeOpen(t *testing.T) {
+	opened := false
+	deps := exportReportingDeps{
+		now: func() time.Time {
+			return time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+		},
+		openDatabase: func(*cobra.Command) (*db.DB, func(), error) {
+			opened = true
+			return nil, func() {}, errors.New("unexpected database open")
+		},
+	}
+	stdout, stderr, err := executeExportSessionsCommand(
+		newExportReportingTestRootWithDeps(deps),
+		"export", "digest", "--from", "2026-07-01", "--to", "2026-08-01",
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "maximum is 31")
+	assert.False(t, opened)
+	assert.Empty(t, stdout)
+	assert.Empty(t, stderr)
 }
 
 func TestExportReportingSchemaVersions(t *testing.T) {

@@ -71,3 +71,103 @@ func BenchmarkReportingJointDay(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkReportingDigestRange(b *testing.B) {
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 0, 29)
+	now := time.Date(2026, 8, 2, 12, 0, 0, 0, time.UTC)
+	for _, variant := range []struct {
+		name   string
+		schema int
+		bucket string
+	}{
+		{name: "v3", schema: export.ReportingSchemaVersion},
+		{name: "v4-5m", schema: export.ReportingJointSchemaVersion, bucket: "5m"},
+	} {
+		b.Run(variant.name, func(b *testing.B) {
+			d := testDB(b)
+			seedReportingDigestBenchmarkArchive(b, d)
+			opts := ReportingDigestExportOptions{
+				From: start, To: end, Now: now,
+				SchemaVersion: variant.schema, Bucket: variant.bucket,
+			}
+			legacy := func() ([]export.ReportingDigestDay, error) {
+				days := make([]export.ReportingDigestDay, 0, 30)
+				for date := start; !date.After(end); date = date.Add(24 * time.Hour) {
+					day, err := d.ExportReportingDay(b.Context(), ReportingExportOptions{
+						Date: date, Now: now, SchemaVersion: variant.schema,
+						Bucket: variant.bucket,
+					})
+					if err != nil {
+						return nil, err
+					}
+					days = append(days, reportingDigestDayFromDay(day))
+				}
+				return days, nil
+			}
+			rangeExport := func() ([]export.ReportingDigestDay, error) {
+				return d.ExportReportingDigest(b.Context(), opts)
+			}
+
+			legacyDays, err := legacy()
+			require.NoError(b, err)
+			rangeDays, err := rangeExport()
+			require.NoError(b, err)
+			legacyBytes, err := export.MarshalCanonical(legacyDays)
+			require.NoError(b, err)
+			rangeBytes, err := export.MarshalCanonical(rangeDays)
+			require.NoError(b, err)
+			require.Equal(b, legacyBytes, rangeBytes)
+
+			b.Run("legacy", func(b *testing.B) {
+				b.ReportAllocs()
+				var err error
+				for b.Loop() {
+					_, err = legacy()
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+			})
+			b.Run("range", func(b *testing.B) {
+				b.ReportAllocs()
+				var err error
+				for b.Loop() {
+					_, err = rangeExport()
+				}
+				if err != nil {
+					b.Fatal(err)
+				}
+			})
+		})
+	}
+}
+
+func seedReportingDigestBenchmarkArchive(b *testing.B, d *DB) {
+	b.Helper()
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(b, d.UpsertSession(Session{
+		ID: "benchmark-long-session", Project: "benchmark-project",
+		Machine: "benchmark-machine", Agent: "benchmark-agent",
+		StartedAt: Ptr(start.Format(time.RFC3339)),
+		EndedAt:   Ptr("2026-07-30T23:55:00Z"), MessageCount: 2,
+		UserMessageCount: 1,
+	}))
+	require.NoError(b, d.InsertMessages([]Message{
+		{SessionID: "benchmark-long-session", Ordinal: 1, Role: "user", Timestamp: start.Format(time.RFC3339)},
+		{SessionID: "benchmark-long-session", Ordinal: 2, Role: "assistant", Timestamp: "2026-07-30T23:55:00Z", Model: "benchmark-model"},
+	}))
+	usage := make([]UsageEvent, 0, 60)
+	for i := range 30 {
+		date := start.AddDate(0, 0, i)
+		for duplicate := range 2 {
+			usage = append(usage, UsageEvent{
+				Source: "benchmark-usage", Model: "benchmark-model",
+				InputTokens: 100 + duplicate, OutputTokens: 50 + duplicate,
+				OccurredAt: date.Add(12 * time.Hour).Format(time.RFC3339),
+				DedupKey:   fmt.Sprintf("day-%02d-row-%d", i, duplicate),
+			})
+		}
+	}
+	require.NoError(b, d.ReplaceSessionUsageEvents("benchmark-long-session", usage))
+}

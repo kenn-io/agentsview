@@ -294,6 +294,8 @@ usage rows, pricing, and project identity therefore describe one coherent
 archive snapshot even when a sync writes concurrently. Usage deduplication and
 authoritative session-cost allocation happen once on the merged usage stream
 across the day before rows are partitioned by hour.
+All dates in one digest share that read transaction, while survivor selection
+and session-cost allocation still run independently for each date.
 
 Usage selects the greatest output-token snapshot for each Claude message/request
 identity before generic deduplication, retains the earliest session for
