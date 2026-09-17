@@ -12,32 +12,30 @@ import type {
   RawSyncUploadResponse,
   RawSyncUploadStartInputBody,
   RawsyncManifest,
-} from "../models";
+  RawsyncStatus
+} from '../models';
 
-import { orvalFetch } from "../../runtime.ts";
+import { orvalFetch } from '../../runtime.ts';
 
 export const getPostApiV1RawSyncManifestsUrl = () => {
-  return `/api/v1/raw-sync/manifests`;
-};
+
+
+
+
+  return `/api/v1/raw-sync/manifests`
+}
 
 /**
  * @summary Commit a raw manifest
  */
-export const postApiV1RawSyncManifests = async (
-  rawsyncManifest: RawsyncManifest,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<RawSyncManifestResponse> => {
-  const getHeaders = (
-    h?: NonNullable<RequestInit["headers"]>,
-  ): Record<string, string | readonly string[]> => {
+export const postApiV1RawSyncManifests = async (rawsyncManifest: RawsyncManifest, options?: Parameters<typeof orvalFetch>[1]): Promise<RawSyncManifestResponse> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
     if (Symbol.iterator in h) {
       return Object.fromEntries(
-        Array.from(
-          h as Iterable<Iterable<string>>,
-          (entry) => Array.from(entry) as [string, string],
-        ),
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
       );
     }
     const headers: Record<string, string | readonly string[]> = {};
@@ -46,36 +44,35 @@ export const postApiV1RawSyncManifests = async (
     }
     return headers;
   };
-  return orvalFetch<RawSyncManifestResponse>(getPostApiV1RawSyncManifestsUrl(), {
+return orvalFetch<RawSyncManifestResponse>(getPostApiV1RawSyncManifestsUrl(),
+  {
     ...options,
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
-    body: JSON.stringify(rawsyncManifest),
-  });
-};
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(rawsyncManifest)
+  }
+);}
+
 
 export const getPostApiV1RawSyncObjectsMissingUrl = () => {
-  return `/api/v1/raw-sync/objects/missing`;
-};
+
+
+
+
+  return `/api/v1/raw-sync/objects/missing`
+}
 
 /**
  * @summary Negotiate missing raw objects
  */
-export const postApiV1RawSyncObjectsMissing = async (
-  rawSyncMissingObjectsInputBody: RawSyncMissingObjectsInputBody,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<RawSyncMissingObjectsResponse> => {
-  const getHeaders = (
-    h?: NonNullable<RequestInit["headers"]>,
-  ): Record<string, string | readonly string[]> => {
+export const postApiV1RawSyncObjectsMissing = async (rawSyncMissingObjectsInputBody: RawSyncMissingObjectsInputBody, options?: Parameters<typeof orvalFetch>[1]): Promise<RawSyncMissingObjectsResponse> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
     if (Symbol.iterator in h) {
       return Object.fromEntries(
-        Array.from(
-          h as Iterable<Iterable<string>>,
-          (entry) => Array.from(entry) as [string, string],
-        ),
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
       );
     }
     const headers: Record<string, string | readonly string[]> = {};
@@ -84,36 +81,58 @@ export const postApiV1RawSyncObjectsMissing = async (
     }
     return headers;
   };
-  return orvalFetch<RawSyncMissingObjectsResponse>(getPostApiV1RawSyncObjectsMissingUrl(), {
+return orvalFetch<RawSyncMissingObjectsResponse>(getPostApiV1RawSyncObjectsMissingUrl(),
+  {
     ...options,
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
-    body: JSON.stringify(rawSyncMissingObjectsInputBody),
-  });
-};
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(rawSyncMissingObjectsInputBody)
+  }
+);}
+
+
+export const getGetApiV1RawSyncStatusUrl = () => {
+
+
+
+
+  return `/api/v1/raw-sync/status`
+}
+
+/**
+ * @summary Read hosted raw sync status
+ */
+export const getApiV1RawSyncStatus = async ( options?: Parameters<typeof orvalFetch>[1]): Promise<RawsyncStatus> => {
+
+  return orvalFetch<RawsyncStatus>(getGetApiV1RawSyncStatusUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
 
 export const getPostApiV1RawSyncTokensUrl = () => {
-  return `/api/v1/raw-sync/tokens`;
-};
+
+
+
+
+  return `/api/v1/raw-sync/tokens`
+}
 
 /**
  * @summary Exchange a device credential
  */
-export const postApiV1RawSyncTokens = async (
-  rawSyncTokenInputBody: RawSyncTokenInputBody,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<RawSyncTokenResponse> => {
-  const getHeaders = (
-    h?: NonNullable<RequestInit["headers"]>,
-  ): Record<string, string | readonly string[]> => {
+export const postApiV1RawSyncTokens = async (rawSyncTokenInputBody: RawSyncTokenInputBody, options?: Parameters<typeof orvalFetch>[1]): Promise<RawSyncTokenResponse> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
     if (Symbol.iterator in h) {
       return Object.fromEntries(
-        Array.from(
-          h as Iterable<Iterable<string>>,
-          (entry) => Array.from(entry) as [string, string],
-        ),
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
       );
     }
     const headers: Record<string, string | readonly string[]> = {};
@@ -122,36 +141,35 @@ export const postApiV1RawSyncTokens = async (
     }
     return headers;
   };
-  return orvalFetch<RawSyncTokenResponse>(getPostApiV1RawSyncTokensUrl(), {
+return orvalFetch<RawSyncTokenResponse>(getPostApiV1RawSyncTokensUrl(),
+  {
     ...options,
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
-    body: JSON.stringify(rawSyncTokenInputBody),
-  });
-};
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(rawSyncTokenInputBody)
+  }
+);}
+
 
 export const getPostApiV1RawSyncUploadsUrl = () => {
-  return `/api/v1/raw-sync/uploads`;
-};
+
+
+
+
+  return `/api/v1/raw-sync/uploads`
+}
 
 /**
  * @summary Create or resume a raw object upload
  */
-export const postApiV1RawSyncUploads = async (
-  rawSyncUploadStartInputBody: RawSyncUploadStartInputBody,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<RawSyncUploadResponse> => {
-  const getHeaders = (
-    h?: NonNullable<RequestInit["headers"]>,
-  ): Record<string, string | readonly string[]> => {
+export const postApiV1RawSyncUploads = async (rawSyncUploadStartInputBody: RawSyncUploadStartInputBody, options?: Parameters<typeof orvalFetch>[1]): Promise<RawSyncUploadResponse> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
     if (Symbol.iterator in h) {
       return Object.fromEntries(
-        Array.from(
-          h as Iterable<Iterable<string>>,
-          (entry) => Array.from(entry) as [string, string],
-        ),
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
       );
     }
     const headers: Record<string, string | readonly string[]> = {};
@@ -160,58 +178,59 @@ export const postApiV1RawSyncUploads = async (
     }
     return headers;
   };
-  return orvalFetch<RawSyncUploadResponse>(getPostApiV1RawSyncUploadsUrl(), {
+return orvalFetch<RawSyncUploadResponse>(getPostApiV1RawSyncUploadsUrl(),
+  {
     ...options,
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
-    body: JSON.stringify(rawSyncUploadStartInputBody),
-  });
-};
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(rawSyncUploadStartInputBody)
+  }
+);}
 
-export const getHeadApiV1RawSyncUploadsByUploadIdUrl = ({
-  uploadId,
-}: HeadApiV1RawSyncUploadsByUploadIdPathParameters) => {
-  return `/api/v1/raw-sync/uploads/${encodeURIComponent(String(uploadId))}`;
-};
+
+export const getHeadApiV1RawSyncUploadsByUploadIdUrl = ({ uploadId }: HeadApiV1RawSyncUploadsByUploadIdPathParameters,) => {
+
+
+
+
+  return `/api/v1/raw-sync/uploads/${encodeURIComponent(String(uploadId))}`
+}
 
 /**
  * @summary Read a raw upload offset
  */
-export const headApiV1RawSyncUploadsByUploadId = async (
-  { uploadId }: HeadApiV1RawSyncUploadsByUploadIdPathParameters,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<void> => {
-  return orvalFetch<void>(getHeadApiV1RawSyncUploadsByUploadIdUrl({ uploadId }), {
-    ...options,
-    method: "HEAD",
-  });
-};
+export const headApiV1RawSyncUploadsByUploadId = async ({ uploadId }: HeadApiV1RawSyncUploadsByUploadIdPathParameters, options?: Parameters<typeof orvalFetch>[1]): Promise<void> => {
 
-export const getPatchApiV1RawSyncUploadsByUploadIdUrl = ({
-  uploadId,
-}: PatchApiV1RawSyncUploadsByUploadIdPathParameters) => {
-  return `/api/v1/raw-sync/uploads/${encodeURIComponent(String(uploadId))}`;
-};
+  return orvalFetch<void>(getHeadApiV1RawSyncUploadsByUploadIdUrl({ uploadId }),
+  {
+    ...options,
+    method: 'HEAD'
+
+
+  }
+);}
+
+
+export const getPatchApiV1RawSyncUploadsByUploadIdUrl = ({ uploadId }: PatchApiV1RawSyncUploadsByUploadIdPathParameters,) => {
+
+
+
+
+  return `/api/v1/raw-sync/uploads/${encodeURIComponent(String(uploadId))}`
+}
 
 /**
  * @summary Append a raw upload chunk
  */
-export const patchApiV1RawSyncUploadsByUploadId = async (
-  { uploadId }: PatchApiV1RawSyncUploadsByUploadIdPathParameters,
-  patchApiV1RawSyncUploadsByUploadIdBody: Blob,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<RawSyncUploadResponse> => {
-  const getHeaders = (
-    h?: NonNullable<RequestInit["headers"]>,
-  ): Record<string, string | readonly string[]> => {
+export const patchApiV1RawSyncUploadsByUploadId = async ({ uploadId }: PatchApiV1RawSyncUploadsByUploadIdPathParameters,
+    patchApiV1RawSyncUploadsByUploadIdBody: Blob, options?: Parameters<typeof orvalFetch>[1]): Promise<RawSyncUploadResponse> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
     if (!h) return {};
     if (h instanceof Headers) return Object.fromEntries(h.entries());
     if (Symbol.iterator in h) {
       return Object.fromEntries(
-        Array.from(
-          h as Iterable<Iterable<string>>,
-          (entry) => Array.from(entry) as [string, string],
-        ),
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
       );
     }
     const headers: Record<string, string | readonly string[]> = {};
@@ -220,10 +239,11 @@ export const patchApiV1RawSyncUploadsByUploadId = async (
     }
     return headers;
   };
-  return orvalFetch<RawSyncUploadResponse>(getPatchApiV1RawSyncUploadsByUploadIdUrl({ uploadId }), {
+return orvalFetch<RawSyncUploadResponse>(getPatchApiV1RawSyncUploadsByUploadIdUrl({ uploadId }),
+  {
     ...options,
-    method: "PATCH",
-    headers: { "Content-Type": "application/octet-stream", ...getHeaders(options?.headers) },
-    body: patchApiV1RawSyncUploadsByUploadIdBody,
-  });
-};
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/octet-stream', ...getHeaders(options?.headers) },
+    body: patchApiV1RawSyncUploadsByUploadIdBody
+  }
+);}

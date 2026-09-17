@@ -787,6 +787,50 @@ func (o *PostAPIV1RawSyncObjectsMissingRequestOptions) GetHeader() (map[string]s
 	return runtime.AsMap[string](o.Header)
 }
 
+// GetAPIV1RawSyncStatusRequestOptions is the options needed to make a request to GetAPIV1RawSyncStatus.
+type GetAPIV1RawSyncStatusRequestOptions struct {
+	Header *GetAPIV1RawSyncStatusHeaders
+}
+
+// Validate validates all the fields in the options.
+// Use it if fields validation was not run.
+func (o *GetAPIV1RawSyncStatusRequestOptions) Validate() error {
+	var errors runtime.ValidationErrors
+
+	if o.Header != nil {
+		if v, ok := any(o.Header).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Header", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+
+	return errors
+}
+
+// GetPathParams returns the path params as a map.
+func (o *GetAPIV1RawSyncStatusRequestOptions) GetPathParams() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetQuery returns the query params as a map.
+func (o *GetAPIV1RawSyncStatusRequestOptions) GetQuery() (map[string]any, error) {
+	return nil, nil
+}
+
+// GetBody returns the payload in any type that can be marshalled to JSON by the client.
+func (o *GetAPIV1RawSyncStatusRequestOptions) GetBody() any {
+	return nil
+}
+
+// GetHeader returns the headers as a map.
+func (o *GetAPIV1RawSyncStatusRequestOptions) GetHeader() (map[string]string, error) {
+	return runtime.AsMap[string](o.Header)
+}
+
 // PostAPIV1RawSyncTokensRequestOptions is the options needed to make a request to PostAPIV1RawSyncTokens.
 type PostAPIV1RawSyncTokensRequestOptions struct {
 	Body   *PostAPIV1RawSyncTokensBody
@@ -4232,6 +4276,7 @@ type ClientInterface interface {
 	PostAPIV1PushPgStreamWithResponse(ctx context.Context, options *PostAPIV1PushPgRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushPgResp, error)
 	PostAPIV1RawSyncManifestsWithResponse(ctx context.Context, options *PostAPIV1RawSyncManifestsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1RawSyncManifestsResp, error)
 	PostAPIV1RawSyncObjectsMissingWithResponse(ctx context.Context, options *PostAPIV1RawSyncObjectsMissingRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1RawSyncObjectsMissingResp, error)
+	GetAPIV1RawSyncStatusWithResponse(ctx context.Context, options *GetAPIV1RawSyncStatusRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1RawSyncStatusResp, error)
 	PostAPIV1RawSyncTokensWithResponse(ctx context.Context, options *PostAPIV1RawSyncTokensRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1RawSyncTokensResp, error)
 	PostAPIV1RawSyncUploadsWithResponse(ctx context.Context, options *PostAPIV1RawSyncUploadsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1RawSyncUploadsResp, error)
 	HeadAPIV1RawSyncUploadsUploadIDWithResponse(ctx context.Context, options *HeadAPIV1RawSyncUploadsUploadIDRequestOptions, reqEditors ...runtime.RequestEditorFn) (*HeadAPIV1RawSyncUploadsUploadIDResp, error)
@@ -7490,6 +7535,229 @@ func (c *Client) PostAPIV1RawSyncObjectsMissingWithResponse(ctx context.Context,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "PostAPIV1RawSyncObjectsMissingErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// GetAPIV1RawSyncStatus Read hosted raw sync status
+func (c *Client) GetAPIV1RawSyncStatusWithResponse(ctx context.Context, options *GetAPIV1RawSyncStatusRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1RawSyncStatusResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/raw-sync/status",
+		Method:     "GET",
+		Options:    options,
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/raw-sync/status")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1RawSyncStatusResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1RawSyncStatusResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncStatusResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1RawSyncStatusErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncStatusErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1RawSyncStatusErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncStatusErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1RawSyncStatusErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncStatusErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1RawSyncStatusErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncStatusErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1RawSyncStatusErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncStatusErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 422:
+		out.JSON422 = new(GetAPIV1RawSyncStatusErrorResponseJSON422)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncStatusErrorResponseJSON422",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1RawSyncStatusErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncStatusErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1RawSyncStatusErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncStatusErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1RawSyncStatusErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncStatusErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1RawSyncStatusErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncStatusErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1RawSyncStatusErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1RawSyncStatusErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -14095,6 +14363,10 @@ type PostAPIV1RawSyncObjectsMissingHeaders struct {
 	Authorization *string `json:"Authorization,omitempty"`
 }
 
+type GetAPIV1RawSyncStatusHeaders struct {
+	Authorization *string `json:"Authorization,omitempty"`
+}
+
 type PostAPIV1RawSyncTokensHeaders struct {
 	Authorization       *string `json:"Authorization,omitempty"`
 	XAgentsViewDeviceID *string `json:"X-AgentsView-Device-ID,omitempty"`
@@ -15656,6 +15928,30 @@ type PostAPIV1RawSyncObjectsMissingErrorResponseJSON503 = APIErrorResponse
 
 type PostAPIV1RawSyncObjectsMissingErrorResponseJSON504 = APIErrorResponse
 
+type GetAPIV1RawSyncStatusResponse = RawsyncStatus
+
+type GetAPIV1RawSyncStatusErrorResponse = APIErrorResponse
+
+type GetAPIV1RawSyncStatusErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1RawSyncStatusErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1RawSyncStatusErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1RawSyncStatusErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1RawSyncStatusErrorResponseJSON422 = APIErrorResponse
+
+type GetAPIV1RawSyncStatusErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1RawSyncStatusErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1RawSyncStatusErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1RawSyncStatusErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1RawSyncStatusErrorResponseJSON504 = APIErrorResponse
+
 type PostAPIV1RawSyncTokensResponse = RawSyncTokenResponse
 
 type PostAPIV1RawSyncTokensErrorResponse = APIErrorResponse
@@ -16666,6 +16962,24 @@ type PostAPIV1RawSyncObjectsMissingResp struct {
 	JSON502      *PostAPIV1RawSyncObjectsMissingErrorResponseJSON502
 	JSON503      *PostAPIV1RawSyncObjectsMissingErrorResponseJSON503
 	JSON504      *PostAPIV1RawSyncObjectsMissingErrorResponseJSON504
+}
+
+type GetAPIV1RawSyncStatusResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1RawSyncStatusResponse
+	JSON400      *GetAPIV1RawSyncStatusErrorResponse
+	JSON401      *GetAPIV1RawSyncStatusErrorResponseJSON
+	JSON403      *GetAPIV1RawSyncStatusErrorResponseJSON403
+	JSON404      *GetAPIV1RawSyncStatusErrorResponseJSON404
+	JSON409      *GetAPIV1RawSyncStatusErrorResponseJSON409
+	JSON422      *GetAPIV1RawSyncStatusErrorResponseJSON422
+	JSON500      *GetAPIV1RawSyncStatusErrorResponseJSON500
+	JSON501      *GetAPIV1RawSyncStatusErrorResponseJSON501
+	JSON502      *GetAPIV1RawSyncStatusErrorResponseJSON502
+	JSON503      *GetAPIV1RawSyncStatusErrorResponseJSON503
+	JSON504      *GetAPIV1RawSyncStatusErrorResponseJSON504
 }
 
 type PostAPIV1RawSyncTokensResp struct {
@@ -18880,6 +19194,15 @@ func (r RawSyncUploadStartInputBody) Validate() error {
 	return errors
 }
 
+type RawsyncDeviceStatus struct {
+	DeviceID   string     `json:"device_id" validate:"required"`
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty" validate:"required"`
+}
+
+func (r RawsyncDeviceStatus) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(r))
+}
+
 type RawsyncEntry struct {
 	Length    int64              `json:"length"`
 	ModTimeNs *int64             `json:"mod_time_ns,omitempty"`
@@ -18912,6 +19235,101 @@ func (r RawsyncEntry) Validate() error {
 type RawsyncManifest = rawsync.Manifest
 
 type RawsyncObjectRef = rawsync.ObjectRef
+
+type RawsyncOpenUploadStatus struct {
+	CreatedAt time.Time `json:"created_at" validate:"required"`
+	UploadID  string    `json:"upload_id" validate:"required"`
+}
+
+func (r RawsyncOpenUploadStatus) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(r))
+}
+
+type RawsyncParseJobCounts struct {
+	Complete   int64 `json:"complete"`
+	Failed     int64 `json:"failed"`
+	Leased     int64 `json:"leased"`
+	Ready      int64 `json:"ready"`
+	Retrying   int64 `json:"retrying"`
+	Superseded int64 `json:"superseded"`
+}
+
+type RawsyncSourceHeadStatus struct {
+	ConfiguredRootID string     `json:"configured_root_id" validate:"required"`
+	DeviceID         string     `json:"device_id" validate:"required"`
+	Generation       int64      `json:"generation"`
+	LastAcceptedAt   *time.Time `json:"last_accepted_at,omitempty" validate:"required"`
+	ParseFailed      bool       `json:"parse_failed"`
+	ParseLeased      bool       `json:"parse_leased"`
+	ParsePending     bool       `json:"parse_pending"`
+	Provider         string     `json:"provider" validate:"required"`
+	SourceKey        string     `json:"source_key" validate:"required"`
+}
+
+func (r RawsyncSourceHeadStatus) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(r))
+}
+
+type RawsyncStatus struct {
+	ActiveDeviceCount int64                      `json:"active_device_count"`
+	Devices           []RawsyncDeviceStatus      `json:"devices" validate:"required"`
+	ParseJobs         RawsyncParseJobCounts      `json:"parse_jobs"`
+	SourceHeads       []RawsyncSourceHeadStatus  `json:"source_heads" validate:"required"`
+	Uploads           RawsyncUploadStatusSummary `json:"uploads"`
+}
+
+func (r RawsyncStatus) Validate() error {
+	var errors runtime.ValidationErrors
+	for i, item := range r.Devices {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Devices[%d]", i), err)
+			}
+		}
+	}
+	if v, ok := any(r.ParseJobs).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("ParseJobs", err)
+		}
+	}
+	for i, item := range r.SourceHeads {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("SourceHeads[%d]", i), err)
+			}
+		}
+	}
+	if v, ok := any(r.Uploads).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Uploads", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type RawsyncUploadStatusSummary struct {
+	OldestOpenSession *RawsyncOpenUploadStatus `json:"oldest_open_session,omitempty"`
+	OpenCount         int64                    `json:"open_count"`
+	PendingBytes      int64                    `json:"pending_bytes"`
+}
+
+func (r RawsyncUploadStatusSummary) Validate() error {
+	var errors runtime.ValidationErrors
+	if r.OldestOpenSession != nil {
+		if v, ok := any(r.OldestOpenSession).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("OldestOpenSession", err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
 
 type RecallEntriesResponse struct {
 	Entries     []DBRecallResult `json:"entries" validate:"required"`

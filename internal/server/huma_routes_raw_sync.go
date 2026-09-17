@@ -30,6 +30,12 @@ func (s *Server) registerRawSyncRoutes() {
 		http.MethodPost, "/tokens", "Exchange a device credential",
 		s.humaRawSyncToken, s.humaTimeout(), maxBodyBytes(rawSyncTokenMaxBodyBytes),
 	)
+	if s.rawSyncStatus != nil || s.rawSyncSchemaOnly {
+		registerRoute(group,
+			http.MethodGet, "/status", "Read hosted raw sync status",
+			s.humaRawSyncStatus, s.humaTimeout(),
+		)
+	}
 	if s.rawSyncCustody == nil && !s.rawSyncSchemaOnly {
 		return
 	}
@@ -45,6 +51,25 @@ func (s *Server) registerRawSyncRoutes() {
 	if s.rawSyncUploads != nil || s.rawSyncSchemaOnly {
 		s.registerRawUploadRoutes(group)
 	}
+}
+
+type rawSyncStatusInput struct {
+	Authorization string `header:"Authorization"`
+}
+
+func (s *Server) humaRawSyncStatus(
+	ctx context.Context,
+	_ *rawSyncStatusInput,
+) (*jsonOutput[rawsync.Status], error) {
+	identity, err := rawSyncIdentityFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	status, err := s.rawSyncStatus.ReadRawSyncStatus(ctx, identity)
+	if err != nil {
+		return nil, rawSyncHTTPError(err)
+	}
+	return &jsonOutput[rawsync.Status]{Body: status}, nil
 }
 
 type rawSyncTokenInput struct {

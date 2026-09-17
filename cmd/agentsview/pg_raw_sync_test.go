@@ -27,6 +27,7 @@ func TestPreparePGRawSyncServicesRegistersHostedRoutes(t *testing.T) {
 	spec := server.OpenAPISpec(server.VersionInfo{}, option)
 	for _, path := range []string{
 		"/api/v1/raw-sync/tokens",
+		"/api/v1/raw-sync/status",
 		"/api/v1/raw-sync/objects/missing",
 		"/api/v1/raw-sync/manifests",
 		"/api/v1/raw-sync/uploads",

@@ -78,6 +78,275 @@ func TestRawSyncTokenExchangeBypassesLegacyBearerAndUsesNamedScopes(t *testing.T
 	assert.Equal(t, 1, auth.issueCalls)
 }
 
+func TestRawSyncStatusHTTP(t *testing.T) {
+	t.Parallel()
+
+	identity := rawsync.AuthIdentity{TenantID: "tenant-a", DeviceID: "dev-a"}
+	acceptedAt := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	lastSeenAt := acceptedAt.Add(time.Hour)
+	want := rawsync.Status{
+		SourceHeads: []rawsync.SourceHeadStatus{{
+			DeviceID:         "dev-a",
+			ConfiguredRootID: "root-a",
+			Provider:         parser.AgentCodex,
+			SourceKey:        "sessions/a.jsonl",
+			Generation:       4,
+			LastAcceptedAt:   &acceptedAt,
+			ParsePending:     true,
+			ParseLeased:      true,
+			ParseFailed:      false,
+		}},
+		ParseJobs: rawsync.ParseJobCounts{
+			Ready: 1, Leased: 2, Retrying: 3,
+			Complete: 4, Failed: 5, Superseded: 6,
+		},
+		ActiveDeviceCount: 2,
+		Devices: []rawsync.DeviceStatus{
+			{DeviceID: "dev-a", LastSeenAt: &lastSeenAt},
+			{DeviceID: "dev-b"},
+		},
+		Uploads: rawsync.UploadStatusSummary{
+			OpenCount:    2,
+			PendingBytes: 17,
+			OldestOpenSession: &rawsync.OpenUploadStatus{
+				UploadID: "upload-a", CreatedAt: acceptedAt,
+			},
+		},
+	}
+	auth := &rawSyncAuthStub{
+		authenticateToken: func(
+			_ context.Context,
+			token string,
+			required rawsync.DeviceTokenScope,
+		) (rawsync.AuthIdentity, error) {
+			assert.Equal(t, "avdt_status", token)
+			assert.Equal(t, rawsync.ScopeStatus, required)
+			return identity, nil
+		},
+	}
+	statusReader := &rawSyncStatusStub{
+		readRawSyncStatus: func(
+			_ context.Context,
+			gotIdentity rawsync.AuthIdentity,
+		) (rawsync.Status, error) {
+			assert.Equal(t, identity, gotIdentity)
+			return want, nil
+		},
+	}
+	srv := newRawSyncHTTPTestServer(
+		t, auth, new(rawSyncCustodyStub), WithRawSyncStatus(statusReader),
+	)
+
+	recorder := serveRawSyncJSON(
+		t, srv, http.MethodGet, "/api/v1/raw-sync/status", "", "avdt_status", "",
+	)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var got rawsync.Status
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &got))
+	assert.Equal(t, want, got)
+	assert.Equal(t, 1, auth.authenticateCalls)
+	assert.Equal(t, 1, statusReader.readCalls)
+}
+
+func TestRawSyncStatusRejectsUnauthorizedBeforeReader(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		authorization string
+		authErr       error
+		wantAuthCalls int
+	}{
+		{name: "missing", wantAuthCalls: 0},
+		{name: "malformed", authorization: "Basic wrong", wantAuthCalls: 0},
+		{
+			name:          "wrong scope",
+			authorization: "Bearer avdt_wrong_scope",
+			authErr:       rawsync.ErrUnauthorized,
+			wantAuthCalls: 1,
+		},
+		{
+			name:          "expired",
+			authorization: "Bearer avdt_expired",
+			authErr:       rawsync.ErrUnauthorized,
+			wantAuthCalls: 1,
+		},
+		{
+			name:          "revoked",
+			authorization: "Bearer avdt_revoked",
+			authErr:       rawsync.ErrUnauthorized,
+			wantAuthCalls: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			auth := &rawSyncAuthStub{
+				authenticateToken: func(
+					_ context.Context,
+					_ string,
+					required rawsync.DeviceTokenScope,
+				) (rawsync.AuthIdentity, error) {
+					assert.Equal(t, rawsync.ScopeStatus, required)
+					return rawsync.AuthIdentity{}, tt.authErr
+				},
+			}
+			statusReader := &rawSyncStatusStub{
+				readRawSyncStatus: func(
+					context.Context,
+					rawsync.AuthIdentity,
+				) (rawsync.Status, error) {
+					require.FailNow(t, "status reader must not run after authentication failure")
+					return rawsync.Status{}, nil
+				},
+			}
+			srv := newRawSyncHTTPTestServer(
+				t, auth, new(rawSyncCustodyStub), WithRawSyncStatus(statusReader),
+			)
+
+			recorder := serveRawSyncStatusRequest(t, srv, tt.authorization)
+
+			assert.Equal(t, http.StatusUnauthorized, recorder.Code, recorder.Body.String())
+			assert.Equal(t, tt.wantAuthCalls, auth.authenticateCalls)
+			assert.Zero(t, statusReader.readCalls)
+		})
+	}
+}
+
+func TestRawSyncStatusUsesAuthenticatedIdentityAndIgnoresSelectors(t *testing.T) {
+	t.Parallel()
+
+	identity := rawsync.AuthIdentity{TenantID: "tenant-auth", DeviceID: "dev-auth"}
+	auth := &rawSyncAuthStub{
+		authenticateToken: func(
+			context.Context,
+			string,
+			rawsync.DeviceTokenScope,
+		) (rawsync.AuthIdentity, error) {
+			return identity, nil
+		},
+	}
+	statusReader := &rawSyncStatusStub{
+		readRawSyncStatus: func(
+			_ context.Context,
+			gotIdentity rawsync.AuthIdentity,
+		) (rawsync.Status, error) {
+			assert.Equal(t, identity, gotIdentity)
+			return rawsync.Status{
+				SourceHeads: make([]rawsync.SourceHeadStatus, 0),
+				Devices:     make([]rawsync.DeviceStatus, 0),
+			}, nil
+		},
+	}
+	srv := newRawSyncHTTPTestServer(
+		t, auth, new(rawSyncCustodyStub), WithRawSyncStatus(statusReader),
+	)
+	recorder := serveRawSyncStatusRequestPath(
+		t, srv,
+		"/api/v1/raw-sync/status?tenant_id=tenant-attacker&device_id=dev-attacker",
+		"Bearer avdt_status",
+	)
+
+	assert.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Equal(t, 1, statusReader.readCalls)
+}
+
+func TestRawSyncStatusOnlyTokenCannotCommit(t *testing.T) {
+	t.Parallel()
+
+	identity := rawsync.AuthIdentity{TenantID: "tenant-a", DeviceID: "dev-a"}
+	auth := &rawSyncAuthStub{
+		authenticateToken: func(
+			_ context.Context,
+			_ string,
+			required rawsync.DeviceTokenScope,
+		) (rawsync.AuthIdentity, error) {
+			if required != rawsync.ScopeStatus {
+				return rawsync.AuthIdentity{}, rawsync.ErrUnauthorized
+			}
+			return identity, nil
+		},
+	}
+	statusReader := &rawSyncStatusStub{
+		readRawSyncStatus: func(
+			context.Context,
+			rawsync.AuthIdentity,
+		) (rawsync.Status, error) {
+			return rawsync.Status{
+				SourceHeads: make([]rawsync.SourceHeadStatus, 0),
+				Devices:     make([]rawsync.DeviceStatus, 0),
+			}, nil
+		},
+	}
+	custody := &rawSyncCustodyStub{
+		commitManifest: func(
+			context.Context,
+			rawsync.AuthIdentity,
+			rawsync.Manifest,
+		) (rawsync.CommitResult, error) {
+			require.FailNow(t, "status-only token must not reach commit")
+			return rawsync.CommitResult{}, nil
+		},
+	}
+	srv := newRawSyncHTTPTestServer(
+		t, auth, custody, WithRawSyncStatus(statusReader),
+	)
+
+	statusRecorder := serveRawSyncJSON(
+		t, srv, http.MethodGet, "/api/v1/raw-sync/status", "", "avdt_status", "",
+	)
+	assert.Equal(t, http.StatusOK, statusRecorder.Code, statusRecorder.Body.String())
+
+	manifestBody, err := json.Marshal(rawHTTPTestManifest())
+	require.NoError(t, err)
+	commitRecorder := serveRawSyncJSON(
+		t, srv, http.MethodPost, "/api/v1/raw-sync/manifests",
+		string(manifestBody), "avdt_status", "",
+	)
+	assert.Equal(t, http.StatusUnauthorized, commitRecorder.Code, commitRecorder.Body.String())
+	assert.Zero(t, custody.commitCalls)
+}
+
+func TestRawSyncStatusErrorDoesNotLeakBackendDetail(t *testing.T) {
+	t.Parallel()
+
+	auth := &rawSyncAuthStub{
+		authenticateToken: func(
+			context.Context,
+			string,
+			rawsync.DeviceTokenScope,
+		) (rawsync.AuthIdentity, error) {
+			return rawsync.AuthIdentity{TenantID: "tenant-a", DeviceID: "dev-a"}, nil
+		},
+	}
+	statusReader := &rawSyncStatusStub{
+		readRawSyncStatus: func(
+			context.Context,
+			rawsync.AuthIdentity,
+		) (rawsync.Status, error) {
+			return rawsync.Status{}, fmt.Errorf("password=secret: database unavailable")
+		},
+	}
+	srv := newRawSyncHTTPTestServer(
+		t, auth, new(rawSyncCustodyStub), WithRawSyncStatus(statusReader),
+	)
+
+	recorder := serveRawSyncJSON(
+		t, srv, http.MethodGet, "/api/v1/raw-sync/status", "", "avdt_status", "",
+	)
+
+	assert.Equal(t, http.StatusInternalServerError, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"code":"internal_error"`)
+	assert.NotContains(t, recorder.Body.String(), "password=secret")
+}
+
+func TestRawSyncStatusRouteRequiresCapability(t *testing.T) {
+	t.Parallel()
+
+	srv := newRawSyncHTTPTestServer(t, new(rawSyncAuthStub), new(rawSyncCustodyStub))
+	assert.NotContains(t, srv.api.OpenAPI().Paths, "/api/v1/raw-sync/status")
+}
+
 func TestRawSyncNegotiationDerivesTenantAndDeviceFromScopedToken(t *testing.T) {
 	t.Parallel()
 
@@ -511,6 +780,7 @@ func TestRawSyncCanonicalOpenAPISpecIncludesRoutes(t *testing.T) {
 	paths := OpenAPISpec(VersionInfo{}).Paths
 	for _, path := range []string{
 		"/api/v1/raw-sync/tokens",
+		"/api/v1/raw-sync/status",
 		"/api/v1/raw-sync/objects/missing",
 		"/api/v1/raw-sync/manifests",
 		"/api/v1/raw-sync/uploads",
@@ -657,15 +927,45 @@ func newRawSyncHTTPTestServer(
 	t *testing.T,
 	auth RawSyncDeviceAuth,
 	custody RawSyncCustody,
+	options ...Option,
 ) *Server {
 	t.Helper()
+	options = append([]Option{WithRawSyncServices(auth, custody)}, options...)
 	return New(config.Config{
 		Host:         "127.0.0.1",
 		Port:         8080,
 		AuthToken:    "legacy-shared-token",
 		RequireAuth:  true,
 		WriteTimeout: 30 * time.Second,
-	}, nil, nil, WithRawSyncServices(auth, custody))
+	}, nil, nil, options...)
+}
+
+func serveRawSyncStatusRequest(
+	t *testing.T,
+	srv *Server,
+	authorization string,
+) *httptest.ResponseRecorder {
+	return serveRawSyncStatusRequestPath(
+		t, srv, "/api/v1/raw-sync/status", authorization,
+	)
+}
+
+func serveRawSyncStatusRequestPath(
+	t *testing.T,
+	srv *Server,
+	path string,
+	authorization string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Host = "127.0.0.1:8080"
+	req.RemoteAddr = "192.0.2.10:54321"
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	return recorder
 }
 
 func serveRawSyncJSON(
@@ -737,6 +1037,22 @@ type rawSyncAuthStub struct {
 	authenticateCalls int
 }
 
+type rawSyncStatusStub struct {
+	readRawSyncStatus func(
+		context.Context,
+		rawsync.AuthIdentity,
+	) (rawsync.Status, error)
+	readCalls int
+}
+
+func (s *rawSyncStatusStub) ReadRawSyncStatus(
+	ctx context.Context,
+	identity rawsync.AuthIdentity,
+) (rawsync.Status, error) {
+	s.readCalls++
+	return s.readRawSyncStatus(ctx, identity)
+}
+
 func (s *rawSyncAuthStub) AuthenticateCredential(
 	ctx context.Context,
 	deviceID string,
@@ -801,3 +1117,4 @@ func (s *rawSyncCustodyStub) CommitManifest(
 
 var _ RawSyncDeviceAuth = (*rawSyncAuthStub)(nil)
 var _ RawSyncCustody = (*rawSyncCustodyStub)(nil)
+var _ RawSyncStatusReader = (*rawSyncStatusStub)(nil)
