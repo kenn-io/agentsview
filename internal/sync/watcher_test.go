@@ -1572,6 +1572,7 @@ func TestWatcherOrdinaryWakeDoesNotClearRetainedRetryBackoff(t *testing.T) {
 		assert.Equal(t, 20*time.Millisecond, observed[1].Sub(observed[0]))
 		assert.Equal(t, 40*time.Millisecond, observed[2].Sub(observed[1]))
 		assert.Equal(t, 80*time.Millisecond, observed[3].Sub(observed[2]))
+		t.Log("ordinary wake gaps: [20ms 40ms 80ms]")
 	})
 }
 
