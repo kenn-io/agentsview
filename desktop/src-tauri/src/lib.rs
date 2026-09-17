@@ -306,6 +306,15 @@ pub fn run() {
             if let RunEvent::MenuEvent(event) = &event {
                 handle_desktop_menu_event(app_handle, event.id().0.as_str());
             }
+            // macOS asks a running app to show itself again through
+            // applicationShouldHandleReopen (Dock icon click, Cmd-Tab
+            // activation with no visible windows, `open -a AgentsView`).
+            // Restore the close-to-tray window here; otherwise the app
+            // stays hidden with no way back in until it is relaunched.
+            #[cfg(target_os = "macos")]
+            if let RunEvent::Reopen { .. } = &event {
+                show_main_window(app_handle);
+            }
         });
 }
 
