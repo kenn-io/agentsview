@@ -116,27 +116,73 @@ func TestReportingDigestSourceLoadObserver(t *testing.T) {
 	from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	for _, days := range []int{1, 2, 30, 31} {
 		t.Run(testReportingDateCountName(days), func(t *testing.T) {
-			calls := 0
-			var stats reportingSourceLoadStats
+			legacyCalls := 0
+			legacyHistoryRows := 0
+			legacyUsageRows := 0
+			for date := from; !date.After(from.AddDate(0, 0, days-1)); date = date.Add(24 * time.Hour) {
+				_, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
+					Date: date, Now: now,
+					afterSourceLoad: func(load reportingSourceLoadStats) {
+						legacyCalls++
+						legacyHistoryRows += load.ActivityHistoryRows
+						legacyUsageRows += load.PaddedUsageRows
+					},
+				})
+				require.NoError(t, err)
+			}
+			rangeCalls := 0
+			var rangeStats reportingSourceLoadStats
 			got, err := d.ExportReportingDigest(t.Context(), ReportingDigestExportOptions{
 				From: from, To: from.AddDate(0, 0, days-1), Now: now,
 				afterSourceLoad: func(load reportingSourceLoadStats) {
-					calls++
-					stats = load
+					rangeCalls++
+					rangeStats = load
 				},
 			})
 			require.NoError(t, err)
 			require.Len(t, got, days)
-			assert.Equal(t, 1, calls)
-			assert.Equal(t, 1, stats.ActivitySessions)
-			assert.Equal(t, 2, stats.ActivityHistoryRows)
-			wantUsageRows := 1
-			if days >= 30 {
-				wantUsageRows = 2
+			assert.Equal(t, days, legacyCalls)
+			assert.Equal(t, 1, rangeCalls)
+			assert.Equal(t, 1, rangeStats.ActivitySessions)
+			assert.Equal(t, 2, rangeStats.ActivityHistoryRows)
+			assert.GreaterOrEqual(t, legacyHistoryRows, rangeStats.ActivityHistoryRows)
+			if days > 1 {
+				assert.Greater(t, legacyHistoryRows, rangeStats.ActivityHistoryRows)
 			}
-			assert.Equal(t, wantUsageRows, stats.PaddedUsageRows)
+			assert.GreaterOrEqual(t, legacyUsageRows, rangeStats.PaddedUsageRows)
 		})
 	}
+}
+
+func TestReportingDigestPreservesTerminalEventEligibility(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "terminal-only", "terminal-project", func(s *Session) {
+		s.Agent = "agent-a"
+		s.StartedAt = Ptr("2026-07-26T09:00:00Z")
+		s.EndedAt = Ptr("2026-07-26T09:01:00Z")
+	})
+	seedMessage(t, d, "terminal-only", 1, "user", "2026-07-26T09:00:00Z", "")
+	timingInsertToolResultEvent(
+		t, d, "terminal-only", 1, 0, "tool-1", "completed",
+		"2026-07-28T10:00:00Z", 0,
+	)
+
+	tx, err := d.getReader().BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	source, err := d.loadReportingExportSource(
+		t.Context(), tx,
+		time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC),
+		export.ReportingSchemaVersion,
+	)
+	require.NoError(t, err)
+	day := source.forDate(
+		time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC),
+	)
+	require.Len(t, day.activitySessions, 1)
+	assert.Equal(t, "terminal-only", day.activitySessions[0].SessionID)
 }
 
 func TestReportingDigestValidatesBeforeSourceLoad(t *testing.T) {

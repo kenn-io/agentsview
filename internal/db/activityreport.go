@@ -1190,31 +1190,6 @@ func sortActivityReportUsageCandidates(
 	})
 }
 
-// activityReportUsageCandidatesFrom returns normalized padded-range rows
-// without sorting or applying a survivor mask. Reporting export merges these
-// rows with standalone candidates before imposing either operation.
-func (db *DB) activityReportUsageCandidatesFrom(
-	ctx context.Context,
-	source sessionExportQuerier,
-	ids []string,
-	lowerBound, upperBound string,
-	includeWebSearch bool,
-) ([]activity.UsageRow, *export.PricingBlock, error) {
-	candidates, rateResolver, err := db.loadActivityReportUsageCandidatesFrom(
-		ctx, source, ids, lowerBound, upperBound, true,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	var webSearchRequests []int
-	if !includeWebSearch {
-		webSearchRequests = make([]int, len(candidates))
-	}
-	return materializeActivityReportUsageCandidates(
-		candidates, nil, nil, webSearchRequests, rateResolver,
-	)
-}
-
 func materializeActivityReportUsageCandidates(
 	candidates []activityReportUsageCandidate,
 	mask []bool,

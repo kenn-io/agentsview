@@ -250,7 +250,6 @@ func (db *DB) ExportReportingDigest(
 			return nil, fmt.Errorf("finalize reporting date: %w", err)
 		}
 		days = append(days, reportingDigestDayFromDay(day))
-		day.Hours = nil
 	}
 	return days, nil
 }

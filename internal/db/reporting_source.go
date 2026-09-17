@@ -17,8 +17,6 @@ type reportingSourceLoadStats struct {
 	PaddedUsageRows     int
 }
 
-var _ = (*DB).activityReportUsageCandidatesFrom
-
 type reportingExportSource struct {
 	activitySessions    []reportingSourceSession
 	activityEvents      []activity.ActivityEvent
@@ -35,10 +33,10 @@ type reportingExportSource struct {
 }
 
 type reportingSourceSession struct {
-	meta               activity.SessionMeta
-	effectiveStart     string
-	effectiveEnd       string
-	terminalTimestamps []string
+	meta              activity.SessionMeta
+	effectiveStart    string
+	effectiveEnd      string
+	terminalTimestamp string
 }
 
 type reportingDaySource struct {
@@ -152,10 +150,10 @@ func (db *DB) loadReportingExportSource(
 			}
 		}
 		activitySessions = append(activitySessions, reportingSourceSession{
-			meta:               session,
-			effectiveStart:     startTimestamp,
-			effectiveEnd:       endTimestamp,
-			terminalTimestamps: terminalTimestamps[session.SessionID],
+			meta:              session,
+			effectiveStart:    startTimestamp,
+			effectiveEnd:      endTimestamp,
+			terminalTimestamp: terminalTimestamps[session.SessionID],
 		})
 	}
 
@@ -217,13 +215,8 @@ func (src reportingExportSource) forDate(
 	selected := make(map[string]struct{}, len(src.activitySessions))
 	for _, candidate := range src.activitySessions {
 		eligible := candidate.effectiveEnd >= startBound
-		if !eligible {
-			for _, terminal := range candidate.terminalTimestamps {
-				if terminal >= startBound {
-					eligible = true
-					break
-				}
-			}
+		if !eligible && candidate.terminalTimestamp >= startBound {
+			eligible = true
 		}
 		if !eligible || candidate.effectiveStart >= endBound {
 			continue
@@ -431,13 +424,13 @@ func reportingTerminalTimestampsFrom(
 	q sessionExportQuerier,
 	ids []string,
 	lowerBound string,
-) (map[string][]string, error) {
-	out := make(map[string][]string, len(ids))
+) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
 	err := queryChunked(ids, func(chunk []string) error {
 		placeholders, args := inPlaceholders(chunk)
 		args = append(args, lowerBound)
 		rows, err := q.QueryContext(ctx, `
-			SELECT session_id, timestamp
+			SELECT session_id, MAX(timestamp)
 			FROM tool_result_events
 			WHERE session_id IN `+placeholders+`
 				AND source = 'tool_execution'
@@ -445,7 +438,8 @@ func reportingTerminalTimestampsFrom(
 				AND timestamp IS NOT NULL
 				AND timestamp != ''
 				AND agentsview_timestamp_unix_micro(timestamp) IS NOT NULL
-				AND timestamp >= ?`, args...)
+				AND timestamp >= ?
+			GROUP BY session_id`, args...)
 		if err != nil {
 			return fmt.Errorf("querying reporting terminal timestamps: %w", err)
 		}
@@ -455,7 +449,7 @@ func reportingTerminalTimestampsFrom(
 			if err := rows.Scan(&id, &timestamp); err != nil {
 				return fmt.Errorf("scanning reporting terminal timestamp: %w", err)
 			}
-			out[id] = append(out[id], timestamp)
+			out[id] = timestamp
 		}
 		if err := rows.Err(); err != nil {
 			return fmt.Errorf("iterating reporting terminal timestamps: %w", err)
