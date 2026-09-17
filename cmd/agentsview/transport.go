@@ -310,7 +310,9 @@ func ensureTransportContext(
 			if tr.DirectReason == errLocalDaemonUnreachable.Error() {
 				return transport{}, errLocalDaemonUnreachable
 			}
-			return transport{}, errors.New(tr.DirectReason)
+			return transport{}, appendDaemonRestartUpgradeHint(
+				errors.New(tr.DirectReason),
+			)
 		}
 		return transport{}, errLocalDaemonUnreachable
 	}

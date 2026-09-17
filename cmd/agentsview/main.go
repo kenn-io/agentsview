@@ -1446,7 +1446,12 @@ func daemonRestartUpgradeHint() string {
 		"must be upgraded before it can be read. The upgrade runs when a " +
 		"writable daemon starts, so restart the daemon to let it run:\n" +
 		"  - desktop app: quit and relaunch it\n" +
-		"  - CLI: run `agentsview daemon restart`"
+		"  - CLI: run `agentsview daemon restart`\n" +
+		"If this command is itself a long-running background process " +
+		"started before the upgrade (`pg push --watch`, " +
+		"`duckdb push --watch`, or a service installed with " +
+		"`agentsview pg service`), restart it too so it picks up the " +
+		"current binary."
 }
 
 func openWriteDB(

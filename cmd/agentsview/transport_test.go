@@ -170,6 +170,36 @@ func writeIncompatibleDaemonRuntime(
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
 }
 
+// writeNewerDataVersionDaemonRuntime writes a runtime record for a daemon
+// that matches this client's API version but was already upgraded to a
+// newer data version than this binary knows about, simulating a client
+// (e.g. a long-running pg push --watch process) still running an older
+// binary after the daemon it talks to has been restarted post-upgrade.
+func writeNewerDataVersionDaemonRuntime(
+	t *testing.T, dir, host string, port int, daemonVersion string,
+) {
+	t.Helper()
+	meta := map[string]string{
+		runtimeHost:        host,
+		runtimePort:        strconv.Itoa(port),
+		runtimeReadOnly:    "false",
+		runtimeAPIVersion:  strconv.Itoa(daemonAPIVersion),
+		runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion() + 1),
+	}
+	rec := daemon.RuntimeRecord{
+		PID:       os.Getpid(),
+		Network:   daemon.NetworkTCP,
+		Address:   net.JoinHostPort(host, strconv.Itoa(port)),
+		Service:   daemonService,
+		Version:   daemonVersion,
+		StartedAt: time.Now(),
+		Metadata:  meta,
+	}
+	_, err := writeRuntimeRecordForTest(dir, rec)
+	require.NoError(t, err)
+	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+}
+
 // setTestVersion overrides the package build version for the duration of
 // the test and restores it on cleanup.
 func setTestVersion(t *testing.T, value string) {
@@ -794,6 +824,36 @@ func TestEnsureTransport_ArchiveWriteDoesNotDowngradeNewerDaemon(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, transportHTTP, tr.Mode)
 	assert.Equal(t, "http://"+net.JoinHostPort(host, strconv.Itoa(port)), tr.URL)
+}
+
+// TestEnsureTransport_ArchiveWriteNewerDaemonDataVersionHintsRestart covers a
+// long-running archive-write process (e.g. `pg push --watch`, installed as
+// `agentsview pg service`) that is still running an older binary after an
+// upgrade: it finds a live daemon already on a newer data version, correctly
+// refuses to replace it (that would downgrade the daemon), and must surface
+// the same actionable restart guidance the read-intent path already gives,
+// not the bare "data version ... incompatible" message.
+func TestEnsureTransport_ArchiveWriteNewerDaemonDataVersionHintsRestart(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	host, port := testPingServer(t)
+	writeNewerDataVersionDaemonRuntime(t, dir, host, port, "1.0.0")
+
+	setTestVersion(t, "1.1.0")
+	forbidStopDaemonRuntimeForUpgrade(t,
+		"a client with an older compiled data version must not replace a "+
+			"daemon already on a newer one")
+	forbidStartBackgroundServeForTransport(t,
+		"a client with an older compiled data version must not replace a "+
+			"daemon already on a newer one")
+
+	cfg := config.Config{DataDir: dir}
+	_, err := ensureTransport(
+		&cfg, transportIntentArchiveWrite, 100*time.Millisecond,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "data version")
+	assert.Contains(t, err.Error(), "restart")
+	assert.Contains(t, err.Error(), "pg service")
 }
 
 func TestShouldUpgradeDaemonRuntimeTreatsMissingDaemonVersionAsOlderRelease(t *testing.T) {
