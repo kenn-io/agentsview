@@ -1159,6 +1159,33 @@ func TestEnsureTransportContextCancelDuringStartupWait(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+// TestEnsureTransport_ArchiveWriteNoDaemonEnvNamesIncompatibleDaemon covers
+// a writer running with AGENTSVIEW_NO_DAEMON=1 that finds a live daemon on a
+// newer data version. The env var forbids replacing the daemon, so the write
+// must fail, and the error must name the data-version mismatch rather than
+// claim the daemon is not responding.
+func TestEnsureTransport_ArchiveWriteNoDaemonEnvNamesIncompatibleDaemon(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	host, port := testPingServer(t)
+	writeNewerDataVersionDaemonRuntime(t, dir, host, port, "1.0.0")
+
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+	setTestVersion(t, "1.1.0")
+	forbidStopDaemonRuntimeForUpgrade(t,
+		"AGENTSVIEW_NO_DAEMON must not replace an incompatible daemon")
+	forbidStartBackgroundServeForTransport(t,
+		"AGENTSVIEW_NO_DAEMON must not start a replacement daemon")
+
+	cfg := config.Config{DataDir: dir}
+	_, err := ensureTransport(
+		&cfg, transportIntentArchiveWrite, 100*time.Millisecond,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "data version")
+	assert.Contains(t, err.Error(), "refusing to write directly")
+	assert.NotContains(t, err.Error(), "not responding")
+}
+
 func TestEnsureTransport_ArchiveWriteNoDaemonEnvUsesDirect(t *testing.T) {
 	dir := daemonRuntimeDir(t)
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")

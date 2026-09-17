@@ -303,6 +303,17 @@ func ensureTransportContext(
 		return transportFromRuntime(rt), nil
 	}
 	if daemonAutostartDisabled() {
+		if tr.DirectIncompatible {
+			// AGENTSVIEW_NO_DAEMON never replaces a live daemon, so a
+			// client that cannot talk to the one it found has no path
+			// forward. Name the real reason instead of letting the
+			// write backend report the daemon as "not responding".
+			return transport{}, fmt.Errorf(
+				"local daemon owns the SQLite archive but cannot serve "+
+					"this client: %s; refusing to write directly",
+				tr.DirectReason,
+			)
+		}
 		return tr, nil
 	}
 	if tr.DirectReadOnly {
