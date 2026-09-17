@@ -27,7 +27,7 @@
     "dompurify": "3.4.15",
     "layerchart": "2.4.1",
     "marked": "18.0.12",
-    "mermaid": "11.17.2",
+    "mermaid": "12.0.0",
     "shiki": "4.4.3"
   },
   "devDependencies": {
