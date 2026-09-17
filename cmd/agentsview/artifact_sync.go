@@ -162,7 +162,7 @@ func runDaemonArtifactExchange(
 		_, err := api.PostAPIV1ArtifactsExchangeWithResponse(ctx, &apiclient.PostAPIV1ArtifactsExchangeRequestOptions{Body: &apiclient.ArtifactExchangeRequest{Target: target, Full: new(full)}})
 		return err
 	}, func(_ context.Context, req *http.Request) error {
-		req.Header.Set("Origin", baseURL)
+		req.Header.Set("Origin", daemonOriginURL(baseURL))
 		if authToken != "" {
 			req.Header.Set("Authorization", "Bearer "+authToken)
 		}
