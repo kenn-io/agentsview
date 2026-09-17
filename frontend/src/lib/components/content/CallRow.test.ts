@@ -10,14 +10,14 @@ afterEach(() => {
 
 describe("CallRow measured timing", () => {
   it.each([
-    { duration: 2000, isLive: false, label: "2.0s", width: "40%" },
-    { duration: 0, isLive: false, label: "0ms", width: "0%" },
-    { duration: null, isLive: false, label: "unknown", width: "0%" },
-    { duration: null, isLive: true, label: "running 5.0s+", width: "0%" },
-    { duration: 2000, isLive: true, label: "running 5.0s+", width: "40%" },
+    { duration: 2000, isLive: false, label: "2.0s", width: "40%", liveClass: false },
+    { duration: 0, isLive: false, label: "0ms", width: "0%", liveClass: false },
+    { duration: null, isLive: false, label: "unknown", width: "0%", liveClass: false },
+    { duration: null, isLive: true, label: "running 5.0s+", width: "0%", liveClass: true },
+    { duration: 2000, isLive: true, label: "2.0s", width: "40%", liveClass: false },
   ])(
     "renders $label from the call when live=$isLive",
-    async ({ duration, isLive, label, width }) => {
+    async ({ duration, isLive, label, width, liveClass }) => {
       const call: CallTiming = {
         tool_use_id: "call-1",
         tool_name: "Bash",
@@ -38,6 +38,9 @@ describe("CallRow measured timing", () => {
       await tick();
 
       expect(document.querySelector(".cd")?.textContent?.trim()).toBe(label);
+      expect(document.querySelector<HTMLElement>(".cd")?.classList.contains("live")).toBe(
+        liveClass,
+      );
       expect(document.querySelector<HTMLElement>(".cbar")?.style.width).toBe(width);
       unmount(component);
     },

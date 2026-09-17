@@ -33,9 +33,10 @@
   }: Props = $props();
 
   let isSubagent = $derived(call.subagent_session_id != null);
+  let isLiveRow = $derived(isLive && call.duration_ms == null);
 
   let durationLabel = $derived.by(() => {
-    if (isLive) {
+    if (isLiveRow) {
       return m.call_row_running_duration({
         duration: formatDuration(liveDurationMs ?? call.duration_ms ?? 0),
       });
@@ -89,7 +90,12 @@
       style="width: {call.duration_ms == null || call.duration_ms <= 0 ? 0 : barWidthPct}%; background: {categoryToken(call.category)}"
     ></span>
   </span>
-  <span class="cd" class:slow={isSlow} class:live={isLive} class:muted={!isSlow && !isLive}>
+  <span
+    class="cd"
+    class:slow={isSlow}
+    class:live={isLiveRow}
+    class:muted={!isSlow && !isLiveRow}
+  >
     {durationLabel}
   </span>
 </div>

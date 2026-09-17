@@ -61,4 +61,44 @@ describe("CallGroup measured timing", () => {
     expect(onCallClick).toHaveBeenCalledOnce();
     unmount(component);
   });
+
+  it("keeps a measured final sibling closed when the group is live", async () => {
+    const calls: CallTiming[] = [
+      {
+        tool_use_id: "a",
+        tool_name: "Bash",
+        category: "Bash",
+        duration_ms: 2000,
+        is_parallel: true,
+        input_preview: "pwd",
+      },
+      {
+        tool_use_id: "b",
+        tool_name: "Task",
+        category: "Task",
+        duration_ms: 3000,
+        is_parallel: true,
+        input_preview: "review",
+      },
+    ];
+    const component = mount(CallGroup, {
+      target: document.body,
+      props: {
+        calls,
+        isLive: true,
+        liveDurationMs: 6000,
+        barScalePct: () => 40,
+        onCallClick: vi.fn(),
+        onSubagentExpand: vi.fn(),
+        expandedSubagentIds: new Set<string>(),
+      },
+    });
+    await tick();
+
+    const rows = [...document.querySelectorAll<HTMLElement>(".cd")];
+    expect(rows.map((row) => row.textContent?.trim())).toEqual(["2.0s", "3.0s"]);
+    expect(rows[1]?.classList.contains("live")).toBe(false);
+
+    unmount(component);
+  });
 });
