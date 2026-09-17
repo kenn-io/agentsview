@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json/v2"
 	"fmt"
 	"time"
@@ -18,7 +19,7 @@ const (
 // statement and one statement timestamp.
 const rawJobHealthSQL = `
 WITH snapshot AS MATERIALIZED (
-	SELECT statement_timestamp() AS observed_at
+	SELECT CURRENT_TIMESTAMP AS observed_at
 ), orphaned AS (
 	SELECT
 		head.device_id,
@@ -233,6 +234,19 @@ func (s *RawIngestStore) RawJobHealth(
 	identity rawsync.AuthIdentity,
 	query rawsync.JobHealthQuery,
 ) (rawsync.JobHealthReport, error) {
+	return rawJobHealth(ctx, s.db, identity, query)
+}
+
+type rawJobHealthQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func rawJobHealth(
+	ctx context.Context,
+	queryer rawJobHealthQueryer,
+	identity rawsync.AuthIdentity,
+	query rawsync.JobHealthQuery,
+) (rawsync.JobHealthReport, error) {
 	if err := validateRawIngestIdentity(identity); err != nil {
 		return rawsync.JobHealthReport{}, err
 	}
@@ -253,7 +267,7 @@ func (s *RawIngestStore) RawJobHealth(
 		staleSourceHeadCount   int64
 		staleSourceHeadsJSON   string
 	)
-	if err := s.db.QueryRowContext(
+	if err := queryer.QueryRowContext(
 		ctx, rawJobHealthSQL, identity.TenantID,
 		query.MaxAttempts, query.StaleAfterSeconds,
 		rawJobHealthMaxRows, rawJobHealthMaxErrorClasses,

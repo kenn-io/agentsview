@@ -18,6 +18,33 @@ import (
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
+func loosenRawIngestJobStageCheck(t *testing.T, pg *sql.DB) {
+	t.Helper()
+	rows, err := pg.QueryContext(t.Context(), `
+		SELECT format(
+			'ALTER TABLE %I.raw_ingest_jobs DROP CONSTRAINT %I',
+			$1::text, conname)
+		FROM pg_catalog.pg_constraint
+		WHERE conrelid = to_regclass(format('%I.raw_ingest_jobs', $1::text))
+			AND contype = 'c'
+			AND pg_get_constraintdef(oid) LIKE '%stage%'
+			AND pg_get_constraintdef(oid) LIKE '%parse%'`,
+		schemaTestSchema)
+	require.NoError(t, err)
+	defer rows.Close()
+	var drops []string
+	for rows.Next() {
+		var ddl string
+		require.NoError(t, rows.Scan(&ddl))
+		drops = append(drops, ddl)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, drops, 1,
+		"a fresh test schema must carry exactly one raw_ingest_jobs stage CHECK")
+	_, err = pg.ExecContext(t.Context(), drops[0])
+	require.NoError(t, err)
+}
+
 func TestRawJobHealthOrphans(t *testing.T) {
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
@@ -141,7 +168,25 @@ func TestRawJobHealthExpiredLeases(t *testing.T) {
 		identity.TenantID, manifest.ManifestID,
 	)
 	require.NoError(t, err)
-
+	tx, err := pg.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(
+		t.Context(),
+		"UPDATE raw_ingest_jobs SET lease_expires_at = CURRENT_TIMESTAMP "+
+			"WHERE tenant_id = $1 AND manifest_id = $2 "+
+			"AND processing_version = 'health-expired-equal'",
+		identity.TenantID, manifest.ManifestID,
+	)
+	require.NoError(t, err)
+	exactReport, err := rawJobHealth(
+		t.Context(), tx, identity,
+		rawsync.JobHealthQuery{MaxAttempts: 5, StaleAfterSeconds: 3600},
+	)
+	require.NoError(t, err)
+	require.Len(t, exactReport.ExpiredLeases, 2)
+	assert.Equal(t, "health-expired-equal",
+		exactReport.ExpiredLeases[1].ProcessingVersion)
+	require.NoError(t, tx.Commit())
 	report := rawHealthReport(t, store, identity, 5, 3600)
 	assert.Equal(t, int64(2), report.ExpiredLeaseCount)
 	require.Len(t, report.ExpiredLeases, 2)
@@ -283,6 +328,29 @@ func TestRawJobHealthStaleHeads(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	tx, err := pg.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(
+		t.Context(),
+		"UPDATE raw_source_heads "+
+			"SET updated_at = CURRENT_TIMESTAMP - interval '1 second' "+
+			"WHERE tenant_id = $1 AND manifest_id = $2",
+		identity.TenantID, boundary.ManifestID,
+	)
+	require.NoError(t, err)
+	exactReport, err := rawJobHealth(
+		t.Context(), tx, identity,
+		rawsync.JobHealthQuery{MaxAttempts: 5, StaleAfterSeconds: 1},
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, exactReport.StaleSourceHeads)
+	var boundaryFound bool
+	for _, row := range exactReport.StaleSourceHeads {
+		boundaryFound = boundaryFound || row.ManifestID == boundary.ManifestID
+	}
+	assert.True(t, boundaryFound)
+	require.NoError(t, tx.Commit())
+
 	report := rawHealthReport(t, store, identity, 5, 1)
 	assert.Equal(t, int64(3), report.StaleSourceHeadCount)
 	require.Len(t, report.StaleSourceHeads, 3)
@@ -302,9 +370,12 @@ func TestRawJobHealthIsolation(t *testing.T) {
 	identityA := rawIngestIdentity(t, "tenant-a")
 	identityB, err := rawsync.NewAuthIdentity("tenant-b", "device-b")
 	require.NoError(t, err)
+	identityAOther, err := rawsync.NewAuthIdentity("tenant-a", "device-b")
+	require.NoError(t, err)
 	object := rawIngestObject(t, "a", 7)
 	require.NoError(t, store.RecordVerifiedObject(t.Context(), identityA, object))
 	require.NoError(t, store.RecordVerifiedObject(t.Context(), identityB, object))
+	require.NoError(t, store.RecordVerifiedObject(t.Context(), identityAOther, object))
 	mainA := rawHealthCommit(
 		t, store, identityA, "capture-main", "", "sessions/main",
 		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object,
@@ -319,6 +390,14 @@ func TestRawJobHealthIsolation(t *testing.T) {
 	)
 	nonParseB := rawHealthCommit(
 		t, store, identityB, "capture-nonparse", "", "sessions/nonparse",
+		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object,
+	)
+	staleAOther := rawHealthCommit(
+		t, store, identityAOther, "capture-stale", "", "sessions/stale",
+		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object,
+	)
+	staleB := rawHealthCommit(
+		t, store, identityB, "capture-stale", "", "sessions/stale",
 		rawsync.ManifestSnapshot, rawIngestCapturedAt(), object,
 	)
 
@@ -357,23 +436,47 @@ func TestRawJobHealthIsolation(t *testing.T) {
 		)
 		require.NoError(t, err)
 	}
+	for _, fixture := range []struct {
+		identity rawsync.AuthIdentity
+		manifest string
+	}{
+		{identityAOther, staleAOther.ManifestID},
+		{identityB, staleB.ManifestID},
+	} {
+		_, err = pg.ExecContext(
+			t.Context(),
+			"UPDATE raw_source_heads "+
+				"SET updated_at = CURRENT_TIMESTAMP - interval '1 hour' "+
+				"WHERE tenant_id = $1 AND manifest_id = $2",
+			fixture.identity.TenantID, fixture.manifest,
+		)
+		require.NoError(t, err)
+	}
 
 	reportA := rawHealthReport(t, store, identityA, 5, 1)
 	assert.Equal(t, int64(1), reportA.OrphanedManifestCount)
 	assert.Equal(t, int64(1), reportA.ExpiredLeaseCount)
 	assert.Equal(t, int64(1), reportA.RetryingNearLimitCount)
 	assert.Equal(t, int64(1), reportA.FailedJobCount)
+	assert.Equal(t, int64(1), reportA.StaleSourceHeadCount)
 	for _, row := range reportA.ExpiredLeases {
 		assert.Equal(t, "device-a", row.DeviceID)
 	}
 	for _, row := range reportA.RetryingNearLimit {
 		assert.Equal(t, "device-a", row.DeviceID)
 	}
+	require.Len(t, reportA.StaleSourceHeads, 1)
+	assert.Equal(t, staleAOther.ManifestID, reportA.StaleSourceHeads[0].ManifestID)
+	assert.Equal(t, "device-b", reportA.StaleSourceHeads[0].DeviceID)
 	reportB := rawHealthReport(t, store, identityB, 5, 1)
 	assert.Equal(t, int64(1), reportB.OrphanedManifestCount)
 	assert.Equal(t, int64(1), reportB.ExpiredLeaseCount)
 	assert.Equal(t, int64(1), reportB.RetryingNearLimitCount)
 	assert.Equal(t, int64(1), reportB.FailedJobCount)
+	assert.Equal(t, int64(1), reportB.StaleSourceHeadCount)
+	require.Len(t, reportB.StaleSourceHeads, 1)
+	assert.Equal(t, staleB.ManifestID, reportB.StaleSourceHeads[0].ManifestID)
+	assert.Equal(t, "device-b", reportB.StaleSourceHeads[0].DeviceID)
 }
 
 func TestRawJobHealthReadOnly(t *testing.T) {
