@@ -202,7 +202,7 @@ func piebaldChatHasCurrentDirectory(ctx context.Context, db *sql.DB) (bool, erro
 		); err != nil {
 			return false, err
 		}
-		if name == "current_directory" {
+		if strings.EqualFold(name, "current_directory") {
 			return true, nil
 		}
 	}

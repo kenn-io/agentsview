@@ -12065,7 +12065,7 @@ func (e *Engine) processProviderFile(
 			retentionLease: lease,
 		}, true
 	}
-	if file.Agent == parser.AgentPiebald && !e.forceParse {
+	if file.Agent == parser.AgentPiebald {
 		e.clearPiebaldFailure(source)
 	}
 	if err := validateProviderOutcome(
@@ -14089,6 +14089,7 @@ func (e *Engine) clearWatcherOverflowCaches() {
 	e.skipFingerprints = make(map[string]string)
 	e.skipHashKeys = make(map[string]string)
 	e.skipMu.Unlock()
+	e.clearPiebaldFailureMemo()
 	if !e.ephemeral {
 		if err := e.db.ReplaceSkippedFiles(map[string]int64{}); err != nil {
 			log.Printf("clearing skipped files after watcher overflow: %v", err)

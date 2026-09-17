@@ -14,9 +14,11 @@ import (
 )
 
 type piebaldFailureIdentity struct {
-	dbPath  string
-	size    int64
-	mtimeNS int64
+	dbPath     string
+	dbSize     int64
+	dbMtimeNS  int64
+	walSize    int64
+	walMtimeNS int64
 }
 
 type piebaldFailureMemoEntry struct {
@@ -80,17 +82,31 @@ func (e *Engine) capturePiebaldFailureIdentity(
 	if e != nil && e.stat != nil {
 		stat = e.stat
 	}
-	info, err := stat(dbPath)
+	dbInfo, err := stat(dbPath)
 	if err != nil {
 		return piebaldFailureIdentity{}, err
 	}
-	if info == nil {
+	if dbInfo == nil {
 		return piebaldFailureIdentity{}, errors.New("piebald source stat returned no file info")
 	}
+	walInfo, err := stat(dbPath + "-wal")
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return piebaldFailureIdentity{}, err
+	}
+	if walInfo == nil && err == nil {
+		return piebaldFailureIdentity{}, errors.New("piebald WAL stat returned no file info")
+	}
+	var walSize, walMtimeNS int64
+	if walInfo != nil {
+		walSize = walInfo.Size()
+		walMtimeNS = walInfo.ModTime().UnixNano()
+	}
 	return piebaldFailureIdentity{
-		dbPath:  filepath.Clean(dbPath),
-		size:    info.Size(),
-		mtimeNS: info.ModTime().UnixNano(),
+		dbPath:     filepath.Clean(dbPath),
+		dbSize:     dbInfo.Size(),
+		dbMtimeNS:  dbInfo.ModTime().UnixNano(),
+		walSize:    walSize,
+		walMtimeNS: walMtimeNS,
 	}, nil
 }
 
@@ -189,9 +205,7 @@ func piebaldFailureIsTransient(ctx context.Context, err error) bool {
 		errors.Is(err, sql.ErrNoRows) ||
 		errors.Is(err, sql.ErrConnDone) ||
 		errors.Is(err, driver.ErrBadConn) ||
-		errors.Is(err, os.ErrNotExist) ||
-		errors.Is(err, os.ErrPermission) ||
-		errors.Is(err, os.ErrInvalid) {
+		errors.Is(err, os.ErrNotExist) {
 		return true
 	}
 
@@ -209,8 +223,7 @@ func piebaldFailureIsTransient(ctx context.Context, err error) bool {
 func piebaldSQLiteErrorIsTransient(err sqlite3.Error) bool {
 	switch err.Code {
 	case sqlite3.ErrBusy, sqlite3.ErrLocked, sqlite3.ErrInterrupt,
-		sqlite3.ErrIoErr, sqlite3.ErrCantOpen, sqlite3.ErrPerm,
-		sqlite3.ErrReadonly, sqlite3.ErrProtocol, sqlite3.ErrFull,
+		sqlite3.ErrIoErr, sqlite3.ErrFull,
 		sqlite3.ErrNomem:
 		return true
 	default:

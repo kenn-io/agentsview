@@ -478,6 +478,62 @@ func TestProcessFileProviderPiebaldMemoizesStableFailuresByDBIdentity(t *testing
 	assert.Empty(t, engine.piebaldFailureMemo)
 }
 
+func TestProcessFileProviderPiebaldFailureMemoTracksWALButIgnoresSHM(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "app.db")
+	database := openProcessProviderPiebaldDB(t, dbPath)
+	seedProcessProviderPiebaldChat(t, database)
+	_, err := database.Exec("PRAGMA journal_mode=WAL")
+	require.NoError(t, err)
+	_, err = database.Exec("PRAGMA wal_autocheckpoint=1000000")
+	require.NoError(t, err)
+	_, err = database.Exec("UPDATE chats SET title = 'WAL seed' WHERE id = 42")
+	require.NoError(t, err)
+
+	virtualPath := dbPath + "#42"
+	provider := newPiebaldProcessFixtureProvider(
+		processFixturePiebaldSource(virtualPath),
+		parser.SourceFingerprint{Key: virtualPath, MTimeNS: 1},
+		parser.ParseOutcome{},
+	)
+	provider.parseErr = errors.New("stable WAL failure")
+	engine := newPiebaldProcessFixtureEngine(t, root, provider)
+	file := parser.DiscoveredFile{Path: virtualPath, Agent: parser.AgentPiebald}
+
+	first := engine.processFile(t.Context(), file)
+	require.ErrorIs(t, first.err, provider.parseErr)
+
+	dbBefore, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	walBefore, err := os.Stat(dbPath + "-wal")
+	require.NoError(t, err)
+	_, err = database.Exec("UPDATE chats SET title = 'WAL update' WHERE id = 42")
+	require.NoError(t, err)
+	dbAfter, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	walAfter, err := os.Stat(dbPath + "-wal")
+	require.NoError(t, err)
+	assert.Equal(t, dbBefore.Size(), dbAfter.Size())
+	assert.Equal(t, dbBefore.ModTime(), dbAfter.ModTime())
+	assert.Greater(t, walAfter.Size(), walBefore.Size())
+
+	second := engine.processFile(t.Context(), file)
+	require.ErrorIs(t, second.err, provider.parseErr)
+	assert.False(t, second.suppressedFailure)
+	assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
+
+	shmPath := dbPath + "-shm"
+	shmBefore, err := os.Stat(shmPath)
+	require.NoError(t, err)
+	require.NoError(t, os.Chtimes(
+		shmPath, shmBefore.ModTime().Add(time.Second), shmBefore.ModTime().Add(time.Second),
+	))
+	third := engine.processFile(t.Context(), file)
+	require.ErrorIs(t, third.err, provider.parseErr)
+	assert.True(t, third.suppressedFailure)
+	assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
+}
+
 func TestProcessFileProviderPiebaldFailureMemoNeedsSourceIdentity(t *testing.T) {
 	root := t.TempDir()
 	dbPath, fingerprint := writeProcessProviderSource(t, root, "app.db")
