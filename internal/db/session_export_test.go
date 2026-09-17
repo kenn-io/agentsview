@@ -931,6 +931,7 @@ func TestAllSessionExportMaterializesActivitySort(t *testing.T) {
 		return nil
 	}, nil)
 	require.ErrorIs(t, err, context.Canceled)
+	// A cancelled reader must allow a fresh export to open cleanly.
 	_, err = d.ExportAllSessionSummaries(ctx, SessionExportOptions{
 		Filter: filter,
 		Limit:  1,
