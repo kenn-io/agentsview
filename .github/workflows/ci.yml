@@ -49,6 +49,11 @@ jobs:
       - name: Run Go linters
         run: make lint-ci
 
+      - name: Prepare SQLite header for Huma check
+        run: |
+          make sqlite-vec-header
+          echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
+
       - name: Check Huma API contract
         run: go run go.kenn.io/kit/cmd/huma-check@e9840a327158da2559458186b253b0c15a5e2c2b -fix=false ./...
 
