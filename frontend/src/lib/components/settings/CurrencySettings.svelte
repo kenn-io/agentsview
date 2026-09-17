@@ -82,8 +82,7 @@
     <TextInput
       id="currency-eur-per-usd"
       class="setting-input"
-      size="md"
-      block
+      size="lg"
       type="text"
       placeholder={m.settings_currency_rate_placeholder()}
       ariaLabel={m.settings_currency_rate_label()}
