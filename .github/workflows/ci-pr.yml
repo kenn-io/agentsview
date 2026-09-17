@@ -1,7 +1,7 @@
 name: CI
 
-# The PR dispatcher uses the workflow from this PR so CI fixes run before merge.
-# It still runs Linux AMD64 and Windows jobs on Namespace, including fork PRs.
+# The PR dispatcher always calls the main-pinned workflow. That workflow
+# runs Linux AMD64 and Windows jobs on Namespace, including fork PRs.
 on:
   pull_request:
 
@@ -9,4 +9,4 @@ permissions: read-all
 
 jobs:
   run:
-    uses: ./.github/workflows/ci.yml
+    uses: kenn-io/agentsview/.github/workflows/ci.yml@main
