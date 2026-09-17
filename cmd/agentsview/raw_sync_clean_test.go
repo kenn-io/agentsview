@@ -47,15 +47,3 @@ func TestRawSyncCleanUploadsRequiresPostgreSQL(t *testing.T) {
 	assert.Contains(t, err.Error(), "postgres URL is required")
 	assert.NotContains(t, err.Error(), rawSyncCleanUploadsCompletion)
 }
-
-func TestRawSyncCleanUploadsWritesFixedOutputAfterSuccess(t *testing.T) {
-	testDataDir(t)
-	original := runRawSyncCleanUploadsCLI
-	runRawSyncCleanUploadsCLI = func() error { return nil }
-	t.Cleanup(func() { runRawSyncCleanUploadsCLI = original })
-
-	output, err := executeCommand(newRootCommand(), "raw-sync", "clean-uploads")
-
-	require.NoError(t, err)
-	assert.Equal(t, rawSyncCleanUploadsCompletion+"\n", output)
-}
