@@ -718,6 +718,31 @@ func TestPiebaldFailureMemoClearsOnCacheInvalidation(t *testing.T) {
 	assert.Empty(t, engine.piebaldFailureMemo)
 }
 
+func TestPrunePiebaldFailuresAfterAuthoritativeDiscovery(t *testing.T) {
+	root := t.TempDir()
+	otherRoot := t.TempDir()
+	firstDB, _ := writeProcessProviderSource(t, root, "app.db")
+	otherDB, _ := writeProcessProviderSource(t, otherRoot, "app.db")
+	firstKey := parser.VirtualSourcePath(firstDB, "42")
+	secondKey := parser.VirtualSourcePath(firstDB, "43")
+	otherKey := parser.VirtualSourcePath(otherDB, "42")
+	engine := &Engine{
+		piebaldFailureMemo: map[string]piebaldFailureMemoEntry{
+			firstKey:  {},
+			secondKey: {},
+			otherKey:  {},
+		},
+	}
+
+	engine.prunePiebaldFailures(
+		[]string{root}, map[string]struct{}{firstKey: {}},
+	)
+
+	assert.Contains(t, engine.piebaldFailureMemo, firstKey)
+	assert.NotContains(t, engine.piebaldFailureMemo, secondKey)
+	assert.Contains(t, engine.piebaldFailureMemo, otherKey)
+}
+
 func TestPiebaldTransientFailureClassesAreNotMemoized(t *testing.T) {
 	root := t.TempDir()
 	dbPath, _ := writeProcessProviderSource(t, root, "app.db")

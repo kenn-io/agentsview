@@ -343,9 +343,15 @@ func TestSyncPiebaldFullSyncSuppressesStableParseFailure(t *testing.T) {
 	beforeMessages, err := env.db.GetAllMessages(t.Context(), "piebald:42")
 	require.NoError(t, err)
 	require.Len(t, beforeMessages, 2)
-	piebald.mustExec(t, "advance chat timestamp",
-		`UPDATE chats SET updated_at = '2026-05-01T10:06:00Z' WHERE id = 42`,
-	)
+	_, storedMtime, ok := env.db.GetSessionFileInfo("piebald:42")
+	require.True(t, ok, "session file info not found")
+	require.NoError(t, env.db.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			"UPDATE sessions SET file_mtime = file_mtime + 1 WHERE id = ?",
+			"piebald:42",
+		)
+		return err
+	}))
 	piebald.mustExec(t, "drop messages table", `DROP TABLE messages`)
 
 	var logs bytes.Buffer
@@ -392,6 +398,13 @@ func TestSyncPiebaldFullSyncSuppressesStableParseFailure(t *testing.T) {
 			(4201, 42, 'user', '', '2026-05-01T10:00:01Z', '2026-05-01T10:00:01Z', 'completed'),
 			(4202, 42, 'assistant', 'claude-test', '2026-05-01T10:00:02Z', '2026-05-01T10:00:03Z', 'completed')`,
 	)
+	require.NoError(t, env.db.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			"UPDATE sessions SET file_mtime = ? WHERE id = ?",
+			storedMtime, "piebald:42",
+		)
+		return err
+	}))
 
 	logs.Reset()
 	recovered := env.engine.SyncAll(t.Context(), nil)

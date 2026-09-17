@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/mattn/go-sqlite3"
 
@@ -191,6 +192,36 @@ func (e *Engine) clearPiebaldFailureMemo() {
 	e.skipMu.Lock()
 	e.piebaldFailureMemo = make(map[string]piebaldFailureMemoEntry)
 	e.skipMu.Unlock()
+}
+
+func (e *Engine) prunePiebaldFailures(
+	roots []string, discovered map[string]struct{},
+) {
+	e.skipMu.Lock()
+	defer e.skipMu.Unlock()
+	for key := range e.piebaldFailureMemo {
+		dbPath, _, ok := parser.ParseVirtualSourcePathForBase(
+			key, parser.PiebaldDBFilename,
+		)
+		if !ok || !piebaldPathWithinRoots(dbPath, roots) {
+			continue
+		}
+		if _, found := discovered[key]; !found {
+			delete(e.piebaldFailureMemo, key)
+		}
+	}
+}
+
+func piebaldPathWithinRoots(path string, roots []string) bool {
+	path = filepath.Clean(path)
+	for _, root := range roots {
+		rel, err := filepath.Rel(filepath.Clean(root), path)
+		if err == nil && rel != ".." && !filepath.IsAbs(rel) &&
+			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 func piebaldFailureIsTransient(ctx context.Context, err error) bool {

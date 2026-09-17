@@ -315,14 +315,17 @@ func TestParsePiebaldCurrentDirectoryNullKeepsFallbacks(t *testing.T) {
 func TestParsePiebaldCurrentDirectoryCaseInsensitive(t *testing.T) {
 	dbPath := newPiebaldTestDB(t)
 	execPiebaldTestSQL(t, dbPath,
+		`INSERT INTO projects (id, directory, name) VALUES (1, '/repo/project', 'project')`,
+	)
+	execPiebaldTestSQL(t, dbPath,
 		`ALTER TABLE chats RENAME COLUMN current_directory TO Current_Directory`,
 	)
 	execPiebaldTestSQL(t, dbPath,
 		`INSERT INTO chats
 			(id, title, created_at, updated_at, is_deleted, message_count,
-			 current_directory, worktree_path, branch_name)
+			 Current_Directory, worktree_path, branch_name, project_id)
 		 VALUES (42, 'Case variant', '2026-05-01T10:00:00Z',
-			 '2026-05-01T10:05:00Z', 0, 1, '/repo/current', '/repo/worktree', 'main')`,
+			 '2026-05-01T10:05:00Z', 0, 1, '/repo/current', '', 'main', 1)`,
 	)
 	execPiebaldTestSQL(t, dbPath,
 		`INSERT INTO messages
@@ -334,7 +337,7 @@ func TestParsePiebaldCurrentDirectoryCaseInsensitive(t *testing.T) {
 
 	sess, _ := parsePiebaldOneSession(t, dbPath, "42", "machine")
 	require.NotNil(t, sess)
-	assert.Equal(t, "/repo/worktree", sess.Cwd)
+	assert.Equal(t, "/repo/current", sess.Cwd)
 	assert.Equal(t, "main", sess.GitBranch)
 }
 
