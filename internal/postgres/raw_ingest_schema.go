@@ -298,6 +298,31 @@ FROM (
     WHERE current_setting('transaction_read_only', true) = 'on'
 ) AS missing_privileges`
 
+func checkRawSyncWritePrivileges(
+	ctx context.Context, db *sql.DB, schema string,
+) (string, error) {
+	if db == nil {
+		return "", errors.New("raw sync write probe requires a PostgreSQL connection")
+	}
+	if strings.TrimSpace(schema) == "" {
+		return "", errors.New("raw sync write probe requires a schema")
+	}
+	var missing string
+	if err := db.QueryRowContext(ctx, rawSyncWritePrivilegeSQL, schema).Scan(&missing); err != nil {
+		return "", fmt.Errorf("probing raw sync write privileges: %w", err)
+	}
+	return missing, nil
+}
+
+// CheckRawSyncWritePrivileges reports whether the current role can use every
+// table and owned sequence required by the raw-sync control plane.
+func CheckRawSyncWritePrivileges(
+	ctx context.Context, db *sql.DB, schema string,
+) (bool, error) {
+	missing, err := checkRawSyncWritePrivileges(ctx, db, schema)
+	return missing == "", err
+}
+
 // CanWriteRawSyncSchema reports whether the current role can use every table
 // and any owned sequence required by the raw-sync control plane. It deliberately
 // probes DML separately from EnsureSchema's DDL capability so a least-privilege
@@ -305,15 +330,9 @@ FROM (
 func CanWriteRawSyncSchema(
 	ctx context.Context, db *sql.DB, schema string,
 ) (bool, error) {
-	if db == nil {
-		return false, errors.New("raw sync write probe requires a PostgreSQL connection")
-	}
-	if strings.TrimSpace(schema) == "" {
-		return false, errors.New("raw sync write probe requires a schema")
-	}
-	var missing string
-	if err := db.QueryRowContext(ctx, rawSyncWritePrivilegeSQL, schema).Scan(&missing); err != nil {
-		return false, fmt.Errorf("probing raw sync write privileges: %w", err)
+	missing, err := checkRawSyncWritePrivileges(ctx, db, schema)
+	if err != nil {
+		return false, err
 	}
 	if missing != "" {
 		log.Printf("pg serve: raw-sync routes disabled; missing requirements: %s", missing)

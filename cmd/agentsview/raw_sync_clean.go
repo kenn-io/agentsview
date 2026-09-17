@@ -46,7 +46,7 @@ func runRawSyncCleanUploads() (err error) {
 		return fmt.Errorf("opening PostgreSQL: %w", err)
 	}
 	defer func() { err = errors.Join(err, database.Close()) }()
-	writable, err := postgres.CanWriteRawSyncSchema(
+	writable, err := postgres.CheckRawSyncWritePrivileges(
 		context.Background(), database, pgCfg.Schema,
 	)
 	if err != nil {

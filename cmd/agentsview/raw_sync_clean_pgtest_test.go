@@ -3,9 +3,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"testing"
@@ -100,12 +102,17 @@ func TestRawSyncCleanUploadsRequiresWritableSchema(t *testing.T) {
 	configureRawSyncCleanUploads(t, dataDir, pgURL)
 	_, err := pg.ExecContext(t.Context(), "DROP TABLE raw_upload_sessions")
 	require.NoError(t, err)
+	var logs bytes.Buffer
+	previousLog := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousLog) })
 
 	output, err := executeCommand(newRootCommand(), "raw-sync", "clean-uploads")
 
 	require.Error(t, err)
 	assert.Empty(t, output)
 	assert.Contains(t, err.Error(), "raw-sync schema is not writable")
+	assert.NotContains(t, logs.String(), "pg serve")
 	_, statErr := os.Stat(filepath.Join(dataDir, "raw-upload-spool"))
 	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }
