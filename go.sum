@@ -93,6 +93,8 @@ github.com/docker/go-connections v0.7.0 h1:6SsRfJddP22WMrCkj19x9WKjEDTB+ahsdiGYf
 github.com/docker/go-connections v0.7.0/go.mod h1:no1qkHdjq7kLMGUXYAduOhYPSJxxvgWBh7ogVvptn3Q=
 github.com/docker/go-units v0.5.0 h1:69rxXcBk27SvSaaxTtLh/8llcHD8vYHT7WSdRZ/jvr4=
 github.com/docker/go-units v0.5.0/go.mod h1:fgPhTUdO+D/Jk86RDLlptpiXQzgHJF7gydDDbaIK4Dk=
+github.com/doordash-oss/oapi-codegen-dd/v3 v3.75.15 h1:z6NqwBZqFuQ0NIWPrRtzOo8AcLVlGuNTOc9ieok8+vs=
+github.com/doordash-oss/oapi-codegen-dd/v3 v3.75.15/go.mod h1:tOXannkMskMrmhh3dPoW0mDhqKpsC34BkHKNlw7ydmg=
 github.com/duckdb/duckdb-go-bindings v0.10505.0 h1:/0pPsTLrcCsTGxT0VrHgJWnOcPe1tQL1vrki1v3jbAI=
 github.com/duckdb/duckdb-go-bindings v0.10505.0/go.mod h1:HoD5xePkDj3VZbBnVVfxVVYIljZ9khCprWA7FgwIiC4=
 github.com/duckdb/duckdb-go-bindings/lib/darwin-amd64 v0.10505.0 h1:FrMqquFBQlMsi34h2KZgCku54rqA8xEbXZ0NLVDKwYs=
@@ -196,8 +198,6 @@ github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e h1:Q6MvJtQK/iRcRt
 github.com/lufia/plan9stats v0.0.0-20260330125221-c963978e514e/go.mod h1:autxFIvghDt3jPTLoqZ9OZ7s9qTGNAWmYCjVFWPX/zg=
 github.com/magiconair/properties v1.8.10 h1:s31yESBquKXCV9a/ScB3ESkOjUYYv+X0rg8SYxI99mE=
 github.com/magiconair/properties v1.8.10/go.mod h1:Dhd985XPs7jluiymwWYZ0G4Z61jb3vdS329zhj2hYo0=
-github.com/mariusvniekerk/oapi-codegen-dd/v3 v3.75.16-0.20260917163643-42d8a7200312 h1:7y+j2BO6BVU8tKtYvUIFKvpqtMvk2VbbC48eOcddfcU=
-github.com/mariusvniekerk/oapi-codegen-dd/v3 v3.75.16-0.20260917163643-42d8a7200312/go.mod h1:tOXannkMskMrmhh3dPoW0mDhqKpsC34BkHKNlw7ydmg=
 github.com/mattn/go-isatty v0.0.24 h1:tGZZoVgT/KiqK1c8ocVLeDS8BSWMRd47J3Lbz7vsReI=
 github.com/mattn/go-isatty v0.0.24/go.mod h1:nMCL3Zebbrt45jsMDgnfIwz6ydEQApk5oEI3HqDio6A=
 github.com/mattn/go-runewidth v0.0.29 h1:3oGF3R/S2N9DQ3ptftzVIvg2eicmojCzlwBEmqEPDfQ=
