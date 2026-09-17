@@ -340,6 +340,38 @@ func TestRawSyncStatusErrorDoesNotLeakBackendDetail(t *testing.T) {
 	assert.NotContains(t, recorder.Body.String(), "password=secret")
 }
 
+func TestRawSyncStatusDeadlineReturnsGatewayTimeout(t *testing.T) {
+	t.Parallel()
+
+	auth := &rawSyncAuthStub{
+		authenticateToken: func(
+			context.Context,
+			string,
+			rawsync.DeviceTokenScope,
+		) (rawsync.AuthIdentity, error) {
+			return rawsync.AuthIdentity{TenantID: "tenant-a", DeviceID: "dev-a"}, nil
+		},
+	}
+	statusReader := &rawSyncStatusStub{
+		readRawSyncStatus: func(
+			context.Context,
+			rawsync.AuthIdentity,
+		) (rawsync.Status, error) {
+			return rawsync.Status{}, context.DeadlineExceeded
+		},
+	}
+	srv := newRawSyncHTTPTestServer(
+		t, auth, new(rawSyncCustodyStub), WithRawSyncStatus(statusReader),
+	)
+
+	recorder := serveRawSyncJSON(
+		t, srv, http.MethodGet, "/api/v1/raw-sync/status", "", "avdt_status", "",
+	)
+
+	assert.Equal(t, http.StatusGatewayTimeout, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), "gateway timeout")
+}
+
 func TestRawSyncStatusRouteRequiresCapability(t *testing.T) {
 	t.Parallel()
 

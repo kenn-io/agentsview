@@ -57,14 +57,31 @@ func TestRawSyncStatusPostgresHTTP(t *testing.T) {
 		t, metadata, firstIdentity, object, "capture-two", firstCommit.Receipt,
 		"2026-09-02T00:00:00Z",
 	)
+	require.NoError(t, metadata.RecordVerifiedObject(ctx, other.Identity, object))
+	otherCommit := commitRawStatusGeneration(
+		t, metadata, otherIdentity, object, "other-capture", "", "2026-09-03T00:00:00Z",
+	)
 
 	insertRawStatusHead(t, pg, firstIdentity, parser.AgentClaude, "root-zero", "zero.jsonl", 0)
 	insertRawStatusHead(t, pg, otherIdentity, parser.AgentClaude, "root-other", "other.jsonl", 0)
 	insertRawStatusJobs(t, pg, firstIdentity.TenantID, secondCommit.ManifestID)
+	insertRawStatusJobs(t, pg, otherIdentity.TenantID, otherCommit.ManifestID)
 
 	statusToken, err := auth.IssueToken(ctx, first.Identity.DeviceID, first.Credential, rawsync.ScopeStatus)
 	require.NoError(t, err)
-	_, err = auth.IssueToken(ctx, first.Identity.DeviceID, first.Credential, rawsync.ScopeStatus)
+	secondStatusToken, err := auth.IssueToken(ctx, first.Identity.DeviceID, first.Credential, rawsync.ScopeStatus)
+	require.NoError(t, err)
+	firstIssuedAt := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	secondIssuedAt := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	_, err = pg.ExecContext(ctx, `
+		UPDATE raw_device_tokens
+		SET issued_at = CASE
+			WHEN token_sha256 = $1 THEN $2::timestamptz
+			WHEN token_sha256 = $3 THEN $4::timestamptz
+		END
+		WHERE token_sha256 IN ($1, $3)`,
+		tokenDigest(statusToken.Token), firstIssuedAt,
+		tokenDigest(secondStatusToken.Token), secondIssuedAt)
 	require.NoError(t, err)
 	revokedToken, err := auth.IssueToken(ctx, revoked.Identity.DeviceID, revoked.Credential, rawsync.ScopeStatus)
 	require.NoError(t, err)
@@ -102,6 +119,12 @@ func TestRawSyncStatusPostgresHTTP(t *testing.T) {
 	assert.Equal(t, parser.AgentCodex, current.Provider)
 	assert.Equal(t, int64(2), current.Generation)
 	assert.NotNil(t, current.LastAcceptedAt)
+	var wantAcceptedAt time.Time
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT accepted_at FROM raw_manifests
+		WHERE tenant_id = $1 AND manifest_id = $2`,
+		firstIdentity.TenantID, secondCommit.ManifestID).Scan(&wantAcceptedAt))
+	assert.Equal(t, wantAcceptedAt.UTC(), current.LastAcceptedAt.UTC())
 	assert.True(t, current.ParsePending)
 	assert.True(t, current.ParseLeased)
 	assert.True(t, current.ParseFailed)
@@ -124,6 +147,12 @@ func TestRawSyncStatusPostgresHTTP(t *testing.T) {
 	require.Contains(t, devices, first.Identity.DeviceID)
 	require.Contains(t, devices, second.Identity.DeviceID)
 	assert.NotNil(t, devices[first.Identity.DeviceID].LastSeenAt)
+	var wantLastSeenAt time.Time
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT MAX(issued_at) FROM raw_device_tokens
+		WHERE tenant_id = $1 AND device_id = $2`,
+		firstIdentity.TenantID, firstIdentity.DeviceID).Scan(&wantLastSeenAt))
+	assert.Equal(t, wantLastSeenAt.UTC(), devices[first.Identity.DeviceID].LastSeenAt.UTC())
 	assert.Nil(t, devices[second.Identity.DeviceID].LastSeenAt)
 	assert.NotContains(t, devices, revoked.Identity.DeviceID)
 
@@ -193,6 +222,27 @@ func TestRawSyncStatusPostgresEmptyHTTP(t *testing.T) {
 	assert.Empty(t, got.Uploads.OpenCount)
 	assert.Zero(t, got.Uploads.PendingBytes)
 	assert.Nil(t, got.Uploads.OldestOpenSession)
+}
+
+func TestRawSyncStatusRollsBackAfterQueryFailure(t *testing.T) {
+	pg := newRawStatusTestDatabase(t, "agentsview_raw_status_failure_test")
+	metadata, err := postgres.NewRawIngestStore(pg)
+	require.NoError(t, err)
+	identity := rawsync.AuthIdentity{TenantID: "tenant-failure", DeviceID: "dev-failure"}
+
+	_, err = pg.ExecContext(t.Context(),
+		`ALTER TABLE raw_ingest_jobs RENAME TO raw_ingest_jobs_missing`)
+	require.NoError(t, err)
+	_, err = metadata.ReadRawSyncStatus(t.Context(), identity)
+	assert.Error(t, err)
+	_, renameErr := pg.ExecContext(t.Context(),
+		`ALTER TABLE raw_ingest_jobs_missing RENAME TO raw_ingest_jobs`)
+	require.NoError(t, renameErr)
+
+	status, err := metadata.ReadRawSyncStatus(t.Context(), identity)
+	require.NoError(t, err)
+	assert.Empty(t, status.SourceHeads)
+	assert.Empty(t, status.Devices)
 }
 
 func newRawStatusTestDatabase(t *testing.T, schema string) *sql.DB {

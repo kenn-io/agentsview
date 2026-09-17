@@ -5,14 +5,18 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/server"
 )
 
@@ -35,6 +39,30 @@ func TestPreparePGRawSyncServicesRegistersHostedRoutes(t *testing.T) {
 	} {
 		assert.Contains(t, spec.Paths, path)
 	}
+}
+
+func TestPreparePGRawSyncServicesWiresRuntimeStatusRoute(t *testing.T) {
+	t.Parallel()
+
+	database := newEmptyRawUploadTestDB(t)
+	option, cleanup, err := preparePGRawSyncServices(t.Context(), t.TempDir(), database)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
+
+	srv := server.New(config.Config{
+		Host:         "127.0.0.1",
+		Port:         8080,
+		AuthToken:    "legacy-shared-token",
+		RequireAuth:  true,
+		WriteTimeout: 30 * time.Second,
+	}, nil, nil, option)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/raw-sync/status", nil)
+	request.Host = "127.0.0.1:8080"
+	request.Header.Set("Authorization", "Bearer legacy-shared-token")
+	srv.Handler().ServeHTTP(recorder, request)
+
+	assert.NotEqual(t, http.StatusNotFound, recorder.Code, recorder.Body.String())
 }
 
 func TestPreparePGRawSyncServicesSkipsReadOnlySchema(t *testing.T) {
