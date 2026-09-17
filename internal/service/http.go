@@ -391,7 +391,7 @@ func (b *httpBackend) Sync(
 	req.Header.Set("Content-Type", "application/json")
 	// The daemon's CSRF guard rejects mutating requests whose Origin
 	// is not in the allowlist. Setting Origin to the daemon's own
-	// daemon origin satisfies that check for the CLI, which has no real
+	// daemon's own origin satisfies that check for the CLI, which has no real
 	// browser origin.
 	req.Header.Set("Origin", b.originURL)
 	b.addAuth(req)
