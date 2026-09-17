@@ -3,7 +3,7 @@ name: Desktop Artifacts
 on:
   workflow_call:
   workflow_dispatch:
-  # Linux AMD64 and Windows builds use GitHub-hosted runners for pushes and all PRs.
+  # Linux AMD64 and Windows builds use Namespace for pushes and all PRs.
   # macOS builds live in desktop-macos-main.yml.
   push:
     branches: [main]
@@ -30,13 +30,13 @@ jobs:
       matrix:
         include:
           - name: Windows
-            os: windows-latest
+            os: namespace-profile-windows-8cpu
             bundle: nsis
             target_triple: ""
             artifact_name: agentsview-desktop-windows
             artifact_dir: desktop/src-tauri/target/release/bundle/nsis/
           - name: Linux
-            os: ubuntu-latest
+            os: namespace-profile-linux-8cpu
             bundle: appimage
             target_triple: ""
             artifact_name: agentsview-desktop-linux
@@ -54,6 +54,7 @@ jobs:
 
       - uses: ./.github/actions/build-desktop-artifact
         with:
+          namespace-cache: ${{ matrix.name != 'Linux (arm64)' }}
           bundle: ${{ matrix.bundle }}
           target_triple: ${{ matrix.target_triple }}
           artifact_name: ${{ matrix.artifact_name }}
