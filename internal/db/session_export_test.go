@@ -573,7 +573,7 @@ func TestAllSessionExportIdentityUsesRowSnapshot(t *testing.T) {
 			return d.SetDatabaseIDForTest(ctx, "generation-after")
 		}
 		return nil
-	})
+	}, nil)
 	require.NoError(t, err)
 	require.Len(t, pages, 2)
 	for _, page := range pages {
@@ -701,13 +701,20 @@ func TestAllSessionExportMaterializesActivitySort(t *testing.T) {
 		"source-missing",
 		"child-continuation",
 	}
-	where, args := buildSessionExportFilterForAlias(filter, "sessions")
-	source := sessionExportActivitySource{materialized: true}
-
 	var tableSQL, indexSQL string
 	var populationCounts []int
 	var watermarkQuery, firstPageQuery, laterPageQuery string
 	var watermarkPlan, firstPagePlan, laterPagePlan []string
+	var observedQueries []struct {
+		query string
+		args  []any
+	}
+	observe := func(query string, args []any) {
+		observedQueries = append(observedQueries, struct {
+			query string
+			args  []any
+		}{query: query, args: args})
+	}
 	explainPlan := func(tx *sql.Tx, query string, queryArgs []any) []string {
 		rows, err := tx.QueryContext(ctx, "EXPLAIN QUERY PLAN "+query, queryArgs...)
 		require.NoError(t, err, "explain session export query")
@@ -753,37 +760,24 @@ func TestAllSessionExportMaterializesActivitySort(t *testing.T) {
 		if page == 1 {
 			tableSQL = currentTableSQL
 			indexSQL = currentIndexSQL
-			var watermarkArgs []any
-			watermarkQuery, watermarkArgs = sessionExportWatermarkQuery(
-				source, where, args,
+			require.Len(t, observedQueries, 2,
+				"watermark and first page must be observed")
+			watermarkQuery = observedQueries[0].query
+			firstPageQuery = observedQueries[1].query
+			watermarkPlan = explainPlan(
+				tx, watermarkQuery, observedQueries[0].args,
 			)
-			watermarkPlan = explainPlan(tx, watermarkQuery, watermarkArgs)
-
-			var firstID, firstActivity string
-			var firstSort float64
-			require.NoError(t, tx.QueryRowContext(ctx,
-				`SELECT id, last_activity_at, last_activity_sort
-				 FROM `+sessionExportActivityTable+`
-				 INDEXED BY `+sessionExportActivityIndex+`
-				 ORDER BY last_activity_sort DESC, id ASC LIMIT 1`,
-			).Scan(&firstID, &firstActivity, &firstSort),
-				"read first materialized activity row")
-			var firstPageArgs []any
-			firstPageQuery, firstPageArgs = sessionExportRowsQuery(
-				source, where, args, firstSort,
-				sessionExportCursorPayload{}, 1,
+			firstPagePlan = explainPlan(
+				tx, firstPageQuery, observedQueries[1].args,
 			)
-			firstPagePlan = explainPlan(tx, firstPageQuery, firstPageArgs)
-			var laterPageArgs []any
-			laterPageQuery, laterPageArgs = sessionExportRowsQuery(
-				source, where, args, firstSort,
-				sessionExportCursorPayload{
-					LastActivityAt:   firstActivity,
-					LastActivitySort: firstSort,
-					LastID:           firstID,
-				}, 1,
+		}
+		if page == 2 {
+			require.Len(t, observedQueries, 3,
+				"later page must be observed")
+			laterPageQuery = observedQueries[2].query
+			laterPagePlan = explainPlan(
+				tx, laterPageQuery, observedQueries[2].args,
 			)
-			laterPagePlan = explainPlan(tx, laterPageQuery, laterPageArgs)
 		}
 		require.Equal(t, len(expectedIDs), population,
 			"one populated activity table must serve every page")
@@ -792,7 +786,7 @@ func TestAllSessionExportMaterializesActivitySort(t *testing.T) {
 		require.Equal(t, indexSQL, currentIndexSQL,
 			"all pages must use one temp index")
 		return nil
-	})
+	}, observe)
 	require.NoError(t, err, "materialized all-session export")
 	assertNoActivityTable()
 	require.Len(t, pages, len(expectedIDs), "one page per session")
@@ -886,7 +880,7 @@ func TestAllSessionExportMaterializesActivitySort(t *testing.T) {
 			require.Equal(t, len(expectedIDs), count)
 		}
 		return nil
-	})
+	}, nil)
 	require.NoError(t, err, "filtered all-session export")
 	assertNoActivityTable()
 	assert.Equal(t, expectedIDs, func() []string {
@@ -908,7 +902,7 @@ func TestAllSessionExportMaterializesActivitySort(t *testing.T) {
 		).Scan(&count), "count empty activity rows")
 		assert.Zero(t, count)
 		return nil
-	})
+	}, nil)
 	require.NoError(t, err, "empty all-session export")
 	assertNoActivityTable()
 	require.Len(t, emptyPages, 1)
@@ -920,7 +914,7 @@ func TestAllSessionExportMaterializesActivitySort(t *testing.T) {
 		Limit:  1,
 	}, func(int, *sql.Tx) error {
 		return callbackErr
-	})
+	}, nil)
 	require.ErrorIs(t, err, callbackErr)
 	assertNoActivityTable()
 
@@ -934,8 +928,13 @@ func TestAllSessionExportMaterializesActivitySort(t *testing.T) {
 			cancel()
 		}
 		return nil
-	})
+	}, nil)
 	require.ErrorIs(t, err, context.Canceled)
+	_, err = d.ExportAllSessionSummaries(ctx, SessionExportOptions{
+		Filter: filter,
+		Limit:  1,
+	})
+	require.NoError(t, err, "export after cancelled transaction")
 	assertNoActivityTable()
 }
 
@@ -1418,15 +1417,21 @@ func TestSessionExportCursorPrefixUsesSameSnapshotAsPageQuery(t *testing.T) {
 		})
 	}
 
-	where, args := buildSessionExportFilter(SessionFilter{Project: "snapshot"})
+	where, args := buildSessionExportFilterForAlias(
+		SessionFilter{Project: "snapshot"}, "",
+	)
 	tx, err := d.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	require.NoError(t, err, "begin read snapshot")
 	defer func() { require.NoError(t, tx.Rollback(), "rollback read snapshot") }()
 
-	_, watermarkSort, err := d.sessionExportWatermark(ctx, tx, where, args)
+	_, watermarkSort, err := d.sessionExportWatermarkFrom(
+		ctx, tx, where, args, sessionExportActivitySource{},
+	)
 	require.NoError(t, err, "snapshot watermark")
-	rows, err := d.querySessionExportRows(
-		ctx, tx, where, args, watermarkSort, sessionExportCursorPayload{}, 2)
+	rows, err := d.querySessionExportRowsFrom(
+		ctx, tx, where, args, watermarkSort, sessionExportCursorPayload{}, 2,
+		sessionExportActivitySource{},
+	)
 	require.NoError(t, err, "snapshot page")
 	require.Len(t, rows, 3, "page query returns limit plus one")
 	emittedRows := rows[:2]
@@ -1877,7 +1882,7 @@ func TestAllSessionExportKeepsOnePricingSnapshotAcrossPages(t *testing.T) {
 		return d.UpsertModelPricing([]ModelPricing{{
 			ModelPattern: "snapshot-model", InputPerMTok: money.MustParseDollars("99"),
 		}})
-	})
+	}, nil)
 	require.NoError(t, err)
 	require.Len(t, pages, 2)
 	require.NotEmpty(t, pages[0].NextCursor)

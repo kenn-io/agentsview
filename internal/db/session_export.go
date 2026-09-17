@@ -29,6 +29,7 @@ const (
 
 type sessionExportActivitySource struct {
 	materialized bool
+	observe      func(string, []any)
 }
 
 type sessionExportQuerier interface {
@@ -226,13 +227,14 @@ func (db *DB) ExportSessionSummaries(
 func (db *DB) ExportAllSessionSummaries(
 	ctx context.Context, opts SessionExportOptions,
 ) ([]SessionExportResult, error) {
-	return db.exportAllSessionSummaries(ctx, opts, nil)
+	return db.exportAllSessionSummaries(ctx, opts, nil, nil)
 }
 
 func (db *DB) exportAllSessionSummaries(
 	ctx context.Context,
 	opts SessionExportOptions,
 	afterPage func(int, *sql.Tx) error,
+	observe func(string, []any),
 ) ([]SessionExportResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -256,7 +258,7 @@ func (db *DB) exportAllSessionSummaries(
 	for {
 		result, err := db.exportSessionSummariesTx(
 			ctx, tx, opts, false,
-			sessionExportActivitySource{materialized: true},
+			sessionExportActivitySource{materialized: true, observe: observe},
 		)
 		if err != nil {
 			return nil, err
@@ -643,14 +645,6 @@ func sessionExportWatermarkQuery(
 		LIMIT 1`, args
 }
 
-func (db *DB) sessionExportWatermark(
-	ctx context.Context, q sessionExportQuerier, where string, args []any,
-) (string, float64, error) {
-	return db.sessionExportWatermarkFrom(
-		ctx, q, where, args, sessionExportActivitySource{},
-	)
-}
-
 func (db *DB) sessionExportWatermarkFrom(
 	ctx context.Context,
 	q sessionExportQuerier,
@@ -659,6 +653,9 @@ func (db *DB) sessionExportWatermarkFrom(
 	source sessionExportActivitySource,
 ) (string, float64, error) {
 	query, queryArgs := sessionExportWatermarkQuery(source, where, args)
+	if source.observe != nil {
+		source.observe(query, append([]any(nil), queryArgs...))
+	}
 	var watermark string
 	var watermarkSort sql.NullFloat64
 	if err := q.QueryRowContext(
@@ -781,54 +778,14 @@ func sessionExportRowsQuery(
 	limit int,
 ) (string, []any) {
 	queryArgs := append([]any{}, args...)
-	activityAt := sessionExportLastActivityExpr()
-	activitySort := sessionExportLastActivitySortExpr()
-	activityAtColumn := activityAt
-	activitySortColumn := activitySort
-	assistantSessionIDColumn := "sessions.id"
-	idColumn := "id"
-	transcriptRevisionColumn := "transcript_revision"
-	localModifiedAtColumn := "local_modified_at"
-	projectColumn := "project"
-	machineColumn := "machine"
-	agentColumn := "agent"
-	cwdColumn := "cwd"
-	gitBranchColumn := "git_branch"
-	startedAtColumn := "started_at"
-	endedAtColumn := "ended_at"
-	messageCountColumn := "message_count"
-	userMessageCountColumn := "user_message_count"
-	automatedColumn := "is_automated"
-	parentSessionIDColumn := "parent_session_id"
-	relationshipColumn := "relationship_type"
-	totalOutputTokensColumn := "total_output_tokens"
-	peakContextTokensColumn := "peak_context_tokens"
-	hasTotalOutputTokensColumn := "has_total_output_tokens"
-	hasPeakContextTokensColumn := "has_peak_context_tokens"
+	activityAtColumn := sessionExportLastActivityExpr()
+	activitySortColumn := sessionExportLastActivitySortExpr()
+	idColumn := "sessions.id"
 	from := "sessions"
-	orderBy := "last_activity_sort DESC, id ASC"
+	orderBy := "last_activity_sort DESC, sessions.id ASC"
 	if source.materialized {
 		activityAtColumn = "activity.last_activity_at"
 		activitySortColumn = "activity.last_activity_sort"
-		idColumn = "sessions.id"
-		transcriptRevisionColumn = "sessions.transcript_revision"
-		localModifiedAtColumn = "sessions.local_modified_at"
-		projectColumn = "sessions.project"
-		machineColumn = "sessions.machine"
-		agentColumn = "sessions.agent"
-		cwdColumn = "sessions.cwd"
-		gitBranchColumn = "sessions.git_branch"
-		startedAtColumn = "sessions.started_at"
-		endedAtColumn = "sessions.ended_at"
-		messageCountColumn = "sessions.message_count"
-		userMessageCountColumn = "sessions.user_message_count"
-		automatedColumn = "sessions.is_automated"
-		parentSessionIDColumn = "sessions.parent_session_id"
-		relationshipColumn = "sessions.relationship_type"
-		totalOutputTokensColumn = "sessions.total_output_tokens"
-		peakContextTokensColumn = "sessions.peak_context_tokens"
-		hasTotalOutputTokensColumn = "sessions.has_total_output_tokens"
-		hasPeakContextTokensColumn = "sessions.has_peak_context_tokens"
 		from = "sessions\nJOIN " + sessionExportActivityTable +
 			" AS activity INDEXED BY " + sessionExportActivityIndex +
 			" ON activity.id = sessions.id"
@@ -846,51 +803,36 @@ func sessionExportRowsQuery(
 	query := `
 SELECT
 	` + idColumn + `,
-	` + transcriptRevisionColumn + `,
-	` + localModifiedAtColumn + `,
-	` + projectColumn + `,
-	` + machineColumn + `,
-	` + agentColumn + `,
-	` + cwdColumn + `,
-	` + gitBranchColumn + `,
-	` + startedAtColumn + `,
-	` + endedAtColumn + `,
+	sessions.transcript_revision,
+	sessions.local_modified_at,
+	sessions.project,
+	sessions.machine,
+	sessions.agent,
+	sessions.cwd,
+	sessions.git_branch,
+	sessions.started_at,
+	sessions.ended_at,
 	` + activityAtColumn + ` AS last_activity_at,
 	` + activitySortColumn + ` AS last_activity_sort,
-	` + messageCountColumn + `,
-	` + userMessageCountColumn + `,
+	sessions.message_count,
+	sessions.user_message_count,
 	(SELECT COUNT(*)
 	 FROM messages m
-	 WHERE m.session_id = ` + assistantSessionIDColumn + `
+	 WHERE m.session_id = sessions.id
 	   AND m.role = 'assistant'
 	   AND COALESCE(m.is_system, 0) = 0) AS assistant_message_count,
-	COALESCE(` + automatedColumn + `, 0) AS is_automated,
-	` + parentSessionIDColumn + `,
-	` + relationshipColumn + `,
-	` + totalOutputTokensColumn + `,
-	` + peakContextTokensColumn + `,
-	` + hasTotalOutputTokensColumn + `,
-	` + hasPeakContextTokensColumn + `
+	COALESCE(sessions.is_automated, 0) AS is_automated,
+	sessions.parent_session_id,
+	sessions.relationship_type,
+	sessions.total_output_tokens,
+	sessions.peak_context_tokens,
+	sessions.has_total_output_tokens,
+	sessions.has_peak_context_tokens
 FROM ` + from + `
 WHERE ` + cursorWhere + `
 ORDER BY ` + orderBy + `
 LIMIT ?`
 	return query, queryArgs
-}
-
-func (db *DB) querySessionExportRows(
-	ctx context.Context,
-	q sessionExportQuerier,
-	where string,
-	args []any,
-	watermarkSort float64,
-	cursor sessionExportCursorPayload,
-	limit int,
-) ([]SessionSummaryRow, error) {
-	return db.querySessionExportRowsFrom(
-		ctx, q, where, args, watermarkSort, cursor, limit,
-		sessionExportActivitySource{},
-	)
 }
 
 func (db *DB) querySessionExportRowsFrom(
@@ -906,6 +848,9 @@ func (db *DB) querySessionExportRowsFrom(
 	query, queryArgs := sessionExportRowsQuery(
 		source, where, args, watermarkSort, cursor, limit,
 	)
+	if source.observe != nil {
+		source.observe(query, append([]any(nil), queryArgs...))
+	}
 
 	sqlRows, err := q.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
@@ -1477,11 +1422,6 @@ func sessionExportFiltersEqual(
 	aj, _ := json.Marshal(a)
 	bj, _ := json.Marshal(b)
 	return string(aj) == string(bj)
-}
-
-func buildSessionExportFilter(f SessionFilter) (string, []any) {
-	dialect := SQLiteQueryDialect()
-	return BuildSessionFilterSQL(f, dialect)
 }
 
 func sessionExportLastActivityExpr() string {
