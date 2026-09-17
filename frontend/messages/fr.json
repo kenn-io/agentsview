@@ -341,7 +341,6 @@
       }
     }
   ],
-  "parallel_group_each_duration": "≤ {duration} chacun",
   "parallel_group_running": "en cours...",
   "subagent_inline_label": "Session de sous-agent",
   "subagent_inline_message_count": [
@@ -1547,9 +1546,16 @@
   "session_vitals_jump_to_call": "Aller à l'appel",
   "session_vitals_turns": "tours",
   "session_vitals_subagents": "sous-agents",
+  "session_vitals_activity": "Activité par tour",
+  "session_vitals_activity_thinking": "Réflexion",
+  "session_vitals_activity_generation": "Génération",
+  "session_vitals_activity_tool": "Exécution des outils",
+  "session_vitals_activity_unattributed": "Non attribué",
+  "session_vitals_activity_turn": "Tour {ordinal} · {duration}",
+  "session_vitals_activity_hint": "Le temps sans limites de phase mesurées reste non attribué.",
   "session_vitals_time_spent": "Temps passé",
   "session_vitals_clear_category_filter": "effacer le filtre de catégorie",
-  "session_vitals_completed_turns_hint": "tours terminés · cliquez pour surligner",
+  "session_vitals_completed_turns_hint": "temps mesuré des outils · cliquez pour surligner",
   "session_vitals_timeline": "Chronologie",
   "session_vitals_click_marks_to_scroll": "cliquez sur les marques pour faire défiler",
   "session_vitals_jump_to_turn": "Aller au tour {category} à {time}",

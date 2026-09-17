@@ -8,7 +8,6 @@
 
   interface Props {
     toolCalls: ToolCall[];
-    turnDurationMs: number | null;
     callTimingByID?: Map<string, CallTiming>;
     isRunning?: boolean;
     searchOrdinal?: number;
@@ -16,16 +15,11 @@
 
   let {
     toolCalls,
-    turnDurationMs,
     callTimingByID,
     isRunning = false,
     searchOrdinal,
   }: Props = $props();
 
-  let upperBoundLabel = $derived.by(() => {
-    if (isRunning || turnDurationMs == null) return null;
-    return m.parallel_group_each_duration({ duration: formatDuration(turnDurationMs) });
-  });
 </script>
 
 <div class="parallel-group">
@@ -35,15 +29,12 @@
     <span class="pg-spacer"></span>
     {#if isRunning}
       <span class="pg-running">{m.parallel_group_running()}</span>
-    {:else if upperBoundLabel}
-      <span class="pg-upper">{upperBoundLabel}</span>
     {/if}
   </div>
   <div class="pg-members">
     {#each toolCalls as toolCall, i (toolCall.tool_use_id || `idx:${i}`)}
       {@const ct = callTimingByID?.get(toolCall.tool_use_id ?? "")}
-      {@const dur = ct?.subagent_session_id && ct.duration_ms != null
-        ? formatDuration(ct.duration_ms) : undefined}
+      {@const dur = ct?.duration_ms != null ? formatDuration(ct.duration_ms) : m.shared_unknown()}
       <ToolBlock
         {toolCall}
         content=""
@@ -83,7 +74,6 @@
     color: var(--text-primary);
   }
   .pg-spacer { flex: 1; }
-  .pg-upper { color: var(--text-muted); font-size: 10px; }
   .pg-running {
     color: var(--running-fg);
     font-size: 10px;

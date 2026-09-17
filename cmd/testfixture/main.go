@@ -453,26 +453,7 @@ func generateContent(role string, idx, total int) string {
 	)
 }
 
-// createDurationShowcaseFixture builds a parent session that
-// exercises every shape the Session Vital Signs UX renders:
-// solo tool call, parallel turn with a sub-agent, and a slow
-// solo Bash. Together with the linked sub-agent session it
-// gives the right-panel timing query stable data to display.
-//
-// Timeline (relative to start):
-//
-//	T+0:00  msg 0  user      "investigate auth"
-//	T+0:02  msg 1  assistant solo Read (tool_use)
-//	T+0:04  msg 2  user      tool_result for Read
-//	T+0:14  msg 3  assistant parallel: 2 Reads + 1 Task
-//	T+2:14  msg 4  user      tool_results for all 3
-//	T+2:24  msg 5  assistant solo Bash
-//	T+2:52  msg 6  user      tool_result for Bash
-//	T+2:55  session ends
-//
-// Per the timing spec, turn durations come from the gap to
-// the next message; sub-agent calls take their duration from
-// the linked child session's started_at/ended_at.
+// Bash has execution endpoints, and the linked Task has a closed child session interval.
 func createDurationShowcaseFixture(
 	database *db.DB, start time.Time,
 ) error {
@@ -493,8 +474,7 @@ func createDurationShowcaseFixture(
 	t6 := start.Add(2*time.Minute + 52*time.Second)
 	endParent := start.Add(2*time.Minute + 55*time.Second)
 
-	// Sub-agent runs alongside the parallel turn so its
-	// duration covers the full ~2 minutes of that turn.
+	// Child bounds provide a closed completion interval for the linked Task call.
 	subStart := t3
 	subEnd := t4
 	subAgentMessages := buildDurationSubagentMessages(
@@ -621,6 +601,7 @@ func buildDurationShowcaseMessages(
 	msg3Content := "Fanning out: two reads plus a sub-agent " +
 		"to dig into the session helpers."
 	msg4Content := "[tool_results]"
+	promptContent := "Confirm the slow path with the auth tests."
 	msg5Content := "Running the auth test suite to confirm " +
 		"the slow path matches what I read."
 	msg6Content := "[tool_result]"
@@ -659,6 +640,7 @@ func buildDurationShowcaseMessages(
 			SessionID:     sessionID,
 			Ordinal:       2,
 			Role:          "user",
+			SourceSubtype: "tool_result",
 			Content:       msg2Content,
 			Timestamp:     t2.Format(time.RFC3339Nano),
 			ContentLength: len(msg2Content),
@@ -709,6 +691,7 @@ func buildDurationShowcaseMessages(
 			SessionID:     sessionID,
 			Ordinal:       4,
 			Role:          "user",
+			SourceSubtype: "tool_result",
 			Content:       msg4Content,
 			Timestamp:     t4.Format(time.RFC3339Nano),
 			ContentLength: len(msg4Content),
@@ -716,6 +699,14 @@ func buildDurationShowcaseMessages(
 		{
 			SessionID:     sessionID,
 			Ordinal:       5,
+			Role:          "user",
+			Content:       promptContent,
+			Timestamp:     t4.Add(5 * time.Second).Format(time.RFC3339Nano),
+			ContentLength: len(promptContent),
+		},
+		{
+			SessionID:     sessionID,
+			Ordinal:       6,
 			Role:          "assistant",
 			Content:       msg5Content,
 			Timestamp:     t5.Format(time.RFC3339Nano),
@@ -733,13 +724,30 @@ func buildDurationShowcaseMessages(
 						`"description":"rerun ` +
 						`auth tests"}`,
 					ResultContentLength: 940,
+					ResultEvents: []db.ToolResultEvent{
+						{
+							ToolUseID:  bashSlowID,
+							Source:     "tool_execution",
+							Status:     "started",
+							Timestamp:  t5.Add(3 * time.Second).Format(time.RFC3339Nano),
+							EventIndex: 0,
+						},
+						{
+							ToolUseID:  bashSlowID,
+							Source:     "tool_execution",
+							Status:     "completed",
+							Timestamp:  t6.Add(-5 * time.Second).Format(time.RFC3339Nano),
+							EventIndex: 1,
+						},
+					},
 				},
 			},
 		},
 		{
 			SessionID:     sessionID,
-			Ordinal:       6,
+			Ordinal:       7,
 			Role:          "user",
+			SourceSubtype: "tool_result",
 			Content:       msg6Content,
 			Timestamp:     t6.Format(time.RFC3339Nano),
 			ContentLength: len(msg6Content),
@@ -747,11 +755,7 @@ func buildDurationShowcaseMessages(
 	}
 }
 
-// buildDurationSubagentMessages builds a small but realistic
-// sub-agent transcript: a Read followed by a Grep, then a
-// final report. The exact gaps don't drive the parent timing
-// UI (that uses the child session's start/end window), so we
-// keep the messages evenly spaced for readability.
+// Child calls lack execution endpoints, so their durations remain unknown.
 func buildDurationSubagentMessages(
 	sessionID string, start time.Time,
 ) []db.Message {

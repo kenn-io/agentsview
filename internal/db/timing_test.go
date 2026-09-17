@@ -154,8 +154,8 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 		require.Len(t, got.Turns, 1, "len(Turns)")
 		require.NotNil(t, got.Turns[0].DurationMs, "turn duration")
 		assert.Equal(t, int64(29_000), *got.Turns[0].DurationMs, "turn duration")
-		require.NotNil(t, got.Turns[0].Calls[0].DurationMs, "call duration")
-		assert.Equal(t, int64(29_000), *got.Turns[0].Calls[0].DurationMs, "call duration")
+		assert.Nil(t, got.Turns[0].Calls[0].DurationMs, "execution was not measured")
+		assert.Zero(t, got.ToolDurationMs)
 	})
 
 	t.Run("completed call excludes idle time before next user message", func(t *testing.T) {
@@ -167,12 +167,12 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 		assert.Equal(t, int64(3_825), *got.Turns[0].DurationMs)
 		require.NotNil(t, got.Turns[0].Calls[0].DurationMs)
 		assert.Equal(t, int64(3_725), *got.Turns[0].Calls[0].DurationMs)
-		assert.Equal(t, int64(3_825), got.ToolDurationMs)
+		assert.Equal(t, int64(3_725), got.ToolDurationMs)
 		require.NotNil(t, got.SlowestCall)
 		assert.Equal(t, "task_complete", got.SlowestCall.ToolName)
 		assert.Equal(t, int64(3_725), *got.SlowestCall.DurationMs)
 		require.Len(t, got.ByCategory, 1)
-		assert.Equal(t, int64(3_825), got.ByCategory[0].DurationMs)
+		assert.Equal(t, int64(3_725), got.ByCategory[0].DurationMs)
 	})
 
 	t.Run("last message falls back to session end", func(t *testing.T) {
@@ -182,9 +182,7 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 			"turn duration nil, want 20000 (fallback to ended_at)")
 		assert.Equal(t, int64(20_000), *got.Turns[0].DurationMs,
 			"turn duration (fallback to ended_at)")
-		require.NotNil(t, got.Turns[0].Calls[0].DurationMs, "call duration")
-		assert.Equal(t, int64(20_000), *got.Turns[0].Calls[0].DurationMs,
-			"call duration (solo non-subagent inherits turn duration)")
+		assert.Nil(t, got.Turns[0].Calls[0].DurationMs, "session end does not prove execution")
 	})
 
 	t.Run("running session last turn null", func(t *testing.T) {
@@ -230,12 +228,16 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 		}
 	})
 
-	t.Run("subagent exact duration", func(t *testing.T) {
+	t.Run("closed child timestamps provide measured execution", func(t *testing.T) {
 		got, err := d.GetSessionTiming(ctx, "parent")
 		require.NoError(t, err, "GetSessionTiming")
 		dms := got.Turns[0].Calls[0].DurationMs
-		require.NotNil(t, dms, "subagent duration")
-		assert.Equal(t, int64(134_000), *dms, "subagent duration")
+		require.NotNil(t, dms, "closed subagent execution")
+		assert.Equal(t, int64(134_000), *dms)
+		assert.Equal(t, "child", *got.Turns[0].Calls[0].SubagentSessionID)
+		assert.Equal(t, int64(134_000), got.ToolDurationMs)
+		require.Len(t, got.ByCategory, 1)
+		assert.Equal(t, CategoryTotal{Category: "Task", DurationMs: 134_000, CallCount: 1}, got.ByCategory[0])
 		assert.Equal(t, 1, got.SubagentCount, "SubagentCount")
 	})
 
@@ -373,9 +375,9 @@ func timingInsertMessage(
 	_, err := d.getWriter().ExecContext(context.Background(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp,
-			 has_tool_use)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, sessionID, ordinal, role, content, ts, flag)
+			 has_tool_use, content_length)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, sessionID, ordinal, role, content, ts, flag, len(content))
 	require.NoError(t, err, "timingInsertMessage %s/%d", sessionID, ordinal)
 }
 

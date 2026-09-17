@@ -4475,3 +4475,131 @@ func TestSearch_DateRange(t *testing.T) {
 		})
 	}
 }
+
+func TestGetSessionTimingActivityTimingParity(t *testing.T) {
+	type execution struct {
+		category, start, end string
+		wantDuration         *int64
+	}
+	for _, tc := range []struct {
+		name                                                 string
+		executions                                           []execution
+		noPrompt, staleEnd, carriers, openChild, closedChild bool
+		wantDuration, wantTool, wantUnattributed             int64
+		wantCategories                                       []db.CategoryTotal
+	}{
+		{name: "measured thinking followed by tool", executions: []execution{{"Bash", "02", "04", new(int64(2000))}}, wantDuration: 6000, wantTool: 2000, wantUnattributed: 4000, wantCategories: []db.CategoryTotal{{Category: "Bash", DurationMs: 2000, CallCount: 1}}},
+		{name: "missing execution", executions: []execution{{category: "Bash"}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Bash", CallCount: 1}}},
+		{name: "same and cross category overlap", executions: []execution{{"Bash", "02", "04", new(int64(2000))}, {"Bash", "03", "05", new(int64(2000))}, {"Read", "04", "06", new(int64(2000))}}, wantDuration: 6000, wantTool: 4000, wantUnattributed: 2000, wantCategories: []db.CategoryTotal{{Category: "Bash", DurationMs: 3000, CallCount: 2}, {Category: "Read", DurationMs: 2000, CallCount: 1}}},
+		{name: "stale session end", staleEnd: true, executions: []execution{{"Bash", "02", "04", new(int64(2000))}}, wantDuration: 4000, wantTool: 2000, wantUnattributed: 2000, wantCategories: []db.CategoryTotal{{Category: "Bash", DurationMs: 2000, CallCount: 1}}},
+		{name: "no visible prompt", noPrompt: true, executions: []execution{{"Bash", "02", "04", new(int64(2000))}}, wantTool: 2000, wantCategories: []db.CategoryTotal{{Category: "Bash", DurationMs: 2000, CallCount: 1}}},
+		{name: "system and tool result carriers", carriers: true, executions: []execution{{"Bash", "02", "04", new(int64(2000))}}, wantDuration: 6000, wantTool: 2000, wantUnattributed: 4000, wantCategories: []db.CategoryTotal{{Category: "Bash", DurationMs: 2000, CallCount: 1}}},
+		{name: "open child", openChild: true, executions: []execution{{category: "Task"}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Task", CallCount: 1}}},
+		{name: "closed child", closedChild: true, executions: []execution{{category: "Task", wantDuration: new(int64(2000))}}, wantDuration: 6000, wantTool: 2000, wantUnattributed: 4000, wantCategories: []db.CategoryTotal{{Category: "Task", DurationMs: 2000, CallCount: 1}}},
+		{name: "zero execution", executions: []execution{{"Bash", "02", "02", new(int64(0))}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Bash", CallCount: 1}}},
+		{name: "backward execution", executions: []execution{{"Bash", "04", "02", nil}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Bash", CallCount: 1}}},
+		{name: "open execution", executions: []execution{{"Bash", "02", "", nil}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Bash", CallCount: 1}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			local := newLocalDB(t)
+			const sessionID = "duck-timing-activity"
+			end := "2026-04-26T10:00:06Z"
+			if tc.staleEnd {
+				end = "2026-04-26T10:00:01Z"
+			}
+			sess := syncSession(sessionID, "timing", "go", "2026-04-26T10:00:00Z", 3)
+			sess.EndedAt = &end
+			role := "user"
+			if tc.noPrompt {
+				role = "assistant"
+			}
+			var calls []db.ToolCall
+			for i, execution := range tc.executions {
+				id := fmt.Sprintf("call-%d", i)
+				call := db.ToolCall{ToolUseID: id, ToolName: execution.category, Category: execution.category, CallIndex: i, InputJSON: "{}"}
+				if tc.openChild || tc.closedChild {
+					call.SubagentSessionID = "duck-timing-child"
+				}
+				for _, event := range []struct{ status, timestamp string }{{"started", execution.start}, {"completed", execution.end}} {
+					if event.timestamp == "" {
+						continue
+					}
+					call.ResultEvents = append(call.ResultEvents, db.ToolResultEvent{ToolUseID: id, Source: "tool_execution", Status: event.status, Timestamp: "2026-04-26T10:00:" + event.timestamp + "Z"})
+				}
+				calls = append(calls, call)
+			}
+			messages := []db.Message{
+				syncMessage(sessionID, 0, role, "go", "2026-04-26T10:00:00Z"),
+				syncMessage(sessionID, 1, "assistant", "thinking then tools", "2026-04-26T10:00:01Z", calls...),
+			}
+			messages[1].HasThinking = true
+			messages[1].ThinkingText = "considering"
+			if tc.carriers {
+				system := syncMessage(sessionID, 2, "user", "system", "2026-04-26T10:00:02Z")
+				system.IsSystem = true
+				result := syncMessage(sessionID, 3, "user", "result", "2026-04-26T10:00:03Z")
+				result.SourceSubtype = "tool_result"
+				messages = append(messages, system, result, syncMessage(sessionID, 4, "user", "", "2026-04-26T10:00:04Z"))
+			}
+			if !tc.noPrompt && !tc.staleEnd {
+				messages = append(messages, syncMessage(sessionID, 5, "user", "next", "2026-04-26T10:00:06Z"))
+			}
+			writes := []db.SessionBatchWrite{{Session: sess, Messages: messages, DataVersion: 1, ReplaceMessages: true}}
+			if tc.openChild || tc.closedChild {
+				child := syncSession("duck-timing-child", "timing", "child", "2026-04-26T10:00:02Z", 0)
+				if tc.openChild {
+					child.EndedAt = nil
+				} else {
+					childEnd := "2026-04-26T10:00:04Z"
+					child.EndedAt = &childEnd
+				}
+				writes = append(writes, db.SessionBatchWrite{Session: child, DataVersion: 1, ReplaceMessages: true})
+			}
+			_, err := local.WriteSessionBatchAtomic(writes)
+			require.NoError(t, err)
+			syncer := newInMemoryTestSync(t, local, SyncOptions{})
+			require.NoError(t, createSchema(ctx, syncer.DB()))
+			_, err = syncer.pushEverything(ctx, nil)
+			require.NoError(t, err)
+			store := NewStoreFromDB(syncer.DB())
+			got, err := store.GetSessionTiming(ctx, sessionID)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Equal(t, tc.wantTool, got.ToolDurationMs)
+			assert.Equal(t, db.ActivityTotals{ToolMs: tc.wantTool, UnattributedMs: tc.wantUnattributed}, got.ActivityTotals)
+			assert.ElementsMatch(t, tc.wantCategories, got.ByCategory)
+			assert.Equal(t, len(tc.executions), got.ToolCallCount)
+			require.Len(t, got.Turns, 1)
+			require.Len(t, got.Turns[0].Calls, len(tc.executions))
+			for i, call := range tc.executions {
+				assert.Equal(t, call.wantDuration, got.Turns[0].Calls[i].DurationMs)
+			}
+			if tc.openChild {
+				assert.Equal(t, new("duck-timing-child"), got.Turns[0].Calls[0].SubagentSessionID)
+			}
+			sqlite, err := local.GetSessionTiming(ctx, sessionID)
+			require.NoError(t, err)
+			assert.Equal(t, sqlite.Activity, got.Activity)
+			assert.Equal(t, sqlite.ActivityTotals, got.ActivityTotals)
+			assert.Equal(t, sqlite.ByCategory, got.ByCategory)
+			if tc.noPrompt {
+				assert.Empty(t, got.Activity)
+				return
+			}
+			count := 2
+			if tc.staleEnd {
+				count = 1
+			}
+			require.Len(t, got.Activity, count)
+			assert.EqualValues(t, 0, got.Activity[0].Ordinal)
+			assert.Equal(t, tc.wantDuration, got.Activity[0].DurationMs)
+			assert.Equal(t, tc.wantTool, got.Activity[0].ToolMs)
+			assert.Equal(t, tc.wantUnattributed, got.Activity[0].UnattributedMs)
+			assert.Zero(t, got.Activity[0].ThinkingMs)
+			assert.Zero(t, got.Activity[0].GenerationMs)
+			assert.Equal(t, "message_only", got.Activity[0].Precision)
+			assert.False(t, got.Activity[0].Running)
+		})
+	}
+}

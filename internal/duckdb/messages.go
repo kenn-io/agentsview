@@ -497,7 +497,8 @@ func (s *Store) queryTurnRows(
 	ctx context.Context, sess *db.Session,
 ) ([]db.TurnRow, error) {
 	rows, err := s.queryContext(ctx, `
-		SELECT id, ordinal, timestamp, has_tool_use
+		SELECT id, ordinal, timestamp, has_tool_use,
+			role, is_system, COALESCE(source_subtype, ''), content_length
 		FROM messages
 		WHERE session_id = ?
 		ORDER BY ordinal`,
@@ -512,7 +513,7 @@ func (s *Store) queryTurnRows(
 	for rows.Next() {
 		var r db.TurnRow
 		var ts any
-		if err := rows.Scan(&r.MessageID, &r.Ordinal, &ts, &r.HasToolUse); err != nil {
+		if err := rows.Scan(&r.MessageID, &r.Ordinal, &ts, &r.HasToolUse, &r.Role, &r.IsSystem, &r.SourceSubtype, &r.ContentLength); err != nil {
 			return nil, fmt.Errorf("scanning duckdb timing turn: %w", err)
 		}
 		r.Timestamp = formatDBTime(ts)
@@ -568,8 +569,9 @@ func (s *Store) queryCallRows(
 					AND tre.timestamp IS NOT NULL
 				ORDER BY tre.event_index DESC
 				LIMIT 1
-			) AS execution_completed_at,
-			s_sub.started_at, s_sub.ended_at
+			) AS execution_completed_at
+			,s_sub.started_at
+			,s_sub.ended_at
 		FROM tool_calls tc
 		JOIN messages m ON m.id = tc.message_id
 		LEFT JOIN sessions s_sub ON s_sub.id = tc.subagent_session_id
@@ -583,15 +585,14 @@ func (s *Store) queryCallRows(
 	defer rows.Close()
 
 	var out []db.CallRow
-	now := time.Now().UTC().Format(time.RFC3339)
 	for rows.Next() {
 		var r db.CallRow
 		var skill, sub sql.NullString
-		var executionStarted, executionCompleted, startedAt, endedAt any
+		var executionStarted, executionCompleted, subagentStarted, subagentEnded any
 		if err := rows.Scan(
 			&r.MessageID, &r.ToolUseID, &r.ToolName, &r.Category,
 			&skill, &sub, &r.InputJSON, &executionStarted, &executionCompleted,
-			&startedAt, &endedAt,
+			&subagentStarted, &subagentEnded,
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb timing call: %w", err)
 		}
@@ -602,15 +603,11 @@ func (s *Store) queryCallRows(
 		if sub.Valid {
 			value := sub.String
 			r.SubagentSessionID = &value
-			if dur, ok := timingMillis(formatDBTime(startedAt), firstNonEmpty(formatDBTime(endedAt), now)); ok {
-				r.DurationMs = &dur
-			}
-		} else if completedAt := formatDBTime(executionCompleted); completedAt != "" {
-			if dur, ok := timingMillis(formatDBTime(executionStarted), completedAt); ok {
-				r.DurationMs = &dur
-				r.CompletedAt = completedAt
-			}
 		}
+		r.ExecutionStart = formatDBTime(executionStarted)
+		r.ExecutionEnd = formatDBTime(executionCompleted)
+		r.SubagentStart = formatDBTime(subagentStarted)
+		r.SubagentEnd = formatDBTime(subagentEnded)
 		out = append(out, r)
 	}
 	return out, rows.Err()

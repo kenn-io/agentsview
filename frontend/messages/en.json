@@ -341,7 +341,6 @@
       }
     }
   ],
-  "parallel_group_each_duration": "≤ {duration} each",
   "parallel_group_running": "running...",
   "subagent_inline_label": "Subagent session",
   "subagent_inline_message_count": [
@@ -1547,9 +1546,16 @@
   "session_vitals_jump_to_call": "Jump to call",
   "session_vitals_turns": "turns",
   "session_vitals_subagents": "sub-agents",
+  "session_vitals_activity": "Turn activity",
+  "session_vitals_activity_thinking": "Thinking",
+  "session_vitals_activity_generation": "Generation",
+  "session_vitals_activity_tool": "Tool execution",
+  "session_vitals_activity_unattributed": "Unattributed",
+  "session_vitals_activity_turn": "Turn {ordinal} · {duration}",
+  "session_vitals_activity_hint": "Time without measured phase boundaries is unattributed.",
   "session_vitals_time_spent": "Time spent",
   "session_vitals_clear_category_filter": "clear category filter",
-  "session_vitals_completed_turns_hint": "completed turns · click to highlight",
+  "session_vitals_completed_turns_hint": "measured tool time · click to highlight",
   "session_vitals_timeline": "Timeline",
   "session_vitals_click_marks_to_scroll": "click marks to scroll",
   "session_vitals_jump_to_turn": "Jump to {category} turn at {time}",
