@@ -4485,6 +4485,7 @@ func TestGetSessionTimingActivityTimingParity(t *testing.T) {
 		name                                                 string
 		executions                                           []execution
 		noPrompt, staleEnd, carriers, openChild, closedChild bool
+		legacyPrefix                                         bool
 		wantDuration, wantTool, wantUnattributed             int64
 		wantCategories                                       []db.CategoryTotal
 	}{
@@ -4495,7 +4496,7 @@ func TestGetSessionTimingActivityTimingParity(t *testing.T) {
 		{name: "no visible prompt", noPrompt: true, executions: []execution{{"Bash", "02", "04", new(int64(2000))}}, wantTool: 2000, wantCategories: []db.CategoryTotal{{Category: "Bash", DurationMs: 2000, CallCount: 1}}},
 		{name: "system and tool result carriers", carriers: true, executions: []execution{{"Bash", "02", "04", new(int64(2000))}}, wantDuration: 6000, wantTool: 2000, wantUnattributed: 4000, wantCategories: []db.CategoryTotal{{Category: "Bash", DurationMs: 2000, CallCount: 1}}},
 		{name: "open child", openChild: true, executions: []execution{{category: "Task"}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Task", CallCount: 1}}},
-		{name: "closed child", closedChild: true, executions: []execution{{category: "Task", wantDuration: new(int64(2000))}}, wantDuration: 6000, wantTool: 2000, wantUnattributed: 4000, wantCategories: []db.CategoryTotal{{Category: "Task", DurationMs: 2000, CallCount: 1}}},
+		{name: "legacy prefix and child precedence", closedChild: true, legacyPrefix: true, executions: []execution{{"Task", "01", "01.500", new(int64(2000))}}, wantDuration: 6000, wantTool: 2000, wantUnattributed: 4000, wantCategories: []db.CategoryTotal{{Category: "Task", DurationMs: 2000, CallCount: 1}}},
 		{name: "zero execution", executions: []execution{{"Bash", "02", "02", new(int64(0))}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Bash", CallCount: 1}}},
 		{name: "backward execution", executions: []execution{{"Bash", "04", "02", nil}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Bash", CallCount: 1}}},
 		{name: "open execution", executions: []execution{{"Bash", "02", "", nil}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Bash", CallCount: 1}}},
@@ -4541,6 +4542,9 @@ func TestGetSessionTimingActivityTimingParity(t *testing.T) {
 				result := syncMessage(sessionID, 3, "user", "result", "2026-04-26T10:00:03Z")
 				result.SourceSubtype = "tool_result"
 				messages = append(messages, system, result, syncMessage(sessionID, 4, "user", "", "2026-04-26T10:00:04Z"))
+			}
+			if tc.legacyPrefix {
+				messages = append(messages, syncMessage(sessionID, 2, "user", "This session is being continued from another session.", "2026-04-26T10:00:05Z"))
 			}
 			if !tc.noPrompt && !tc.staleEnd {
 				messages = append(messages, syncMessage(sessionID, 5, "user", "next", "2026-04-26T10:00:06Z"))

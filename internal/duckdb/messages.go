@@ -498,7 +498,9 @@ func (s *Store) queryTurnRows(
 ) ([]db.TurnRow, error) {
 	rows, err := s.queryContext(ctx, `
 		SELECT id, ordinal, timestamp, has_tool_use,
-			role, is_system, COALESCE(source_subtype, ''), content_length
+			role, is_system,
+			CASE WHEN `+db.DuckDBSystemPrefixSQL("content", "role")+` THEN FALSE ELSE TRUE END,
+			COALESCE(source_subtype, ''), content_length
 		FROM messages
 		WHERE session_id = ?
 		ORDER BY ordinal`,
@@ -513,7 +515,7 @@ func (s *Store) queryTurnRows(
 	for rows.Next() {
 		var r db.TurnRow
 		var ts any
-		if err := rows.Scan(&r.MessageID, &r.Ordinal, &ts, &r.HasToolUse, &r.Role, &r.IsSystem, &r.SourceSubtype, &r.ContentLength); err != nil {
+		if err := rows.Scan(&r.MessageID, &r.Ordinal, &ts, &r.HasToolUse, &r.Role, &r.IsSystem, &r.IsSystemPrefixed, &r.SourceSubtype, &r.ContentLength); err != nil {
 			return nil, fmt.Errorf("scanning duckdb timing turn: %w", err)
 		}
 		r.Timestamp = formatDBTime(ts)

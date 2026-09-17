@@ -56,15 +56,16 @@ type CallTiming struct {
 // query. Both SQLite and PG mirrors scan into this shape and pass slices
 // to AssembleTiming.
 type TurnRow struct {
-	MessageID     int64
-	Ordinal       int64
-	Timestamp     string
-	HasToolUse    bool
-	DurationMs    *int64
-	Role          string
-	IsSystem      bool
-	SourceSubtype string
-	ContentLength int
+	MessageID        int64
+	Ordinal          int64
+	Timestamp        string
+	HasToolUse       bool
+	DurationMs       *int64
+	Role             string
+	IsSystem         bool
+	IsSystemPrefixed bool
+	SourceSubtype    string
+	ContentLength    int
 }
 
 // CallRow is the per-tool_call row returned by the per-call SQL query.
@@ -119,10 +120,12 @@ func (db *DB) queryTurnRows(
 		    WHEN m2.delta_ms < 0    THEN NULL
 		    ELSE m2.delta_ms
 		  END AS turn_duration_ms,
-		  m2.role, m2.is_system, COALESCE(m2.source_subtype, ''), m2.content_length
+		  m2.role, m2.is_system, m2.is_system_prefixed,
+		  COALESCE(m2.source_subtype, ''), m2.content_length
 		FROM (
 		  SELECT
 		    m.*,
+		    CASE WHEN `+SystemPrefixSQL("m.content", "m.role")+` THEN 0 ELSE 1 END AS is_system_prefixed,
 		    CAST(
 		      ROUND(
 		        (julianday(
@@ -152,7 +155,7 @@ func (db *DB) queryTurnRows(
 		var dur sql.NullInt64
 		if err := rows.Scan(
 			&r.MessageID, &r.Ordinal, &ts, &hasFlag, &dur,
-			&r.Role, &r.IsSystem, &r.SourceSubtype, &r.ContentLength,
+			&r.Role, &r.IsSystem, &r.IsSystemPrefixed, &r.SourceSubtype, &r.ContentLength,
 		); err != nil {
 			return nil, err
 		}

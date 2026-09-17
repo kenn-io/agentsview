@@ -46,7 +46,8 @@ func (s *Store) queryTurnRows(
 	rows, err := s.pg.QueryContext(ctx, `
 		SELECT
 		  m2.ordinal, m2.timestamp, m2.has_tool_use,
-		  m2.role, m2.is_system, m2.source_subtype, m2.content_length,
+		  m2.role, m2.is_system, m2.is_system_prefixed,
+		  m2.source_subtype, m2.content_length,
 		  CASE
 		    WHEN NOT m2.has_tool_use THEN NULL
 		    WHEN m2.delta_ms < 0    THEN NULL
@@ -55,7 +56,9 @@ func (s *Store) queryTurnRows(
 		FROM (
 		  SELECT
 		    m.session_id, m.ordinal, m.timestamp, m.has_tool_use,
-		    m.role, m.is_system, COALESCE(m.source_subtype, '') AS source_subtype, m.content_length,
+		    m.role, m.is_system,
+		    CASE WHEN `+db.PostgresSystemPrefixSQL("m.content", "m.role")+` THEN FALSE ELSE TRUE END AS is_system_prefixed,
+		    COALESCE(m.source_subtype, '') AS source_subtype, m.content_length,
 		    (round(EXTRACT(EPOCH FROM (
 		      COALESCE(
 		        LEAD(m.timestamp) OVER (ORDER BY m.ordinal),
@@ -79,20 +82,21 @@ func (s *Store) queryTurnRows(
 		var ts *time.Time
 		var hasToolUse bool
 		var role, sourceSubtype string
-		var isSystem bool
+		var isSystem, isSystemPrefixed bool
 		var contentLength int
 		var dur sql.NullInt64
-		if err := rows.Scan(&ordinal, &ts, &hasToolUse, &role, &isSystem, &sourceSubtype, &contentLength, &dur); err != nil {
+		if err := rows.Scan(&ordinal, &ts, &hasToolUse, &role, &isSystem, &isSystemPrefixed, &sourceSubtype, &contentLength, &dur); err != nil {
 			return nil, fmt.Errorf("scanning timing turn: %w", err)
 		}
 		r := db.TurnRow{
-			MessageID:     int64(ordinal),
-			Ordinal:       int64(ordinal),
-			HasToolUse:    hasToolUse,
-			Role:          role,
-			IsSystem:      isSystem,
-			SourceSubtype: sourceSubtype,
-			ContentLength: contentLength,
+			MessageID:        int64(ordinal),
+			Ordinal:          int64(ordinal),
+			HasToolUse:       hasToolUse,
+			Role:             role,
+			IsSystem:         isSystem,
+			IsSystemPrefixed: isSystemPrefixed,
+			SourceSubtype:    sourceSubtype,
+			ContentLength:    contentLength,
 		}
 		if ts != nil {
 			r.Timestamp = FormatISO8601(*ts)

@@ -312,6 +312,7 @@ func TestPGGetSessionTiming_ActivityTiming(t *testing.T) {
 		name                                     string
 		executions                               []execution
 		noPrompt, staleEnd, carriers, openChild  bool
+		closedChild, legacyPrefix                bool
 		wantDuration, wantTool, wantUnattributed int64
 		wantCategories                           []db.CategoryTotal
 	}{
@@ -322,6 +323,7 @@ func TestPGGetSessionTiming_ActivityTiming(t *testing.T) {
 		{name: "no visible prompt", noPrompt: true, executions: []execution{{"Bash", "02", "04", new(int64(2000))}}, wantTool: 2000, wantCategories: []db.CategoryTotal{{Category: "Bash", DurationMs: 2000, CallCount: 1}}},
 		{name: "system and tool result carriers", carriers: true, executions: []execution{{"Bash", "02", "04", new(int64(2000))}}, wantDuration: 6000, wantTool: 2000, wantUnattributed: 4000, wantCategories: []db.CategoryTotal{{Category: "Bash", DurationMs: 2000, CallCount: 1}}},
 		{name: "open child", openChild: true, executions: []execution{{category: "Task"}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Task", CallCount: 1}}},
+		{name: "legacy prefix and child precedence", closedChild: true, legacyPrefix: true, executions: []execution{{"Task", "01", "01.500", new(int64(2000))}}, wantDuration: 6000, wantTool: 2000, wantUnattributed: 4000, wantCategories: []db.CategoryTotal{{Category: "Task", DurationMs: 2000, CallCount: 1}}},
 		{name: "zero execution", executions: []execution{{"Bash", "02", "02", new(int64(0))}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Bash", CallCount: 1}}},
 		{name: "backward execution", executions: []execution{{"Bash", "04", "02", nil}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Bash", CallCount: 1}}},
 		{name: "open execution", executions: []execution{{"Bash", "02", "", nil}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Bash", CallCount: 1}}},
@@ -346,6 +348,9 @@ func TestPGGetSessionTiming_ActivityTiming(t *testing.T) {
 			if !tc.noPrompt && !tc.staleEnd {
 				timingInsertMessagePG(t, pg, sessionID, 5, "user", "next", "2026-04-26T10:00:06Z", false)
 			}
+			if tc.legacyPrefix {
+				timingInsertMessagePG(t, pg, sessionID, 2, "user", "This session is being continued from another session.", "2026-04-26T10:00:05Z", false)
+			}
 			if tc.carriers {
 				timingInsertMessagePG(t, pg, sessionID, 2, "user", "system", "2026-04-26T10:00:02Z", false)
 				timingInsertMessagePG(t, pg, sessionID, 3, "user", "result", "2026-04-26T10:00:03Z", false)
@@ -354,9 +359,13 @@ func TestPGGetSessionTiming_ActivityTiming(t *testing.T) {
 				require.NoError(t, err)
 			}
 			child := ""
-			if tc.openChild {
+			if tc.openChild || tc.closedChild {
 				child = "timing-activity-child"
-				timingInsertSessionPG(t, pg, child, "2026-04-26T10:00:02Z", "")
+				childEnd := ""
+				if tc.closedChild {
+					childEnd = "2026-04-26T10:00:04Z"
+				}
+				timingInsertSessionPG(t, pg, child, "2026-04-26T10:00:02Z", childEnd)
 			}
 			for i, call := range tc.executions {
 				id := fmt.Sprintf("call-%d", i)

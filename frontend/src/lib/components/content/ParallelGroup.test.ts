@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 describe("ParallelGroup", () => {
-  it("shows a closed ordinary call and an unknown child call independently", async () => {
+  it("shows only known timing rows", async () => {
     const callTimingByID = new Map<string, CallTiming>([
       [
         "a",
@@ -52,7 +52,7 @@ describe("ParallelGroup", () => {
     const component = mount(ParallelGroup, {
       target: document.body,
       props: {
-        toolCalls: [makeToolCall("a"), makeToolCall("b")],
+        toolCalls: [makeToolCall("a"), makeToolCall("b"), makeToolCall("c")],
         callTimingByID,
       },
     });
@@ -62,7 +62,7 @@ describe("ParallelGroup", () => {
       [...document.querySelectorAll(".tool-duration")].map((el) => el.textContent?.trim()),
     ).toEqual(["2.0s", "unknown"]);
     expect(document.querySelector(".pg-header")?.textContent).not.toContain("5.0s");
-    expect(document.querySelector(".pg-count")?.textContent?.trim()).toBe("2 calls");
+    expect(document.querySelector(".pg-count")?.textContent?.trim()).toBe("3 calls");
     unmount(component);
   });
 
@@ -78,9 +78,7 @@ describe("ParallelGroup", () => {
 
     expect(document.querySelector(".pg-label")?.textContent?.trim()).toBe("并行");
     expect(document.querySelector(".pg-count")?.textContent?.trim()).toBe("2 次调用");
-    expect(
-      [...document.querySelectorAll(".tool-duration")].map((el) => el.textContent?.trim()),
-    ).toEqual(["未知", "未知"]);
+    expect(document.querySelectorAll(".tool-duration")).toHaveLength(0);
 
     unmount(component);
   });

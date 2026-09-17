@@ -49,13 +49,12 @@ func executionInterval(call CallRow) (activityInterval, bool) {
 }
 
 func measuredCallInterval(call CallRow) (activityInterval, bool) {
-	if interval, ok := executionInterval(call); ok {
-		return interval, true
+	if call.SubagentSessionID != nil {
+		if interval, ok := parseClosedInterval(call.SubagentStart, call.SubagentEnd); ok {
+			return interval, true
+		}
 	}
-	if call.SubagentSessionID == nil {
-		return activityInterval{}, false
-	}
-	return parseClosedInterval(call.SubagentStart, call.SubagentEnd)
+	return executionInterval(call)
 }
 
 // assembleTurnActivity shares clipped evidence with call labels and category totals.
@@ -63,7 +62,7 @@ func assembleTurnActivity(out *SessionTiming, sess *Session, turns []TurnRow, ca
 	out.Activity = []TurnActivity{}
 	var starts []int64
 	for _, row := range turns {
-		if row.Role != "user" || row.IsSystem || row.SourceSubtype == "tool_result" || row.ContentLength <= 0 {
+		if row.Role != "user" || row.IsSystem || row.IsSystemPrefixed || row.SourceSubtype == "tool_result" || row.ContentLength <= 0 {
 			continue
 		}
 		start, ok := timingTimestamp(row.Timestamp)

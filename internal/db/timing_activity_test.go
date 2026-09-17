@@ -222,6 +222,7 @@ func TestActivityTiming_ClosedSubagentEvidence(t *testing.T) {
 		},
 		[]CallRow{{
 			MessageID: 2, Category: "Task", SubagentSessionID: &child,
+			ExecutionStart: "2026-04-26T10:00:01Z", ExecutionEnd: "2026-04-26T10:00:01.500Z",
 			SubagentStart: "2026-04-26T10:00:02Z", SubagentEnd: "2026-04-26T10:00:04Z",
 		}},
 		time.Date(2026, 4, 26, 10, 0, 6, 0, time.UTC),
@@ -233,6 +234,43 @@ func TestActivityTiming_ClosedSubagentEvidence(t *testing.T) {
 	assert.Equal(t, ActivityTotals{ToolMs: 2000, UnattributedMs: 4000}, got.ActivityTotals)
 	assert.Equal(t, CategoryTotal{Category: "Task", DurationMs: 2000, CallCount: 1}, got.ByCategory[0])
 	assert.Equal(t, int64(2000), *got.SlowestCall.DurationMs)
+}
+
+func TestActivityTiming_InvalidChildFallsBackToExecution(t *testing.T) {
+	start := "2026-04-26T10:00:00Z"
+	end := "2026-04-26T10:00:06Z"
+	child := "child"
+	for _, tc := range []struct {
+		name, childStart, childEnd string
+	}{
+		{name: "missing child"},
+		{name: "malformed child", childStart: "invalid", childEnd: "2026-04-26T10:00:04Z"},
+		{name: "backward child", childStart: "2026-04-26T10:00:04Z", childEnd: "2026-04-26T10:00:02Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := AssembleTiming(
+				&Session{ID: "activity", StartedAt: &start, EndedAt: &end},
+				[]TurnRow{
+					{MessageID: 1, Ordinal: 0, Role: "user", ContentLength: 3, Timestamp: start},
+					{MessageID: 2, Ordinal: 1, Role: "assistant", HasToolUse: true, ContentLength: 3, Timestamp: "2026-04-26T10:00:01Z"},
+				},
+				[]CallRow{{
+					MessageID: 2, Category: "Task", SubagentSessionID: &child,
+					ExecutionStart: "2026-04-26T10:00:01Z", ExecutionEnd: "2026-04-26T10:00:02Z",
+					SubagentStart: tc.childStart, SubagentEnd: tc.childEnd,
+				}},
+				time.Date(2026, 4, 26, 10, 0, 6, 0, time.UTC),
+			)
+			require.Len(t, got.Turns, 1)
+			require.NotNil(t, got.Turns[0].Calls[0].DurationMs)
+			assert.Equal(t, int64(1000), *got.Turns[0].Calls[0].DurationMs)
+			assert.Equal(t, int64(1000), got.ToolDurationMs)
+			assert.Equal(t, ActivityTotals{ToolMs: 1000, UnattributedMs: 5000}, got.ActivityTotals)
+			assert.Equal(t, CategoryTotal{Category: "Task", DurationMs: 1000, CallCount: 1}, got.ByCategory[0])
+			require.NotNil(t, got.SlowestCall)
+			assert.Equal(t, int64(1000), *got.SlowestCall.DurationMs)
+		})
+	}
 }
 
 func TestActivityTiming_PreservesEvidenceBeforeFirstPrompt(t *testing.T) {
@@ -261,22 +299,27 @@ func TestActivityTiming_PreservesEvidenceBeforeFirstPrompt(t *testing.T) {
 
 func TestActivityTiming_VisiblePrompts(t *testing.T) {
 	for _, tc := range []struct {
-		name, role, subtype, timestamp string
-		system                         bool
-		length                         int
+		name, role, content, subtype, timestamp string
+		system                                  bool
+		length                                  int
 	}{
-		{name: "system", role: "user", system: true, length: 3, timestamp: "2026-04-26T10:00:03Z"},
-		{name: "tool result", role: "user", subtype: "tool_result", length: 30, timestamp: "2026-04-26T10:00:03Z"},
-		{name: "empty carrier", role: "user", timestamp: "2026-04-26T10:00:03Z"},
-		{name: "assistant", role: "assistant", length: 30, timestamp: "2026-04-26T10:00:03Z"},
-		{name: "missing timestamp", role: "user", length: 3},
-		{name: "malformed timestamp", role: "user", length: 3, timestamp: "invalid"},
+		{name: "system", role: "user", content: "carrier", system: true, length: 3, timestamp: "2026-04-26T10:00:03Z"},
+		{name: "system prefix", role: "user", content: "This session is being continued from another session.", length: 3, timestamp: "2026-04-26T10:00:03Z"},
+		{name: "tool result", role: "user", content: "carrier", subtype: "tool_result", length: 30, timestamp: "2026-04-26T10:00:03Z"},
+		{name: "empty carrier", role: "user", content: "carrier", timestamp: "2026-04-26T10:00:03Z"},
+		{name: "assistant", role: "assistant", content: "carrier", length: 30, timestamp: "2026-04-26T10:00:03Z"},
+		{name: "missing timestamp", role: "user", content: "carrier", length: 3},
+		{name: "malformed timestamp", role: "user", content: "carrier", length: 3, timestamp: "invalid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			timingInsertSession(t, d, "carriers", "2026-04-26T10:00:00Z", "2026-04-26T10:00:06Z")
 			timingInsertMessage(t, d, "carriers", 0, "user", "run", "2026-04-26T10:00:00Z", false)
-			timingInsertMessage(t, d, "carriers", 1, tc.role, "carrier", tc.timestamp, false)
+			content := tc.content
+			if content == "" {
+				content = "carrier"
+			}
+			timingInsertMessage(t, d, "carriers", 1, tc.role, content, tc.timestamp, false)
 			_, err := d.getWriter().Exec(`UPDATE messages SET is_system = ?, source_subtype = ?, content_length = ? WHERE session_id = 'carriers' AND ordinal = 1`, tc.system, tc.subtype, tc.length)
 			require.NoError(t, err)
 			got, err := d.GetSessionTiming(context.Background(), "carriers")

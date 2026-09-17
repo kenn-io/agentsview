@@ -248,6 +248,43 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 	})
 }
 
+func TestGetSessionTiming_LegacyPrefixAndChildPrecedence(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	timingInsertSession(t, d, "prefix-child",
+		"2026-04-26T10:00:00Z", "2026-04-26T10:00:06Z")
+	timingInsertSession(t, d, "prefix-child-child",
+		"2026-04-26T10:00:02Z", "2026-04-26T10:00:04Z")
+	timingInsertMessage(t, d, "prefix-child", 0, "user",
+		"run", "2026-04-26T10:00:00Z", false)
+	timingInsertMessage(t, d, "prefix-child", 1, "assistant",
+		"spawning", "2026-04-26T10:00:01Z", true)
+	callMessageID := timingMsgID(t, d, "prefix-child", 1)
+	timingInsertToolCall(t, d, "prefix-child", callMessageID,
+		"tu_child", "Agent", "Task", "prefix-child-child")
+	timingInsertToolResultEvent(t, d, "prefix-child", 1, 0,
+		"tu_child", "started", "2026-04-26T10:00:01Z", 0)
+	timingInsertToolResultEvent(t, d, "prefix-child", 1, 0,
+		"tu_child", "completed", "2026-04-26T10:00:01.500Z", 1)
+	timingInsertMessage(t, d, "prefix-child", 2, "user",
+		"This session is being continued from another session.",
+		"2026-04-26T10:00:05Z", false)
+
+	got, err := d.GetSessionTiming(ctx, "prefix-child")
+	require.NoError(t, err)
+	require.Len(t, got.Activity, 1,
+		"the legacy system-prefixed row must not open an activity window")
+	require.Len(t, got.Turns, 1)
+	require.Len(t, got.Turns[0].Calls, 1)
+	require.NotNil(t, got.Turns[0].Calls[0].DurationMs)
+	assert.Equal(t, int64(2000), *got.Turns[0].Calls[0].DurationMs)
+	assert.Equal(t, int64(2000), got.ToolDurationMs)
+	assert.Equal(t, ActivityTotals{ToolMs: 2000, UnattributedMs: 4000}, got.ActivityTotals)
+	assert.Equal(t, CategoryTotal{Category: "Task", DurationMs: 2000, CallCount: 1}, got.ByCategory[0])
+	require.NotNil(t, got.SlowestCall)
+	assert.Equal(t, int64(2000), *got.SlowestCall.DurationMs)
+}
+
 // TestActiveGapCapConstantsAgree guards the two spellings of the active
 // gap cap against drifting apart: the velocity metric uses the seconds
 // form and the active-duration SQL uses the milliseconds form.

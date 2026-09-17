@@ -34,7 +34,7 @@
   <div class="pg-members">
     {#each toolCalls as toolCall, i (toolCall.tool_use_id || `idx:${i}`)}
       {@const ct = callTimingByID?.get(toolCall.tool_use_id ?? "")}
-      {@const dur = ct?.duration_ms != null ? formatDuration(ct.duration_ms) : m.shared_unknown()}
+      {@const dur = ct === undefined ? undefined : ct.duration_ms != null ? formatDuration(ct.duration_ms) : m.shared_unknown()}
       <ToolBlock
         {toolCall}
         content=""
