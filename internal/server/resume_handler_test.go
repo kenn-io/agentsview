@@ -464,7 +464,8 @@ func TestResumeSession(t *testing.T) {
 	})
 
 	t.Run("pi_command_only", func(t *testing.T) {
-		projectDir := t.TempDir()
+		projectDir := filepath.Join(t.TempDir(), "project~1")
+		require.NoError(t, os.Mkdir(projectDir, 0o755))
 		v1Path := filepath.Join(projectDir, "2025-01-01T09-00-00-000Z_parent-uuid.jsonl")
 		remotePath := "/home/user/.pi/agent/sessions/session-1.jsonl"
 		remoteV1Path := "/home/user/.pi/agent/sessions/2025-01-01T09-00-00-000Z_parent-uuid.jsonl"
@@ -547,7 +548,6 @@ func TestResumeSession(t *testing.T) {
 				assert.False(t, resp.Launched, "expected launched=false for command_only")
 				assert.Equal(t, "cd '"+tt.wantCwd+"' && "+tt.wantSuffix, resp.Command)
 				assert.Equal(t, tt.wantCwd, resp.Cwd)
-				assert.NotContains(t, resp.Command, "~")
 			})
 		}
 	})
