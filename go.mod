@@ -14,6 +14,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jellydator/ttlcache/v3 v3.4.1
 	github.com/klauspost/compress v1.20.0
 	github.com/mattn/go-runewidth v0.0.29
 	github.com/mattn/go-sqlite3 v1.14.52

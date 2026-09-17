@@ -3,16 +3,18 @@ package server
 import (
 	"context"
 	"os"
-	"sync"
 	"time"
+
+	"github.com/jellydator/ttlcache/v3"
 
 	"go.kenn.io/agentsview/internal/assets"
 )
 
 const (
-	assetCacheMaxAge     = 7 * 24 * time.Hour
-	assetCacheMaxEntries = 64
-	assetCacheMaxBytes   = int64(64 << 20)
+	assetCacheMaxAge        = 7 * 24 * time.Hour
+	assetCacheMaxEntries    = uint64(64)
+	assetCacheMaxBytes      = uint64(64 << 20)
+	assetCacheSweepInterval = time.Minute
 )
 
 var readAssetFile = os.ReadFile
@@ -24,28 +26,39 @@ type assetCacheEntry struct {
 	contentType   string
 	sourceSize    int64
 	sourceModTime time.Time
-	generatedAt   time.Time
 }
 
+// assetCache keeps recently served asset bytes in memory. Entries expire a
+// fixed time after they are stored, hits do not extend that time, and the
+// cache evicts its least recently used entry when the entry or byte limit
+// would be exceeded.
 type assetCache struct {
-	mu         sync.Mutex
-	entries    map[string]*assetCacheEntry
-	now        func() time.Time
-	maxAge     time.Duration
-	maxEntries int
-	maxBytes   int64
-	bytes      int64
-	notify     chan struct{}
+	items         *ttlcache.Cache[string, *assetCacheEntry]
+	maxBytes      uint64
+	sweepInterval time.Duration
 }
 
 func newAssetCache() *assetCache {
+	return newAssetCacheWithLimits(
+		assetCacheMaxAge, assetCacheMaxEntries, assetCacheMaxBytes,
+	)
+}
+
+func newAssetCacheWithLimits(
+	maxAge time.Duration, maxEntries, maxBytes uint64,
+) *assetCache {
+	cost := func(item ttlcache.CostItem[string, *assetCacheEntry]) uint64 {
+		return uint64(len(item.Value.body))
+	}
 	return &assetCache{
-		entries:    make(map[string]*assetCacheEntry),
-		now:        time.Now,
-		maxAge:     assetCacheMaxAge,
-		maxEntries: assetCacheMaxEntries,
-		maxBytes:   assetCacheMaxBytes,
-		notify:     make(chan struct{}, 1),
+		items: ttlcache.New(
+			ttlcache.WithTTL[string, *assetCacheEntry](maxAge),
+			ttlcache.WithCapacity[string, *assetCacheEntry](maxEntries),
+			ttlcache.WithMaxCost(maxBytes, cost),
+			ttlcache.WithDisableTouchOnHit[string, *assetCacheEntry](),
+		),
+		maxBytes:      maxBytes,
+		sweepInterval: assetCacheSweepInterval,
 	}
 }
 
@@ -79,17 +92,16 @@ func (cache *assetCache) read(
 func (cache *assetCache) get(
 	filename, contentType string, sourceSize int64, sourceModTime time.Time,
 ) ([]byte, bool) {
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-	now := cache.now()
-	cache.expireLocked(now)
-	entry := cache.entries[filename]
-	if entry == nil || entry.contentType != contentType ||
+	item := cache.items.Get(filename)
+	if item == nil {
+		return nil, false
+	}
+	entry := item.Value()
+	if entry.contentType != contentType ||
 		entry.sourceSize != sourceSize ||
 		!entry.sourceModTime.Equal(sourceModTime) {
 		return nil, false
 	}
-	cache.signal()
 	return append([]byte(nil), entry.body...), true
 }
 
@@ -97,113 +109,47 @@ func (cache *assetCache) put(
 	filename, contentType string, body []byte,
 	sourceSize int64, sourceModTime time.Time,
 ) bool {
-	if cache.maxEntries <= 0 || int64(len(body)) > cache.maxBytes {
+	if uint64(len(body)) > cache.maxBytes {
 		return false
 	}
 	ref, err := assets.Reference(contentType, body)
 	if err != nil || ref != "asset://"+filename {
 		return false
 	}
-
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-	now := cache.now()
-	cache.expireLocked(now)
-	if existing := cache.entries[filename]; existing != nil {
-		cache.removeLocked(filename, existing)
-	}
-	for len(cache.entries) >= cache.maxEntries ||
-		cache.bytes+int64(len(body)) > cache.maxBytes {
-		oldestID, oldest := cache.oldestLocked()
-		if oldest == nil {
-			return false
-		}
-		cache.removeLocked(oldestID, oldest)
-	}
-	cache.entries[filename] = &assetCacheEntry{
+	cache.items.Set(filename, &assetCacheEntry{
 		body:          append([]byte(nil), body...),
 		contentType:   contentType,
 		sourceSize:    sourceSize,
 		sourceModTime: sourceModTime,
-		generatedAt:   now,
-	}
-	cache.bytes += int64(len(body))
-	cache.signal()
+	}, ttlcache.DefaultTTL)
 	return true
 }
 
-func (cache *assetCache) expireAndNextWait() (time.Duration, bool) {
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-	now := cache.now()
-	cache.expireLocked(now)
-	var next time.Time
-	for _, entry := range cache.entries {
-		deadline := entry.generatedAt.Add(cache.maxAge)
-		if next.IsZero() || deadline.Before(next) {
-			next = deadline
-		}
-	}
-	if next.IsZero() {
-		return 0, false
-	}
-	return max(next.Sub(now), 0), true
-}
-
-func (cache *assetCache) expireLocked(now time.Time) {
-	for filename, entry := range cache.entries {
-		if !now.Before(entry.generatedAt.Add(cache.maxAge)) {
-			cache.removeLocked(filename, entry)
-		}
-	}
-}
-
+// Run releases expired entries on a fixed sweep interval until ctx is
+// cancelled. Lookups already ignore expired entries, so the sweep only
+// bounds how long expired bytes stay resident.
 func (cache *assetCache) Run(ctx context.Context) {
+	ticker := time.NewTicker(cache.sweepInterval)
+	defer ticker.Stop()
 	for {
-		wait, ok := cache.expireAndNextWait()
-		if !ok {
-			select {
-			case <-ctx.Done():
-				return
-			case <-cache.notify:
-				continue
-			}
-		}
-
-		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
-			timer.Stop()
 			return
-		case <-cache.notify:
-			timer.Stop()
-		case <-timer.C:
+		case <-ticker.C:
+			cache.items.DeleteExpired()
 		}
 	}
 }
 
-func (cache *assetCache) signal() {
-	select {
-	case cache.notify <- struct{}{}:
-	default:
-	}
+func (cache *assetCache) len() int {
+	return cache.items.Len()
 }
 
-func (cache *assetCache) oldestLocked() (string, *assetCacheEntry) {
-	var oldestID string
-	var oldest *assetCacheEntry
-	for filename, entry := range cache.entries {
-		if oldest == nil || entry.generatedAt.Before(oldest.generatedAt) ||
-			entry.generatedAt.Equal(oldest.generatedAt) && filename < oldestID {
-			oldestID, oldest = filename, entry
-		}
-	}
-	return oldestID, oldest
-}
-
-func (cache *assetCache) removeLocked(
-	filename string, entry *assetCacheEntry,
-) {
-	delete(cache.entries, filename)
-	cache.bytes -= int64(len(entry.body))
+func (cache *assetCache) bytes() uint64 {
+	var total uint64
+	cache.items.Range(func(item *ttlcache.Item[string, *assetCacheEntry]) bool {
+		total += uint64(len(item.Value().body))
+		return true
+	})
+	return total
 }
