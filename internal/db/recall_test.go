@@ -339,11 +339,8 @@ func TestOpenRepairsMissingRecallEntrySourceEpisodeIndex(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
-func TestOpenCreatesSearchableRecallFTSWhenRuntimeSupportsFTS4(t *testing.T) {
+func TestOpenCreatesSearchableRecallFTS(t *testing.T) {
 	d := testDB(t)
-	if !d.HasFTS() && !sqliteRuntimeSupportsFTS4(t, d) {
-		t.Skip("no FTS4 or FTS5 support")
-	}
 	ctx := context.Background()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
@@ -372,13 +369,10 @@ func TestOpenCreatesSearchableRecallFTSWhenRuntimeSupportsFTS4(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
-func TestOpenCreatesSearchableRecallEvidenceFTSWhenRuntimeSupportsFTS4(
+func TestOpenCreatesSearchableRecallEvidenceFTS(
 	t *testing.T,
 ) {
 	d := testDB(t)
-	if !d.HasFTS() && !sqliteRuntimeSupportsFTS4(t, d) {
-		t.Skip("no FTS4 or FTS5 support")
-	}
 	ctx := context.Background()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
@@ -416,22 +410,6 @@ func TestOpenCreatesSearchableRecallEvidenceFTSWhenRuntimeSupportsFTS4(
 	assert.Equal(t, 1, count)
 }
 
-func sqliteRuntimeSupportsFTS4(t *testing.T, d *DB) bool {
-	t.Helper()
-	_, err := d.getWriter().Exec(
-		`CREATE VIRTUAL TABLE temp.recall_fts4_probe USING fts4(value)`,
-	)
-	if err != nil {
-		if strings.Contains(err.Error(), "no such module") {
-			return false
-		}
-		require.NoError(t, err, "probe fts4 support")
-	}
-	_, err = d.getWriter().Exec(`DROP TABLE temp.recall_fts4_probe`)
-	require.NoError(t, err, "drop fts4 probe table")
-	return true
-}
-
 func requireRecallFTS(t *testing.T, d *DB) {
 	t.Helper()
 	var count int
@@ -446,19 +424,6 @@ func requireRecallFTS(t *testing.T, d *DB) {
 	_, err = d.getReader().Exec(`SELECT 1 FROM recall_entries_fts LIMIT 1`)
 	if err != nil {
 		t.Skipf("no recall FTS support: %v", err)
-	}
-}
-
-func requireRecallFTS4(t *testing.T, d *DB) {
-	t.Helper()
-	var ddl string
-	err := d.getReader().QueryRow(
-		`SELECT lower(sql) FROM sqlite_master
-		 WHERE type = 'table' AND name = 'recall_entries_fts'`,
-	).Scan(&ddl)
-	require.NoError(t, err, "query recall fts ddl")
-	if !strings.Contains(ddl, "using fts4") {
-		t.Skip("recall FTS table is not FTS4")
 	}
 }
 
@@ -2290,86 +2255,6 @@ func TestListRecallEntryTextCandidatesOrdersByLexicalRank(t *testing.T) {
 	assert.Equal(t, "partial", candidates[1].ID)
 }
 
-func TestListRecallEntryTextCandidatesFallsBackToLikeForFTS4SubstringMatch(t *testing.T) {
-	d := testDB(t)
-	requireRecallFTS(t, d)
-	requireRecallFTS4(t, d)
-	ctx := context.Background()
-	insertSession(t, d, "s1", "test-agent", func(s *Session) {
-		s.Agent = "test-agent"
-	})
-	_, err := d.InsertRecallEntry(RecallEntry{
-		ID:              "substring-recall",
-		Type:            "fact",
-		Scope:           "project",
-		Status:          "accepted",
-		Title:           "Portal substring clue",
-		Body:            "The decisive clue was abcdefghij in the portal state.",
-		Project:         "test-agent",
-		Agent:           "test-agent",
-		SourceSessionID: "s1",
-	})
-	require.NoError(t, err)
-
-	candidates, err := d.ListRecallEntryTextCandidates(ctx, RecallQuery{
-		Text:    "cdefg",
-		Project: "test-agent",
-		Agent:   "test-agent",
-		Limit:   10,
-	})
-
-	require.NoError(t, err)
-	require.NotEmpty(t, candidates)
-	assert.Equal(t, "substring-recall", candidates[0].ID)
-}
-
-func TestListRecallEntryTextCandidatesUsesFTS4RowIDMatchForDirectText(t *testing.T) {
-	d := testDB(t)
-	requireRecallFTS(t, d)
-	requireRecallFTS4(t, d)
-	ctx := context.Background()
-	insertSession(t, d, "s1", "test-agent", func(s *Session) {
-		s.Agent = "test-agent"
-	})
-	_, err := d.InsertRecallEntry(RecallEntry{
-		ID:              "fts4-direct-recall",
-		Type:            "fact",
-		Scope:           "project",
-		Status:          "accepted",
-		Title:           "Portal menu finding",
-		Body:            "The dropdown was inspected.",
-		Project:         "test-agent",
-		Agent:           "test-agent",
-		SourceSessionID: "s1",
-	})
-	require.NoError(t, err)
-	_, err = d.getWriter().ExecContext(ctx, `
-		UPDATE recall_entries_fts
-		SET body = 'The decisive clue was heliotrope parser overflow.'
-		WHERE rowid = (SELECT rowid FROM recall_entries WHERE id = ?)`,
-		"fts4-direct-recall",
-	)
-	require.NoError(t, err)
-
-	candidates, err := d.ListRecallEntryTextCandidates(ctx, RecallQuery{
-		Text:    "heliotrope parser overflow",
-		Project: "test-agent",
-		Agent:   "test-agent",
-		Limit:   10,
-	})
-
-	require.NoError(t, err)
-	require.NotEmpty(t, candidates)
-	assert.Equal(t, "fts4-direct-recall", candidates[0].ID)
-}
-
-func TestRecallEvidenceFTSKindDetectsFTS4(t *testing.T) {
-	d := testDB(t)
-	requireRecallFTS4(t, d)
-
-	assert.Equal(t, "fts4", d.recallEvidenceFTSKind(context.Background()))
-}
-
 func TestRecallQueryTermsRetainsShortCriticalUITerms(t *testing.T) {
 	got := recallQueryTerms(
 		`I am working with our internal ops portal. On the Incidents list page, ` +
@@ -3051,9 +2936,6 @@ func TestListRecallEvidenceHydratesMoreThanSQLiteBindLimit(t *testing.T) {
 func TestVacuumPreservesRecallEntriesFTSSearchable(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
-	if d.recallFTSKind(ctx) != "fts5" {
-		t.Skip("requires fts5 runtime support")
-	}
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
@@ -3080,13 +2962,13 @@ func TestVacuumPreservesRecallEntriesFTSSearchable(t *testing.T) {
 	q := RecallQuery{Text: "heliotrope"}
 	terms := recallQueryTerms(q.Text)
 
-	pre, err := d.listRecallFTS5Candidates(ctx, q, terms)
+	pre, err := d.listRecallFTSCandidates(ctx, q, terms)
 	require.NoError(t, err, "fts5 search before vacuum")
 	require.Len(t, pre, 1, "fts join finds survivor before vacuum")
 
 	require.NoError(t, d.Vacuum(), "vacuum")
 
-	post, err := d.listRecallFTS5Candidates(ctx, q, terms)
+	post, err := d.listRecallFTSCandidates(ctx, q, terms)
 	require.NoError(t, err, "fts5 search after vacuum")
 	require.Len(t, post, 1, "fts join still finds survivor after vacuum")
 	assert.Equal(t, "m3", post[0].ID)

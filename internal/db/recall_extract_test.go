@@ -1664,6 +1664,7 @@ func TestActivateExtractGenerationSwitchesServedEntries(t *testing.T) {
 		entry("e-old", "fp-old", "archived", "unreviewed_auto"),
 		entry("e-new-staged", "fp-new", "archived", "unreviewed_auto"),
 		entry("e-reviewed", "fp-old", "accepted", "human_reviewed"),
+		entry("e-rejected", "fp-old", "archived", "human_rejected"),
 	})
 	require.NoError(t, err)
 	require.NoError(t, d.ActivateExtractGeneration(
@@ -1684,6 +1685,8 @@ func TestActivateExtractGenerationSwitchesServedEntries(t *testing.T) {
 		"activation must stop serving the retired generation's entries")
 	assert.Equal(t, "accepted", status("e-reviewed"),
 		"human-reviewed entries are not lifecycle-managed")
+	assert.Equal(t, "archived", status("e-rejected"),
+		"human-rejected entries are not lifecycle-managed")
 }
 
 func TestRetireExtractGenerationArchivesServedEntries(t *testing.T) {
@@ -1710,6 +1713,75 @@ func TestRetireExtractGenerationArchivesServedEntries(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, "archived", got.Status,
 		"retiring a generation must stop serving its entries")
+}
+
+func TestActivateExtractGenerationWithOnlyHumanApprovedEntries(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	seedCoveredExtractSession(t, d, "sess-1", "fp-a")
+	seedServableExtractEntry(t, d, "fp-a", "sess-1", "e-approved")
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+	_, err = d.ReviewRecallEntry(ctx, "e-approved", RecallReviewApprove)
+	require.NoError(t, err)
+	require.NoError(t, d.RetireExtractGeneration(ctx, "fp-a", true))
+
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+	assert.Equal(t, ExtractGenerationActive, generationStates(t, d)["fp-a"])
+	entry, err := d.GetRecallEntry(ctx, "e-approved")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, "accepted", entry.Status)
+	assert.Equal(t, "human_reviewed", entry.ReviewState)
+}
+
+func TestActivateExtractGenerationIgnoresRejectedEntriesInFailedCoverage(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
+		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
+	})
+	require.NoError(t, err)
+	seedCoveredExtractSession(t, d, "sess-ok", "fp-a")
+	seedServableExtractEntry(t, d, "fp-a", "sess-ok", "e-ok")
+	seedCoveredExtractSession(t, d, "sess-fail", "fp-a")
+	seedServableExtractEntry(t, d, "fp-a", "sess-fail", "e-rejected")
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+	_, err = d.ReviewRecallEntry(ctx, "e-rejected", RecallReviewArchive)
+	require.NoError(t, err)
+	require.NoError(t, d.RetireExtractGeneration(ctx, "fp-a", true))
+
+	// A revisit preserves the rejected entry, then fails before producing
+	// any new entries. A later session write makes its coverage stale.
+	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
+		SessionID: "sess-fail", Fingerprint: "fp-a",
+		ContentDigest: "changed", UnitsTotal: 2, StampedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID: "sess-fail", Fingerprint: "fp-a",
+		ExpectedDigest: "changed", ExpectedCursor: 0, LastError: "unit failed",
+	}))
+	require.NoError(t, d.BumpLocalModifiedAt("sess-fail"))
+
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+	assert.Equal(t, ExtractGenerationActive, generationStates(t, d)["fp-a"])
+	entry, err := d.GetRecallEntry(ctx, "e-rejected")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, "archived", entry.Status)
+	assert.Equal(t, "human_rejected", entry.ReviewState)
+	servable, err := d.GetRecallEntry(ctx, "e-ok")
+	require.NoError(t, err)
+	require.NotNil(t, servable)
+	assert.Equal(t, "accepted", servable.Status)
 }
 
 func TestExtractCandidatesRequireScanVersions(t *testing.T) {
@@ -2839,22 +2911,40 @@ func TestActivateExtractGenerationSkipsSupersededEntries(t *testing.T) {
 		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 	})
 	require.NoError(t, err)
-	seedCoveredExtractSession(t, d, "sess-1", "fp-a")
+	seedCoveredExtractSession(t, d, "sess-live", "fp-a")
+	seedCoveredExtractSession(t, d, "sess-super", "fp-a")
 	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
 		{
 			ID: "e-live", Type: "fact", ReviewState: "unreviewed_auto",
 			Status: "archived", Title: "t", Body: "b",
-			SourceSessionID: "sess-1", SourceRunID: "fp-a", ProvenanceOK: true,
+			SourceSessionID: "sess-live", SourceRunID: "fp-a", ProvenanceOK: true,
 		},
 		{
 			ID: "e-super", Type: "fact", ReviewState: "unreviewed_auto",
 			Status: "archived", Title: "old", Body: "old",
-			SourceSessionID: "sess-1", SourceRunID: "fp-a", ProvenanceOK: true,
-			SupersededByEntryID: "e-repl",
+			SourceSessionID: "sess-super", SourceRunID: "fp-a", ProvenanceOK: true,
 		},
 	})
 	require.NoError(t, err)
 
+	require.NoError(t, d.ActivateExtractGeneration(
+		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
+	_, err = d.SupersedeRecallEntry(ctx, "e-super", RecallEntry{
+		ID: "e-repl", Type: "fact", ReviewState: "human_reviewed",
+		Status: "accepted", Title: "Replacement", Body: "Updated fact",
+		SourceSessionID: "sess-super", ProvenanceOK: true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.RetireExtractGeneration(ctx, "fp-a", true))
+
+	// A failed revisit leaves the superseded entry intact. It cannot be
+	// promoted, even when a later session write makes the coverage stale.
+	require.NoError(t, d.MarkExtractProgressFailed(ctx, ExtractFailure{
+		SessionID: "sess-super", Fingerprint: "fp-a",
+		ExpectedDigest: "dg", ExpectedCursor: 0,
+		LastError: "session read failed", Reopen: true,
+	}))
+	require.NoError(t, d.BumpLocalModifiedAt("sess-super"))
 	require.NoError(t, d.ActivateExtractGeneration(
 		ctx, "fp-a", []string{"rules-v1"}, time.Now()))
 
@@ -2868,6 +2958,8 @@ func TestActivateExtractGenerationSkipsSupersededEntries(t *testing.T) {
 	require.NotNil(t, super)
 	assert.Equal(t, "archived", super.Status,
 		"a superseded entry must not be promoted back into service")
+	assert.Equal(t, "unreviewed_auto", super.ReviewState)
+	assert.Equal(t, "e-repl", super.SupersededByEntryID)
 }
 
 // TestActivateExtractGenerationRefusesEmptyPromotion pins the replacement
@@ -3061,6 +3153,7 @@ func TestUpsertExtractProgressDigestChangeRemovesEntriesAtomically(t *testing.T)
 	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{
 		machineEntry("e-1", "unreviewed_auto"),
 		machineEntry("e-human", "human_reviewed"),
+		machineEntry("e-rejected", "human_rejected"),
 	})
 	require.NoError(t, err)
 
@@ -3090,6 +3183,10 @@ func TestUpsertExtractProgressDigestChangeRemovesEntriesAtomically(t *testing.T)
 	human, err := d.GetRecallEntry(ctx, "e-human")
 	require.NoError(t, err)
 	require.NotNil(t, human, "human-touched entries are never machine-deleted")
+	rejected, err := d.GetRecallEntry(ctx, "e-rejected")
+	require.NoError(t, err)
+	require.NotNil(t, rejected,
+		"human-rejected entries are never machine-deleted")
 
 	// A refused progress write rolls the entry delete back with it.
 	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{

@@ -392,9 +392,6 @@ func TestCompactRefusedWhileWriterBarrierHeld(t *testing.T) {
 func TestCompactPreservesRecallFTSSearchable(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
-	if d.recallFTSKind(ctx) != "fts5" {
-		t.Skip("requires fts5 runtime support")
-	}
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
@@ -419,14 +416,14 @@ func TestCompactPreservesRecallFTSSearchable(t *testing.T) {
 
 	q := RecallQuery{Text: "heliotrope"}
 	terms := recallQueryTerms(q.Text)
-	pre, err := d.listRecallFTS5Candidates(ctx, q, terms)
+	pre, err := d.listRecallFTSCandidates(ctx, q, terms)
 	require.NoError(t, err, "fts5 search before compact")
 	require.Len(t, pre, 1, "fts join finds survivor before compact")
 
 	_, err = d.Compact(ctx, CompactOptions{StagingDir: t.TempDir()})
 	require.NoError(t, err, "compact")
 
-	post, err := d.listRecallFTS5Candidates(ctx, q, terms)
+	post, err := d.listRecallFTSCandidates(ctx, q, terms)
 	require.NoError(t, err, "fts5 search after compact")
 	require.Len(t, post, 1, "fts join still finds survivor after compact")
 	assert.Equal(t, "m3", post[0].ID)
