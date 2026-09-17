@@ -709,6 +709,7 @@ func TestAllSessionExportMaterializesActivitySort(t *testing.T) {
 		query string
 		args  []any
 	}
+	// Observe executed SQL so the plan assertions cannot drift from production.
 	observe := func(query string, args []any) {
 		observedQueries = append(observedQueries, struct {
 			query string
