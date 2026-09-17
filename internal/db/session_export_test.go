@@ -561,7 +561,7 @@ func TestAllSessionExportIdentityUsesRowSnapshot(t *testing.T) {
 	_, err := d.getWriter().Exec(`UPDATE sessions
 		SET transcript_revision = '7', local_modified_at = '2026-05-01T10:01:00Z'`)
 	require.NoError(t, err)
-	pages, err := d.exportAllSessionSummaries(ctx, SessionExportOptions{Limit: 1}, func(page int) error {
+	pages, err := d.exportAllSessionSummaries(ctx, SessionExportOptions{Limit: 1}, func(page int, _ *sql.Tx) error {
 		if page == 1 {
 			if _, err := d.getWriter().Exec(`UPDATE sessions
 				SET transcript_revision = '8', local_modified_at = '2026-05-01T10:02:00Z'`); err != nil {
@@ -593,6 +593,350 @@ func TestAllSessionExportIdentityUsesRowSnapshot(t *testing.T) {
 		require.NotNil(t, row.LocalModifiedAt)
 		assert.Equal(t, "2026-05-01T10:02:00Z", *row.LocalModifiedAt)
 	}
+}
+
+func TestAllSessionExportMaterializesActivitySort(t *testing.T) {
+	d := testSessionExportDB(t)
+	ctx := context.Background()
+	d.rawReader().SetMaxOpenConns(1)
+	d.rawReader().SetMaxIdleConns(1)
+
+	project := "activity-cache"
+	rootID := "activity-a"
+	insertExportSession(t, d, Session{
+		ID:        "activity-a",
+		Project:   project,
+		StartedAt: Ptr("2026-05-01T09:00:00Z"),
+		EndedAt:   Ptr("2026-05-01T10:00:00-04:00"),
+	})
+	insertExportSession(t, d, Session{
+		ID:        "activity-b",
+		Project:   project,
+		StartedAt: Ptr("2026-05-01T09:00:00Z"),
+		EndedAt:   Ptr("2026-05-01T14:00:00Z"),
+	})
+	insertExportSession(t, d, Session{
+		ID:        "activity-missing-ended",
+		Project:   project,
+		StartedAt: Ptr("2026-05-01T09:00:00Z"),
+	})
+	insertMessages(t, d, Message{
+		SessionID: "activity-missing-ended",
+		Ordinal:   0,
+		Role:      "user",
+		Content:   "activity",
+		Timestamp: "2026-05-01T14:00:00+00:00",
+	})
+
+	for _, session := range []Session{
+		{
+			ID:               "child-subagent",
+			Project:          project,
+			StartedAt:        Ptr("2026-05-01T12:00:00Z"),
+			EndedAt:          Ptr("2026-05-01T13:00:00Z"),
+			ParentSessionID:  &rootID,
+			RelationshipType: "subagent",
+		},
+		{
+			ID:               "child-fork",
+			Project:          project,
+			StartedAt:        Ptr("2026-05-01T11:00:00Z"),
+			EndedAt:          Ptr("2026-05-01T12:00:00Z"),
+			ParentSessionID:  &rootID,
+			RelationshipType: "fork",
+		},
+		{
+			ID:               "child-continuation",
+			Project:          project,
+			StartedAt:        Ptr("2026-05-01T10:00:00Z"),
+			EndedAt:          Ptr("2026-05-01T11:00:00Z"),
+			ParentSessionID:  &rootID,
+			RelationshipType: "continuation",
+		},
+		{
+			ID:              "imported-migrated",
+			Project:         project,
+			StartedAt:       Ptr("2026-05-01T12:00:00Z"),
+			EndedAt:         Ptr("2026-05-01T12:30:00Z"),
+			SourceSessionID: "remote-session",
+			SourceVersion:   "remote-v1",
+		},
+		{
+			ID:        "source-missing",
+			Project:   project,
+			StartedAt: Ptr("2026-05-01T10:00:00Z"),
+			EndedAt:   Ptr("2026-05-01T11:30:00Z"),
+		},
+		{
+			ID:        "trashed",
+			Project:   project,
+			StartedAt: Ptr("2026-05-01T15:00:00Z"),
+			EndedAt:   Ptr("2026-05-01T16:00:00Z"),
+		},
+		{
+			ID:        "tombstoned",
+			Project:   project,
+			StartedAt: Ptr("2026-05-01T17:00:00Z"),
+			EndedAt:   Ptr("2026-05-01T18:00:00Z"),
+		},
+	} {
+		insertExportSession(t, d, session)
+	}
+	require.NoError(t, d.SoftDeleteSession("trashed"), "soft-delete trashed session")
+	require.NoError(t, d.DeleteSession("tombstoned"), "tombstone session")
+	_, err := d.getWriter().Exec(
+		`UPDATE sessions SET source_missing_at = ? WHERE id = ?`,
+		"2026-05-01T19:00:00Z", "source-missing",
+	)
+	require.NoError(t, err, "mark source-missing session")
+
+	filter := SessionFilter{Project: project, IncludeChildren: true}
+	expectedIDs := []string{
+		"activity-a",
+		"activity-b",
+		"activity-missing-ended",
+		"child-subagent",
+		"imported-migrated",
+		"child-fork",
+		"source-missing",
+		"child-continuation",
+	}
+	where, args := buildSessionExportFilterForAlias(filter, "sessions")
+	source := sessionExportActivitySource{materialized: true}
+
+	var tableSQL, indexSQL string
+	var populationCounts []int
+	var watermarkQuery, firstPageQuery, laterPageQuery string
+	var watermarkPlan, firstPagePlan, laterPagePlan []string
+	explainPlan := func(tx *sql.Tx, query string, queryArgs []any) []string {
+		rows, err := tx.QueryContext(ctx, "EXPLAIN QUERY PLAN "+query, queryArgs...)
+		require.NoError(t, err, "explain session export query")
+		defer rows.Close()
+		var details []string
+		for rows.Next() {
+			var id, parent, notUsed int
+			var detail string
+			require.NoError(t, rows.Scan(&id, &parent, &notUsed, &detail),
+				"scan session export query plan")
+			details = append(details, detail)
+		}
+		require.NoError(t, rows.Err(), "iterate session export query plan")
+		return details
+	}
+	assertNoActivityTable := func() {
+		var count int
+		require.NoError(t, d.rawReader().QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM sqlite_temp_master
+			 WHERE type = 'table' AND name = ?`, sessionExportActivityTable,
+		).Scan(&count), "inspect reader temp schema after export")
+		assert.Zero(t, count, "activity table must not survive the export")
+	}
+
+	pages, err := d.exportAllSessionSummaries(ctx, SessionExportOptions{
+		Filter: filter,
+		Limit:  1,
+	}, func(page int, tx *sql.Tx) error {
+		var currentTableSQL, currentIndexSQL string
+		require.NoError(t, tx.QueryRowContext(ctx,
+			`SELECT sql FROM sqlite_temp_master
+			 WHERE type = 'table' AND name = ?`, sessionExportActivityTable,
+		).Scan(&currentTableSQL), "inspect activity table")
+		require.NoError(t, tx.QueryRowContext(ctx,
+			`SELECT sql FROM sqlite_temp_master
+			 WHERE type = 'index' AND name = ?`, sessionExportActivityIndex,
+		).Scan(&currentIndexSQL), "inspect activity index")
+		var population int
+		require.NoError(t, tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM `+sessionExportActivityTable,
+		).Scan(&population), "count materialized activity rows")
+		populationCounts = append(populationCounts, population)
+		if page == 1 {
+			tableSQL = currentTableSQL
+			indexSQL = currentIndexSQL
+			var watermarkArgs []any
+			watermarkQuery, watermarkArgs = sessionExportWatermarkQuery(
+				source, where, args,
+			)
+			watermarkPlan = explainPlan(tx, watermarkQuery, watermarkArgs)
+
+			var firstID, firstActivity string
+			var firstSort float64
+			require.NoError(t, tx.QueryRowContext(ctx,
+				`SELECT id, last_activity_at, last_activity_sort
+				 FROM `+sessionExportActivityTable+`
+				 INDEXED BY `+sessionExportActivityIndex+`
+				 ORDER BY last_activity_sort DESC, id ASC LIMIT 1`,
+			).Scan(&firstID, &firstActivity, &firstSort),
+				"read first materialized activity row")
+			var firstPageArgs []any
+			firstPageQuery, firstPageArgs = sessionExportRowsQuery(
+				source, where, args, firstSort,
+				sessionExportCursorPayload{}, 1,
+			)
+			firstPagePlan = explainPlan(tx, firstPageQuery, firstPageArgs)
+			var laterPageArgs []any
+			laterPageQuery, laterPageArgs = sessionExportRowsQuery(
+				source, where, args, firstSort,
+				sessionExportCursorPayload{
+					LastActivityAt:   firstActivity,
+					LastActivitySort: firstSort,
+					LastID:           firstID,
+				}, 1,
+			)
+			laterPagePlan = explainPlan(tx, laterPageQuery, laterPageArgs)
+		}
+		require.Equal(t, len(expectedIDs), population,
+			"one populated activity table must serve every page")
+		require.Equal(t, tableSQL, currentTableSQL,
+			"all pages must use one temp table")
+		require.Equal(t, indexSQL, currentIndexSQL,
+			"all pages must use one temp index")
+		return nil
+	})
+	require.NoError(t, err, "materialized all-session export")
+	assertNoActivityTable()
+	require.Len(t, pages, len(expectedIDs), "one page per session")
+	var gotIDs []string
+	var gotActivities []string
+	for _, page := range pages {
+		gotIDs = append(gotIDs, sessionExportRowIDs(page.Rows)...)
+		for _, row := range page.Rows {
+			gotActivities = append(gotActivities, row.LastActivityAt)
+		}
+	}
+	assert.Equal(t, expectedIDs, gotIDs)
+	assert.Equal(t, []string{
+		"2026-05-01T10:00:00-04:00",
+		"2026-05-01T14:00:00Z",
+		"2026-05-01T14:00:00+00:00",
+		"2026-05-01T13:00:00Z",
+		"2026-05-01T12:30:00Z",
+		"2026-05-01T12:00:00Z",
+		"2026-05-01T11:30:00Z",
+		"2026-05-01T11:00:00Z",
+	}, gotActivities)
+	assert.Equal(t, []int{len(expectedIDs)}, slices.Compact(populationCounts))
+	require.Contains(t, tableSQL, sessionExportActivityTable)
+	require.Contains(t, tableSQL, "last_activity_at")
+	require.Contains(t, tableSQL, "last_activity_sort")
+	require.Contains(t, indexSQL, sessionExportActivityIndex)
+	require.Contains(t, indexSQL, "last_activity_sort DESC, id ASC")
+	for _, query := range []string{
+		watermarkQuery, firstPageQuery, laterPageQuery,
+	} {
+		require.Contains(t, query, sessionExportActivityTable)
+		require.Contains(t, query, sessionExportActivityIndex)
+		require.NotContains(t, query, sessionExportLastActivityExpr())
+		require.NotContains(t, query, sessionExportLastActivitySortExpr())
+	}
+	planText := func(details []string) string {
+		return strings.ToLower(strings.Join(details, " | "))
+	}
+	for _, plan := range [][]string{
+		watermarkPlan, firstPagePlan, laterPagePlan,
+	} {
+		require.Contains(t, planText(plan),
+			strings.ToLower("USING INDEX "+sessionExportActivityIndex),
+			"materialized query must use the activity sort index")
+	}
+	t.Logf("activity table SQL: %s", strings.Join(strings.Fields(tableSQL), " "))
+	t.Logf("activity index SQL: %s", strings.Join(strings.Fields(indexSQL), " "))
+	t.Logf("watermark SQL: %s", strings.Join(strings.Fields(watermarkQuery), " "))
+	t.Logf("watermark plan: %s", strings.Join(watermarkPlan, " | "))
+	t.Logf("first page SQL: %s", strings.Join(strings.Fields(firstPageQuery), " "))
+	t.Logf("first page plan: %s", strings.Join(firstPagePlan, " | "))
+	t.Logf("later page SQL: %s", strings.Join(strings.Fields(laterPageQuery), " "))
+	t.Logf("later page plan: %s", strings.Join(laterPagePlan, " | "))
+
+	expression, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: filter,
+		Limit:  len(expectedIDs),
+	})
+	require.NoError(t, err, "expression-based single-page export")
+	assertNoActivityTable()
+	assert.Equal(t, expectedIDs, sessionExportRowIDs(expression.Rows))
+	for i, row := range expression.Rows {
+		assert.Equal(t, gotActivities[i], row.LastActivityAt)
+	}
+
+	firstCursor := pages[0].NextCursor
+	require.NotEmpty(t, firstCursor, "first page cursor")
+	resumed, err := d.ExportAllSessionSummaries(ctx, SessionExportOptions{
+		Cursor:          firstCursor,
+		UseCursorFilter: true,
+		Limit:           1,
+	})
+	require.NoError(t, err, "cursor-owned all-session export")
+	assertNoActivityTable()
+	var resumedIDs []string
+	for _, page := range resumed {
+		resumedIDs = append(resumedIDs, sessionExportRowIDs(page.Rows)...)
+	}
+	assert.Equal(t, expectedIDs[1:], resumedIDs)
+
+	filteredPages, err := d.exportAllSessionSummaries(ctx, SessionExportOptions{
+		Filter: filter,
+		Limit:  1,
+	}, func(page int, tx *sql.Tx) error {
+		if page == 1 {
+			var count int
+			require.NoError(t, tx.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM `+sessionExportActivityTable,
+			).Scan(&count), "count filtered activity rows")
+			require.Equal(t, len(expectedIDs), count)
+		}
+		return nil
+	})
+	require.NoError(t, err, "filtered all-session export")
+	assertNoActivityTable()
+	assert.Equal(t, expectedIDs, func() []string {
+		var ids []string
+		for _, page := range filteredPages {
+			ids = append(ids, sessionExportRowIDs(page.Rows)...)
+		}
+		return ids
+	}())
+
+	emptyPages, err := d.exportAllSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "no-such-project"},
+		Limit:  1,
+	}, func(page int, tx *sql.Tx) error {
+		require.Equal(t, 1, page)
+		var count int
+		require.NoError(t, tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM `+sessionExportActivityTable,
+		).Scan(&count), "count empty activity rows")
+		assert.Zero(t, count)
+		return nil
+	})
+	require.NoError(t, err, "empty all-session export")
+	assertNoActivityTable()
+	require.Len(t, emptyPages, 1)
+	assert.Empty(t, emptyPages[0].Rows)
+
+	callbackErr := errors.New("after-page callback failed")
+	_, err = d.exportAllSessionSummaries(ctx, SessionExportOptions{
+		Filter: filter,
+		Limit:  1,
+	}, func(int, *sql.Tx) error {
+		return callbackErr
+	})
+	require.ErrorIs(t, err, callbackErr)
+	assertNoActivityTable()
+
+	cancelCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	_, err = d.exportAllSessionSummaries(cancelCtx, SessionExportOptions{
+		Filter: filter,
+		Limit:  1,
+	}, func(page int, _ *sql.Tx) error {
+		if page == 1 {
+			cancel()
+		}
+		return nil
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	assertNoActivityTable()
 }
 
 func TestSessionSummaryExportUsesMessageActivityForOpenSessions(t *testing.T) {
@@ -1526,7 +1870,7 @@ func TestAllSessionExportKeepsOnePricingSnapshotAcrossPages(t *testing.T) {
 
 	pages, err := d.exportAllSessionSummaries(ctx, SessionExportOptions{
 		Limit: 1, Filter: SessionFilter{IncludeChildren: true},
-	}, func(page int) error {
+	}, func(page int, _ *sql.Tx) error {
 		if page != 1 {
 			return nil
 		}
