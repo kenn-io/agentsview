@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 
@@ -22,7 +21,7 @@ func newRawSyncCleanUploadsCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := runRawSyncCleanUploadsCLI(cmd.Context()); err != nil {
+			if err := runRawSyncCleanUploadsCLI(); err != nil {
 				return fmt.Errorf("raw-sync clean-uploads: %w", err)
 			}
 			_, err := fmt.Fprintln(cmd.OutOrStdout(), rawSyncCleanUploadsCompletion)
@@ -31,7 +30,7 @@ func newRawSyncCleanUploadsCommand() *cobra.Command {
 	}
 }
 
-func runRawSyncCleanUploads(ctx context.Context) (err error) {
+func runRawSyncCleanUploads() (err error) {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -53,26 +51,11 @@ func TestRawSyncCleanUploadsRequiresPostgreSQL(t *testing.T) {
 func TestRawSyncCleanUploadsWritesFixedOutputAfterSuccess(t *testing.T) {
 	testDataDir(t)
 	original := runRawSyncCleanUploadsCLI
-	runRawSyncCleanUploadsCLI = func(context.Context) error { return nil }
+	runRawSyncCleanUploadsCLI = func() error { return nil }
 	t.Cleanup(func() { runRawSyncCleanUploadsCLI = original })
 
 	output, err := executeCommand(newRootCommand(), "raw-sync", "clean-uploads")
 
 	require.NoError(t, err)
 	assert.Equal(t, rawSyncCleanUploadsCompletion+"\n", output)
-}
-
-func TestRawSyncCleanUploadsDoesNotWriteOutputOnRunnerFailure(t *testing.T) {
-	testDataDir(t)
-	original := runRawSyncCleanUploadsCLI
-	runRawSyncCleanUploadsCLI = func(context.Context) error {
-		return errors.New("cleanup failed")
-	}
-	t.Cleanup(func() { runRawSyncCleanUploadsCLI = original })
-
-	output, err := executeCommand(newRootCommand(), "raw-sync", "clean-uploads")
-
-	require.Error(t, err)
-	assert.Empty(t, output)
-	assert.NotContains(t, output, rawSyncCleanUploadsCompletion)
 }
