@@ -95,6 +95,21 @@ func TestRawSyncCleanUploadsFailures(t *testing.T) {
 	assert.NotContains(t, err.Error(), rawSyncCleanUploadsCompletion)
 }
 
+func TestRawSyncCleanUploadsRequiresWritableSchema(t *testing.T) {
+	pg, dataDir, pgURL := newRawSyncCleanUploadsPG(t)
+	configureRawSyncCleanUploads(t, dataDir, pgURL)
+	_, err := pg.ExecContext(t.Context(), "DROP TABLE raw_upload_sessions")
+	require.NoError(t, err)
+
+	output, err := executeCommand(newRootCommand(), "raw-sync", "clean-uploads")
+
+	require.Error(t, err)
+	assert.Empty(t, output)
+	assert.Contains(t, err.Error(), "raw-sync schema is not writable")
+	_, statErr := os.Stat(filepath.Join(dataDir, "raw-upload-spool"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
 func newRawSyncCleanUploadsPG(t *testing.T) (*sql.DB, string, string) {
 	t.Helper()
 	pgURL := os.Getenv("TEST_PG_URL")

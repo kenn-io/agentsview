@@ -80,7 +80,9 @@ pass uses the existing bound of up to 128 rows per SQL batch and 128 spool
 entries per directory scan. The command starts a fresh spool cursor on every
 invocation. The long-running server keeps its cursor between the existing
 startup pass and its 15-minute cleanup passes. The command prints `Raw upload
-cleanup pass completed.` only after the pass succeeds.
+cleanup pass completed.` only after the pass succeeds. The PostgreSQL target
+must have the provisioned raw-sync schema and its write privileges. The command
+checks that capability before creating the upload spool.
 
 ______________________________________________________________________
 

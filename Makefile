@@ -413,7 +413,7 @@ test-postgres: pricing-snapshot ensure-embed-dir postgres-up
 
 # PostgreSQL integration tests for CI (postgres already running as service)
 test-postgres-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
+	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./cmd/agentsview ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
 
 # S3 discovery integration tests. testcontainers starts and tears down a
 # rustfs (S3-compatible) container automatically, so only a working Docker

@@ -102,8 +102,9 @@ The command uses the effective PostgreSQL target and data directory paired with
 `pg serve`, so an operator can run it while the server is stopped or when
 cleanup should happen immediately. A short-lived command starts a fresh spool
 cursor, so repeat invocations may revisit entries preserved by an earlier pass.
-It reports `Raw upload cleanup pass completed.` only after the cleanup store
-closes successfully.
+It checks that the target has the provisioned raw-sync schema and write
+privileges before creating the upload spool. It reports `Raw upload cleanup
+pass completed.` only after the cleanup store closes successfully.
 
 ## HTTP control plane
 
