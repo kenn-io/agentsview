@@ -480,11 +480,12 @@ func (p *pendingWatchBatch) takeLifecycleTokens() []backendLifecycleToken {
 }
 
 type watchEventSink struct {
-	mu        sync.Mutex
-	pending   *pendingWatchBatch
-	handoff   atomic.Pointer[pendingWatchBatch]
-	overflows boundedCounter
-	wake      chan struct{}
+	mu            sync.Mutex
+	pending       *pendingWatchBatch
+	handoff       atomic.Pointer[pendingWatchBatch]
+	overflows     boundedCounter
+	wake          chan struct{}
+	immediateWake atomic.Bool
 }
 
 type boundedCounter struct {
@@ -555,7 +556,7 @@ func (s *watchEventSink) RetainAuthoritative(token backendLifecycleToken) {
 	batch.AddFullSync()
 	batch.AddLifecycle(token)
 	s.publishHandoff(batch)
-	s.signal()
+	s.signalImmediate()
 }
 
 func (s *watchEventSink) Empty() bool {
@@ -622,6 +623,15 @@ func (s *watchEventSink) signal() {
 	case s.wake <- struct{}{}:
 	default:
 	}
+}
+
+func (s *watchEventSink) signalImmediate() {
+	s.immediateWake.Store(true)
+	s.signal()
+}
+
+func (s *watchEventSink) takeImmediateWake() bool {
+	return s.immediateWake.Swap(false)
 }
 
 // Watcher schedules backend changes into serialized callbacks with short-burst
@@ -993,6 +1003,9 @@ func (w *Watcher) start(openDispatch bool) error {
 		w.dispatchEnabled.Store(true)
 	}
 	w.lifecycleMu.Unlock()
+	if openDispatch {
+		w.eventSink.signalImmediate()
+	}
 	return nil
 }
 
@@ -1011,7 +1024,7 @@ func (w *Watcher) QueueRetryBatch(batch WatchBatch) {
 		return
 	}
 	w.eventSink.RetainRetry(batch)
-	w.eventSink.signal()
+	w.eventSink.signalImmediate()
 }
 
 // OpenDispatch transitions a collecting watcher to callback dispatch. It is
@@ -1024,7 +1037,7 @@ func (w *Watcher) OpenDispatch() {
 	}
 	w.lifecycle = watcherDispatching
 	w.dispatchEnabled.Store(true)
-	w.eventSink.signal()
+	w.eventSink.signalImmediate()
 }
 
 // Stop stops the watcher and waits for it to finish.
@@ -1180,15 +1193,18 @@ func (w *Watcher) loop() {
 			schedule()
 
 		case <-w.eventSink.wake:
+			immediate := w.eventSink.takeImmediateWake()
 			if w.eventSink.Empty() {
 				continue
 			}
-			if firstPendingAt.IsZero() {
-				firstPendingAt = time.Now()
-			}
-			pendingDelay = 0
-			if timerC != nil {
-				stopTimer()
+			if immediate || timerC == nil {
+				if firstPendingAt.IsZero() {
+					firstPendingAt = time.Now()
+				}
+				pendingDelay = 0
+				if immediate && timerC != nil {
+					stopTimer()
+				}
 			}
 			schedule()
 

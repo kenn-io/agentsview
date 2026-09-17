@@ -1534,6 +1534,47 @@ func TestWatcherFailedRetryBackoffIsIndependentOfBatchPathCount(t *testing.T) {
 	}
 }
 
+func TestWatcherOrdinaryWakeDoesNotClearRetainedRetryBackoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		backend := newFakeWatchBackend()
+		starts := make(chan time.Time, 6)
+		var watcher *Watcher
+		attempt := 0
+		w, err := newWatcherWithBackend(
+			0, 20*time.Millisecond,
+			func(_ context.Context, _ WatchBatch) error {
+				attempt++
+				starts <- time.Now()
+				if attempt == 1 {
+					go func() {
+						time.Sleep(time.Millisecond)
+						watcher.eventSink.TryAccumulate(func(add func(backendEvent) bool) bool {
+							return add(backendEvent{Path: "/ordinary", Op: backendOpWrite})
+						})
+					}()
+				}
+				return retryScopedWatchError{retry: WatchBatch{Paths: []string{"/retained"}}}
+			},
+			backend, 8, 100_000,
+		)
+		require.NoError(t, err)
+		watcher = w
+		w.Start()
+		defer w.Stop()
+		w.QueueRetryBatch(WatchBatch{Paths: []string{"/retained"}})
+		synctest.Wait()
+		time.Sleep(250 * time.Millisecond)
+		synctest.Wait()
+		observed := make([]time.Time, 0, 4)
+		for range 4 {
+			observed = append(observed, requireReceiveWithin(t, starts, time.Second))
+		}
+		assert.Equal(t, 20*time.Millisecond, observed[1].Sub(observed[0]))
+		assert.Equal(t, 40*time.Millisecond, observed[2].Sub(observed[1]))
+		assert.Equal(t, 80*time.Millisecond, observed[3].Sub(observed[2]))
+	})
+}
+
 func TestWatcherSuccessfulCallbackWithConcurrentEventsKeepsBatchDelay(t *testing.T) {
 	for _, tc := range []struct {
 		name string
