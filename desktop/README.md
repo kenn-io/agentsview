@@ -58,6 +58,20 @@ If a link appears to do nothing, deep link handling is recorded in
 the scheme is registered through the bundled app's `Info.plist`, so dev builds
 (`tauri:dev`) do not receive deep links; use a bundled build.
 
+## Window Behavior (macOS)
+
+Closing the main window hides AgentsView to the menu bar instead of quitting;
+the tray item keeps the backend running. The window comes back through the tray
+menu, a deep link, or standard macOS reopen gestures: clicking the Dock icon or
+activating the app with no visible windows.
+
+AgentsView appears in the Dock and Cmd-Tab while running, even with the window
+hidden. To make it behave like a menu-bar app whenever the window is closed,
+check "Hide from Dock and Cmd-Tab when window closed" in the tray menu. The
+choice persists across relaunches, takes effect immediately, and applies to
+every restore path (tray menu, dock click, deep links, and second launches). It
+is off by default.
+
 ## Environment Notes (Desktop)
 
 When launched from Finder/Explorer, desktop apps usually do not inherit your
