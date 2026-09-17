@@ -5,12 +5,14 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { settings } from "../../stores/settings.svelte.js";
   import {
+    ApiError,
     getServerUrl,
     setServerUrl,
     getAuthToken,
     setAuthToken,
     isRemoteConnection,
   } from "../../api/runtime.js";
+  import { MetadataService } from "../../api/generated/index.js";
   import { LatestRead } from "../../utils/latest-read.js";
 
   let serverUrl: string = $state(getServerUrl());
@@ -41,22 +43,19 @@
       if (tokenInput.trim()) {
         headers["Authorization"] = `Bearer ${tokenInput.trim()}`;
       }
-      const res = await fetch(`${base}/api/v1/version`, { headers, signal });
+      const data = await MetadataService.getApiV1Version({ baseUrl: base, headers, signal });
       if (!versionRead.isCurrent(signal)) return;
-      if (res.ok) {
-        const data = await res.json();
-        testResult = {
-          ok: true,
-          message: m.settings_remote_connected_version({ version: data.version || m.settings_remote_unknown() }),
-        };
-      } else {
-        testResult = { ok: false, message: m.settings_remote_server_returned({ status: res.status }) };
-      }
+      testResult = {
+        ok: true,
+        message: m.settings_remote_connected_version({ version: data.version || m.settings_remote_unknown() }),
+      };
     } catch (e) {
       if (signal.aborted || !versionRead.isCurrent(signal)) return;
       testResult = {
         ok: false,
-        message: e instanceof Error ? e.message : m.settings_remote_connection_failed(),
+        message: e instanceof ApiError
+          ? m.settings_remote_server_returned({ status: e.status })
+          : e instanceof Error ? e.message : m.settings_remote_connection_failed(),
       };
     } finally {
       if (versionRead.finish(signal)) testing = false;
@@ -356,7 +355,7 @@
 
   .test-btn:disabled,
   .connect-btn:disabled {
-    opacity: 0.6;
+    opacity: var(--opacity-disabled);
     cursor: default;
   }
 

@@ -51,6 +51,7 @@
   import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
   import CommandPalette from "./lib/components/command-palette/CommandPalette.svelte";
   import AboutModal from "./lib/components/modals/AboutModal.svelte";
+  import GoToSessionModal from "./lib/components/modals/GoToSessionModal.svelte";
   import ShortcutsModal from "./lib/components/modals/ShortcutsModal.svelte";
   import PublishModal from "./lib/components/modals/PublishModal.svelte";
   import ResyncModal from "./lib/components/modals/ResyncModal.svelte";
@@ -85,7 +86,7 @@
     type PanelDateState,
   } from "./lib/stores/yokedDates.svelte.js";
   import { m } from "./lib/i18n/index.js";
-  import { setAuthToken, getAuthToken, setServerUrl, getBase } from "./lib/api/runtime.js";
+  import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
@@ -746,7 +747,7 @@
     sync.checkForUpdate();
     sync.startPolling();
 
-    const healthCleanup = setupVisibilityHealthCheck(getBase, {
+    const healthCleanup = setupVisibilityHealthCheck({
       onBackendDegraded: () => sync.markBackendDegraded(),
     });
 
@@ -895,6 +896,10 @@
 
 {#if ui.activeModal === "commandPalette"}
   <CommandPalette />
+{/if}
+
+{#if ui.activeModal === "goToSession"}
+  <GoToSessionModal />
 {/if}
 
 {#if ui.activeModal === "shortcuts"}
@@ -1075,7 +1080,7 @@
   }
 
   .auth-card-btn:disabled {
-    opacity: 0.6;
+    opacity: var(--opacity-disabled);
     cursor: default;
   }
 

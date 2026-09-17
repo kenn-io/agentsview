@@ -4,7 +4,7 @@
   import { CopyButton, Tooltip } from "@kenn-io/kit-ui";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
-  import { fetchSessionTiming } from "../../api/timing.js";
+  import { getApiV1SessionsByIdTiming as fetchSessionTiming } from "../../api/generated/sessions/sessions.js";
   import { isAbortError } from "../../api/runtime.js";
   import { formatDuration } from "../../utils/duration.js";
   import { categoryToken } from "../../utils/categoryToken.js";
@@ -13,10 +13,10 @@
   import { m } from "../../i18n/index.js";
   import { formatNumber } from "../../utils/format.js";
   import type {
-    CallTiming,
-    SessionTiming,
-    TurnTiming,
-  } from "../../api/types/timing.js";
+    DbCallTiming as CallTiming,
+    DbSessionTiming as SessionTiming,
+    DbTurnTiming as TurnTiming,
+  } from "../../api/generated/index.js";
   import ActivityLane from "./ActivityLane.svelte";
   import RecallPanel from "./RecallPanel.svelte";
   import CallRow from "./CallRow.svelte";
@@ -109,7 +109,7 @@
       nextPending.add(sid);
       pendingSubagentIds = nextPending;
       try {
-        const t = await fetchSessionTiming(sid, signal);
+        const t = await fetchSessionTiming({ id: sid }, { signal });
         if (
           !t ||
           ownerSessionId !== sessionId ||

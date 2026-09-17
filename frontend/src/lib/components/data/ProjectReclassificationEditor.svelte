@@ -8,10 +8,10 @@
     type DbWorktreeReclassificationPreview,
     type DbWorktreeReclassificationSessionSample,
   } from "../../api/generated/index";
-  import { callGenerated, isAbortError } from "../../api/runtime.js";
+  import { isAbortError } from "../../api/runtime.js";
   import { m } from "../../i18n/index.js";
   import { data } from "../../stores/data.svelte.js";
-  import type { ProjectInfo } from "../../api/types/core.js";
+  import type { DbProjectInfo as ProjectInfo } from "../../api/generated/index.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
@@ -98,14 +98,11 @@
     candidatesLoading = true;
     candidatesError = "";
     try {
-      const response = await callGenerated(
-        (options) => DataService.getApiV1DataProjectReclassificationCandidates({
+      const response = await DataService.getApiV1DataProjectReclassificationCandidates({
           project_label: projectLabel,
           project_key: projectKey,
           ...data.dateParams,
-        }, options),
-        signal,
-      );
+        }, { signal });
       if (!candidatesRead.isCurrent(signal)) return;
       candidates = response.candidates ?? [];
       onCandidateCount?.(candidates.length);
@@ -229,11 +226,7 @@
     previewLoading = true;
     previewError = "";
     try {
-      const result = await callGenerated(
-        (options) =>
-          SettingsService.postApiV1SettingsWorktreeMappingsPreview(requestBody, options),
-        signal,
-      );
+      const result = await SettingsService.postApiV1SettingsWorktreeMappingsPreview(requestBody, { signal });
       if (!previewRead.isCurrent(signal)) return;
       preview = result;
     } catch (error) {
@@ -259,9 +252,7 @@
     const requestBody = { ...draft(), mapping_token: token };
     const target = preview?.normalized_project || requestBody.project;
     try {
-      await callGenerated(() =>
-        SettingsService.postApiV1SettingsWorktreeMappingsReclassify(requestBody),
-      );
+      await SettingsService.postApiV1SettingsWorktreeMappingsReclassify(requestBody);
       if (disposed) {
         // The mutation committed even though the editor unmounted mid-flight;
         // fire the store-level refresh so the inventory does not go stale,

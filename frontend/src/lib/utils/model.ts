@@ -1,4 +1,4 @@
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 
 /**
  * Compute the most frequently used model across assistant messages.
@@ -55,7 +55,5 @@ export function computeMainModelInfo(messages: Message[]): ModelEffort {
 
 export function formatModelEffort(info: ModelEffort): string {
   if (!info.model) return "";
-  return info.reasoningEffort
-    ? `${info.model} ${info.reasoningEffort}`
-    : info.model;
+  return info.reasoningEffort ? `${info.model} ${info.reasoningEffort}` : info.model;
 }

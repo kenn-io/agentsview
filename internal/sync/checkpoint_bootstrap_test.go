@@ -178,6 +178,72 @@ func TestCodexCheckpointMissingHonorsMatchingSkipEntry(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestCodexCheckpointDeviceChangeVerifiesContentBeforeReparsing(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		changed     bool
+		missingHash bool
+	}{
+		{name: "unchanged"},
+		{name: "changed", changed: true},
+		{name: "changed without stored hash", changed: true, missingHash: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			const uuid = "019eb791-cf7d-75c1-8439-9ed74c122c11"
+			root := writeCodexParityRoot(t, uuid)
+			path := filepath.Join(root, "2024", "01", "01",
+				"rollout-2024-01-01T10-00-00-"+uuid+".jsonl")
+			database := openTestDB(t)
+			cfg := EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
+				Machine:   "local",
+			}
+			engine := NewEngine(database, cfg)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			engine.Close()
+			cp, ok, err := database.GetParserCheckpoint("codex:" + uuid)
+			require.NoError(t, err)
+			require.True(t, ok)
+			blobs, ok, err := database.GetParserCheckpointBlobs(cp.SessionID)
+			require.NoError(t, err)
+			require.True(t, ok)
+			// Device numbers can change across boots. The checkpoint must no
+			// longer authorize an append, but the transcript may be unchanged.
+			cp.FileDevice++
+			require.NoError(t, database.UpsertParserCheckpoint(*cp, blobs))
+			if tt.missingHash {
+				session, err := database.GetSessionFull(t.Context(), cp.SessionID)
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				session.FileHash = nil
+				require.NoError(t, database.UpsertSession(*session))
+			}
+			require.NoError(t, database.DeleteProviderStatHash(t.Context(), parser.AgentCodex, path))
+			wantMessage, wantSynced := "run the suite", 0
+			if tt.changed {
+				info, err := os.Stat(path)
+				require.NoError(t, err)
+				content, err := os.ReadFile(path)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(path,
+					[]byte(strings.Replace(string(content), "run the suite", "fix the suite", 1)), 0o644))
+				require.NoError(t, os.Chtimes(path, info.ModTime(), info.ModTime()))
+				wantMessage, wantSynced = "fix the suite", 1
+			}
+			fresh := NewEngine(database, cfg)
+			t.Cleanup(fresh.Close)
+			stats := fresh.SyncAll(t.Context(), nil)
+			require.Zero(t, stats.Failed)
+			messages, err := database.GetAllMessages(t.Context(), cp.SessionID)
+			require.NoError(t, err)
+			require.NotEmpty(t, messages)
+			require.Equal(t, wantMessage, messages[0].Content)
+			require.Equal(t, wantSynced, stats.Synced)
+			require.Zero(t, fresh.SyncAll(t.Context(), nil).Synced)
+		})
+	}
+}
+
 func TestCodexCheckpointInvalidIsDiscardedOnNextSourceChange(t *testing.T) {
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122c08"
 	root := writeCodexParityRoot(t, uuid)

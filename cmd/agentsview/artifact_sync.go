@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -156,29 +157,16 @@ func runDaemonArtifactExchange(
 	if err != nil {
 		return artifact.SyncResult{}, &daemonArtifactExchangeError{cause: err}
 	}
-	body, err := json.Marshal(server.ArtifactExchangeRequest{
-		Target: target,
-		Full:   full,
+	response, err := apiclient.RawRequest(baseURL, daemonArtifactExchangeHTTPClient, func(api *apiclient.Client) error {
+		_, err := api.PostAPIV1ArtifactsExchangeWithResponse(ctx, &apiclient.PostAPIV1ArtifactsExchangeRequestOptions{Body: &apiclient.ArtifactExchangeRequest{Target: target, Full: new(full)}})
+		return err
+	}, func(_ context.Context, req *http.Request) error {
+		req.Header.Set("Origin", baseURL)
+		if authToken != "" {
+			req.Header.Set("Authorization", "Bearer "+authToken)
+		}
+		return nil
 	})
-	if err != nil {
-		return artifact.SyncResult{}, &daemonArtifactExchangeError{cause: err}
-	}
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		baseURL+"/api/v1/artifacts/exchange",
-		strings.NewReader(string(body)),
-	)
-	if err != nil {
-		return artifact.SyncResult{}, &daemonArtifactExchangeError{cause: err}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Origin", baseURL)
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
-	}
-
-	response, err := daemonArtifactExchangeHTTPClient.Do(req)
 	if err != nil {
 		return artifact.SyncResult{}, &daemonArtifactExchangeError{cause: err}
 	}

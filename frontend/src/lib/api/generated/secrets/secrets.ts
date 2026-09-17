@@ -8,6 +8,7 @@ import type {
 } from "../models";
 
 import { orvalFetch } from "../../runtime.ts";
+import { orvalRequest } from "../../runtime.ts";
 
 export const getGetApiV1SecretsUrl = (params?: GetApiV1SecretsParams) => {
   const normalizedParams = new URLSearchParams();
@@ -57,9 +58,9 @@ export const getPostApiV1SecretsScanUrl = (params?: PostApiV1SecretsScanParams) 
  */
 export const postApiV1SecretsScan = async (
   params?: PostApiV1SecretsScanParams,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<string> => {
-  return orvalFetch<string>(getPostApiV1SecretsScanUrl(params), {
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getPostApiV1SecretsScanUrl(params), {
     ...options,
     method: "POST",
   });

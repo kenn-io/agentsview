@@ -17,6 +17,9 @@ describe("RecallPage", () => {
     router.route = "recall";
     router.params = {};
     sync.serverVersion = {
+      api_version: 1,
+      data_version: 1,
+      insight_generation_available: false,
       version: "dev",
       commit: "unknown",
       build_date: "",
@@ -65,6 +68,9 @@ describe("RecallPage", () => {
 
   it("shows only Generated insights for a read-only backend", async () => {
     sync.serverVersion = {
+      api_version: 1,
+      data_version: 1,
+      insight_generation_available: false,
       version: "dev",
       commit: "unknown",
       build_date: "",

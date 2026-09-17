@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { tick } from "svelte";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 import { InSessionSearchStore } from "./inSessionSearch.svelte.js";
 import { reactiveSource, reactiveView } from "./__fixtures__/search-state.svelte.js";
 
@@ -27,6 +27,8 @@ vi.mock("./ui.svelte.js", () => ({
 let nextId = 150000;
 function message(ordinal: number, content: string, overrides: Partial<Message> = {}): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: nextId++,
     session_id: "session-a",
     ordinal,
@@ -293,13 +295,28 @@ describe("local in-session search", () => {
 
   it("counts a replaced tool result without depending on message count", async () => {
     const original = message(1, "", {
-      tool_calls: [{ tool_name: "Read", result_content: "needle" }],
+      tool_calls: [
+        {
+          category: "",
+          tool_name: "Read",
+          result_content: "needle",
+        },
+      ],
     });
     const { store, source } = setup([original]);
     await search(store);
     expect(store.total).toBe(1);
     source.messages = [
-      { ...original, tool_calls: [{ tool_name: "Read", result_content: "needle needle" }] },
+      {
+        ...original,
+        tool_calls: [
+          {
+            category: "",
+            tool_name: "Read",
+            result_content: "needle needle",
+          },
+        ],
+      },
     ];
     await tick();
     expect(store.total).toBe(2);

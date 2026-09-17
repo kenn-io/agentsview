@@ -108,6 +108,23 @@ func TestHTTPSyncRejectsMismatchedRemoteProtocol(t *testing.T) {
 	}
 }
 
+func TestRequestArchivePreservesEmptyDeltaSelection(t *testing.T) {
+	var received ArchiveRequest
+	server := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.UnmarshalRead(r.Body, &received))
+		w.Header().Set("Content-Type", "application/x-tar")
+	}))
+	t.Cleanup(server.Close)
+
+	response, err := (HTTPSync{URL: server.URL}).requestArchive(
+		t.Context(), server.Client(), ArchiveRequest{DeltaFiles: []string{}},
+	)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	assert.NotNil(t, received.DeltaFiles)
+	assert.Empty(t, received.DeltaFiles)
+}
+
 func TestHTTPSyncDownloadsArchiveAndImports(t *testing.T) {
 	archive := buildHTTPTestTar(t, map[string]string{
 		"home/wes/.claude/projects/test-project/session.jsonl": testjsonl.NewSessionBuilder().

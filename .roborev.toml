@@ -132,6 +132,15 @@ Key assumptions reviewers MUST account for:
     go.mod toolchain version before flagging unfamiliar language
     features.
 
+19. SERVING USER-OWNED FILES: AgentsView has users. Serving bytes
+    that already exist on disk (assets, session files, exports) is
+    the product's job. Do NOT recommend replacing a working read
+    with an error, rejecting non-regular files, or adding stat,
+    close, or mode gates in front of a read that succeeds on main.
+    A fallback that skips a cache and reads the file directly is
+    correct behavior, not a defect. Flag only changes that stop a
+    readable file from being served.
+
 Do NOT flag issues that only apply to public-facing, multi-tenant,
 or internet-exposed services. Focus on bugs, logic errors, data
 corruption risks, and code quality issues.

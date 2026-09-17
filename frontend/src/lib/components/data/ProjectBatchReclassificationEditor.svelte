@@ -8,8 +8,8 @@
     type DbWorktreeReclassificationCandidate,
     type DbWorktreeReclassificationPreview,
   } from "../../api/generated/index";
-  import type { ProjectInfo } from "../../api/types/core.js";
-  import { callGenerated, isAbortError } from "../../api/runtime.js";
+  import type { DbProjectInfo as ProjectInfo } from "../../api/generated/index.js";
+  import { isAbortError } from "../../api/runtime.js";
   import { m } from "../../i18n/index.js";
   import { data } from "../../stores/data.svelte.js";
   import { LatestRead } from "../../utils/latest-read.js";
@@ -115,14 +115,11 @@
       const results = await Promise.all(
         rows.map(async (row) => ({
           row,
-          response: await callGenerated(
-            (options) => DataService.getApiV1DataProjectReclassificationCandidates({
+          response: await DataService.getApiV1DataProjectReclassificationCandidates({
               project_label: row.label,
               project_key: row.project_key,
               ...data.dateParams,
-            }, options),
-            signal,
-          ),
+            }, { signal }),
         })),
       );
       if (!candidatesRead.isCurrent(signal)) return;
@@ -209,10 +206,7 @@
       const results = await Promise.all(
         usableCandidates.map(async (entry) => ({
           entry,
-          preview: await callGenerated(
-            (options) => SettingsService.postApiV1SettingsWorktreeMappingsPreview(draft(entry), options),
-            signal,
-          ),
+          preview: await SettingsService.postApiV1SettingsWorktreeMappingsPreview(draft(entry), { signal }),
         })),
       );
       if (!previewRead.isCurrent(signal)) return;
@@ -255,9 +249,7 @@
       const savedRuleStates = new Map<string, string>();
       const savedSessionIDs = new Set<string>();
       for (const { requestBody, accepted } of requests) {
-        const current = await callGenerated(() =>
-          SettingsService.postApiV1SettingsWorktreeMappingsPreview(requestBody),
-        );
+        const current = await SettingsService.postApiV1SettingsWorktreeMappingsPreview(requestBody);
         const savedState = savedRuleStates.get(requestBody.machine);
         // Before our first write on a machine, require the exact reviewed token.
         // Later writes may only account for our own rule edits and sessions
@@ -274,11 +266,9 @@
           await refreshChangedImpact();
           return;
         }
-        const result = await callGenerated(() =>
-          SettingsService.postApiV1SettingsWorktreeMappingsReclassify({
+        const result = await SettingsService.postApiV1SettingsWorktreeMappingsReclassify({
             ...requestBody, mapping_token: current.mapping_token,
-          }),
-        );
+          });
         savedRuleStates.set(requestBody.machine, result.result.mapping_set_token);
         for (const id of current.updated_session_ids) savedSessionIDs.add(id);
         savedCount += 1;
@@ -579,6 +569,5 @@
     font: inherit;
     cursor: pointer;
   }
-
 
 </style>

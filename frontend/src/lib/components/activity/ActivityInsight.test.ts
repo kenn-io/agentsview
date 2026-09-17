@@ -24,7 +24,6 @@ vi.mock("../../api/generated/index", () => ({
   InsightsService: { getApiV1Insights: mocks.getInsights },
 }));
 vi.mock("../../api/runtime.js", () => ({
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   isAbortError: vi.fn(() => false),
 }));
 vi.mock("../../api/client.js", () => ({

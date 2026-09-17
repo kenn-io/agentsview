@@ -6,7 +6,6 @@
   import type { Session } from "../../api/types.js";
   import { SessionsService } from "../../api/generated/index";
   import {
-    callGenerated,
     isAbortError,
   } from "../../api/runtime.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -18,10 +17,6 @@
   let emptying = $state(false);
   const trashRead = new LatestRead();
 
-  interface TrashResponse {
-    sessions: Session[];
-  }
-
   onMount(() => {
     loadTrash();
   });
@@ -30,10 +25,7 @@
     const signal = trashRead.begin();
     loading = true;
     try {
-      const res = await callGenerated(
-        (options) => SessionsService.getApiV1Trash(options),
-        signal,
-      );
+      const res = await SessionsService.getApiV1Trash({ signal });
       if (!trashRead.isCurrent(signal)) return;
       trashedSessions = res.sessions ?? [];
     } catch (e) {

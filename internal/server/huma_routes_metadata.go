@@ -8,10 +8,13 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/update"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 func (s *Server) registerMetadataRoutes() {
-	group := newRouteGroup(s.api, "/api/v1", "Metadata")
+	group := huma.NewGroup(s.api, "/api/v1")
+	configureRouteGroup(group, "Metadata")
 
 	s.get(group, "/projects", "List projects", s.humaListProjects)
 	s.get(group, "/machines", "List machines", s.humaListMachines)

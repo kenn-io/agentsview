@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -449,6 +450,8 @@ func TestPiProviderParsesBranchedFrom(t *testing.T) {
 			sess.ParentSessionID,
 			"PRSR-10: basename of branchedFrom without .jsonl extension, prefixed",
 		)
+		assert.Equal(t, RelFork, sess.RelationshipType,
+			"legacy branchedFrom lineage is classified as a fork")
 	})
 }
 
@@ -486,12 +489,9 @@ func parsePiLikeTestSession(
 	return &result.Session, result.Messages
 }
 
-// TestPiProviderParsesOMPParentSession verifies OMP (Oh My Pi) branch
-// lineage (kata 9nz9): OMP v3 headers record the parent as parentSession,
-// a session ID, rather than pi's branchedFrom, a file path. parentSession
-// is mapped to ParentSessionID with the agent's ID prefix, but only as a
-// fallback -- branchedFrom keeps winning when present, and upstream pi
-// sessions ignore parentSession entirely.
+// TestPiProviderParsesOMPParentSession verifies Pi-family parent lineage:
+// parentSession is a fallback, while branchedFrom keeps precedence. Native Pi
+// persisted paths use the same filename identity convention as branchedFrom.
 func TestPiProviderParsesOMPParentSession(t *testing.T) {
 	const ts = `"timestamp":"2026-07-03T06:30:58.508Z"`
 	tests := []struct {
@@ -519,9 +519,27 @@ func TestPiProviderParsesOMPParentSession(t *testing.T) {
 			wantPSI: "",
 		},
 		{
-			name:    "pi ignores parentSession (branchedFrom-only lineage)",
+			name:    "native pi parentSession POSIX path maps by filename",
 			agent:   AgentPi,
-			header:  `{"type":"session","version":3,"id":"child",` + ts + `,"cwd":"/repos/x","parentSession":"parent-abc"}`,
+			header:  `{"type":"session","version":3,"id":"child",` + ts + `,"cwd":"/repos/x","parentSession":"/data/2026-07-03T06-00-00-000Z_parent-file.jsonl"}`,
+			wantPSI: "pi:2026-07-03T06-00-00-000Z_parent-file",
+		},
+		{
+			name:    "native pi parentSession Windows path maps by filename",
+			agent:   AgentPi,
+			header:  `{"type":"session","version":3,"id":"child",` + ts + `,"cwd":"/repos/x","parentSession":"C:\\\\data\\\\parent-file.jsonl"}`,
+			wantPSI: "pi:parent-file",
+		},
+		{
+			name:    "native pi branchedFrom wins over parentSession",
+			agent:   AgentPi,
+			header:  `{"type":"session","version":3,"id":"child",` + ts + `,"cwd":"/repos/x","branchedFrom":"/data/2026-07-03T06-00-00-000Z_parent-file.jsonl","parentSession":"/data/other-parent.jsonl"}`,
+			wantPSI: "pi:2026-07-03T06-00-00-000Z_parent-file",
+		},
+		{
+			name:    "native pi with neither field yields empty parent",
+			agent:   AgentPi,
+			header:  `{"type":"session","version":3,"id":"child",` + ts + `,"cwd":"/repos/x"}`,
 			wantPSI: "",
 		},
 		{
@@ -542,6 +560,34 @@ func TestPiProviderParsesOMPParentSession(t *testing.T) {
 			assert.Equal(t, tt.wantPSI, sess.ParentSessionID)
 		})
 	}
+}
+
+// TestPiProviderNativeParentSessionUsesHeaderIdentity verifies that native
+// Pi parentSession paths resolve to the parent's persisted header ID when the
+// filename stem and header ID differ.
+func TestPiProviderNativeParentSessionUsesHeaderIdentity(t *testing.T) {
+	root := t.TempDir()
+	parentPath := filepath.Join(root, "2026-07-03T06-00-00-000Z_parent-file.jsonl")
+	childPath := filepath.Join(root, "2026-07-03T06-30-00-000Z_child-file.jsonl")
+	parentPathJSON, err := json.Marshal(parentPath)
+	require.NoError(t, err)
+	parentContent := `{"type":"session","version":3,"id":"header-id-does-not-match-filename","timestamp":"2026-07-03T06:00:00.000Z","cwd":"/repos/x"}` + "\n"
+	childContent := `{"type":"session","version":3,"id":"child","timestamp":"2026-07-03T06:30:00.000Z","cwd":"/repos/x","parentSession":` + string(parentPathJSON) + `}` + "\n"
+	require.NoError(t, os.WriteFile(parentPath, []byte(parentContent), 0o644))
+	require.NoError(t, os.WriteFile(childPath, []byte(childContent), 0o644))
+
+	parent, _, err := parsePiLikeSession(parentPath, "my_project", "local", AgentPi, "pi:")
+	require.NoError(t, err)
+	child, _, err := parsePiLikeSession(childPath, "my_project", "local", AgentPi, "pi:")
+	require.NoError(t, err)
+
+	assert.Equal(t, "pi:header-id-does-not-match-filename", parent.ID)
+	assert.Equal(t, parent.ID, child.ParentSessionID,
+		"native parentSession must resolve to the parent's stored header ID")
+	assert.Empty(t, parent.RelationshipType,
+		"native Pi parent session has no relationship")
+	assert.Equal(t, RelFork, child.RelationshipType,
+		"native Pi parented session is classified as a fork")
 }
 
 // TestPiProviderOMPParentSessionMatchesParentID proves the mapped

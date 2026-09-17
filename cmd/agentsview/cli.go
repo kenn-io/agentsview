@@ -304,25 +304,38 @@ func newServeRestartCommand(deps daemonCommandDeps) *cobra.Command {
 }
 
 func newOpenAPICommand() *cobra.Command {
-	return &cobra.Command{
+	var yamlOutput bool
+	cmd := &cobra.Command{
 		Use:          "openapi",
 		Short:        "Print OpenAPI 3.1 schema",
 		GroupID:      groupMeta,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			spec, err := server.OpenAPIJSON(server.VersionInfo{
+			spec := server.OpenAPISpec(server.VersionInfo{
 				Version:   version,
 				Commit:    commit,
 				BuildDate: buildDate,
 			})
+			var data []byte
+			var err error
+			if yamlOutput {
+				data, err = spec.YAML()
+			} else {
+				data, err = spec.MarshalJSON()
+			}
 			if err != nil {
 				return err
 			}
-			_, err = cmd.OutOrStdout().Write(append(spec, '\n'))
+			if !yamlOutput {
+				data = append(data, '\n')
+			}
+			_, err = cmd.OutOrStdout().Write(data)
 			return err
 		},
 	}
+	cmd.Flags().BoolVar(&yamlOutput, "yaml", false, "Print the schema as YAML")
+	return cmd
 }
 
 func newSyncCommand() *cobra.Command {
@@ -376,7 +389,7 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 	)
 	cmd.Flags().StringVar(
 		&cfg.Host, "host", "",
-		"SSH hostname for deprecated remote sync",
+		"Configured HTTP host name or deprecated SSH hostname",
 	)
 	cmd.Flags().StringVar(
 		&cfg.Target,

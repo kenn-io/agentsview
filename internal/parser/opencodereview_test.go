@@ -114,7 +114,7 @@ func TestOpenCodeReviewCacheWrites(t *testing.T) {
 	result := openCodeReviewParseForTest(t, path)
 	require.Len(t, result.Messages, 1)
 	assert.Equal(t, 130, result.Messages[0].ContextTokens)
-	assert.JSONEq(t, `{"input_tokens":20,"output_tokens":5,"cache_read_input_tokens":80,"cache_creation_input_tokens":30}`, string(result.Messages[0].TokenUsage))
+	assert.Equal(t, `{"cache_creation_input_tokens":30,"cache_read_input_tokens":80,"input_tokens":20,"output_tokens":5}`, string(result.Messages[0].TokenUsage))
 }
 
 func TestOpenCodeReviewCompressionAndAuxiliaryPrompts(t *testing.T) {

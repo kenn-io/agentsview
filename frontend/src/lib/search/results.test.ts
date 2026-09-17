@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 import type { Match } from "./session-index.js";
 import type { SearchBlock } from "./block-text.js";
 import { matchSnippet, groupFindResults, resultRows } from "./results.js";
 function message(ordinal: number): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: ordinal,
     session_id: "results",
     ordinal,

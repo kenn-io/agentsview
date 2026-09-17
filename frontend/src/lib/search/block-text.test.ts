@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vite-plus/test";
-import type { Message, ToolCall } from "../api/types.js";
+import type { DbMessage as Message, DbToolCall as ToolCall } from "../api/generated/index.js";
 import { renderMarkdown } from "../utils/markdown.js";
 import { blockKey, collectSearchBlocks, resolveToolInputText } from "./block-text.js";
 import { domText, findOccurrences } from "./dom-text.js";
@@ -8,6 +8,8 @@ import { domText, findOccurrences } from "./dom-text.js";
 let nextId = 50000;
 function message(content: string, overrides: Partial<Message> = {}): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: nextId++,
     session_id: "search-fixture",
     ordinal: 7,
@@ -27,7 +29,11 @@ function message(content: string, overrides: Partial<Message> = {}): Message {
 }
 
 function call(tool_name: string, params: Record<string, unknown>): ToolCall {
-  return { tool_name, input_json: JSON.stringify(params) };
+  return {
+    category: "",
+    tool_name,
+    input_json: JSON.stringify(params),
+  };
 }
 
 describe("collectSearchBlocks", () => {
@@ -55,6 +61,7 @@ describe("collectSearchBlocks", () => {
       message("", {
         tool_calls: [
           {
+            category: "",
             tool_name: "view_image",
             result_content: content,
             result_events: [
@@ -207,12 +214,26 @@ describe("collectSearchBlocks", () => {
   });
 
   it("caches by message identity and refreshes replaced tool output", () => {
-    const original = message("", { tool_calls: [{ tool_name: "Read", result_content: "first" }] });
+    const original = message("", {
+      tool_calls: [
+        {
+          category: "",
+          tool_name: "Read",
+          result_content: "first",
+        },
+      ],
+    });
     const blocks = collectSearchBlocks(original);
     expect(collectSearchBlocks(original)).toBe(blocks);
     const replacement = {
       ...original,
-      tool_calls: [{ tool_name: "Read", result_content: "other" }],
+      tool_calls: [
+        {
+          category: "",
+          tool_name: "Read",
+          result_content: "other",
+        },
+      ],
     };
     expect(collectSearchBlocks(replacement)).not.toBe(blocks);
     expect(collectSearchBlocks(replacement)[0]?.text).toBe("other");
@@ -260,7 +281,16 @@ describe("resolveToolInputText", () => {
   });
 
   it.each(["{broken", "null", "false", "[]"])("handles invalid input %s", (input_json) => {
-    expect(resolveToolInputText({ tool_name: "Bash", input_json }, "legacy")).toBe("legacy");
+    expect(
+      resolveToolInputText(
+        {
+          category: "",
+          tool_name: "Bash",
+          input_json,
+        },
+        "legacy",
+      ),
+    ).toBe("legacy");
   });
 
   it("retains legacy text when a Task prompt is empty", () => {

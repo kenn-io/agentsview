@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-import { ApiError, callGenerated, orvalFetch, setAuthToken } from "./runtime.js";
+import { getApiV1Version } from "./generated/metadata/metadata.js";
+import { ApiError, orvalFetch, setAuthToken } from "./runtime.js";
 
 describe("orvalFetch", () => {
   afterEach(() => {
@@ -24,21 +25,34 @@ describe("orvalFetch", () => {
     expect(String(input)).toBe("https://example.test/api/v1/usage/summary");
     expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer secret");
   });
+  it("tests a candidate server with only the supplied credentials", async () => {
+    localStorage.setItem("agentsview-server-url", "https://selected.example.test");
+    setAuthToken("selected-token");
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('{"version":"test"}', { headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await getApiV1Version({ baseUrl: "https://candidate.example.test" });
+    await getApiV1Version({
+      baseUrl: "https://candidate.example.test",
+      headers: { Authorization: "Bearer candidate-token" },
+    });
+    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
+      "https://candidate.example.test/api/v1/version",
+      "https://candidate.example.test/api/v1/version",
+    ]);
+    expect(new Headers(fetchMock.mock.calls[0]![1]?.headers).get("Authorization")).toBeNull();
+    expect(new Headers(fetchMock.mock.calls[1]![1]?.headers).get("Authorization")).toBe(
+      "Bearer candidate-token",
+    );
+  });
 });
 
-describe("callGenerated", () => {
+describe("API errors", () => {
   afterEach(() => {
     localStorage.clear();
     vi.unstubAllGlobals();
-  });
-
-  it("passes its abort signal to the generated request", async () => {
-    const controller = new AbortController();
-    const request = vi.fn(async () => "done");
-
-    await expect(callGenerated(request, controller.signal)).resolves.toBe("done");
-
-    expect(request).toHaveBeenCalledWith({ signal: controller.signal });
   });
 
   it("normalizes generated API error bodies and codes", async () => {
@@ -56,9 +70,7 @@ describe("callGenerated", () => {
       ),
     );
 
-    await expect(
-      callGenerated(() => orvalFetch("/api/v1/usage/summary", {})),
-    ).rejects.toMatchObject({
+    await expect(orvalFetch("/api/v1/usage/summary", {})).rejects.toMatchObject({
       name: "ApiError",
       status: 400,
       code: "unknown_project_key",

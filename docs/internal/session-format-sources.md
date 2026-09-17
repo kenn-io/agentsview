@@ -325,8 +325,7 @@ add an archived or maintained mirror without replacing the original identity.
   skill names from recorded paths without consulting worker-local `SKILL.md`
   frontmatter or the local parse cache; local parsing retains frontmatter
   lookup. `TestHostedSkillInferenceKeepsNamesLexical` covers this boundary.
-  Reverified 2026-08-22 against
-  local sessions launched from repository-local
+  Reverified 2026-08-22 against local sessions launched from repository-local
   `REPO/.claude/worktrees/<generated-name>` worktrees: the transcript retains
   the generated worktree path after that checkout is deleted, so Agentsview
   recognizes the anchored layout and attributes it to `REPO`. Evidence remains
@@ -875,6 +874,10 @@ add an archived or maintained mirror without replacing the original identity.
   [session history](https://github.com/alibaba/open-code-review/blob/966f976e24b09e2a3691d3919c9833adcd03642f/internal/session/history.go).
   The public issue sample was also preserved as a sanitized fixture in the
   AgentsView parser tests.
+- **Usage encoding reverified (2026-09-16):** The pinned session history
+  declares prompt, completion, cache-read, and cache-write token fields.
+  AgentsView serializes their normalized map with sorted keys so reparsing
+  unchanged usage preserves the bytes used by message comparison.
 - **Reverified (2026-09-10):** Checked the pinned writer and history code plus
   [tool execution](https://github.com/alibaba/open-code-review/blob/966f976e24b09e2a3691d3919c9833adcd03642f/internal/llmloop/loop.go)
   and
@@ -1540,6 +1543,18 @@ schemas keep their existing ordering behavior.
   update (3.16.29) has shrunk or wiped some users' `cursorDiskKV` rows, so the
   parser tolerates a `fullConversationHeadersOnly` entry whose `bubbleId` row
   is missing rather than failing the whole session.
+- **Tool results:**
+  [Issue #1798](https://github.com/kenn-io/agentsview/issues/1798) supplies
+  one redacted `todo_write` bubble with an object-valued
+  `toolFormerData.result`, rechecked 2026-09-16. The Cursor version is
+  unconfirmed. The checked-in
+  `internal/parser/testdata/cursor-ide-object-tool-result.json` replaces the
+  capture placeholders with synthetic values and keeps `rawArgs` and `params`
+  as JSON-encoded strings. This sample establishes the object shape only, with
+  no frequency or all-version claim. The parser preserves the existing string
+  result text and renders other valid non-null JSON values as raw JSON text.
+  Absent, null, and empty-string results emit no tool result. Nonempty
+  malformed bubble JSON still errors.
 - **NULL values:**
   [Issue #1676](https://github.com/kenn-io/agentsview/issues/1676) (reported
   2026-09-08; rechecked 2026-09-10) records 64 SQL NULL values among 2,189
@@ -1739,7 +1754,23 @@ schemas keep their existing ordering behavior.
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the
   parser attributed 1,316 `read` calls whose `path` or `file_path` named a
   concrete `SKILL.md`, while shell commands that only mentioned the filename
-  without reading it stayed unattributed.
+  without reading it stayed unattributed. Reverified 2026-09-14 against the
+  pinned
+  [session format](https://github.com/earendil-works/pi/blob/f1c587dde39025c75d7397bc14532d8fa5c001d9/packages/coding-agent/docs/session-format.md)
+  and
+  [session manager](https://github.com/earendil-works/pi/blob/f1c587dde39025c75d7397bc14532d8fa5c001d9/packages/coding-agent/src/core/session-manager.ts):
+  native Pi persists the parent of `/fork`, `/clone`, and
+  `newSession({ parentSession })` sessions as a `parentSession` file path to
+  the parent transcript, whose header UUID is authoritative even where the
+  filename stem diverges (explicit `--session` paths skip the default
+  `timestamp_session-id` naming). Agentsview resolves that path against the
+  referenced sibling's header UUID, falls back to the filename stem when the
+  referenced file is unavailable, and classifies native Pi sessions with a
+  parent as forks. Because the default filename does not contain the header
+  UUID, identity lookup that arrives with only a bare header UUID and no
+  stored path or fingerprint hint scans discovered session headers after the
+  filename and directory lookups miss. Data version 109 reparses stored
+  native Pi sessions to repair lineage edges and fork classification.
 
 ## Prime Agent (`prime-agent`)
 
@@ -3037,6 +3068,10 @@ schemas keep their existing ordering behavior.
   contained `reasoning`, `totalTokens`, and cost objects, which AgentsView
   ignores. A producer-derived test covers 25 total cache-write tokens and a
   10-token one-hour subset.
+- **Usage encoding reverified (2026-09-16):** The pinned message model still
+  exposes input, output, cache-read, and cache-write usage. AgentsView keeps
+  its normalized JSON keys sorted so unchanged usage compares byte-for-byte
+  equal after reparsing.
 - **Agentsview:** `internal/parser/tau.go` and `internal/parser/tau_provider.go`
   read each transcript once, exclude the exact `index.jsonl` basename, use the
   filename for ordinary session identity, and encode the project directory
@@ -3051,6 +3086,64 @@ schemas keep their existing ordering behavior.
   default sessions from distinct configured roots separate; it does not
   distinguish machines with identical root paths. No legacy Tau v1 conversion,
   native transfer, or index metadata synchronization is included.
+
+## Charm Crush (`crush`)
+
+- **Format:** One SQLite `crush.db` per project under the project's `.crush`
+  data directory (configurable with `options.data_directory` or `--data-dir`).
+  Session metadata, cumulative token totals, and cost live in `sessions`;
+  ordered role messages with a JSON `parts` array (`text`, `reasoning`,
+  `tool_call`, `tool_result`, `finish`) live in `messages`. A project registry
+  at the global data directory maps project paths to data directories.
+
+- **Evidence:** `source`.
+
+- **Upstream:** Clone `https://github.com/charmbracelet/crush.git` at
+  `ce980ada68444b7591d8dfa631af7e94b2aba0b3`; see the pinned
+  [initial schema](https://github.com/charmbracelet/crush/blob/ce980ada68444b7591d8dfa631af7e94b2aba0b3/internal/db/migrations/20250424200609_initial.sql),
+
+    [project registry](https://github.com/charmbracelet/crush/blob/ce980ada68444b7591d8dfa631af7e94b2aba0b3/internal/projects/projects.go),
+    and
+    [data-directory resolution](https://github.com/charmbracelet/crush/blob/ce980ada68444b7591d8dfa631af7e94b2aba0b3/internal/config/load.go).
+    The registry is `projects.json` next to the global config file:
+    `~/.local/share/crush/projects.json` (or `$XDG_DATA_HOME/crush/`,
+    `$CRUSH_GLOBAL_DATA/`) on macOS and Linux and
+    `%LOCALAPPDATA%\crush\projects.json` on Windows. Timestamps are Unix seconds
+    despite older schema comments claiming milliseconds; the `updated_at`
+    triggers write `strftime('%s','now')`. Later migrations add
+    `summary_message_id`, `todos`, `provider`, `is_summary_message`,
+    `read_files`, and Prism/Hyper metadata columns. The schema was reverified
+    against a live 2026-09 Crush store on 2026-09-11.
+
+- **Usage and cost:** `sessions.prompt_tokens` and `sessions.completion_tokens`
+  are cumulative session totals and `sessions.cost` is a recorded provider
+  cost, with no per-request breakdown and no per-message token fields.
+  Agentsview emits exactly one aggregate `session` usage event per session,
+  tagged with the most recent assistant message's model, and reports no
+  per-message token data.
+
+- **Agentsview:** `internal/parser/crush.go` and
+  `internal/parser/crush_provider.go` require the `messages.parts` column as
+  the format marker (the `goose_db_version` table belongs to Crush's vendored
+  goose migration tool and proves nothing), expand `projects.json` entries
+  into provider roots, attribute each session to the project directory above
+  the store, pair `tool_result` parts into system tool-result messages keyed
+  by call ID, emit `is_summary_message` rows as compact-boundary system
+  messages, and fingerprint the session and message rows so same-second edits
+  still invalidate freshness (`FingerprintHashRequiredForFreshness`). Watcher
+  events use bounded rowid cursors over `sessions` and `messages` so work
+  stays proportional to inserted rows, with a periodic reconciliation pass
+  covering metadata-only edits. Raw-sync audits re-read the project registry,
+  and raw snapshots carry the registry-derived project path in the database's
+  logical manifest path because the database does not store it. Source row
+  deletion is not authoritative. Crush's pinned
+  [session deletion service](https://github.com/charmbracelet/crush/blob/ce980ada68444b7591d8dfa631af7e94b2aba0b3/internal/session/session.go#L138-L168)
+  physically removes session messages, files, and the session row
+  (reverified 2026-09-16). Raw derivation requests full content replacement
+  for emitted sessions separately from membership replacement, including when
+  the next snapshot is empty. Archived sessions remain active until the user
+  deletes them in AgentsView. A malformed `parts` value fails that session's
+  parse rather than degrading silently, matching the goose parser's policy.
 
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go

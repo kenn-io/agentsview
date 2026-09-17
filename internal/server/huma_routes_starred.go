@@ -3,10 +3,13 @@ package server
 import (
 	"context"
 	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 func (s *Server) registerStarredRoutes() {
-	group := newRouteGroup(s.api, "/api/v1", "Starred")
+	group := huma.NewGroup(s.api, "/api/v1")
+	configureRouteGroup(group, "Starred")
 
 	s.get(group, "/starred", "List starred sessions", s.humaListStarred)
 	s.put(group, "/sessions/{id}/star", "Star session", s.humaStarSession)

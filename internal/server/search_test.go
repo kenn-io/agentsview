@@ -12,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func TestPrepareFTSQuery(t *testing.T) {
@@ -99,7 +100,7 @@ func TestSearchDateRangeHTTPTransport(t *testing.T) {
 	srv.routes()
 	httpServer := httptest.NewServer(srv.mux)
 	t.Cleanup(httpServer.Close)
-	client := service.NewHTTPBackend(httpServer.URL, "", true, "")
+	client := servicehttp.NewHTTPBackend(httpServer.URL, "", true, "")
 	_, err := client.Search(context.Background(), service.SearchRequest{
 		Query: "hello", DateFrom: "2024-06-01", DateTo: "2024-06-02",
 	})

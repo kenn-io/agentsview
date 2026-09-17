@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { DataService } from "../api/generated/index";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DbProjectInventory, DbProjectInventoryRow } from "../api/generated/index";
 
@@ -7,7 +8,6 @@ const api = vi.hoisted(() => ({
 }));
 
 const apiRuntimeMocks = vi.hoisted(() => ({
-  callGenerated: vi.fn((request: () => Promise<unknown>, _signal?: AbortSignal) => request()),
   isAbortError: vi.fn(() => false),
 }));
 
@@ -19,7 +19,6 @@ vi.mock("../api/generated/index", () => ({
   DataService: { getApiV1DataProjects: api.getApiV1DataProjects },
 }));
 vi.mock("../api/runtime.js", () => ({
-  callGenerated: apiRuntimeMocks.callGenerated,
   isAbortError: apiRuntimeMocks.isAbortError,
 }));
 vi.mock("./router.svelte.js", () => ({
@@ -62,10 +61,7 @@ let emitDataChanged: ((event: { scope: "messages" | "sessions" | "sync" }) => vo
 
 beforeEach(() => {
   api.getApiV1DataProjects.mockReset();
-  apiRuntimeMocks.callGenerated.mockReset();
-  apiRuntimeMocks.callGenerated.mockImplementation(
-    (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
-  );
+
   apiRuntimeMocks.isAbortError.mockReset();
   apiRuntimeMocks.isAbortError.mockReturnValue(false);
   eventBus.subscribe.mockReset();
@@ -99,15 +95,21 @@ describe("hydrateFromUrl", () => {
   it("loads a chosen month and preserves its bounds when selecting projects", async () => {
     api.getApiV1DataProjects.mockResolvedValue(makeInventory([]));
     data.setDateSelection({ mode: "calendar", unit: "month", anchor: "2026-08-15" });
-    expect(api.getApiV1DataProjects).toHaveBeenLastCalledWith(expect.objectContaining({
-      date_from: "2026-08-01", date_to: "2026-08-31",
-    }), undefined);
+    expect(api.getApiV1DataProjects).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        date_from: "2026-08-01",
+        date_to: "2026-08-31",
+      }),
+      { signal: expect.any(AbortSignal) },
+    );
     data.selectProject("k1");
     expect(routerMod.router.replaceParams).toHaveBeenLastCalledWith({
-      project_key: "k1", date_from: "2026-08-01", date_to: "2026-08-31",
+      project_key: "k1",
+      date_from: "2026-08-01",
+      date_to: "2026-08-31",
     });
     data.setDateSelection({ mode: "relative", days: 0 });
-    expect(api.getApiV1DataProjects).toHaveBeenLastCalledWith({}, undefined);
+    expect(api.getApiV1DataProjects).toHaveBeenLastCalledWith({}, { signal: expect.any(AbortSignal) });
     expect(data.selectedProjectKey).toBe("");
     await Promise.resolve();
   });
@@ -324,14 +326,6 @@ describe("attach", () => {
 
 describe("cancelInFlightReads", () => {
   it("stops loading and a late resolution does not overwrite inventory or loading", async () => {
-    const signals: AbortSignal[] = [];
-    apiRuntimeMocks.callGenerated.mockImplementation(
-      (request: () => Promise<unknown>, signal?: AbortSignal) => {
-        signals.push(signal as AbortSignal);
-        return request();
-      },
-    );
-
     let resolveLoad!: (inventory: DbProjectInventory) => void;
     api.getApiV1DataProjects.mockImplementationOnce(
       () =>
@@ -342,11 +336,17 @@ describe("cancelInFlightReads", () => {
 
     const pending = data.load();
     expect(data.loading).toBe(true);
-    expect(signals[0]?.aborted).toBe(false);
+    expect(
+      vi.mocked(DataService.getApiV1DataProjects).mock.calls[0]?.[1]?.signal
+        ?.aborted,
+    ).toBe(false);
 
     data.cancelInFlightReads();
     expect(data.loading).toBe(false);
-    expect(signals[0]?.aborted).toBe(true);
+    expect(
+      vi.mocked(DataService.getApiV1DataProjects).mock.calls[0]?.[1]?.signal
+        ?.aborted,
+    ).toBe(true);
 
     resolveLoad(makeInventory([makeRow()]));
     await expect(pending).resolves.toBe(false);

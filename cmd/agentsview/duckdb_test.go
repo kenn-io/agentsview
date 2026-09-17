@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 )
@@ -172,12 +173,12 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		r *http.Request,
 	) {
 		startupPushes++
-		var req daemonPushRequest
+		var req apiclient.DaemonPushRequest
 		require.NoError(t, json.UnmarshalRead(r.Body, &req))
-		require.NotNil(t, req.DuckDB)
-		assert.Empty(t, req.DuckDB.Path,
+		require.NotNil(t, req.Duckdb)
+		assert.Empty(t, req.Duckdb.Path,
 			"the CLI defers to the daemon's pinned mirror path")
-		assert.True(t, req.Automatic,
+		assert.Equal(t, new(true), req.Automatic,
 			"watch-mode daemon pushes must be marked automatic")
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
@@ -188,12 +189,12 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	) {
 		resolvedPushes++
 		cancel()
-		var req daemonPushRequest
+		var req apiclient.DaemonPushRequest
 		require.NoError(t, json.UnmarshalRead(r.Body, &req))
-		require.NotNil(t, req.DuckDB)
-		assert.Empty(t, req.DuckDB.Path,
+		require.NotNil(t, req.Duckdb)
+		assert.Empty(t, req.Duckdb.Path,
 			"the CLI defers to the daemon's pinned mirror path")
-		assert.True(t, req.Automatic,
+		assert.Equal(t, new(true), req.Automatic,
 			"watch-mode daemon pushes must be marked automatic")
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
@@ -384,7 +385,6 @@ type wantDuckDBDaemonPush struct {
 	token           string
 	machineName     string
 	allowInsecure   bool
-	syncStateTarget string
 }
 
 // duckDBPushDaemonServer starts a daemon test server on the DuckDB push route
@@ -410,18 +410,18 @@ func duckDBPushDaemonServerAt(
 		r *http.Request,
 	) {
 		assert.Equal(t, want.auth, r.Header.Get("Authorization"))
-		var req daemonPushRequest
+		var req apiclient.DaemonPushRequest
 		require.NoError(t, json.UnmarshalRead(r.Body, &req))
 		assert.Equal(t, want.full, req.Full)
 		assert.Equal(t, want.projects, req.Projects)
 		assert.Equal(t, want.excludeProjects, req.ExcludeProjects)
-		require.NotNil(t, req.DuckDB)
-		assert.Equal(t, want.path, req.DuckDB.Path)
-		assert.Equal(t, want.url, req.DuckDB.URL)
-		assert.Equal(t, want.token, req.DuckDB.Token)
-		assert.Equal(t, want.machineName, req.DuckDB.MachineName)
-		assert.Equal(t, want.allowInsecure, req.DuckDB.AllowInsecure)
-		assert.Equal(t, want.syncStateTarget, req.SyncStateTarget)
+		require.NotNil(t, req.Duckdb)
+		assert.Equal(t, want.path, req.Duckdb.Path)
+		assert.Equal(t, want.url, req.Duckdb.URL)
+		assert.Equal(t, new(want.token), req.Duckdb.Token)
+		assert.Equal(t, want.machineName, req.Duckdb.MachineName)
+		assert.Equal(t, want.allowInsecure, req.Duckdb.AllowInsecure)
+		assert.Nil(t, req.SyncStateTarget)
 		writeTestJSON(t, w, result)
 	})
 }

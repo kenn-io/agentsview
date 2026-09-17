@@ -3,20 +3,10 @@ package rawclient
 import (
 	"context"
 	"fmt"
-	"net/http"
 
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/rawsync"
 )
-
-// commitResultWire mirrors the manifest-commit response body. rawsync's
-// CommitResult is the custody-domain type and carries no JSON tags, so the
-// four wire fields decode here and convert.
-type commitResultWire struct {
-	ManifestID string `json:"manifest_id"`
-	Receipt    string `json:"receipt"`
-	Generation int64  `json:"generation"`
-	Created    bool   `json:"created"`
-}
 
 // CommitManifest submits one complete manifest and returns its durable
 // receipt. Only this response authorizes checkpoint advancement. Head
@@ -26,15 +16,13 @@ func (c *Client) CommitManifest(
 	ctx context.Context,
 	manifest rawsync.Manifest,
 ) (rawsync.CommitResult, error) {
-	resp, err := c.do(ctx, http.MethodPost, "/api/v1/raw-sync/manifests", nil, manifest)
+	response, err := c.do(ctx, func(api *apiclient.Client) (*apiclient.PostAPIV1RawSyncManifestsResp, error) {
+		return api.PostAPIV1RawSyncManifestsWithResponse(ctx, &apiclient.PostAPIV1RawSyncManifestsRequestOptions{Body: &manifest})
+	})
 	if err != nil {
 		return rawsync.CommitResult{}, err
 	}
-	defer resp.Body.Close()
-	var wire commitResultWire
-	if err := jsonDecode(resp.Body, &wire); err != nil {
-		return rawsync.CommitResult{}, fmt.Errorf("rawclient: decode commit result: %w", err)
-	}
+	wire := response.JSON200
 	if wire.Receipt == "" {
 		return rawsync.CommitResult{}, fmt.Errorf("rawclient: commit response missing receipt")
 	}

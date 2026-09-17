@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Message } from "../../api/types.js";
+  import type { DbMessage as Message } from "../../api/generated/index.js";
   import { formatTimestamp } from "../../utils/format.js";
   import { RefreshCwIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";

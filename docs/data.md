@@ -190,6 +190,13 @@ those references with readable descriptions. HTML export keeps its own
 `agentsview session export` command streams provider source bytes, including
 original inline payloads.
 
+The daemon may retain recently served canonical image bytes in a bounded
+in-process cache for up to seven days from generation. Entries can leave sooner
+under the 64-entry or 64 MiB limits, and process exit clears them. The cache is
+separate from the durable `{dataDir}/assets` store and from the browser's own
+cache policy. Evicting a cache entry never changes the durable asset or its
+backup.
+
 ### Reclaim free space
 
 Image cleanup reports stored-content and decoded-image byte counts. These are

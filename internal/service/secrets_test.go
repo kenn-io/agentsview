@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func TestHTTPBackendScanSecretsStream(t *testing.T) {
@@ -36,7 +37,7 @@ func TestHTTPBackendScanSecretsStream(t *testing.T) {
 			f.Flush()
 		}))
 	defer ts.Close()
-	svc := service.NewHTTPBackend(ts.URL, "", false, "")
+	svc := servicehttp.NewHTTPBackend(ts.URL, "", false, "")
 	var ticks []service.SecretScanProgress
 	sum, err := svc.ScanSecrets(context.Background(),
 		service.SecretScanInput{Backfill: true},

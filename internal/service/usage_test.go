@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func seedPairwiseUsageFixture(t *testing.T, d *db.DB) {
@@ -280,7 +281,7 @@ func TestHTTPBackend_UsageSummary_SendsExplicitIncludeOneShot(t *testing.T) {
 					_, _ = w.Write([]byte(`{"from":"x","to":"y"}`))
 				}))
 			t.Cleanup(srv.Close)
-			svc := service.NewHTTPBackend(srv.URL, "", false, "")
+			svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
 
 			_, err := svc.UsageSummary(context.Background(), service.UsageRequest{
 				From: "2024-06-01", To: "2024-06-02",
@@ -301,7 +302,7 @@ func TestHTTPBackend_UsageSummary_ReadOnly(t *testing.T) {
 			w.WriteHeader(http.StatusNotImplemented)
 		}))
 	t.Cleanup(srv.Close)
-	svc := service.NewHTTPBackend(srv.URL, "", true, "")
+	svc := servicehttp.NewHTTPBackend(srv.URL, "", true, "")
 
 	_, err := svc.UsageSummary(context.Background(), service.UsageRequest{
 		From: "2024-06-01", To: "2024-06-02",
@@ -753,7 +754,7 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 		},
 	))
 	t.Cleanup(srv.Close)
-	svc := service.NewHTTPBackend(srv.URL, "", false, "")
+	svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
 
 	res, err := svc.UsagePairwiseComparison(
 		context.Background(),

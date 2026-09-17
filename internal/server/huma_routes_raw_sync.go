@@ -9,6 +9,8 @@ import (
 
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawsync"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 const (
@@ -22,20 +24,21 @@ func (s *Server) registerRawSyncRoutes() {
 	if s.rawSyncDeviceAuth == nil && !s.rawSyncSchemaOnly {
 		return
 	}
-	group := newRouteGroup(s.api, "/api/v1/raw-sync", "RawSync")
-	group.register(
+	group := huma.NewGroup(s.api, "/api/v1/raw-sync")
+	configureRouteGroup(group, "RawSync")
+	registerRoute(group,
 		http.MethodPost, "/tokens", "Exchange a device credential",
 		s.humaRawSyncToken, s.humaTimeout(), maxBodyBytes(rawSyncTokenMaxBodyBytes),
 	)
 	if s.rawSyncCustody == nil && !s.rawSyncSchemaOnly {
 		return
 	}
-	group.register(
+	registerRoute(group,
 		http.MethodPost, "/objects/missing", "Negotiate missing raw objects",
 		s.humaRawSyncMissingObjects, s.humaTimeout(),
 		maxBodyBytes(rawSyncControlMaxBodyBytes),
 	)
-	group.register(
+	registerRoute(group,
 		http.MethodPost, "/manifests", "Commit a raw manifest",
 		s.humaRawSyncManifest, s.humaTimeout(), maxBodyBytes(rawSyncControlMaxBodyBytes),
 	)

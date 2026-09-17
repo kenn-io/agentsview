@@ -2,10 +2,10 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
   import type {
-    SessionTiming,
-    CallTiming,
-    TurnTiming,
-  } from "../../api/types/timing.js";
+    DbSessionTiming as SessionTiming,
+    DbCallTiming as CallTiming,
+    DbTurnTiming as TurnTiming,
+  } from "../../api/generated/index.js";
   import { formatDuration } from "../../utils/duration.js";
   import { formatNumber } from "../../utils/format.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";

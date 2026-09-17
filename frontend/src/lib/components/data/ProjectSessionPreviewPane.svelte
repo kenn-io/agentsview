@@ -7,14 +7,14 @@
     SettingsService,
     type DbSession,
   } from "../../api/generated/index";
-  import { callGenerated, isAbortError } from "../../api/runtime.js";
+  import { isAbortError } from "../../api/runtime.js";
   import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, FunnelIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
   import { data } from "../../stores/data.svelte.js";
-  import type { Message } from "../../api/types.js";
+  import type { DbMessage as Message } from "../../api/generated/index.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import MessageContent from "../content/MessageContent.svelte";
-  import type { ProjectInfo } from "../../api/types/core.js";
+  import type { DbProjectInfo as ProjectInfo } from "../../api/generated/index.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
 
   interface Props {
@@ -61,12 +61,9 @@
     else loading = true;
     loadError = "";
     try {
-      const response = await callGenerated(
-        (options) => DataService.getApiV1DataProjectsByProjectKeySessions({
+      const response = await DataService.getApiV1DataProjectsByProjectKeySessions({
           projectKey,
-        }, { ...data.dateParams, cursor: append ? nextCursor : undefined, limit: 20, include_automated: data.includeAutomatedPreviews }, options),
-        signal,
-      );
+        }, { ...data.dateParams, cursor: append ? nextCursor : undefined, limit: 20, include_automated: data.includeAutomatedPreviews }, { signal });
       if (!sessionsRead.isCurrent(signal)) return false;
       const page = (response.sessions ?? []) as DbSession[];
       sessions = append ? [...sessions, ...page] : page;
@@ -113,11 +110,9 @@
     assignmentError = "";
     assignmentRefreshError = "";
     try {
-      const assignment = await callGenerated(() =>
-        SettingsService.putApiV1SettingsSessionProjectAssignmentsBySessionId({
+      const assignment = await SettingsService.putApiV1SettingsSessionProjectAssignmentsBySessionId({
           sessionId: session.id,
-        }, { project: target }),
-      );
+        }, { project: target });
       let inventoryRefreshed = false;
       try {
         inventoryRefreshed = await onAssigned(assignment.project);
@@ -148,11 +143,9 @@
     assignmentError = "";
     assignmentRefreshError = "";
     try {
-      const cleared = await callGenerated(() =>
-        SettingsService.deleteApiV1SettingsSessionProjectAssignmentsBySessionId({
+      const cleared = await SettingsService.deleteApiV1SettingsSessionProjectAssignmentsBySessionId({
           sessionId: session.id,
-        }),
-      );
+        });
       let inventoryRefreshed = false;
       try {
         inventoryRefreshed = await onAssigned(cleared.project);
@@ -183,16 +176,13 @@
     const signal = messagesRead.begin();
     messagesLoadingId = sessionId;
     try {
-      const response = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsByIdMessages({
+      const response = await SessionsService.getApiV1SessionsByIdMessages({
           id: sessionId,
         }, {
           limit: 12,
           direction: "asc",
           roles: "user,assistant",
-        }, options),
-        signal,
-      );
+        }, { signal });
       if (!messagesRead.isCurrent(signal)) return;
       // The generated message list has the same temporary `any[]` boundary
       // as the session list above.

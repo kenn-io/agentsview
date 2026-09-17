@@ -1,5 +1,5 @@
 /** Collect the searchable text blocks rendered by one transcript message. */
-import type { Message, ToolCall } from "../api/types.js";
+import type { DbMessage as Message, DbToolCall as ToolCall } from "../api/generated/index.js";
 import { LRUCache } from "../utils/cache.js";
 import { enrichSegments, parseContent } from "../utils/content-parser.js";
 import { renderMarkdown, type MarkdownRenderOptions } from "../utils/markdown.js";

@@ -1,4 +1,7 @@
+import { EventSource } from "eventsource";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+vi.mock("eventsource", () => ({ EventSource: vi.fn() }));
 
 // Minimal EventSource stub. Tests control when events fire and
 // assert on the number of instances created.
@@ -44,7 +47,9 @@ class FakeEventSource {
 
 beforeEach(async () => {
   FakeEventSource.reset();
-  vi.stubGlobal("EventSource", FakeEventSource);
+  vi.mocked(EventSource).mockImplementation(function (url) {
+    return new FakeEventSource(String(url)) as unknown as EventSource;
+  });
   const { events } = await import("./events.svelte.js");
   events.setAvailable(true);
 });

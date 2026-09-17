@@ -4,7 +4,7 @@
 
 export type GetApiV1SessionIdsResolveParams = {
   /**
-   * Session ID substring
+   * Session ID substring or raw suffix
    */
   partial: string;
   /**
@@ -13,4 +13,8 @@ export type GetApiV1SessionIdsResolveParams = {
    * @maximum 1000
    */
   limit?: number;
+  /**
+   * Use literal exact, colon-suffix, or host-tilde-suffix matching
+   */
+  raw_suffix?: boolean;
 };

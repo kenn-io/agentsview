@@ -87,6 +87,44 @@ func TestFindSessionIDsByPartialLiteralCaseSensitive(t *testing.T) {
 	assert.NotContains(t, got, "ABCdef")
 }
 
+func TestFindSessionIDsByRawSuffix(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "plain-id", "exact")
+	insertSession(t, d, "codex:uuid", "agent")
+	insertSession(t, d, "host~uuid", "host")
+	insertSession(t, d, "host~uuid-fork", "fork")
+	insertSession(t, d, "host~P-E", "entry")
+	insertSession(t, d, "host~wild_%_literal", "wild")
+	insertSession(t, d, "host~trashed", "trash")
+	require.NoError(t, d.SoftDeleteSession("host~trashed"))
+
+	ctx := context.Background()
+	got, err := d.FindSessionIDsByRawSuffix(ctx, "uuid", 2)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"codex:uuid", "host~uuid"}, got)
+	uuidIDs := append([]string(nil), got...)
+
+	got, err = d.FindSessionIDsByRawSuffix(ctx, "plain-id", 2)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"plain-id"}, got)
+	exactIDs := append([]string(nil), got...)
+
+	got, err = d.FindSessionIDsByRawSuffix(ctx, "wild_%_literal", 2)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"host~wild_%_literal"}, got)
+	wildcardIDs := append([]string(nil), got...)
+
+	got, err = d.FindSessionIDsByRawSuffix(ctx, "trashed", 2)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	trashedIDs := append([]string(nil), got...)
+
+	got, err = d.FindSessionIDsByRawSuffix(ctx, "E", 2)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	t.Logf("head: sqlite_uuid=%v exact=%v wildcard=%v trashed=%v entry=%v", uuidIDs, exactIDs, wildcardIDs, trashedIDs, got)
+}
+
 func TestListSessions_OutcomeFilter(t *testing.T) {
 	d := testDB(t)
 

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
-import type { Message } from "../../api/types.js";
+import type { DbMessage as Message } from "../../api/generated/index.js";
 import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
 import { messages } from "../../stores/messages.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
@@ -40,6 +40,8 @@ let component: ReturnType<typeof mount> | undefined;
 let nextId = 180000;
 function message(ordinal: number, content: string, overrides: Partial<Message> = {}): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: nextId++,
     session_id: "search-list",
     ordinal,
@@ -73,7 +75,13 @@ beforeEach(() => {
     message(1, "[Thinking]\nneedle\n[/Thinking]", { has_thinking: true }),
     message(2, "", {
       has_tool_use: true,
-      tool_calls: [{ tool_name: "Read", result_content: "needle" }],
+      tool_calls: [
+        {
+          category: "",
+          tool_name: "Read",
+          result_content: "needle",
+        },
+      ],
     }),
   ];
   messages.messageCount = 3;

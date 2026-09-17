@@ -1,6 +1,6 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
-  import type { ToolCategoryCount } from "../../api/types.js";
+  import type { DbToolCategoryCount as ToolCategoryCount } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
 
   const CATEGORY_COLORS: Record<string, string> = {

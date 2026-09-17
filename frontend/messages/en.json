@@ -2311,5 +2311,17 @@
     }
   ],
   "settings_image_cleanup_compact_note": "Removing payloads rewrites the stored rows. The archive file keeps its size until you run agentsview db compact.",
-  "appearance_render_unknown_xml_blocks": "Render unknown XML blocks as preformatted text"
+  "appearance_render_unknown_xml_blocks": "Render unknown XML blocks as preformatted text",
+  "go_to_session_title": "Go to session",
+  "go_to_session_input_label": "Session ID or UUID",
+  "go_to_session_placeholder": "Paste a session ID or UUID",
+  "go_to_session_submit": "Open session",
+  "go_to_session_close": "Close go to session",
+  "go_to_session_empty": "Enter a session ID or UUID.",
+  "go_to_session_invalid": "Enter a session ID or UUID.",
+  "go_to_session_not_found": "No session matches that ID or UUID.",
+  "go_to_session_ambiguous": "Multiple sessions match that ID or UUID. Open the desired session from an existing link.",
+  "go_to_session_capped": "Too many sessions match that ID or UUID. Open the desired session from an existing link.",
+  "go_to_session_failed": "Could not look up that session. Try again.",
+  "shortcuts_go_to_session": "Go to session when find is closed"
 }

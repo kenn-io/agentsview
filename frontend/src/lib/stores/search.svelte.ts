@@ -1,7 +1,7 @@
 import { debounce } from "@kenn-io/kit-ui";
 import { SearchService } from "../api/generated/index.js";
-import { ApiError, callGenerated, isAbortError } from "../api/runtime.js";
-import type { SearchResult } from "../api/types.js";
+import { ApiError, isAbortError } from "../api/runtime.js";
+import type { DbSearchResult as SearchResult } from "../api/generated/index.js";
 import { resolveRange, type RangeSelection } from "../components/shared/rangeSelection.js";
 
 export type SearchMode = "fulltext" | "semantic" | "hybrid";
@@ -245,41 +245,33 @@ export class SearchStore {
     try {
       let results: PaletteSearchResult[];
       if (mode === "fulltext") {
-        const response = await callGenerated(
-          (options) =>
-            SearchService.getApiV1Search(
-              {
-                q: query,
-                project: project || undefined,
-                limit: PALETTE_RESULT_LIMIT,
-                sort: this.sort,
-                ...dates,
-              },
-              options,
-            ),
-          signal,
+        const response = await SearchService.getApiV1Search(
+          {
+            q: query,
+            project: project || undefined,
+            limit: PALETTE_RESULT_LIMIT,
+            sort: this.sort,
+            ...dates,
+          },
+          { signal },
         );
         results = normalizeFullText(response.results ?? []);
       } else {
-        const response = await callGenerated(
-          (options) =>
-            SearchService.getApiV1SearchContent(
-              {
-                pattern: query.trim(),
-                mode,
-                project: project || undefined,
-                limit: CONTENT_SEARCH_LIMIT,
-                include_one_shot: true,
-                include_automated: true,
-                ...dates,
-                ...(range ? { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone } : {}),
-              },
-              {
-                ...options,
-                headers: { "X-AgentsView-Search-Intent": "semantic" },
-              },
-            ),
-          signal,
+        const response = await SearchService.getApiV1SearchContent(
+          {
+            pattern: query.trim(),
+            mode,
+            project: project || undefined,
+            limit: CONTENT_SEARCH_LIMIT,
+            include_one_shot: true,
+            include_automated: true,
+            ...dates,
+            ...(range ? { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone } : {}),
+          },
+          {
+            signal,
+            headers: { "X-AgentsView-Search-Intent": "semantic" },
+          },
         );
         results = normalizeContent(response.matches ?? []);
       }

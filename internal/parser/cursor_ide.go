@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"database/sql"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"hash/fnv"
@@ -269,10 +270,10 @@ func listCursorIDEComposerIDs(ctx context.Context, conn *sql.DB) ([]string, erro
 // separate call/result blocks, Cursor stores one tool invocation (input,
 // status, and output) inline on the assistant bubble that issued it.
 type cursorIDEToolFormerData struct {
-	ToolCallID string `json:"toolCallId"`
-	Name       string `json:"name"`
-	RawArgs    string `json:"rawArgs"`
-	Result     string `json:"result"`
+	ToolCallID string         `json:"toolCallId"`
+	Name       string         `json:"name"`
+	RawArgs    string         `json:"rawArgs"`
+	Result     jsontext.Value `json:"result,omitzero"`
 }
 
 type cursorIDEBubble struct {
@@ -280,6 +281,20 @@ type cursorIDEBubble struct {
 	Text           string                   `json:"text"`
 	CreatedAt      string                   `json:"createdAt"`
 	ToolFormerData *cursorIDEToolFormerData `json:"toolFormerData"`
+}
+
+func cursorIDEToolResultText(v jsontext.Value) string {
+	if len(v) == 0 || v.Kind() == 'n' {
+		return ""
+	}
+	if v.Kind() == '"' {
+		var text string
+		if err := json.Unmarshal(v, &text); err != nil {
+			return ""
+		}
+		return text
+	}
+	return string(v)
 }
 
 func loadCursorIDEBubble(
@@ -356,12 +371,12 @@ func cursorIDEMessageFromBubble(ordinal int, bubble cursorIDEBubble) (ParsedMess
 			Category:  NormalizeToolCategory(tfd.Name),
 			InputJSON: tfd.RawArgs,
 		}}
-		if tfd.Result != "" {
-			quoted, err := json.Marshal(tfd.Result)
+		if text := cursorIDEToolResultText(tfd.Result); text != "" {
+			quoted, err := json.Marshal(text)
 			if err == nil {
 				msg.ToolResults = []ParsedToolResult{{
 					ToolUseID:     tfd.ToolCallID,
-					ContentLength: len(tfd.Result),
+					ContentLength: len(text),
 					ContentRaw:    string(quoted),
 				}}
 			}

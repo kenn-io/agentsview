@@ -4,7 +4,7 @@
   import { data } from "../../stores/data.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import type { DbProjectInventoryRow } from "../../api/generated/index";
-  import type { ProjectInfo } from "../../api/types/core.js";
+  import type { DbProjectInfo as ProjectInfo } from "../../api/generated/index.js";
   import ProjectInventoryTable from "./ProjectInventoryTable.svelte";
   import ProjectBatchWorkspace from "./ProjectBatchWorkspace.svelte";
   import ProjectWorkspace from "./ProjectWorkspace.svelte";

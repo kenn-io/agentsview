@@ -17,7 +17,7 @@ func resolveChildCommand(command string) (string, error) {
 	switch strings.ToLower(filepath.Ext(resolved)) {
 	case ".bat", ".cmd":
 		return "", fmt.Errorf(
-			"Windows capture requires a native producer executable; batch shim %q is unsupported",
+			"windows capture requires a native producer executable; batch shim %q is unsupported",
 			filepath.Base(resolved),
 		)
 	default:

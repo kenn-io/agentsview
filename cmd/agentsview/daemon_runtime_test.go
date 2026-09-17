@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -1764,4 +1765,38 @@ func TestDaemonRuntime_ReadOnlyPersisted(t *testing.T) {
 	assert.Equal(t, "true", rec.Metadata[runtimeReadOnly])
 	assert.Equal(t, strconv.Itoa(port), rec.Metadata[runtimePort])
 	assert.Equal(t, "test", rec.Version)
+}
+
+func TestBasePathDaemonDiscoveryAndAPITransport(t *testing.T) {
+	for _, token := range []string{"", "test-token"} {
+		t.Run(token, func(t *testing.T) {
+			ts := httptest.NewUnstartedServer(nil)
+			cfg := config.Config{
+				Host: "127.0.0.1", Port: ts.Listener.Addr().(*net.TCPAddr).Port,
+				RequireAuth: token != "", AuthToken: token,
+			}
+			srv := server.New(cfg, nil, nil, server.WithBasePath("/viewer/"))
+			ts.Config.Handler = srv.Handler()
+			ts.Start()
+			defer ts.Close()
+			ep := serverEndpoint(t, ts)
+			dir := t.TempDir()
+			_, err := WriteDaemonRuntimeWithAuth(dir, ep.Host, ep.Port, "test", "https://viewer.example/viewer", true, token != "")
+			require.NoError(t, err)
+			rt := FindDaemonRuntime(dir, token)
+			require.NotNil(t, rt, "prefixed daemon must be discoverable")
+			tr := transportFromRuntime(rt)
+			assert.Equal(t, ts.URL+"/viewer", tr.URL)
+			assert.Equal(t, "https://viewer.example/viewer", tr.BrowserURL)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, tr.URL+"/api/ping", nil)
+			require.NoError(t, err)
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+			resp, err := ts.Client().Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusOK, resp.StatusCode)
+		})
+	}
 }

@@ -89,24 +89,19 @@ func parsePiLikeSession(
 		project = ExtractProjectFromCwd(cwd)
 	}
 
-	// Branch lineage. Upstream pi records the parent as branchedFrom, a
-	// file path whose basename without extension is the parent's session
-	// ID. OMP (Oh My Pi) headers instead record the parent's session ID
-	// directly in parentSession, while Prime Agent records its file path there.
-	// branchedFrom wins when present so upstream pi is unchanged.
-	// Both paths reuse this session's own idPrefix, so the mapped value
-	// matches the parent's stored ID (idPrefix + its session id) and
-	// lineage resolves.
+	// Branch lineage. Pi records persisted parents as file paths in
+	// branchedFrom or parentSession. OMP records a raw ID in parentSession,
+	// while Prime Agent and native Pi may need to resolve a persisted path
+	// against a sibling. branchedFrom wins when present.
 	var parentSessionID string
 	if branchedFrom := gjson.Get(headerLine, "branchedFrom").Str; branchedFrom != "" {
 		parentSessionID = idPrefix + piPersistedPathSessionID(branchedFrom)
-	} else if agent == AgentOMP || agent == AgentPrimeAgent {
-		if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" {
-			if agent == AgentPrimeAgent {
-				parentSession = primeParentSessionID(path, parentSession)
-			}
-			parentSessionID = idPrefix + parentSession
+	} else if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" &&
+		(agent == AgentPi || agent == AgentOMP || agent == AgentPrimeAgent) {
+		if agent == AgentPrimeAgent || agent == AgentPi {
+			parentSession = primeParentSessionID(path, parentSession)
 		}
+		parentSessionID = idPrefix + parentSession
 	}
 
 	// OMP writes subagent transcripts inside a directory named after the
@@ -354,7 +349,7 @@ func parsePiLikeSession(
 			Mtime: info.ModTime().UnixNano(),
 		},
 	}
-	if agent == AgentPrimeAgent && parentSessionID != "" {
+	if (agent == AgentPrimeAgent || agent == AgentPi) && parentSessionID != "" {
 		sess.RelationshipType = RelFork
 	}
 	if isOMPSubagent {

@@ -1,21 +1,21 @@
+import type { AutomatedScope } from "../api/types.js";
 import type {
-  AnalyticsSummary,
-  ActivityResponse,
-  ProjectsAnalyticsResponse,
-  HourOfWeekResponse,
-  SessionShapeResponse,
-  VelocityResponse,
-  ToolsAnalyticsResponse,
-  SkillsAnalyticsResponse,
-  SignalsAnalyticsResponse,
-  AutomatedScope,
-} from "../api/types.js";
+  DbAnalyticsSummary as AnalyticsSummary,
+  DbActivityResponse as ActivityResponse,
+  DbProjectsAnalyticsResponse as ProjectsAnalyticsResponse,
+  DbHourOfWeekResponse as HourOfWeekResponse,
+  DbSessionShapeResponse as SessionShapeResponse,
+  DbVelocityResponse as VelocityResponse,
+  DbToolsAnalyticsResponse as ToolsAnalyticsResponse,
+  DbSkillsAnalyticsResponse as SkillsAnalyticsResponse,
+  DbSignalsAnalyticsResponse as SignalsAnalyticsResponse,
+} from "../api/generated/index.js";
 import {
   AnalyticsService,
   type DbHeatmapResponse,
   type DbTopSessionsResponse,
 } from "../api/generated/index";
-import { callGenerated, isAbortError } from "../api/runtime.js";
+import { isAbortError } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
@@ -467,7 +467,7 @@ class AnalyticsStore {
     const started = performance.now();
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
-      const data = await callGenerated(fetchRequest, signal);
+      const data = await fetchRequest({ signal });
       if (this.versions[panel] === v) {
         onSuccess(data);
         this.errors[panel] = null;

@@ -12,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func TestGradeCell(t *testing.T) {
@@ -335,7 +336,7 @@ func TestResolveHealthSessionIDUsesDaemonPartialLookup(t *testing.T) {
 
 	got, err := resolveHealthSessionID(
 		context.Background(),
-		service.NewHTTPBackend(ts.URL, "", false, ""),
+		servicehttp.NewHTTPBackend(ts.URL, "", false, ""),
 		"partial-target",
 	)
 

@@ -999,7 +999,7 @@
   }
 
   .header-btn:disabled {
-    opacity: 0.55;
+    opacity: var(--opacity-disabled);
     cursor: default;
   }
 
@@ -1053,7 +1053,7 @@
   }
 
   .import-btn:disabled {
-    opacity: 0.55;
+    opacity: var(--opacity-disabled);
     cursor: default;
   }
 

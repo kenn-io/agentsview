@@ -9,7 +9,7 @@ export interface DbSessionTiming {
   by_category: DbCategoryTotal[];
   running: boolean;
   session_id: string;
-  slowest_call: DbCallTiming;
+  slowest_call: DbCallTiming | null;
   subagent_count: number;
   tool_call_count: number;
   tool_duration_ms: number;

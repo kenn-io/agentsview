@@ -73,6 +73,10 @@ type SourceCapabilities struct {
 	// its stored virtual members. A still-present container remains
 	// authoritative for member deletion.
 	PersistentArchive CapabilitySupport
+	// ExplicitDeletionOnly means source discovery and reconciliation may
+	// refresh sessions but must never mark an archived session missing. The
+	// user deletes these sessions explicitly from AgentsView.
+	ExplicitDeletionOnly CapabilitySupport
 	// MultiFileStatHash declares that a provider's on-disk source layout
 	// spans multiple sibling files (Codebuff's chat-messages.json plus
 	// run-state.json and chat-meta.json, for example) and that the engine

@@ -10,7 +10,6 @@ vi.mock("../../api/generated/index", () => ({
   SessionsService: { getApiV1SessionsById: api.getSession },
 }));
 vi.mock("../../api/runtime.js", () => ({
-  callGenerated: (request: () => Promise<unknown>) => request(),
   isAbortError: () => false,
 }));
 
@@ -88,7 +87,11 @@ describe("ProjectSessionPreviewCarousel", () => {
     );
     await flush();
 
-    expect(api.getSession).toHaveBeenNthCalledWith(1, { id: "session-1" }, undefined);
+    expect(api.getSession).toHaveBeenNthCalledWith(
+      1,
+      { id: "session-1" },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(screen.getByText("Fix the first project")).toBeTruthy();
     expect(screen.getByText("project-a-old")).toBeTruthy();
     expect(screen.getByText("project-a")).toBeTruthy();
@@ -98,7 +101,11 @@ describe("ProjectSessionPreviewCarousel", () => {
     );
     await flush();
 
-    expect(api.getSession).toHaveBeenNthCalledWith(2, { id: "session-2" }, undefined);
+    expect(api.getSession).toHaveBeenNthCalledWith(
+      2,
+      { id: "session-2" },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(screen.getByText("Review the second project")).toBeTruthy();
     expect(screen.getByText("project-b-old")).toBeTruthy();
     expect(screen.getByText("/worktrees/project-a/branch-two")).toBeTruthy();

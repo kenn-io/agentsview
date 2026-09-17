@@ -3,10 +3,7 @@
   import { scalePoint } from "d3-scale";
   import LargeChartFrame from "../shared/LargeChartFrame.svelte";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
-  import type {
-    TrendsBucket,
-    TrendsSeries,
-  } from "../../api/types.js";
+  import type { DbTrendBucket as TrendsBucket, DbTrendSeries as TrendsSeries } from "../../api/generated/index.js";
 
   interface Props {
     buckets: TrendsBucket[];

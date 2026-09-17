@@ -5,10 +5,13 @@ import (
 	"net/http"
 
 	"go.kenn.io/agentsview/internal/db"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 func (s *Server) registerPinRoutes() {
-	group := newRouteGroup(s.api, "/api/v1", "Pins")
+	group := huma.NewGroup(s.api, "/api/v1")
+	configureRouteGroup(group, "Pins")
 
 	s.get(group, "/pins", "List pins", s.humaListPins)
 	s.get(group, "/sessions/{id}/pins", "List session pins", s.humaListSessionPins)

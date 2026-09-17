@@ -24,7 +24,8 @@ const (
 )
 
 func (s *Server) registerActivityRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/activity", "Activity")
+	group := huma.NewGroup(s.api, "/api/v1/activity")
+	configureRouteGroup(group, "Activity")
 	s.stream(group, http.MethodGet, "/report", "Get activity report",
 		s.humaActivityReport, streamJSONResponseSchema("ActivityReport"))
 	s.getLong(group, "/report/{report_id}/sessions",

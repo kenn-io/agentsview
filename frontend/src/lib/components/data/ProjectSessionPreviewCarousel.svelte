@@ -6,7 +6,7 @@
     type DbWorktreeReclassificationSessionSample,
     type ServiceSessionDetail,
   } from "../../api/generated/index";
-  import { callGenerated, isAbortError } from "../../api/runtime.js";
+  import { isAbortError } from "../../api/runtime.js";
   import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon } from "../../icons.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { LatestRead } from "../../utils/latest-read.js";
@@ -56,10 +56,7 @@
     const signal = detailRead.begin();
     loadingId = sample.id;
     try {
-      const detail = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsById({ id: sample.id }, options),
-        signal,
-      );
+      const detail = await SessionsService.getApiV1SessionsById({ id: sample.id }, { signal });
       if (!detailRead.isCurrent(signal)) return;
       details = { ...details, [sample.id]: detail };
     } catch (error) {

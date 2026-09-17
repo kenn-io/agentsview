@@ -28,6 +28,24 @@ When changing route registration or generated client contracts:
 - Keep generated frontend code under `frontend/src/lib/api/generated/`; it is
   marked as generated in `.gitattributes` and should not be hand-edited.
 
+## Generated contract and clients
+
+Run `npm run generate:api` in `frontend/` to regenerate the committed
+[`openapi.yaml`](../../openapi.yaml), the Orval TypeScript client, and the
+DoorDash Go client in `internal/apiclient`. The Go client covers CLI, service,
+raw-sync, and remote transfer operations. `npm run check:api` checks all three
+outputs for drift. The standalone `agentsview openapi --yaml` command prints the
+same schema without opening an archive or starting a server.
+
+Prek and CI run every rule in the shared `huma-check` linter at kit PR #84's
+`efb469cee12d24fd52640ea05b03ced275bf4370` revision. The linter reads the Git
+index, so stage changes before running it locally.
+
+Use Huma's group type and literal prefixes when registering routes so the linter
+can distinguish grouped routes from root paths. Archive and raw-sync clients use
+generated operations with an unread-response transport to preserve streaming and
+caller-owned response limits.
+
 ## Collection nullability
 
 AgentsView uses `encoding/json/v2`, which encodes a nil Go slice as an empty

@@ -25,7 +25,6 @@
     type ResumeResponse,
   } from "../../api/generated/index";
   import {
-    callGenerated,
     isAbortError,
   } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
@@ -105,7 +104,7 @@
 
   onMount(() => {
     const signal = openersRead.begin();
-    callGenerated((options) => OpenersService.getApiV1Openers(options), signal)
+    OpenersService.getApiV1Openers({ signal })
       .then((res) => {
         if (!openersRead.isCurrent(signal)) return;
         openers = res.openers;
@@ -132,10 +131,7 @@
     const signal = directoryRead.begin();
     pendingSessionDirId = id;
     sessionDir = null;
-    callGenerated(
-      (options) => SessionsService.getApiV1SessionsByIdDirectory({ id }, options),
-      signal,
-    )
+    SessionsService.getApiV1SessionsByIdDirectory({ id }, { signal })
       .then(({ path }) => {
         if (session?.id === id && directoryRead.isCurrent(signal)) {
           sessionDir = (path as SessionDirectoryResponse["path"]) || null;
@@ -242,10 +238,7 @@
     if (key === costFetchKey) return;
     const signal = costRead.begin();
     costSessionId = id;
-    callGenerated(
-      (options) => SessionsService.getApiV1SessionsByIdUsage({ id }, { rollup: true }, options),
-      signal,
-    )
+    SessionsService.getApiV1SessionsByIdUsage({ id }, { rollup: true }, { signal })
       .then((res) => {
         if (!costRead.isCurrent(signal)) return;
         costFetchKey = key;
@@ -282,11 +275,7 @@
     if (key === breakdownFetchKey) return;
     const signal = breakdownRead.begin();
     usageBreakdownLoading = true;
-    callGenerated(
-      (options) =>
-        SessionsService.getApiV1SessionsByIdUsage({ id }, { breakdown: true }, options),
-      signal,
-    )
+    SessionsService.getApiV1SessionsByIdUsage({ id }, { breakdown: true }, { signal })
       .then((res) => {
         if (!breakdownRead.isCurrent(signal)) return;
         breakdownFetchKey = key;
@@ -409,7 +398,6 @@
       if (copiedSessionId === sessionId) copiedSessionId = "";
     }, 1500);
   }
-
 
   let copiedLinkId = $state("");
   let copiedLinkTimer: ReturnType<typeof setTimeout> | undefined;
@@ -739,7 +727,6 @@
   onkeydown={handleKeydown}
   onclick={handleClickOutside}
 />
-
 
 <div class="session-breadcrumb">
   {#if !ui.isMobileViewport && !ui.sidebarOpen}
@@ -1393,7 +1380,6 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
-
 
   .session-id {
     font-size: 10px;

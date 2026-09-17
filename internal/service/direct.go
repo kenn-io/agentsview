@@ -55,6 +55,16 @@ func NewReadOnlyBackend(d db.Store) SessionService {
 
 func (b *directBackend) SupportsRecallQueries() bool { return b.local != nil }
 
+func (b *directBackend) MachineLabels(
+	ctx context.Context,
+) (MachineLabelCatalog, error) {
+	labels, err := b.db.GetMachineLabels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return MachineLabelCatalog(labels), nil
+}
+
 func (b *directBackend) Get(
 	ctx context.Context, id string,
 ) (*SessionDetail, error) {
@@ -70,6 +80,12 @@ func (b *directBackend) FindSessionIDsByPartial(
 	ctx context.Context, partial string, limit int,
 ) ([]string, error) {
 	return b.db.FindSessionIDsByPartial(ctx, partial, limit)
+}
+
+func (b *directBackend) FindSessionIDsByRawSuffix(
+	ctx context.Context, raw string, limit int,
+) ([]string, error) {
+	return b.db.FindSessionIDsByRawSuffix(ctx, raw, limit)
 }
 
 // buildSessionDetail wraps a db.Session with its computed health

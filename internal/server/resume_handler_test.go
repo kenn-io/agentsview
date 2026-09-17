@@ -463,6 +463,95 @@ func TestResumeSession(t *testing.T) {
 		assertSamePath(t, "cwd", resp.Cwd, projectDir)
 	})
 
+	t.Run("pi_command_only", func(t *testing.T) {
+		projectDir := filepath.Join(t.TempDir(), "project~1")
+		require.NoError(t, os.Mkdir(projectDir, 0o755))
+		v1Path := filepath.Join(projectDir, "2025-01-01T09-00-00-000Z_parent-uuid.jsonl")
+		remotePath := "/home/user/.pi/agent/sessions/session-1.jsonl"
+		remoteV1Path := "/home/user/.pi/agent/sessions/2025-01-01T09-00-00-000Z_parent-uuid.jsonl"
+		te.seedSession(t, "pi:session-1", "pi-project", 3, func(s *db.Session) {
+			s.Agent = "pi"
+			s.Cwd = projectDir
+		})
+		te.seedSession(t, "pi:$(whoami)", "pi-project", 3, func(s *db.Session) {
+			s.Agent = "pi"
+			s.Cwd = projectDir
+		})
+		te.seedSession(t, "devbox1~pi:session-1", "remote-project", 3, func(s *db.Session) {
+			s.Agent = "pi"
+			s.Cwd = "/home/user/project"
+			storedPath := "devbox1:" + remotePath
+			s.FilePath = &storedPath
+		})
+		te.seedSession(t, "devbox1~pi:2025-01-01T09-00-00-000Z_parent-uuid", "remote-project", 3, func(s *db.Session) {
+			s.Agent = "pi"
+			s.Cwd = "/home/user/project"
+			storedPath := "devbox1:" + remoteV1Path
+			s.FilePath = &storedPath
+		})
+		te.seedSession(t, "pi:2025-01-01T09-00-00-000Z_parent-uuid", "pi-project", 3, func(s *db.Session) {
+			s.Agent = "pi"
+			s.Cwd = projectDir
+			s.FilePath = &v1Path
+		})
+
+		for _, tt := range []struct {
+			name       string
+			id         string
+			wantCwd    string
+			wantSuffix string
+		}{
+			{
+				name:       "local session",
+				id:         "pi:session-1",
+				wantCwd:    projectDir,
+				wantSuffix: "pi --session session-1",
+			},
+			{
+				name:       "local shell metacharacter",
+				id:         "pi:$(whoami)",
+				wantCwd:    projectDir,
+				wantSuffix: "pi --session '$(whoami)'",
+			},
+			{
+				name:       "remote session",
+				id:         "devbox1~pi:session-1",
+				wantCwd:    "/home/user/project",
+				wantSuffix: "pi --session '" + remotePath + "'",
+			},
+			{
+				name:       "remote v1 session strips storage host",
+				id:         "devbox1~pi:2025-01-01T09-00-00-000Z_parent-uuid",
+				wantCwd:    "/home/user/project",
+				wantSuffix: "pi --session '" + remoteV1Path + "'",
+			},
+			{
+				name:       "v1 session uses file path",
+				id:         "pi:2025-01-01T09-00-00-000Z_parent-uuid",
+				wantCwd:    projectDir,
+				wantSuffix: "pi --session '" + v1Path + "'",
+			},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				w := te.post(t,
+					"/api/v1/sessions/"+tt.id+"/resume",
+					`{"command_only":true}`,
+				)
+				t.Logf("id=%s command=%s", tt.id, w.Body.String())
+				assertStatus(t, w, http.StatusOK)
+				var resp struct {
+					Launched bool   `json:"launched"`
+					Command  string `json:"command"`
+					Cwd      string `json:"cwd"`
+				}
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+				assert.False(t, resp.Launched, "expected launched=false for command_only")
+				assert.Equal(t, "cd '"+tt.wantCwd+"' && "+tt.wantSuffix, resp.Command)
+				assert.Equal(t, tt.wantCwd, resp.Cwd)
+			})
+		}
+	})
+
 	t.Run("claude desktop rejects non-claude agent", func(t *testing.T) {
 		te.seedSession(t, "codex-desk", t.TempDir(), 3, func(s *db.Session) {
 			s.Agent = "codex"

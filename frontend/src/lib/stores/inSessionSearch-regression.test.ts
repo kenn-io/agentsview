@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { tick } from "svelte";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 import { InSessionSearchStore } from "./inSessionSearch.svelte.js";
 import { reactiveSource, reactiveView } from "./__fixtures__/search-state.svelte.js";
 
@@ -27,6 +27,8 @@ vi.mock("./ui.svelte.js", () => ({
 let id = 900000;
 function message(ordinal: number, content: string): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: id++,
     session_id: "find-regression",
     ordinal,

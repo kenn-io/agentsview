@@ -349,8 +349,8 @@ func loadUsageRollupFacts(
 		f.cost_source, f.request_scoped, f.claude_message_id, f.claude_request_id,
 		f.source_uuid, f.usage_dedup_key, f.token_eligible, f.activity_eligible
 		FROM usage_rollup_build_sessions selected
-		JOIN usage_cached_sessions cs ON cs.session_id = selected.session_id
-		JOIN usage_facts f ON f.cached_session_id = cs.id
+		CROSS JOIN usage_cached_sessions cs ON cs.session_id = selected.session_id
+		CROSS JOIN usage_facts f ON f.cached_session_id = cs.id
 		ORDER BY cs.session_id, f.fact_index`)
 	if err != nil {
 		return nil, fmt.Errorf("loading rollup facts: %w", err)

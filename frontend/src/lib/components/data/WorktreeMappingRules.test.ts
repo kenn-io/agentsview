@@ -10,7 +10,6 @@ vi.mock("../../api/runtime.js", async (importOriginal) => {
   const orig = await importOriginal<typeof import("../../api/runtime.js")>();
   return {
     ...orig,
-    callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   };
 });
 
@@ -205,7 +204,7 @@ describe("WorktreeMappingRules", () => {
     component = mountRules();
     await flush();
 
-    await fireEvent.click(screen.getByRole("button", { name: "Select machine" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Select machine:/ }));
     await fireEvent.mouseDown(screen.getByRole("option", { name: "remote-host" }));
     await flush();
 
@@ -223,7 +222,7 @@ describe("WorktreeMappingRules", () => {
     component = mountRules({ onMachineChange: undefined });
     await flush();
 
-    await fireEvent.click(screen.getByRole("button", { name: "Select machine" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Select machine:/ }));
     await fireEvent.mouseDown(screen.getByRole("option", { name: "remote-host" }));
     await flush();
 
@@ -269,7 +268,7 @@ describe("WorktreeMappingRules", () => {
     expect(dataService.getApiV1DataProjectRules.mock.lastCall?.[0]).toEqual({
       machine: undefined,
     });
-    const typeahead = screen.getByRole("button", { name: "Select machine" });
+    const typeahead = screen.getByRole("button", { name: /^Select machine:/ });
     expect(typeahead.textContent).toContain("local-host");
   });
 
@@ -300,10 +299,10 @@ describe("WorktreeMappingRules", () => {
 
     await fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(screen.getByRole("button", { name: "Save mapping" })).toBeTruthy();
-    await fireEvent.click(screen.getByRole("button", { name: "Select machine" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Select machine:/ }));
     await fireEvent.mouseDown(screen.getByRole("option", { name: "remote-host" }));
     expect(screen.getByRole("button", { name: "Add mapping" })).toBeTruthy();
-    await fireEvent.click(screen.getByRole("button", { name: "Select machine" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Select machine:/ }));
     await fireEvent.mouseDown(screen.getByRole("option", { name: "local-host" }));
 
     expect(dataService.getApiV1DataProjectRules.mock.calls[1]?.[0]).toEqual({
@@ -402,7 +401,7 @@ describe("WorktreeMappingRules", () => {
     });
     await fireEvent.click(screen.getByRole("button", { name: "Add mapping" }));
 
-    await fireEvent.click(screen.getByRole("button", { name: "Select machine" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Select machine:/ }));
     await fireEvent.mouseDown(screen.getByRole("option", { name: "remote-host" }));
     await flush();
     await fireEvent.input(screen.getByRole("textbox", { name: "Path prefix" }), {
@@ -437,7 +436,7 @@ describe("WorktreeMappingRules", () => {
     await flush();
 
     await fireEvent.click(screen.getByRole("button", { name: "Apply mappings" }));
-    await fireEvent.click(screen.getByRole("button", { name: "Select machine" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Select machine:/ }));
     await fireEvent.mouseDown(screen.getByRole("option", { name: "remote-host" }));
     await flush();
 
@@ -462,7 +461,7 @@ describe("WorktreeMappingRules", () => {
     await flush();
 
     await fireEvent.click(screen.getByRole("button", { name: "Apply mappings" }));
-    await fireEvent.click(screen.getByRole("button", { name: "Select machine" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Select machine:/ }));
     await fireEvent.mouseDown(screen.getByRole("option", { name: "remote-host" }));
     await flush();
 
@@ -490,7 +489,7 @@ describe("WorktreeMappingRules", () => {
       target: { value: "local-project" },
     });
     await fireEvent.click(screen.getByRole("button", { name: "Add mapping" }));
-    await fireEvent.click(screen.getByRole("button", { name: "Select machine" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Select machine:/ }));
     await fireEvent.mouseDown(screen.getByRole("option", { name: "remote-host" }));
     await flush();
 
@@ -513,7 +512,7 @@ describe("WorktreeMappingRules", () => {
 
     await fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await fireEvent.click(screen.getByRole("button", { name: "Delete mapping" }));
-    await fireEvent.click(screen.getByRole("button", { name: "Select machine" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Select machine:/ }));
     await fireEvent.mouseDown(screen.getByRole("option", { name: "remote-host" }));
     await flush();
 

@@ -1,7 +1,12 @@
 import type { DataChangedEvent } from "../api/client.js";
 import { MetadataService, SessionsService, SettingsService } from "../api/generated/index";
-import { callGenerated, isAbortError, isNotFoundError } from "../api/runtime.js";
-import type { Session, ProjectInfo, AgentInfo, SidebarSessionIndexRow } from "../api/types.js";
+import { isAbortError, isNotFoundError } from "../api/runtime.js";
+import type { Session } from "../api/types.js";
+import type {
+  DbProjectInfo as ProjectInfo,
+  DbAgentInfo as AgentInfo,
+  DbSidebarSessionIndexRow as SidebarSessionIndexRow,
+} from "../api/generated/index.js";
 import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import { starred } from "./starred.svelte.js";
@@ -518,10 +523,7 @@ class SessionsStore {
       total: this.total,
     };
     try {
-      const index = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsSidebarIndex(params, options),
-        signal,
-      );
+      const index = await SessionsService.getApiV1SessionsSidebarIndex(params, { signal });
       if (this.loadVersion !== version) return;
 
       this.sidebarIndexVersion = indexVersion;
@@ -607,10 +609,7 @@ class SessionsStore {
         const promise = this.runSidebarHydration(async () => {
           if (signal.aborted) return;
           try {
-            const hydrated = await callGenerated(
-              (options) => SessionsService.getApiV1SessionsById({ id }, options),
-              signal,
-            );
+            const hydrated = await SessionsService.getApiV1SessionsById({ id }, { signal });
             if (
               version !== this.sidebarIndexVersion ||
               epoch !== (this.sidebarHydrationEpochByVersion.get(version) ?? 0)
@@ -690,17 +689,13 @@ class SessionsStore {
     const signal = this.routeSignal();
     this.loading = true;
     try {
-      const index = await callGenerated(
-        (options) =>
-          SessionsService.getApiV1SessionsSidebarIndex(
-            {
-              ...this.apiParams,
-              cursor: this.nextCursor!,
-              limit: SESSION_PAGE_SIZE,
-            },
-            options,
-          ),
-        signal,
+      const index = await SessionsService.getApiV1SessionsSidebarIndex(
+        {
+          ...this.apiParams,
+          cursor: this.nextCursor!,
+          limit: SESSION_PAGE_SIZE,
+        },
+        { signal },
       );
       if (this.loadVersion !== version) return;
       // Merge index-page order first, appended rows last. Rows outside
@@ -882,10 +877,7 @@ class SessionsStore {
     const entry = { id, promise: Promise.resolve() };
     entry.promise = (async () => {
       try {
-        const session = await callGenerated(
-          (options) => SessionsService.getApiV1SessionsById({ id }, options),
-          signal,
-        );
+        const session = await SessionsService.getApiV1SessionsById({ id }, { signal });
         if (this.activeSessionId === id && this.navigateRead.isCurrent(signal)) {
           const idx = this.sessions.findIndex((s) => s.id === id);
           if (idx >= 0) {
@@ -965,10 +957,7 @@ class SessionsStore {
     const version = ++this.refreshVersion;
     const signal = this.refreshRead.begin();
     try {
-      const session = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsById({ id }, options),
-        signal,
-      );
+      const session = await SessionsService.getApiV1SessionsById({ id }, { signal });
       if (
         this.refreshVersion !== version ||
         this.activeSessionId !== id ||
@@ -995,9 +984,9 @@ class SessionsStore {
     const version = ++this.childSessionsVersion;
     const signal = this.childSessionsRead.begin();
     try {
-      const children = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsByIdChildren({ id: parentId }, options),
-        signal,
+      const children = await SessionsService.getApiV1SessionsByIdChildren(
+        { id: parentId },
+        { signal },
       );
       if (
         this.childSessionsVersion !== version ||
@@ -1048,10 +1037,7 @@ class SessionsStore {
     const signal = this.routeSignal();
     this.signalDetailLoading = true;
     try {
-      const session = await callGenerated(
-        (options) => SessionsService.getApiV1SessionsById({ id }, options),
-        signal,
-      );
+      const session = await SessionsService.getApiV1SessionsById({ id }, { signal });
       if (signal.aborted) return;
       this.signalDetailCache.set(id, {
         basis: session.health_score_basis ?? null,
@@ -1073,7 +1059,7 @@ class SessionsStore {
         this.sessions[idx] = {
           ...s,
           health_score_basis: detail.basis,
-          health_penalties: detail.penalties,
+          health_penalties: detail.penalties ?? undefined,
         };
       }
     }
@@ -1442,7 +1428,7 @@ class SessionsStore {
       // Explicitly null it out so the store reflects the cleared state rather
       // than keeping the stale value until the next SSE-triggered refresh.
       if (displayName === null && updated.display_name === undefined) {
-        merged.display_name = null;
+        merged.display_name = undefined;
       }
       this.sessions[idx] = merged;
     }
@@ -1591,6 +1577,17 @@ export function createSessionsStore(): SessionsStore {
 
 function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Session): Session {
   const skinny: Session = {
+    compaction_count: 0,
+    consecutive_failure_max: 0,
+    edit_churn_count: 0,
+    ended_with_role: "",
+    final_failure_streak: 0,
+    mid_task_compaction_count: 0,
+    outcome: "",
+    outcome_confidence: "",
+    secret_leak_count: 0,
+    tool_failure_signal_count: 0,
+    tool_retry_count: 0,
     id: row.id,
     project: row.project,
     project_assigned: row.project_assigned ?? false,
@@ -1599,14 +1596,14 @@ function sidebarIndexRowToSession(row: SidebarSessionIndexRow, existing?: Sessio
     agent_label: row.agent_label ?? undefined,
     entrypoint: row.entrypoint ?? undefined,
     first_message: null,
-    display_name: row.display_name ?? null,
+    display_name: row.display_name ?? undefined,
     started_at: row.started_at,
     ended_at: row.ended_at,
     message_count: row.message_count,
     user_message_count: row.user_message_count,
     parent_session_id: row.parent_session_id ?? undefined,
     relationship_type: row.relationship_type ?? undefined,
-    termination_status: row.termination_status ?? null,
+    termination_status: row.termination_status ?? undefined,
     total_output_tokens: 0,
     peak_context_tokens: 0,
     has_total_output_tokens: false,

@@ -18,15 +18,16 @@ import (
 )
 
 func (s *Server) registerInsightsRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/insights", "Insights")
+	group := huma.NewGroup(s.api, "/api/v1")
+	configureRouteGroup(group, "Insights")
 
-	s.get(group, "", "List insights", s.humaListInsights)
-	s.get(group, "/{id}", "Get insight", s.humaGetInsight)
-	s.raw(group, http.MethodGet, "/{id}/export", "Export insight as HTML", s.humaExportInsight)
-	s.raw(group, http.MethodGet, "/{id}/md", "Export insight as Markdown", s.humaMarkdownInsight)
-	s.post(group, "/{id}/publish", "Publish insight", s.humaPublishInsight)
-	s.deleteRoute(group, "/{id}", "Delete insight", s.humaDeleteInsight)
-	s.stream(group, http.MethodPost, "/generate", "Generate insight", s.humaGenerateInsight)
+	s.get(group, "/insights", "List insights", s.humaListInsights)
+	s.get(group, "/insights/{id}", "Get insight", s.humaGetInsight)
+	s.raw(group, http.MethodGet, "/insights/{id}/export", "Export insight as HTML", "text/html", s.humaExportInsight)
+	s.raw(group, http.MethodGet, "/insights/{id}/md", "Export insight as Markdown", "text/markdown", s.humaMarkdownInsight)
+	s.post(group, "/insights/{id}/publish", "Publish insight", s.humaPublishInsight)
+	s.deleteRoute(group, "/insights/{id}", "Delete insight", s.humaDeleteInsight)
+	s.stream(group, http.MethodPost, "/insights/generate", "Generate insight", s.humaGenerateInsight)
 }
 
 type insightType string

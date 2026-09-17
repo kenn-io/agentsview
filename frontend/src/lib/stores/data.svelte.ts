@@ -3,13 +3,17 @@ import {
   type DbProjectInventory,
   type DbProjectInventoryRow,
 } from "../api/generated/index";
-import { callGenerated, isAbortError } from "../api/runtime.js";
+import { isAbortError } from "../api/runtime.js";
 import { m } from "../i18n/index.js";
 import { router } from "./router.svelte.js";
 import { LatestRead } from "../utils/latest-read.js";
 import { events } from "./events.svelte.js";
 import { PROJECT_MAPPING_WORKSPACE_ENABLED } from "../feature-flags.js";
-import { resolveRange, selectionFromWindow, type RangeSelection } from "../components/shared/rangeSelection.js";
+import {
+  resolveRange,
+  selectionFromWindow,
+  type RangeSelection,
+} from "../components/shared/rangeSelection.js";
 
 export type DataView = "inventory" | "rules";
 const DATA_REFRESH_DEBOUNCE_MS = 300;
@@ -38,7 +42,11 @@ class DataStore {
   get dateParams(): { date_from?: string; date_to?: string; timezone?: string } {
     if (!this.dateFiltered) return {};
     const range = resolveRange(this.dateSelection);
-    return { date_from: range.from, date_to: range.to, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone };
+    return {
+      date_from: range.from,
+      date_to: range.to,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    };
   }
 
   setDateSelection(selection: RangeSelection) {
@@ -111,9 +119,15 @@ class DataStore {
    * `project_key` param, if any, selected.
    */
   hydrateFromUrl(params: Record<string, string>, projectWorkspaceEnabled: boolean) {
-    this.dateSelection = params.date_from && params.date_to
-      ? selectionFromWindow({ isPinned: true, windowDays: 0, from: params.date_from, to: params.date_to })
-      : { mode: "relative", days: 0 };
+    this.dateSelection =
+      params.date_from && params.date_to
+        ? selectionFromWindow({
+            isPinned: true,
+            windowDays: 0,
+            from: params.date_from,
+            to: params.date_to,
+          })
+        : { mode: "relative", days: 0 };
     if (!projectWorkspaceEnabled) {
       this.view = "rules";
       this.rulesMachine = params.view === "rules" ? (params.machine ?? "") : "";
@@ -160,10 +174,7 @@ class DataStore {
     if (!opts.background) this.loading = true;
     this.error = "";
     try {
-      const inventory = await callGenerated(
-        (options) => DataService.getApiV1DataProjects(this.dateParams, options),
-        signal,
-      );
+      const inventory = await DataService.getApiV1DataProjects(this.dateParams, { signal });
       if (!this.#inventoryRead.isCurrent(signal) || version !== this.#loadVersion) return false;
       this.inventory = inventory;
       return true;

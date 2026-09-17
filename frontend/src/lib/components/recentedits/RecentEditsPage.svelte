@@ -3,7 +3,7 @@
   import { PencilIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
   import { RecentEditsService } from "../../api/generated/index";
-  import { callGenerated, isAbortError } from "../../api/runtime.js";
+  import { isAbortError } from "../../api/runtime.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -68,15 +68,12 @@
       files = [];
     }
     try {
-      const res = (await callGenerated((options) =>
-        RecentEditsService.getApiV1RecentEdits({
+      const res = (await RecentEditsService.getApiV1RecentEdits({
           limit: PAGE,
           offset: requestOffset,
           project,
           search: searchTerm,
-        }, options),
-        signal,
-      ));
+        }, { signal }));
       // A newer project change, refresh, or load-more supersedes this one.
       if (seq !== requestSeq || !pageRead.isCurrent(signal)) return;
       files = reset
@@ -268,7 +265,7 @@
   }
 
   .re-refresh:disabled {
-    opacity: 0.55;
+    opacity: var(--opacity-disabled);
     cursor: default;
   }
 
@@ -450,7 +447,7 @@
   }
 
   .re-load-more:disabled {
-    opacity: 0.55;
+    opacity: var(--opacity-disabled);
     cursor: default;
   }
 </style>

@@ -7,7 +7,7 @@
   import { m } from "../../i18n/index.js";
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
-  import type { SessionActivityBucket } from "../../api/types/session-activity.js";
+  import type { DbSessionActivityBucket as SessionActivityBucket } from "../../api/generated/index.js";
 
   interface Props {
     sessionId: string;

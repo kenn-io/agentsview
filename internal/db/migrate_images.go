@@ -2,7 +2,8 @@ package db
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 )
 
@@ -53,15 +54,15 @@ func (db *DB) migrateStoredToolResultRows(
 func countMigratable(content string) ToolImageStats {
 	var stats ToolImageStats
 	// Try direct JSON array.
-	var blocks []json.RawMessage
+	var blocks []jsontext.Value
 	if err := json.Unmarshal([]byte(content), &blocks); err == nil && blocks != nil {
 		countMigratableBlocks(blocks, &stats)
 		return stats
 	}
 	// Labeled/anonymous summary: count through the same scanner the rewrite
 	// uses, so the preview cannot see a different set of sections.
-	scanSummarySections(content, func(_, _ int, raw json.RawMessage) {
-		var sectionBlocks []json.RawMessage
+	scanSummarySections(content, func(_, _ int, raw jsontext.Value) {
+		var sectionBlocks []jsontext.Value
 		if err := json.Unmarshal(raw, &sectionBlocks); err == nil {
 			countMigratableBlocks(sectionBlocks, &stats)
 		}
@@ -69,13 +70,13 @@ func countMigratable(content string) ToolImageStats {
 	return stats
 }
 
-func countMigratableBlocks(blocks []json.RawMessage, stats *ToolImageStats) {
+func countMigratableBlocks(blocks []jsontext.Value, stats *ToolImageStats) {
 	for _, raw := range blocks {
 		if !isMigratableToolImageBlock(raw) {
 			continue
 		}
 		var block toolImageBlock
-		if err := json.Unmarshal(raw, &block); err != nil {
+		if err := json.Unmarshal(raw, &block, json.MatchCaseInsensitiveNames(true)); err != nil {
 			continue
 		}
 		_, decoded, stored, ok := decodeInlineImageURL(block.ImageURL)

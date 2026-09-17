@@ -48,7 +48,7 @@ func TestMissingObjectsRoundTrip(t *testing.T) {
 		assert.Equal(t, "/api/v1/raw-sync/objects/missing", r.URL.Path)
 		body, err := io.ReadAll(r.Body)
 		if assert.NoError(t, err) {
-			assert.Equal(t, `{"provider":"claude","objects":[`+
+			assert.JSONEq(t, `{"provider":"claude","objects":[`+
 				`{"sha256":"`+digest+`","length":3}]}`, string(body))
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -143,7 +143,7 @@ func (s *uploadScript) handler(t *testing.T) http.Handler {
 			var in struct {
 				Object rawsync.ObjectRef `json:"object"`
 			}
-			if !assert.NoError(t, jsonDecode(r.Body, &in)) {
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &in)) {
 				http.Error(w, "bad upload start", http.StatusBadRequest)
 				return
 			}

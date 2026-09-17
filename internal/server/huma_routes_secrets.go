@@ -10,7 +10,8 @@ import (
 )
 
 func (s *Server) registerSecretsRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/secrets", "Secrets")
+	group := huma.NewGroup(s.api, "/api/v1/secrets")
+	configureRouteGroup(group, "Secrets")
 
 	s.get(group, "", "List secret findings", s.humaListSecrets)
 	s.stream(group, http.MethodPost, "/scan", "Scan secrets", s.humaScanSecrets)

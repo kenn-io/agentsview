@@ -1,6 +1,8 @@
+import { InsightsService } from "../api/generated/index";
 import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { insights } from "./insights.svelte.js";
-import type { Insight, Session } from "../api/types.js";
+import type { Session } from "../api/types.js";
+import type { DbInsight as Insight } from "../api/generated/index.js";
 
 const api = vi.hoisted(() => {
   class MockApiError extends Error {
@@ -22,17 +24,13 @@ const api = vi.hoisted(() => {
 
 const ApiError = api.ApiError;
 
-const runtimeMocks = vi.hoisted(() => ({
-  callGenerated: vi.fn((request: () => Promise<unknown>, _signal?: AbortSignal) => request()),
-}));
-
 vi.mock("../api/client.js", () => ({
   generateInsight: api.generateInsight,
 }));
 
 vi.mock("../api/runtime.js", () => ({
   ApiError: api.ApiError,
-  callGenerated: runtimeMocks.callGenerated,
+
   isAbortError: vi.fn(() => false),
 }));
 
@@ -62,6 +60,19 @@ function makeInsight(overrides: Partial<Insight> = {}): Insight {
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
+    compaction_count: 0,
+    consecutive_failure_max: 0,
+    edit_churn_count: 0,
+    ended_with_role: "",
+    final_failure_streak: 0,
+    has_peak_context_tokens: false,
+    has_total_output_tokens: false,
+    mid_task_compaction_count: 0,
+    outcome: "",
+    outcome_confidence: "",
+    secret_leak_count: 0,
+    tool_failure_signal_count: 0,
+    tool_retry_count: 0,
     id: "run:session-1",
     project: "proj-a",
     machine: "local",
@@ -95,19 +106,10 @@ beforeEach(() => {
   insights.setSessionAgent("");
   insights.setAutomatedScope("human");
   insights.promptText = "";
-  runtimeMocks.callGenerated.mockReset();
-  runtimeMocks.callGenerated.mockImplementation(
-    (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
-  );
 });
 
 describe("load", () => {
   it("aborts an obsolete list read without aborting generation", async () => {
-    const signals: AbortSignal[] = [];
-    runtimeMocks.callGenerated.mockImplementation((request, signal) => {
-      signals.push(signal as AbortSignal);
-      return request();
-    });
     vi.mocked(api.listInsights)
       .mockImplementationOnce(() => new Promise(() => {}))
       .mockResolvedValueOnce({ insights: [] });
@@ -116,23 +118,22 @@ describe("load", () => {
     await Promise.resolve();
     await insights.load();
 
-    expect(signals[0]?.aborted).toBe(true);
+    expect(vi.mocked(InsightsService.getApiV1Insights).mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      true,
+    );
     expect(api.generateInsight).not.toHaveBeenCalled();
   });
 
   it("aborts the list read on page teardown", async () => {
-    const signals: AbortSignal[] = [];
-    runtimeMocks.callGenerated.mockImplementation((request, signal) => {
-      signals.push(signal as AbortSignal);
-      return request();
-    });
     vi.mocked(api.listInsights).mockImplementationOnce(() => new Promise(() => {}));
 
     void insights.load();
     await Promise.resolve();
     insights.cancelInFlightReads();
 
-    expect(signals[0]?.aborted).toBe(true);
+    expect(vi.mocked(InsightsService.getApiV1Insights).mock.calls[0]?.[1]?.signal?.aborted).toBe(
+      true,
+    );
   });
 
   it("fetches insights and updates state", async () => {

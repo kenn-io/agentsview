@@ -1,9 +1,6 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
-  import type {
-    VelocityOverview,
-    VelocityBreakdown,
-  } from "../../api/types.js";
+  import type { DbVelocityOverview as VelocityOverview, DbVelocityBreakdown as VelocityBreakdown } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
 
   function formatDuration(sec: number): string {

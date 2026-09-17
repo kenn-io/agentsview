@@ -19,6 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 	"go.kenn.io/agentsview/internal/update"
 )
 
@@ -455,7 +456,7 @@ func urlFromDaemonRuntime(rt *DaemonRuntime) string {
 	case "::":
 		host = "::1"
 	}
-	return "http://" + net.JoinHostPort(host, strconv.Itoa(rt.Port))
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(rt.Port)) + rt.BasePath
 }
 
 // newService builds the SessionService matching the detected
@@ -466,7 +467,7 @@ func newService(
 ) (service.SessionService, func(), error) {
 	switch tr.Mode {
 	case transportHTTP:
-		return service.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
+		return servicehttp.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly, tr.BrowserURL),
 			func() {}, nil
 	default:
 		if err := directIncompatibleDaemonError(tr); err != nil {

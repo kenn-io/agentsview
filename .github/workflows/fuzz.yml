@@ -20,7 +20,7 @@ on:
 
 jobs:
   fuzz:
-    runs-on: namespace-profile-linux-16cpu
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:

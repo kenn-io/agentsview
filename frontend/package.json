@@ -18,16 +18,18 @@
     "e2e": "playwright test"
   },
   "dependencies": {
-    "@kenn-io/kit-ui": "git+https://github.com/kenn-io/kit-ui.git#b4227114b3f6cc5edaa9a7ebf6cab7dbec2f527e",
+    "@kenn-io/kit-ui": "git+https://github.com/kenn-io/kit-ui.git#4e2d49e768d07c4ebca7da8dd37ca54f01cac28e",
     "@lucide/svelte": "1.43.0",
     "@tanstack/virtual-core": "3.17.9",
     "d3-hierarchy": "3.1.2",
     "d3-scale": "4.0.2",
     "d3-time": "3.1.0",
     "dompurify": "3.4.15",
+    "eventsource": "^4.1.0",
+    "eventsource-parser": "^3.1.0",
     "layerchart": "2.4.1",
     "marked": "18.0.12",
-    "mermaid": "11.17.2",
+    "mermaid": "12.0.0",
     "shiki": "4.4.3"
   },
   "devDependencies": {

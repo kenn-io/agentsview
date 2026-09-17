@@ -161,3 +161,10 @@ func TestRedactToolUseRenderingHandlesProviderRenderers(t *testing.T) {
 		})
 	}
 }
+
+func TestReduceToolInputToPathsStable(t *testing.T) {
+	const input = `{"path":"src/main.go","file_path":"src/other.go","dir_path":"src","notebook_path":"notes.ipynb","content":"discard"}`
+	for range 20 {
+		assert.Equal(t, `{"dir_path":"src","file_path":"src/other.go","notebook_path":"notes.ipynb","path":"src/main.go"}`, reduceToolInputToPaths(input))
+	}
+}

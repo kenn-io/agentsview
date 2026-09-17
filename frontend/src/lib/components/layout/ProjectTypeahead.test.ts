@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { fireEvent, screen } from "@testing-library/svelte";
 import { mount, unmount } from "svelte";
-import type { ProjectInfo } from "../../api/types/core.js";
+import type { DbProjectInfo as ProjectInfo } from "../../api/generated/index.js";
 import { m } from "../../i18n/index.js";
 import ProjectTypeahead from "./ProjectTypeahead.svelte";
 

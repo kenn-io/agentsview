@@ -1,11 +1,7 @@
 <script lang="ts">
   import { Chip } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
-  import type {
-    SkillAgentBreakdown,
-    SkillProjectBreakdown,
-    SkillUsage,
-  } from "../../api/types.js";
+  import type { DbSkillAgentBreakdown as SkillAgentBreakdown, DbSkillProjectBreakdown as SkillProjectBreakdown, DbSkillUsage as SkillUsage } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
 
   const skills = $derived(analytics.skills?.by_skill ?? []);

@@ -4,7 +4,7 @@
   import { getLocale, m } from "../../i18n/index.js";
   import { DataService } from "../../api/generated/index";
   import type { DbStripImagesReport } from "../../api/generated/index";
-  import { ApiError, callGenerated, isAbortError } from "../../api/runtime.js";
+  import { ApiError, isAbortError } from "../../api/runtime.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import { settings } from "../../stores/settings.svelte.js";
 
@@ -74,14 +74,10 @@
     mayHavePartiallyApplied = false;
     const signal = previewRead.begin();
     try {
-      const report = await callGenerated(
-        (options) =>
-          DataService.postApiV1DataStripImagesPreview(
+      const report = await DataService.postApiV1DataStripImagesPreview(
             { project: projectFilter, before: beforeFilter },
-            options,
-          ),
-        signal,
-      );
+            { signal },
+          );
       if (disposed || !previewRead.isCurrent(signal)) return;
       preview = report;
       phase = "previewed";
@@ -122,16 +118,14 @@
     errorText = "";
     mayHavePartiallyApplied = false;
     try {
-      const report = await callGenerated((options) =>
-        DataService.postApiV1DataStripImages(
+      const report = await DataService.postApiV1DataStripImages(
           {
             project: frozenFilter!.project,
             before: frozenFilter!.before,
             confirmed: true,
           },
-          options,
-        ),
-      );
+          undefined,
+        );
       if (disposed) return;
       applied = report;
       phase = "applied";

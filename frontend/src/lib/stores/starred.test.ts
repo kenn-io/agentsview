@@ -2,9 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vite-plus/test"
 import { StarredService } from "../api/generated/index";
 import { createStarredStore } from "./starred.svelte.js";
 
-vi.mock("../api/runtime.js", () => ({
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
-}));
+vi.mock("../api/runtime.js", () => ({}));
 
 vi.mock("../api/generated/index", () => ({
   StarredService: {

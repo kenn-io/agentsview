@@ -16,7 +16,7 @@ import { sync } from "./lib/stores/sync.svelte.js";
 import { ui } from "./lib/stores/ui.svelte.js";
 import { usage } from "./lib/stores/usage.svelte.js";
 import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
-import type { Message } from "./lib/api/types.js";
+import type { DbMessage as Message } from "./lib/api/generated/index.js";
 import { hasVisibleSegments } from "./lib/utils/content-parser.js";
 import sourceRaw from "./App.svelte?raw";
 import { SESSION_FILTER_KEYS } from "./lib/stores/sessionRouteParams.js";
@@ -212,6 +212,9 @@ describe("App Recall availability", () => {
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
 
     sync.serverVersion = {
+      api_version: 1,
+      data_version: 1,
+      insight_generation_available: false,
       version: "dev",
       commit: "unknown",
       build_date: "",
@@ -486,6 +489,17 @@ describe("App session URL date state", () => {
 
     sessions.sessions = [
       {
+        compaction_count: 0,
+        consecutive_failure_max: 0,
+        edit_churn_count: 0,
+        ended_with_role: "",
+        final_failure_streak: 0,
+        mid_task_compaction_count: 0,
+        outcome: "",
+        outcome_confidence: "",
+        secret_leak_count: 0,
+        tool_failure_signal_count: 0,
+        tool_retry_count: 0,
         id: "session-1",
         project: "proj-a",
         machine: "local",

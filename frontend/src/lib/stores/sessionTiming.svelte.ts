@@ -1,5 +1,5 @@
-import { fetchSessionTiming } from "../api/timing.js";
-import type { SessionTiming } from "../api/types/timing.js";
+import { getApiV1SessionsByIdTiming as fetchSessionTiming } from "../api/generated/sessions/sessions.js";
+import type { DbSessionTiming as SessionTiming } from "../api/generated/index.js";
 import { LatestRead } from "../utils/latest-read.js";
 
 /** Per-session timing snapshot fetched from
@@ -37,7 +37,7 @@ class SessionTimingStore {
     this.loading = true;
     this.error = null;
     try {
-      const t = await fetchSessionTiming(sessionId, signal);
+      const t = await fetchSessionTiming({ id: sessionId }, { signal });
       if (version !== this.loadVersion || !this.timingRead.isCurrent(signal)) return;
       this.timing = t;
     } catch (e) {

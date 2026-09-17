@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { commitsDisagree, sync } from "./sync.svelte.js";
-import type { SyncStats, UpdateCheck } from "../api/types.js";
+import type {
+  SyncSyncStats as SyncStats,
+  UpdateCheckResponse as UpdateCheck,
+} from "../api/generated/index.js";
 
 const api = vi.hoisted(() => ({
   triggerSync: vi.fn(),
@@ -31,7 +34,7 @@ vi.mock("../api/client.js", () => ({
 
 vi.mock("../api/runtime.js", () => ({
   ApiError: api.ApiError,
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+
   isRemoteConnection: api.isRemoteConnection,
 }));
 

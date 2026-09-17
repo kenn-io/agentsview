@@ -81,6 +81,7 @@ type Server struct {
 	activeDisabledAgents  []parser.AgentType
 	db                    db.Store
 	activityReports       *activityReportCache
+	assetCache            *assetCache
 	activityReportFlights *activityReportBuildGroup
 	engine                *sync.Engine
 	onDemandEngine        *sync.Engine
@@ -258,6 +259,7 @@ func New(
 	if s.version.DataVersion == 0 {
 		s.version.DataVersion = db.CurrentDataVersion()
 	}
+	s.assetCache = newAssetCache()
 	s.routes()
 	return s
 }
@@ -634,38 +636,6 @@ func (s *Server) routes() {
 		s.mux.HandleFunc("/debug/pprof/trace", httppprof.Trace)
 	}
 
-	s.mux.Handle("GET /api/v1/recall/entries", s.withTimeout(
-		"GET /api/v1/recall/entries",
-		s.handleListRecallEntries,
-	))
-	s.mux.Handle("GET /api/v1/recall/entries/{id}", s.withTimeout(
-		"GET /api/v1/recall/entries/{id}",
-		s.handleGetRecallEntry,
-	))
-	s.mux.Handle("GET /api/v1/recall/extraction/status", s.withTimeout(
-		"GET /api/v1/recall/extraction/status",
-		s.handleRecallExtractionStatus,
-	))
-	s.mux.Handle("GET /api/v1/recall/extraction/progress", s.withTimeout(
-		"GET /api/v1/recall/extraction/progress",
-		s.handleRecallExtractionProgress,
-	))
-	s.mux.Handle("POST /api/v1/recall/extraction/activate", s.withTimeout(
-		"POST /api/v1/recall/extraction/activate",
-		s.handleRecallExtractionActivate,
-	))
-	s.mux.Handle("POST /api/v1/recall/extraction/generations/{fingerprint}/retire", s.withTimeout(
-		"POST /api/v1/recall/extraction/generations/{fingerprint}/retire",
-		s.handleRecallExtractionRetire,
-	))
-	s.mux.Handle("POST /api/v1/recall/query", s.withTimeout(
-		"POST /api/v1/recall/query",
-		s.handleQueryRecallEntries,
-	))
-	s.mux.Handle("POST /api/v1/recall/import", s.withTimeout(
-		"POST /api/v1/recall/import",
-		s.handleImportRecallEntries,
-	))
 	s.registerEvalIngestRoutes()
 
 	if s.artifactExchangeRunner != nil {
@@ -1282,6 +1252,22 @@ func (s *Server) Serve(ln net.Listener) error {
 		cacheCtx, stopCache := context.WithCancel(cacheCtx)
 		go cache.Run(cacheCtx)
 		defer stopCache()
+	}
+	if cache := s.assetCache; cache != nil {
+		cacheCtx := context.Background()
+		if s.baseCtx != nil {
+			cacheCtx = s.baseCtx
+		}
+		cacheCtx, stopCache := context.WithCancel(cacheCtx)
+		cacheDone := make(chan struct{})
+		go func() {
+			cache.Run(cacheCtx)
+			close(cacheDone)
+		}()
+		defer func() {
+			stopCache()
+			<-cacheDone
+		}()
 	}
 	log.Printf("Starting server at http://%s", addr)
 	return srv.Serve(ln)

@@ -1,6 +1,7 @@
 <script lang="ts">
-  import type { Message, Session } from "../../api/types.js";
-  import type { CallTiming, TurnTiming } from "../../api/types/timing.js";
+  import type { Session } from "../../api/types.js";
+import type { DbMessage as Message } from "../../api/generated/index.js";
+  import type { DbCallTiming as CallTiming, DbTurnTiming as TurnTiming } from "../../api/generated/index.js";
   import { parseContent, enrichSegments } from "../../utils/content-parser.js";
   import { formatTimestamp, formatTokenUsage } from "../../utils/format.js";
   import { formatDuration } from "../../utils/duration.js";
@@ -382,7 +383,7 @@
   @media (hover: none) { .pin-btn { opacity: 1; } }
   .pin-btn:hover { background: var(--bg-surface-hover); color: var(--text-secondary); }
   .pin-btn.pinned { color: var(--accent-blue); }
-  .pin-btn:active { transform: scale(0.92); }
+  .pin-btn:active { transform: var(--press-transform); }
   .pin-feedback, .fork-feedback { font-size: 11px; color: var(--text-muted); animation: fade-in-out 1.5s ease-in-out; }
   @keyframes fade-in-out { 0% { opacity: 0; } 15% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
   .text-content { font-size: 14px; line-height: 1.7; color: var(--text-primary); word-wrap: break-word; }

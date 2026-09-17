@@ -4,7 +4,7 @@ import { mount, tick, unmount } from "svelte";
 import { trends } from "../../stores/trends.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
-import type { TrendsTermsResponse } from "../../api/types.js";
+import type { DbTrendsTermsResponse as TrendsTermsResponse } from "../../api/generated/index.js";
 import source from "./TrendsPage.svelte?raw";
 
 const mocks = vi.hoisted(() => ({
@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../api/runtime.js", () => ({
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
   isAbortError: vi.fn(() => false),
 }));
 

@@ -1,14 +1,11 @@
 <!-- ABOUTME: Expandable inline view of a subagent's conversation.
      ABOUTME: Lazily loads and renders subagent messages within a parent ToolBlock. -->
 <script lang="ts">
-  import type {
-    Message,
-    MessagesResponse,
-    Session,
-  } from "../../api/types.js";
+  import type { Session } from "../../api/types.js";
+import type { DbMessage as Message } from "../../api/generated/index.js";
+import type { ServiceMessageList as MessagesResponse } from "../../api/generated/index.js";
   import { SessionsService } from "../../api/generated/index";
   import {
-    callGenerated,
     isAbortError,
   } from "../../api/runtime.js";
   import { formatTokenUsage } from "../../utils/format.js";
@@ -64,19 +61,12 @@
       error = null;
       try {
         const [resp, meta] = await Promise.all([
-          callGenerated(
-            (options) =>
-              SessionsService.getApiV1SessionsByIdMessages(
+          SessionsService.getApiV1SessionsByIdMessages(
                 { id: sessionId },
                 { limit: 1000 },
-                options,
+                { signal },
               ),
-            signal,
-          ),
-          (callGenerated(
-            (options) => SessionsService.getApiV1SessionsById({ id: sessionId }, options),
-            signal,
-          )).catch((e) => {
+          (SessionsService.getApiV1SessionsById({ id: sessionId }, { signal })).catch((e) => {
             if (isAbortError(e)) throw e;
             return null;
           }),

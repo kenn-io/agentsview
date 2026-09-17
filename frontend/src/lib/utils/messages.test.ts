@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vite-plus/test";
 import { isSystemMessage, normalizeMessagePreview, previewMessage } from "./messages.js";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 
 function msg(overrides: Partial<Message>): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: 1,
     session_id: "s1",
     ordinal: 0,

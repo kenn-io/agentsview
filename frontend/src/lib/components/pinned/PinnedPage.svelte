@@ -37,7 +37,7 @@
     router.navigateToSession(sessionId);
   }
 
-  function getSessionInfo(pin: import("../../api/types.js").PinnedMessage) {
+  function getSessionInfo(pin: import("../../api/generated/index.js").DbPinnedMessage) {
     // Use backend-provided session metadata (available for all-pins
     // query). Fall back to the sessions store for older data.
     if (pin.session_project || pin.session_agent) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"github.com/danielgtaylor/huma/v2"
 	"io"
 	"log"
 	"net/http"
@@ -16,7 +17,8 @@ import (
 )
 
 func (s *Server) registerRemoteSyncRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/remote-sync", "RemoteSync")
+	group := huma.NewGroup(s.api, "/api/v1/remote-sync")
+	configureRouteGroup(group, "RemoteSync")
 	s.get(group, "/targets", "Resolve remote sync targets", s.humaRemoteSyncTargets)
 	s.mux.HandleFunc("/api/v1/remote-sync/archive", s.remoteSyncArchiveHTTP)
 	s.mux.HandleFunc("/api/v1/remote-sync/manifest", s.remoteSyncManifestHTTP)

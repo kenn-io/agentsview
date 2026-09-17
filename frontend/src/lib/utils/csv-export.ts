@@ -1,10 +1,10 @@
 import type {
-  AnalyticsSummary,
-  ActivityResponse,
-  ProjectsAnalyticsResponse,
-  ToolsAnalyticsResponse,
-  VelocityResponse,
-} from "../api/types.js";
+  DbAnalyticsSummary as AnalyticsSummary,
+  DbActivityResponse as ActivityResponse,
+  DbProjectsAnalyticsResponse as ProjectsAnalyticsResponse,
+  DbToolsAnalyticsResponse as ToolsAnalyticsResponse,
+  DbVelocityResponse as VelocityResponse,
+} from "../api/generated/index.js";
 
 export interface AnalyticsData {
   from: string;

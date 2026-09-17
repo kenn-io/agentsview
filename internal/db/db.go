@@ -493,7 +493,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // REPO/.claude/worktrees/<generated-name> so they use the owning repository
 // rather than the generated worktree name, including unchanged sources
 // already parsed at version 108 by v0.43.0.)
-const dataVersion = 109
+// (110: Native Pi parentSession paths now resolve to the parent's persisted
+// header ID, and native Pi sessions with a resolved parent are classified as
+// forks. Re-parse stored native Pi sessions to repair lineage edges and fork
+// classification.)
+const dataVersion = 110
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

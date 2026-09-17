@@ -1,5 +1,5 @@
 /** Shared input text resolution for tool rendering and session search. */
-import type { ToolCall } from "../api/types.js";
+import type { DbToolCall as ToolCall } from "../api/generated/index.js";
 import { generateFallbackContent } from "../utils/tool-params.js";
 
 export interface ToolInput {

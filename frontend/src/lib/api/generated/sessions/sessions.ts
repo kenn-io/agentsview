@@ -55,6 +55,7 @@ import type {
   UploadSessionResponse,
 } from "../models";
 
+import { orvalRequest } from "../../runtime.ts";
 import { orvalFetch } from "../../runtime.ts";
 
 export const getGetApiV1EventsUrl = () => {
@@ -65,9 +66,9 @@ export const getGetApiV1EventsUrl = () => {
  * @summary Watch server events
  */
 export const getApiV1Events = async (
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<string> => {
-  return orvalFetch<string>(getGetApiV1EventsUrl(), {
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getGetApiV1EventsUrl(), {
     ...options,
     method: "GET",
   });
@@ -336,9 +337,9 @@ export const getGetApiV1SessionsByIdExportUrl = ({
  */
 export const getApiV1SessionsByIdExport = async (
   { id }: GetApiV1SessionsByIdExportPathParameters,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<string> => {
-  return orvalFetch<string>(getGetApiV1SessionsByIdExportUrl({ id }), {
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getGetApiV1SessionsByIdExportUrl({ id }), {
     ...options,
     method: "GET",
   });
@@ -369,9 +370,9 @@ export const getGetApiV1SessionsByIdMdUrl = (
 export const getApiV1SessionsByIdMd = async (
   { id }: GetApiV1SessionsByIdMdPathParameters,
   params?: GetApiV1SessionsByIdMdParams,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<string> => {
-  return orvalFetch<string>(getGetApiV1SessionsByIdMdUrl({ id }, params), {
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getGetApiV1SessionsByIdMdUrl({ id }, params), {
     ...options,
     method: "GET",
   });
@@ -719,9 +720,9 @@ export const getGetApiV1SessionsByIdWatchUrl = ({
  */
 export const getApiV1SessionsByIdWatch = async (
   { id }: GetApiV1SessionsByIdWatchPathParameters,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<string> => {
-  return orvalFetch<string>(getGetApiV1SessionsByIdWatchUrl({ id }), {
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getGetApiV1SessionsByIdWatchUrl({ id }), {
     ...options,
     method: "GET",
   });

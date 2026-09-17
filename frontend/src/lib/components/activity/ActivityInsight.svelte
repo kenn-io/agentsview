@@ -3,7 +3,6 @@
   import { m } from "../../i18n/index.js";
   import { InsightsService, type DbInsight } from "../../api/generated/index";
   import {
-    callGenerated,
     isAbortError,
   } from "../../api/runtime.js";
   import {
@@ -100,14 +99,11 @@
     generating = false;
     loading = true;
 
-    callGenerated(
-      (options) => InsightsService.getApiV1Insights({
+    InsightsService.getApiV1Insights({
         type: "daily_activity",
         date_from: from,
         date_to: to,
-      }, options),
-      signal,
-    )
+      }, { signal })
       .then((res) => {
         if (v !== fetchVersion || !insightListRead.isCurrent(signal)) return;
         // The list endpoint treats date_from/date_to as range BOUNDS, so a
@@ -356,12 +352,12 @@
   }
 
   .generate-btn:active:not(:disabled) {
-    transform: scale(0.98);
+    transform: var(--press-transform);
     box-shadow: none;
   }
 
   .generate-btn:disabled {
-    opacity: 0.45;
+    opacity: var(--opacity-disabled);
     box-shadow: none;
     cursor: default;
   }

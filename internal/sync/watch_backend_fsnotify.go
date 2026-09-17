@@ -502,6 +502,14 @@ func (b *fsnotifyBackend) translateEvent(event fsnotify.Event) (backendEvent, bo
 	if op == backendOpUnknown {
 		return backendEvent{}, false
 	}
+	// fsnotify still reports changes to files below a watched directory even
+	// when the file matched an exclusion during directory registration. Ignore
+	// those events here as well, otherwise transient lock-file renames can be
+	// mistaken for session changes while another process is replacing the
+	// lock.
+	if b.shouldExclude(event.Name) {
+		return backendEvent{}, false
+	}
 
 	itemType := backendItemUnknown
 	if op&(backendOpRemove|backendOpRename) != 0 {

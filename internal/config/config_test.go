@@ -1053,6 +1053,13 @@ func TestAgentDirsExplicitEmptyArrayOverridesDefaults(t *testing.T) {
 	assert.True(t, cfg.IsUserConfigured(parser.AgentCopilot))
 }
 
+func TestDefaultWatchExcludesTransientLockFiles(t *testing.T) {
+	cfg, err := Default()
+	require.NoError(t, err)
+
+	assert.Contains(t, cfg.WatchExcludePatterns, "*.lock*")
+}
+
 func TestAgentDirsEnvBeatsExplicitEmptyArray(t *testing.T) {
 	f := newConfigFixture(t)
 	f.WriteConfigText(t, "grok_dirs = []\n")

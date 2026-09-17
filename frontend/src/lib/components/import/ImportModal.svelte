@@ -1,11 +1,11 @@
 <script lang="ts">
+ import type { ImporterImportStats as ImportStats } from "../../api/generated/index.js";
   import { Button, Modal, Spinner } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { untrack } from "svelte";
   import {
     importClaudeAI,
     importChatGPT,
-    type ImportStats,
   } from "../../api/client.js";
   import {
     FileCheckIcon,

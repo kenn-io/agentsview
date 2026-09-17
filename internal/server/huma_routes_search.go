@@ -8,10 +8,13 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 func (s *Server) registerSearchRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/search", "Search")
+	group := huma.NewGroup(s.api, "/api/v1/search")
+	configureRouteGroup(group, "Search")
 
 	s.get(group, "", "Search sessions", s.humaSearch)
 	s.getLong(group, "/content", "Search session content", s.humaSearchContent)

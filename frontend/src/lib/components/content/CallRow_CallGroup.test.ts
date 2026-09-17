@@ -12,7 +12,7 @@ import { mount, tick, unmount } from "svelte";
 import { mkdirSync, writeFileSync } from "node:fs";
 // @ts-ignore -- @types/node is not in devDependencies; harmless at runtime.
 import { resolve } from "node:path";
-import type { CallTiming } from "../../api/types/timing.js";
+import type { DbCallTiming as CallTiming } from "../../api/generated/index.js";
 import { m } from "../../i18n/index.js";
 // @ts-ignore
 import CallRow from "./CallRow.svelte";

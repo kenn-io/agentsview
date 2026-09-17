@@ -3,7 +3,7 @@ package parser
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -466,7 +466,7 @@ func applyTauUsage(pm *ParsedMessage, usage gjson.Result) {
 	if len(normalized) == 0 {
 		return
 	}
-	encoded, err := json.Marshal(normalized)
+	encoded, err := json.Marshal(normalized, json.Deterministic(true))
 	if err != nil {
 		return
 	}

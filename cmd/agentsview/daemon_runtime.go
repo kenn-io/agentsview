@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -55,6 +56,7 @@ type DaemonRuntime struct {
 	Record           daemon.RuntimeRecord
 	Host             string
 	BrowserURL       string
+	BasePath         string
 	Port             int
 	ExplicitPort     *int // Original --port value, including zero; nil if not recorded.
 	ReadOnly         bool
@@ -466,6 +468,10 @@ func probeRuntime(
 	opts daemon.ProbeOptions,
 ) (daemon.PingInfo, error) {
 	ep := rec.Endpoint()
+	if opts.Path == "" {
+		opts.Path = daemon.DefaultPingPath
+	}
+	opts.Path = daemonRuntimeFromRecord(rec).BasePath + opts.Path
 	if authToken == "" {
 		return daemon.Probe(ctx, ep, opts)
 	}
@@ -505,6 +511,11 @@ func (t bearerAuthTransport) RoundTrip(
 }
 
 func daemonRuntimeFromRecord(rec daemon.RuntimeRecord) *DaemonRuntime {
+	// The configured public URL is origin-only; startup appends the server mount path.
+	basePath := ""
+	if browser, err := url.Parse(rec.Metadata[runtimeBrowserURL]); err == nil {
+		basePath = strings.TrimRight(browser.EscapedPath(), "/")
+	}
 	ep := rec.Endpoint()
 	host, portText, _ := net.SplitHostPort(ep.Address)
 	port, _ := strconv.Atoi(portText)
@@ -544,6 +555,7 @@ func daemonRuntimeFromRecord(rec daemon.RuntimeRecord) *DaemonRuntime {
 		ExplicitPort:     explicitPort,
 		Host:             host,
 		BrowserURL:       rec.Metadata[runtimeBrowserURL],
+		BasePath:         basePath,
 		ReadOnly:         readOnly,
 		RequireAuth:      requireAuth,
 		RequireAuthKnown: requireAuthKnown,

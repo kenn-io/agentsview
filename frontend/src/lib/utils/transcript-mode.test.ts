@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { Message } from "../api/types.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
 import { buildDisplayItems } from "./display-items.js";
 import {
   filterDisplayItemsByTranscriptMode,
@@ -10,6 +10,8 @@ let nextId = 1;
 
 function msg(overrides: Partial<Message> & { content: string }): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: nextId++,
     session_id: "s1",
     ordinal: 0,
@@ -29,11 +31,23 @@ function msg(overrides: Partial<Message> & { content: string }): Message {
 }
 
 function userMsg(ordinal: number, content = "user") {
-  return msg({ ordinal, role: "user", content });
+  return msg({
+    has_context_tokens: false,
+    has_output_tokens: false,
+    ordinal,
+    role: "user",
+    content,
+  });
 }
 
 function assistantMsg(ordinal: number, content = "assistant") {
-  return msg({ ordinal, role: "assistant", content });
+  return msg({
+    has_context_tokens: false,
+    has_output_tokens: false,
+    ordinal,
+    role: "assistant",
+    content,
+  });
 }
 
 function toolMsg(ordinal: number, tool = "Bash", args = "$ ls") {
@@ -46,6 +60,8 @@ function toolMsg(ordinal: number, tool = "Bash", args = "$ ls") {
 
 function systemMsg(ordinal: number, subtype: string, content: string) {
   return msg({
+    has_context_tokens: false,
+    has_output_tokens: false,
     ordinal,
     role: "user",
     is_system: true,
@@ -163,6 +179,8 @@ describe("filterDisplayItemsByTranscriptMode", () => {
 
   it("keeps the assistant response that precedes a compact-boundary divider", () => {
     const boundary = msg({
+      has_context_tokens: false,
+      has_output_tokens: false,
       ordinal: 2,
       role: "user",
       content: "[compact summary]",

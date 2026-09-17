@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Button, Card } from "@kenn-io/kit-ui";
-  import { fetchSessionRecall } from "../../api/recall.js";
+  import { RecallService } from "../../api/generated/index.js";
   import type {
     RecallEntry,
     RecallEvidence,
@@ -25,9 +25,9 @@
     loading = true;
     failed = false;
     try {
-      const next = await fetchSessionRecall(id, signal);
+      const next = await RecallService.getApiV1RecallEntries({ source_session_id: id, limit: 500 }, { signal });
       if (!read.isCurrent(signal)) return;
-      entries = next;
+      entries = next.entries;
     } catch (error) {
       if (isAbortError(error) || !read.isCurrent(signal)) return;
       entries = [];

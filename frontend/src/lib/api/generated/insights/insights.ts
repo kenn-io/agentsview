@@ -16,6 +16,7 @@ import type {
 } from "../models";
 
 import { orvalFetch } from "../../runtime.ts";
+import { orvalRequest } from "../../runtime.ts";
 
 export const getGetApiV1InsightsUrl = (params?: GetApiV1InsightsParams) => {
   const normalizedParams = new URLSearchParams();
@@ -55,8 +56,8 @@ export const getPostApiV1InsightsGenerateUrl = () => {
  */
 export const postApiV1InsightsGenerate = async (
   generateInsightRequest: GenerateInsightRequest,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<string> => {
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
   const getHeaders = (
     h?: NonNullable<RequestInit["headers"]>,
   ): Record<string, string | readonly string[]> => {
@@ -76,7 +77,7 @@ export const postApiV1InsightsGenerate = async (
     }
     return headers;
   };
-  return orvalFetch<string>(getPostApiV1InsightsGenerateUrl(), {
+  return orvalRequest<Response>(getPostApiV1InsightsGenerateUrl(), {
     ...options,
     method: "POST",
     headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
@@ -129,9 +130,9 @@ export const getGetApiV1InsightsByIdExportUrl = ({
  */
 export const getApiV1InsightsByIdExport = async (
   { id }: GetApiV1InsightsByIdExportPathParameters,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<string> => {
-  return orvalFetch<string>(getGetApiV1InsightsByIdExportUrl({ id }), {
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getGetApiV1InsightsByIdExportUrl({ id }), {
     ...options,
     method: "GET",
   });
@@ -146,9 +147,9 @@ export const getGetApiV1InsightsByIdMdUrl = ({ id }: GetApiV1InsightsByIdMdPathP
  */
 export const getApiV1InsightsByIdMd = async (
   { id }: GetApiV1InsightsByIdMdPathParameters,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<string> => {
-  return orvalFetch<string>(getGetApiV1InsightsByIdMdUrl({ id }), {
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getGetApiV1InsightsByIdMdUrl({ id }), {
     ...options,
     method: "GET",
   });

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
-import type { Message, ToolCall } from "../../api/types.js";
+import type { DbMessage as Message, DbToolCall as ToolCall } from "../../api/generated/index.js";
 import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
 import { messages } from "../../stores/messages.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
@@ -15,6 +15,8 @@ const components: ReturnType<typeof mount>[] = [];
 let id = 210000;
 function message(content: string, overrides: Partial<Message> = {}): Message {
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: id++,
     session_id: "blocks",
     ordinal: 7,
@@ -177,7 +179,11 @@ describe("search block integration", () => {
   });
 
   it("temporarily displays canonical raw output and restores the formatted preference", async () => {
-    const call: ToolCall = { tool_name: "Read", result_content: "# needle\n\n**bold**" };
+    const call: ToolCall = {
+      category: "",
+      tool_name: "Read",
+      result_content: "# needle\n\n**bold**",
+    };
     const source = message("", { has_tool_use: true, tool_calls: [call] });
     components.push(
       mount(ToolBlock, {

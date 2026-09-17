@@ -11,7 +11,7 @@ import {
 import DOMPurify from "dompurify";
 import { LRUCache } from "./cache.js";
 import { escapeHtml as escapeHTML } from "@kenn-io/kit-ui";
-import { authHeaders, getBase } from "../api/runtime.js";
+import { AssetsService } from "../api/generated/index.js";
 
 const KNOWN_HTML_TAGS = new Set([
   "a",
@@ -789,8 +789,9 @@ const cache = new LRUCache<string, RenderCacheEntry>(6000);
 const ASSET_PLACEHOLDER_PREFIX = "/__agentsview_asset__/";
 
 function resolveAssetURLs(text: string): string {
-  return text.replace(/asset:\/\/([^\s)]+)/g, (_match, reference: string) =>
-    `${ASSET_PLACEHOLDER_PREFIX}${encodeURIComponent(reference)}`,
+  return text.replace(
+    /asset:\/\/([^\s)]+)/g,
+    (_match, reference: string) => `${ASSET_PLACEHOLDER_PREFIX}${encodeURIComponent(reference)}`,
   );
 }
 
@@ -801,13 +802,6 @@ function getAssetReference(src: string | null): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-function getAssetURL(reference: string): string {
-  const filename = reference.startsWith("asset://")
-    ? reference.slice("asset://".length)
-    : reference;
-  return `${getBase().replace(/\/$/, "")}/assets/${encodeURIComponent(filename)}`;
 }
 
 export function loadAssetImages(node: HTMLElement, _content = "") {
@@ -823,8 +817,11 @@ export function loadAssetImages(node: HTMLElement, _content = "") {
         image.dataset.agentsviewAsset = reference;
 
         try {
-          const response = await fetch(getAssetURL(reference), authHeaders());
-          if (!response.ok) throw new Error(`asset request failed: ${response.status}`);
+          const response = await AssetsService.getApiV1AssetsByFilename({
+            filename: reference.startsWith("asset://")
+              ? reference.slice("asset://".length)
+              : reference,
+          });
           const blobURL = URL.createObjectURL(await response.blob());
           if (destroyed || !node.contains(image)) {
             URL.revokeObjectURL(blobURL);

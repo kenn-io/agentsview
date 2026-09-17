@@ -160,6 +160,10 @@ func TestUsageDailyGolden(t *testing.T) {
 	var report db.DailyUsageResult
 	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
 	assert.Equal(t, export.UsageDailySchemaVersion, report.SchemaVersion)
+	var document map[string]jsontext.Value
+	require.NoError(t, json.Unmarshal([]byte(stdout), &document))
+	_, hasMachineLabels := document["machine_labels"]
+	assert.False(t, hasMachineLabels)
 
 	assertCatalogGolden(t, "usage_daily_v6.json", []byte(stdout))
 }
@@ -183,9 +187,10 @@ func TestUsageDailyBreakdownGolden(t *testing.T) {
 		_, err = cmd.ExecuteC()
 	})
 	require.NoError(t, err, "usage daily json breakdown golden command")
-	var report db.DailyUsageResult
+	var report usageDailyDocument
 	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
 	require.NotEmpty(t, report.Daily)
+	assert.Equal(t, "Golden Host", report.MachineLabels["golden-host"])
 	for _, daily := range report.Daily {
 		require.Len(t, daily.MachineBreakdowns, 1)
 		assert.Equal(t, "golden-host", daily.MachineBreakdowns[0].MachineName)
@@ -227,6 +232,9 @@ func seedExportGoldenArchive(t *testing.T, database *db.DB) {
 	require.NoError(t, database.SetDatabaseIDForTest(ctx, goldenDatabaseID))
 	require.NoError(t, database.SetArchiveIdentityForTest(
 		ctx, goldenArchiveID, goldenArchiveSalt,
+	))
+	require.NoError(t, database.SetSyncState(
+		db.MachineLabelKeyPrefix+"golden-host", "Golden Host",
 	))
 	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{
 		{

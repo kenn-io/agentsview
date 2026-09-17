@@ -69,6 +69,21 @@ The latest published release is
     scroll panes. Counts and navigation follow the active filters, and a result
     list and overview show each match's location. The underlined `ab` toggle
     enables whole-word matching.
+- Sync sessions faster by reusing Git repository lookups for repeated working
+  directories within each sync operation. OpenCode and its Kilo and MiMoCode
+  forks, Command Code, and Kiro CLI now respect disabled filesystem discovery
+  during remote imports and capture. These sessions use recorded paths to name
+  projects, so their project names may change when re-parsed. (#1759)
+
+- Expand a **Cursor CLI** session in the sidebar to read the transcripts of
+  the subagents it delegated to. Transcripts stored in a parent session's
+  `subagents` directory are now discovered, synced, and linked to the
+  delegating session, including from S3 roots. Cursor's `Subagent` tool call
+  now counts as a Task call in transcripts and analytics, but it does not yet
+  link to the child session inline. Existing archives re-parse on the next
+  sync to apply the new category. A machine that only runs `agentsview usage`
+  needs one `agentsview sync` to pick up subagent transcripts that already
+  exist.
 
 - Activity separates interactive conversations, subagents, and automated
     sessions across counts, minutes, costs, and badges. Its concurrency chart
@@ -201,6 +216,25 @@ The latest published release is
     sync. Canceling the wait leaves the existing work running.
 - Keep redirected sync output readable without terminal control sequences.
 - Position archive search snippets around the matching text.
+- Keep remotely imported project names independent of local repositories when
+  importing changed files, matching full-import behavior. (#1759)
+
+- Generate insights and session analyses when opening AgentsView over HTTP
+  outside localhost. Starting a report no longer requires a browser UUID API
+  that is unavailable on those origins. (#1742)
+- Show costs for OpenCode turns served through Ollama Cloud, such as
+  `kimi-k2.7-code:cloud` or `gpt-oss:120b-cloud`, which previously showed as
+  $0.00. Ollama bills these models per token at the upstream model's
+  published rate, so a tagged name now uses the untagged model's catalog
+  price when nothing matches the tagged name itself. Usage breakdowns keep
+  the tagged name, local Ollama tags such as `:27b-mlx` or `:latest` stay
+  unpriced, and cached usage totals recalculate on the next start.
+- Show Bedrock costs for Codex turns reported as `openai.gpt-5.4`,
+  `openai.gpt-5.6-luna`, `openai.gpt-5.6-terra`, and `openai.gpt-6-astra`,
+  while keeping those names in usage breakdowns. Dated usage uses AWS rates
+  from GenAI Prices when available, including Luna and Terra prices before
+  the July 30 cut. Astra gains offline pricing at Bedrock rates. Full
+  region-qualified catalog names retain their own pricing.
 
 **Acknowledgements**
 

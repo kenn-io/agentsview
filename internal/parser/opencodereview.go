@@ -3,7 +3,7 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"slices"
@@ -28,26 +28,26 @@ type openCodeReviewRecord struct {
 	ResumedFrom   string                     `json:"resumedFrom"`
 	FilePath      string                     `json:"filePath"`
 	TaskType      string                     `json:"taskType"`
-	Messages      []json.RawMessage          `json:"messages"`
+	Messages      []jsontext.Value           `json:"messages"`
 	Content       string                     `json:"content"`
 	Reasoning     string                     `json:"reasoning_content"`
 	ToolCalls     []openCodeReviewToolCall   `json:"tool_calls"`
 	Usage         *openCodeReviewUsage       `json:"usage"`
 	ToolName      string                     `json:"tool_name"`
-	Arguments     json.RawMessage            `json:"arguments"`
+	Arguments     jsontext.Value             `json:"arguments"`
 	Result        string                     `json:"result"`
 	OK            *bool                      `json:"ok"`
 	Error         string                     `json:"error"`
-	Comments      []json.RawMessage          `json:"comments"`
+	Comments      []jsontext.Value           `json:"comments"`
 	SourceSession string                     `json:"sourceSessionId"`
 	ParentRunID   string                     `json:"parent_run_id"`
 	RunManifest   *openCodeReviewRunManifest `json:"run_manifest"`
 }
 
 type openCodeReviewToolCall struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments"`
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Arguments jsontext.Value `json:"arguments"`
 }
 
 type openCodeReviewUsage struct {
@@ -248,10 +248,10 @@ func openCodeReviewConsumeRecord(state *openCodeReviewParserState, record openCo
 		openCodeReviewToolResult(state, record)
 	case "review_item_done", "review_item_reused":
 		if len(record.Comments) > 0 {
-			content, err := json.MarshalIndent(struct {
-				SourceSession string            `json:"sourceSessionId,omitempty"`
-				Comments      []json.RawMessage `json:"comments"`
-			}{record.SourceSession, record.Comments}, "", "  ")
+			content, err := json.Marshal(struct {
+				SourceSession string           `json:"sourceSessionId,omitempty"`
+				Comments      []jsontext.Value `json:"comments"`
+			}{record.SourceSession, record.Comments}, jsontext.WithIndent("  "))
 			if err == nil {
 				openCodeReviewDiagnostic(state, record.UUID, record.ParentUUID, parseTimestamp(record.Timestamp), string(content), record.Type)
 			}
@@ -478,7 +478,7 @@ func openCodeReviewApplyUsage(message *ParsedMessage, usage *openCodeReviewUsage
 		return
 	}
 	message.ContextTokens = contextTokens
-	raw, err := json.Marshal(values)
+	raw, err := json.Marshal(values, json.Deterministic(true))
 	if err == nil {
 		message.TokenUsage = jsontext.Value(raw)
 	}
@@ -510,7 +510,7 @@ func lastOpenCodeReviewTimestamp(messages []ParsedMessage, fallback time.Time) t
 	return last
 }
 
-func openCodeReviewArguments(raw json.RawMessage) string {
+func openCodeReviewArguments(raw jsontext.Value) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
 	}

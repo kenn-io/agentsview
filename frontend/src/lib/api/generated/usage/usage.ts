@@ -14,6 +14,7 @@ import type {
 } from "../models";
 
 import { orvalFetch } from "../../runtime.ts";
+import { orvalRequest } from "../../runtime.ts";
 
 export const getGetApiV1UsageComparisonUrl = (params: GetApiV1UsageComparisonParams) => {
   const normalizedParams = new URLSearchParams();
@@ -128,9 +129,9 @@ export const getGetApiV1UsageSummaryStreamUrl = (params?: GetApiV1UsageSummarySt
  */
 export const getApiV1UsageSummaryStream = async (
   params?: GetApiV1UsageSummaryStreamParams,
-  options?: Parameters<typeof orvalFetch>[1],
-): Promise<string> => {
-  return orvalFetch<string>(getGetApiV1UsageSummaryStreamUrl(params), {
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getGetApiV1UsageSummaryStreamUrl(params), {
     ...options,
     method: "GET",
   });

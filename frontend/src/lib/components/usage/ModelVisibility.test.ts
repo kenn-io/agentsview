@@ -53,7 +53,6 @@ const api = vi.hoisted(() => {
 });
 vi.mock("../../api/generated/index", () => ({ UsageService: api }));
 vi.mock("../../api/runtime.js", () => ({
-  callGenerated: (request: () => Promise<unknown>) => request(),
   isAbortError: () => false,
 }));
 

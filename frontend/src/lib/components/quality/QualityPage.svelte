@@ -20,13 +20,10 @@
   import { scoreToGrade } from "../../utils/grade.js";
   import { agentLabel } from "../../utils/agents.js";
   import { AnalyticsService } from "../../api/generated/index.js";
-  import { callGenerated, isAbortError } from "../../api/runtime.js";
+  import { isAbortError } from "../../api/runtime.js";
   import { LatestRead } from "../../utils/latest-read.js";
-  import type {
-    AutomatedScope,
-    SignalCalibration,
-    SignalSessionExample,
-  } from "../../api/types.js";
+  import type { AutomatedScope } from "../../api/types.js";
+import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample as SignalSessionExample } from "../../api/generated/index.js";
   import { Card, Typeahead } from "@kenn-io/kit-ui";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
@@ -315,14 +312,11 @@
     signalExamplesLoading = true;
     signalExamplesError = null;
     try {
-      const response = await callGenerated(
-        (options) => AnalyticsService.getApiV1AnalyticsSignalSessions({
+      const response = await AnalyticsService.getApiV1AnalyticsSignalSessions({
           ...params,
           signal,
           limit: 8,
-        }, options),
-        requestSignal,
-      );
+        }, { signal: requestSignal });
       if (
         signalEvidenceRead.isCurrent(requestSignal) &&
         selectedSignalId === signal &&
@@ -1133,7 +1127,6 @@
       var(--border-muted)
     );
   }
-
 
   .summary-grid {
     display: grid;

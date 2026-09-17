@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount, type ComponentProps } from "svelte";
-import type { Message, Session } from "../../api/types.js";
+import type { Session } from "../../api/types.js";
+import type { DbMessage as Message } from "../../api/generated/index.js";
 import { setLocale } from "../../i18n/index.js";
 import MessageContent from "./MessageContent.svelte";
 
@@ -70,6 +71,8 @@ let nextId = 220000;
 function message(overrides: Partial<Message> = {}): Message {
   const content = overrides.content ?? "Token summary";
   return {
+    has_context_tokens: false,
+    has_output_tokens: false,
     id: nextId++,
     session_id: "session-1",
     ordinal: 0,
@@ -90,6 +93,19 @@ function message(overrides: Partial<Message> = {}): Message {
 }
 function session(overrides: Partial<Session> = {}): Session {
   return {
+    compaction_count: 0,
+    consecutive_failure_max: 0,
+    edit_churn_count: 0,
+    ended_with_role: "",
+    final_failure_streak: 0,
+    has_peak_context_tokens: false,
+    has_total_output_tokens: false,
+    mid_task_compaction_count: 0,
+    outcome: "",
+    outcome_confidence: "",
+    secret_leak_count: 0,
+    tool_failure_signal_count: 0,
+    tool_retry_count: 0,
     id: "session-1",
     agent: "claude",
     project: "proj-a",

@@ -37,7 +37,6 @@ vi.mock("../../api/generated/index", () => ({
   },
 }));
 vi.mock("../../api/runtime.js", () => ({
-  callGenerated: (request: () => Promise<unknown>) => request(),
   isAbortError: () => false,
 }));
 vi.mock("../../stores/router.svelte.js", () => ({
@@ -499,7 +498,7 @@ describe("DataPage", () => {
     await flush();
     expect(api.getApiV1DataProjectRules).toHaveBeenCalledTimes(1);
 
-    await fireEvent.click(screen.getByRole("button", { name: "Select machine" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Select machine:/ }));
     await fireEvent.mouseDown(screen.getByRole("option", { name: "Workstation machine-b" }));
     await flush();
 

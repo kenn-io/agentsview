@@ -8,10 +8,13 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/timeutil"
+
+	"github.com/danielgtaylor/huma/v2"
 )
 
 func (s *Server) registerAnalyticsRoutes() {
-	group := newRouteGroup(s.api, "/api/v1/analytics", "Analytics")
+	group := huma.NewGroup(s.api, "/api/v1/analytics")
+	configureRouteGroup(group, "Analytics")
 
 	s.get(group, "/summary", "Get analytics summary", s.humaAnalyticsSummary)
 	s.get(group, "/activity", "Get analytics activity", s.humaAnalyticsActivity)

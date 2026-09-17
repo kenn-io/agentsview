@@ -12,6 +12,7 @@
   const baseShortcuts = $derived([
     { key: `${mod} K`, action: m.shortcuts_open_command_palette() },
     { key: `${mod} F / /`, action: m.shortcuts_find_in_session() },
+    { key: `${mod} G`, action: m.shortcuts_go_to_session() },
     { key: escapeKey, action: m.shortcuts_close_palette() },
     { key: "j / \u2193", action: m.shortcuts_next_message() },
     { key: "k / \u2191", action: m.shortcuts_prev_message() },
