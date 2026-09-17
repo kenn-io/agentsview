@@ -1,0 +1,219 @@
+package sync
+
+import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"errors"
+	"os"
+	"path/filepath"
+
+	"github.com/mattn/go-sqlite3"
+
+	"go.kenn.io/agentsview/internal/parser"
+)
+
+type piebaldFailureIdentity struct {
+	dbPath  string
+	size    int64
+	mtimeNS int64
+}
+
+type piebaldFailureMemoEntry struct {
+	identity    piebaldFailureIdentity
+	err         error
+	retryNeeded bool
+}
+
+type piebaldFailureLookup struct {
+	key        string
+	identity   piebaldFailureIdentity
+	identityOK bool
+	err        error
+	retry      bool
+}
+
+func (e *Engine) preparePiebaldFailure(
+	source parser.SourceRef,
+) (piebaldFailureLookup, bool) {
+	key, dbPath, ok := piebaldFailureSourcePaths(source)
+	if !ok {
+		return piebaldFailureLookup{}, false
+	}
+	identity, err := e.capturePiebaldFailureIdentity(dbPath)
+	if err != nil {
+		e.skipMu.Lock()
+		entry, found := e.piebaldFailureMemo[key]
+		if found && !entry.retryNeeded {
+			delete(e.piebaldFailureMemo, key)
+			found = false
+		}
+		e.skipMu.Unlock()
+		return piebaldFailureLookup{key: key, retry: found}, found
+	}
+	lookup := piebaldFailureLookup{
+		key:        key,
+		identity:   identity,
+		identityOK: true,
+	}
+
+	e.skipMu.Lock()
+	entry, found := e.piebaldFailureMemo[key]
+	if found && entry.identity != identity {
+		e.piebaldFailureMemo[key] = piebaldFailureMemoEntry{
+			identity:    identity,
+			retryNeeded: true,
+		}
+		lookup.retry = true
+	} else if found {
+		lookup.err = entry.err
+		lookup.retry = entry.retryNeeded
+	}
+	e.skipMu.Unlock()
+	return lookup, true
+}
+
+func (e *Engine) capturePiebaldFailureIdentity(
+	dbPath string,
+) (piebaldFailureIdentity, error) {
+	stat := os.Stat
+	if e != nil && e.stat != nil {
+		stat = e.stat
+	}
+	info, err := stat(dbPath)
+	if err != nil {
+		return piebaldFailureIdentity{}, err
+	}
+	if info == nil {
+		return piebaldFailureIdentity{}, errors.New("piebald source stat returned no file info")
+	}
+	return piebaldFailureIdentity{
+		dbPath:  filepath.Clean(dbPath),
+		size:    info.Size(),
+		mtimeNS: info.ModTime().UnixNano(),
+	}, nil
+}
+
+func piebaldFailureSourcePaths(
+	source parser.SourceRef,
+) (virtualPath, dbPath string, ok bool) {
+	if source.Provider != parser.AgentPiebald {
+		return "", "", false
+	}
+	virtualPath = providerDiscoveredPath(source)
+	dbPath, sessionID, ok := parser.ParseVirtualSourcePathForBase(
+		virtualPath, parser.PiebaldDBFilename,
+	)
+	if !ok {
+		return "", "", false
+	}
+	dbPath = filepath.Clean(dbPath)
+	return parser.VirtualSourcePath(dbPath, sessionID), dbPath, true
+}
+
+func (e *Engine) rememberPiebaldParseFailure(
+	ctx context.Context,
+	source parser.SourceRef,
+	pre piebaldFailureLookup,
+	parseErr error,
+) {
+	if parseErr == nil || !pre.identityOK {
+		return
+	}
+	key, dbPath, ok := piebaldFailureSourcePaths(source)
+	if !ok || key != pre.key {
+		return
+	}
+	post, err := e.capturePiebaldFailureIdentity(dbPath)
+	if err != nil {
+		return
+	}
+	if pre.identity != post {
+		e.setPiebaldRetry(key, post)
+		return
+	}
+	if piebaldFailureIsTransient(ctx, parseErr) {
+		return
+	}
+
+	e.skipMu.Lock()
+	if e.piebaldFailureMemo == nil {
+		e.piebaldFailureMemo = make(map[string]piebaldFailureMemoEntry)
+	}
+	e.piebaldFailureMemo[key] = piebaldFailureMemoEntry{
+		identity: post,
+		err:      parseErr,
+	}
+	e.skipMu.Unlock()
+}
+
+func (e *Engine) setPiebaldRetry(
+	key string, identity piebaldFailureIdentity,
+) {
+	e.skipMu.Lock()
+	if e.piebaldFailureMemo == nil {
+		e.piebaldFailureMemo = make(map[string]piebaldFailureMemoEntry)
+	}
+	e.piebaldFailureMemo[key] = piebaldFailureMemoEntry{
+		identity:    identity,
+		retryNeeded: true,
+	}
+	e.skipMu.Unlock()
+}
+
+func (e *Engine) clearPiebaldFailure(source parser.SourceRef) {
+	key, _, ok := piebaldFailureSourcePaths(source)
+	if !ok {
+		return
+	}
+	e.skipMu.Lock()
+	delete(e.piebaldFailureMemo, key)
+	e.skipMu.Unlock()
+}
+
+func (e *Engine) clearPiebaldFailureMemo() {
+	e.skipMu.Lock()
+	e.piebaldFailureMemo = make(map[string]piebaldFailureMemoEntry)
+	e.skipMu.Unlock()
+}
+
+func piebaldFailureIsTransient(ctx context.Context, err error) bool {
+	if err == nil {
+		return true
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return true
+	}
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, sql.ErrNoRows) ||
+		errors.Is(err, sql.ErrConnDone) ||
+		errors.Is(err, driver.ErrBadConn) ||
+		errors.Is(err, os.ErrNotExist) ||
+		errors.Is(err, os.ErrPermission) ||
+		errors.Is(err, os.ErrInvalid) {
+		return true
+	}
+
+	var sqliteErr sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		return piebaldSQLiteErrorIsTransient(sqliteErr)
+	}
+	var sqliteErrPtr *sqlite3.Error
+	if errors.As(err, &sqliteErrPtr) && sqliteErrPtr != nil {
+		return piebaldSQLiteErrorIsTransient(*sqliteErrPtr)
+	}
+	return false
+}
+
+func piebaldSQLiteErrorIsTransient(err sqlite3.Error) bool {
+	switch err.Code {
+	case sqlite3.ErrBusy, sqlite3.ErrLocked, sqlite3.ErrInterrupt,
+		sqlite3.ErrIoErr, sqlite3.ErrCantOpen, sqlite3.ErrPerm,
+		sqlite3.ErrReadonly, sqlite3.ErrProtocol, sqlite3.ErrFull,
+		sqlite3.ErrNomem:
+		return true
+	default:
+		return false
+	}
+}

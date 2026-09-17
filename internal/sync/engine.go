@@ -584,6 +584,8 @@ type Engine struct {
 	// skipCacheDirty is protected by skipMu and cleared only for a persistence attempt.
 	skipCacheDirty   bool
 	skipFingerprints map[string]string
+	// piebaldFailureMemo suppresses repeated ordinary parse failures per virtual source.
+	piebaldFailureMemo map[string]piebaldFailureMemoEntry
 	// retryUnsafeSkipPaths records sources whose successful processing changed
 	// exclusion or source-missing state in the current database. A rebuild that
 	// later fails discards those database changes, so its skip entries cannot be
@@ -973,6 +975,7 @@ func NewEngine(
 		skipCache:               skipCache,
 		skipCacheDirty:          true,
 		skipFingerprints:        make(map[string]string),
+		piebaldFailureMemo:      make(map[string]piebaldFailureMemoEntry),
 		skipHashKeys:            skipHashKeys,
 		s3CodexIndexCache:       make(map[string]s3CodexIndexSnapshot),
 		ephemeral:               cfg.Ephemeral,
@@ -3983,6 +3986,7 @@ func (e *Engine) ResetCachesAfterSwap() error {
 	e.clearTrustedSQLiteContainers()
 	e.clearTrustedOpenCodeStorageSessions()
 	e.clearVerifiedSources()
+	e.clearPiebaldFailureMemo()
 	return e.ReloadSkipCache()
 }
 
@@ -10210,7 +10214,9 @@ func (e *Engine) collectAndBatchWithOptions(
 			if r.cacheSkip && r.mtime != 0 && !r.noCacheSkip {
 				e.cacheSkip(r.skipCacheKey(), r.mtime, r.sourceFingerprint)
 			}
-			log.Printf("sync error: %v", r.err)
+			if !r.suppressedFailure {
+				log.Printf("sync error: %v", r.err)
+			}
 			r.releaseAll()
 			continue
 		}
@@ -11027,6 +11033,8 @@ type processResult struct {
 	// retrying it.
 	noCacheSkip bool
 	needsRetry  bool
+	// suppressedFailure keeps a memoized parse error visible in stats without logging it again.
+	suppressedFailure bool
 	// forceReplace requests full message replacement on write,
 	// even when the existing rows would otherwise be left in
 	// place. Set when a fall-through to full parse is recovering
@@ -11450,7 +11458,26 @@ func (e *Engine) processProviderFile(
 	if cwdAgent == "" {
 		cwdAgent = file.Agent
 	}
+	explicitForce := e.forceParseRequested(file)
 	forceSourceCwdParse := cwdDecision.forceParse
+	var piebaldFailure piebaldFailureLookup
+	if file.Agent == parser.AgentPiebald && !explicitForce {
+		var found bool
+		piebaldFailure, found = e.preparePiebaldFailure(source)
+		if found {
+			if piebaldFailure.err != nil {
+				return processResult{
+					err:               piebaldFailure.err,
+					noCacheSkip:       true,
+					suppressedFailure: true,
+				}, true
+			}
+			if piebaldFailure.retry {
+				file.ForceParse = true
+				forceSourceCwdParse = true
+			}
+		}
+	}
 
 	// Codex checkpoint decision: an invalid proof requires an authoritative
 	// replacement. A missing checkpoint is merely absent optimization state:
@@ -12009,6 +12036,9 @@ func (e *Engine) processProviderFile(
 		if stagedGCRelease != nil {
 			stagedGCRelease()
 		}
+		if file.Agent == parser.AgentPiebald && !explicitForce {
+			e.rememberPiebaldParseFailure(ctx, source, piebaldFailure, err)
+		}
 		if !e.forceParse {
 			cwdChanged, reconcileErr := e.reconcileSourceCwdByPath(
 				source, cwdDecision,
@@ -12034,6 +12064,9 @@ func (e *Engine) processProviderFile(
 			noCacheSkip:    true,
 			retentionLease: lease,
 		}, true
+	}
+	if file.Agent == parser.AgentPiebald && !e.forceParse {
+		e.clearPiebaldFailure(source)
 	}
 	if err := validateProviderOutcome(
 		provider.Definition(),
