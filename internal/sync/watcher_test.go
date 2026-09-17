@@ -787,6 +787,36 @@ func TestWatchEventSinkRetainsConcurrentAuthoritativeLifecycleMarkers(t *testing
 		"separate lifecycle gates must not overwrite one another")
 }
 
+func TestWatchEventSinkDispatchConsumesImmediateWake(t *testing.T) {
+	sink := newWatchEventSink(8, 1024)
+	sink.RetainRetryImmediate(WatchBatch{Paths: []string{"/retry"}})
+
+	batch, ok := sink.Take(nil)
+	require.True(t, ok)
+	assert.Equal(t, []string{"/retry"}, batch.Paths)
+	assert.False(t, sink.takeImmediateWake(),
+		"a timer-dispatched batch must consume its own immediate marker")
+	select {
+	case <-sink.wake:
+	default:
+		t.Fatal("expected the control wake to remain queued")
+	}
+	sink.RetainRetry(WatchBatch{Paths: []string{"/later"}})
+	assert.False(t, sink.takeImmediateWake(),
+		"a stale control wake must not mark later retry work")
+}
+
+func TestWatchEventSinkEmptyImmediateWakeDoesNotLeak(t *testing.T) {
+	sink := newWatchEventSink(8, 1024)
+	sink.MarkImmediate()
+	sink.Add(backendEvent{Path: "/ordinary", Op: backendOpWrite})
+	assert.False(t, sink.takeImmediateWake())
+
+	sink.RetainRetry(WatchBatch{Paths: []string{"/retry"}})
+	assert.False(t, sink.takeImmediateWake(),
+		"an empty immediate wake must not mark later retry work")
+}
+
 func TestWatcherBatchesPathsAndEnforcesDispatchFloor(t *testing.T) {
 	const (
 		batchDelay  = 50 * time.Millisecond

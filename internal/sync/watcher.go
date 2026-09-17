@@ -128,6 +128,7 @@ type pendingWatchBatch struct {
 	maxPathBytes   int
 	fullSync       bool
 	lostEvents     bool
+	immediate      bool // Keep control urgency with the batch it belongs to.
 	onOverflow     func(WatchBatchPromotionReason)
 }
 
@@ -294,6 +295,7 @@ func (p *pendingWatchBatch) merge(other *pendingWatchBatch) {
 	if other == nil {
 		return
 	}
+	p.immediate = p.immediate || other.immediate
 	if other.fullSync {
 		p.makeFullSync(other.lostEvents)
 	}
@@ -390,6 +392,7 @@ func (p *pendingWatchBatch) TakeWithRootAgents(
 	if p.Empty() {
 		return WatchBatch{}, false
 	}
+	p.immediate = false
 	if p.fullSync {
 		p.fullSync = false
 		lostEvents := p.lostEvents
@@ -480,12 +483,11 @@ func (p *pendingWatchBatch) takeLifecycleTokens() []backendLifecycleToken {
 }
 
 type watchEventSink struct {
-	mu            sync.Mutex
-	pending       *pendingWatchBatch
-	handoff       atomic.Pointer[pendingWatchBatch]
-	overflows     boundedCounter
-	wake          chan struct{}
-	immediateWake atomic.Bool
+	mu        sync.Mutex
+	pending   *pendingWatchBatch
+	handoff   atomic.Pointer[pendingWatchBatch]
+	overflows boundedCounter
+	wake      chan struct{}
 }
 
 type boundedCounter struct {
@@ -555,8 +557,9 @@ func (s *watchEventSink) RetainAuthoritative(token backendLifecycleToken) {
 	batch := newPendingWatchBatch(s.pending.maxEntries, s.pending.maxPathBytes)
 	batch.AddFullSync()
 	batch.AddLifecycle(token)
+	batch.immediate = true
 	s.publishHandoff(batch)
-	s.signalImmediate()
+	s.signal()
 }
 
 func (s *watchEventSink) Empty() bool {
@@ -582,6 +585,24 @@ func (s *watchEventSink) RetainRetry(retry WatchBatch) {
 	defer s.mu.Unlock()
 	s.absorbHandoff()
 	retainWatchRetry(s.pending, retry)
+}
+
+func (s *watchEventSink) RetainRetryImmediate(retry WatchBatch) {
+	s.mu.Lock()
+	s.absorbHandoff()
+	retainWatchRetry(s.pending, retry)
+	s.pending.immediate = true
+	s.mu.Unlock()
+	s.signal()
+}
+
+func (s *watchEventSink) MarkImmediate() {
+	s.mu.Lock()
+	s.absorbHandoff()
+	if !s.pending.Empty() {
+		s.pending.immediate = true
+	}
+	s.mu.Unlock()
 }
 
 func (s *watchEventSink) publishHandoff(batch *pendingWatchBatch) {
@@ -625,13 +646,16 @@ func (s *watchEventSink) signal() {
 	}
 }
 
-func (s *watchEventSink) signalImmediate() {
-	s.immediateWake.Store(true)
-	s.signal()
-}
-
 func (s *watchEventSink) takeImmediateWake() bool {
-	return s.immediateWake.Swap(false)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.absorbHandoff()
+	immediate := s.pending.immediate
+	s.pending.immediate = false
+	if s.pending.Empty() {
+		return false
+	}
+	return immediate
 }
 
 // Watcher schedules backend changes into serialized callbacks with short-burst
@@ -1020,8 +1044,7 @@ func (w *Watcher) QueueRetryBatch(batch WatchBatch) {
 		len(batch.Paths) == 0 {
 		return
 	}
-	w.eventSink.RetainRetry(batch)
-	w.eventSink.signalImmediate()
+	w.eventSink.RetainRetryImmediate(batch)
 }
 
 // OpenDispatch transitions a collecting watcher to callback dispatch. It is
@@ -1034,7 +1057,8 @@ func (w *Watcher) OpenDispatch() {
 	}
 	w.lifecycle = watcherDispatching
 	w.dispatchEnabled.Store(true)
-	w.eventSink.signalImmediate()
+	w.eventSink.MarkImmediate()
+	w.eventSink.signal()
 }
 
 // Stop stops the watcher and waits for it to finish.
