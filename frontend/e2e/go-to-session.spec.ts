@@ -21,8 +21,8 @@ const UNKNOWN_UUID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const TARGET_ID = `remote-host~codex:${TARGET_UUID}`;
 const MISSING_ID = `remote-host~codex:${MISSING_UUID}`;
 const OPAQUE_ID = "test-session-project-reclassification-nested";
-const TARGET_PATH = `/sessions/${encodeURIComponent(TARGET_ID)}`;
-const MISSING_PATH = `/sessions/${encodeURIComponent(MISSING_ID)}`;
+const TARGET_PATH = `/sessions/remote-host~codex/${TARGET_UUID}`;
+const MISSING_PATH = `/sessions/remote-host~codex/${MISSING_UUID}`;
 const OPAQUE_PATH = `/sessions/${encodeURIComponent(OPAQUE_ID)}`;
 
 const now = "2026-09-14T12:00:00Z";

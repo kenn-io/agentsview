@@ -317,6 +317,39 @@ func TestUsageRollupCrossIdentityQueriesUseIndexes(t *testing.T) {
 	usageKeyPlan := plan(usageRollupCrossUsageKeySQL)
 	assert.Contains(t, usageKeyPlan, "usage_facts_usage_dedup_key")
 	assert.Contains(t, usageKeyPlan, "cursor_usage_facts_dedup_key")
+
+	// A partial identity index can still scan the entire archive. The
+	// selected batch must drive the query, even as unrelated facts grow.
+	for _, size := range []int{10, 1000} {
+		_, err = conn.ExecContext(t.Context(), `
+			WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x < ?)
+			INSERT OR IGNORE INTO usage_cached_sessions(
+				session_id, source_sync_marker, source_transcript_rev,
+				usage_event_fingerprint, install_revision)
+			SELECT 'unrelated-' || x, '', '0', '', x FROM n`, size)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(t.Context(), `INSERT OR IGNORE INTO usage_facts(
+			cached_session_id, fact_index, source, uses_session_start, model,
+			input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens,
+			cache_read_tokens, web_search_requests, request_scoped,
+			token_eligible, activity_eligible, claude_message_id,
+			claude_request_id, source_uuid, usage_dedup_key)
+			SELECT id, 0, 'message', 0, 'model', 1, 1, 0, 0, 0, 0, 1, 1, 1,
+				session_id, session_id, session_id, session_id
+			FROM usage_cached_sessions;
+			ANALYZE`)
+		require.NoError(t, err)
+		for _, query := range []string{
+			usageRollupCrossSnapshotSQL, usageRollupCrossSourceUUIDSQL, usageRollupCrossUsageKeySQL,
+		} {
+			detail := plan(query)
+			assert.Contains(t, detail, "SCAN selected")
+			assert.Contains(t, detail, "SEARCH f USING PRIMARY KEY (cached_session_id=?)")
+		}
+		cross, err := loadUsageRollupCrossIdentities(t.Context(), conn)
+		require.NoError(t, err)
+		assert.True(t, cross.isEmpty(), "an empty batch must not pick up unrelated facts")
+	}
 }
 
 func TestUsageRollupSeededRandomParitySweep(t *testing.T) {

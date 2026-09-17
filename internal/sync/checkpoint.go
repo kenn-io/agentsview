@@ -33,8 +33,9 @@ const (
 	codexCheckpointAppend
 	// codexCheckpointInvalid means a checkpoint exists but its proof failed
 	// (identity changed, truncation, anchor mismatch, missing hash state).
-	// The caller must authoritatively reparse and replace stored rows —
-	// never resume and never append against the unverified prefix.
+	// Never resume or append against its unverified prefix. A matching full
+	// source fingerprint can still prove the stored transcript unchanged;
+	// otherwise the caller must authoritatively reparse and replace it.
 	codexCheckpointInvalid
 	// codexCheckpointMissing means a stored Codex session has no usable
 	// checkpoint (for example, an archive written before checkpoints
