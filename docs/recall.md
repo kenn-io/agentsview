@@ -81,6 +81,9 @@ separate cached report. Changes to credentials or transport opt-ins do not
 change that identity; use force refresh when those changes should regenerate a
 report under the same endpoint and model.
 
+Generated insights can also be listed, fetched, and generated from the CLI with
+`agentsview insight`; see the [CLI reference](/docs/commands/).
+
 ### Configuring agent binaries
 
 AgentsView normally resolves `claude`, `codex`, `copilot`, `gemini`, and

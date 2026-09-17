@@ -1464,6 +1464,38 @@ server.
 
 ______________________________________________________________________
 
+### `agentsview insight`
+
+Generate and inspect stored Activity Insights through the daemon API.
+
+```bash
+agentsview insight list [--type <type>] [--project <project>] \
+  [--date-from <date>] [--date-to <date>]
+agentsview insight get <id>
+agentsview insight generate --type daily_activity --date-from <date> \
+  --date-to <date> [flags]
+```
+
+`insight list` accepts `--type`, `--project`, `--date-from`, and `--date-to`.
+`insight get` prints one saved insight. Use `--format json` or `--json` for
+the API envelope and complete stored rows. Human output prints a table for
+list and the saved Markdown content for get.
+
+`insight generate` accepts `--type`, `--date-from`, `--date-to`, `--project`,
+`--prompt`, `--session-id`, `--agent`, `--automated-scope`, and `--timezone`.
+The type defaults to `daily_activity`. The server validates fields, selects
+the configured agent or endpoint, and decides whether the selected backend
+can save the result. Local commands discover or start the configured daemon;
+an explicit `--server <url>` targets an already running server.
+
+Generation status and log events go to stderr. The saved insight is the only
+result written to stdout, which keeps JSON output usable in scripts. For an
+explicit server, provide its bearer token with `AGENTSVIEW_SERVER_TOKEN` or
+`--server-token-file <path>`. The local daemon token from `config.toml` is
+never sent to an explicitly supplied server.
+
+______________________________________________________________________
+
 ### `agentsview mcp`
 
 Run a read-only Model Context Protocol server for assistant clients that can
