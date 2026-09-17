@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick } from "svelte";
 import SummaryCards from "./SummaryCards.svelte";
 import type { Report } from "../../api/types.js";
@@ -156,5 +156,23 @@ describe("SummaryCards", () => {
 
     expect(totalCost?.querySelector(".card-value")?.textContent).toBe("€9.00");
     expect(report.totals.cost).toEqual({ microdollars: 10_000_000 });
+  });
+
+  it("renders the applied EUR cost when storage writes are blocked", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("storage blocked");
+    });
+
+    try {
+      expect(costDisplay.setPreference("EUR", 0.9)).toBe(true);
+      const target = await render(makeReport({ cost: testMoney(10) }));
+      const totalCost = [...target.querySelectorAll(".card")].find(
+        (card) => card.querySelector(".card-label")?.textContent?.trim() === "Total Cost",
+      );
+
+      expect(totalCost?.querySelector(".card-value")?.textContent).toBe("€9.00");
+    } finally {
+      setItem.mockRestore();
+    }
   });
 });

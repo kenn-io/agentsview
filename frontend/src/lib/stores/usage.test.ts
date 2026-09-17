@@ -401,8 +401,13 @@ describe("UsageStore display boundary", () => {
 
   it("keeps comparison requests in USD microdollars in EUR mode", async () => {
     usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(usageSummary(10));
-    costDisplay.setPreference("EUR", 0.9);
     const { usage } = await loadStore();
+    const { costDisplay: loadedCostDisplay } = await import("./costDisplay.svelte.js");
+    loadedCostDisplay.setPreference("EUR", 0.9);
+    expect(loadedCostDisplay.preference).toEqual({
+      currency: "EUR",
+      eurPerUsd: 0.9,
+    });
 
     await usage.fetchAll();
 

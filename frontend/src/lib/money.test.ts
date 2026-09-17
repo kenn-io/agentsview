@@ -25,6 +25,7 @@ describe("formatMoney", () => {
     [0.01, "$0.01"],
     [12.345, "$12.35"],
     [99.994, "$99.99"],
+    [-99.994, "-$99.99"],
     [100, "$100"],
   ])("keeps USD output for %d", (value, expected) => {
     expect(formatMoney(testMoney(value))).toBe(expected);

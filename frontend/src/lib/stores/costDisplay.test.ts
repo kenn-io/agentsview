@@ -49,6 +49,17 @@ describe("CostDisplayStore", () => {
     });
   });
 
+  it("defaults to USD when persisted preference JSON is malformed", () => {
+    const { storage } = testStorage({
+      [COST_DISPLAY_STORAGE_KEY]: "{",
+    });
+
+    expect(new CostDisplayStore(storage).preference).toEqual({
+      currency: "USD",
+      eurPerUsd: null,
+    });
+  });
+
   it.each([
     ["null", null],
     ["an unknown currency", { currency: "GBP", eurPerUsd: 0.9 }],
