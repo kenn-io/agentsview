@@ -359,7 +359,7 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 	)
 	cmd.Flags().StringVar(
 		&cfg.Host, "host", "",
-		"SSH hostname for deprecated remote sync",
+		"Configured HTTP host name or deprecated SSH hostname",
 	)
 	cmd.Flags().StringVar(
 		&cfg.Target,

@@ -4,4 +4,5 @@
 
 export interface ResolveSessionIDsResponse {
   ids: string[];
+  raw_suffix?: boolean;
 }

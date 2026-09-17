@@ -188,6 +188,30 @@ func (b *httpBackend) FindSessionIDsByPartial(
 	return out.IDs, nil
 }
 
+func (b *httpBackend) FindSessionIDsByRawSuffix(
+	ctx context.Context, raw string, limit int,
+) ([]string, error) {
+	q := url.Values{}
+	q.Set("partial", raw)
+	q.Set("raw_suffix", "true")
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var out struct {
+		IDs       []string `json:"ids"`
+		RawSuffix bool     `json:"raw_suffix"`
+	}
+	if err := b.getJSON(ctx, "/api/v1/session-ids/resolve?"+q.Encode(), &out); err != nil {
+		return nil, err
+	}
+	if !out.RawSuffix {
+		return nil, errors.New(
+			"server does not acknowledge raw session ID lookup",
+		)
+	}
+	return out.IDs, nil
+}
+
 func (b *httpBackend) List(
 	ctx context.Context, f ListFilter,
 ) (*SessionList, error) {

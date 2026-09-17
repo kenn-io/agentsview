@@ -1,7 +1,7 @@
 name: CI
 
 # The PR dispatcher always calls the main-pinned workflow. That workflow
-# runs Linux AMD64 and Windows jobs on Namespace, including fork PRs.
+# runs Linux AMD64 and Windows jobs on GitHub-hosted runners, including fork PRs.
 on:
   pull_request:
 

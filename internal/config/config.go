@@ -1062,6 +1062,15 @@ func Default() (Config, error) {
 				dirs = []string{filepath.Join(stateHome, "evener")}
 			}
 		}
+		// CRUSH_GLOBAL_DATA and XDG_DATA_HOME override Crush's default
+		// data directory following the upstream XDG conventions.
+		if def.Type == parser.AgentCrush && root == "" {
+			if crushGlobal := os.Getenv("CRUSH_GLOBAL_DATA"); crushGlobal != "" && filepath.IsAbs(crushGlobal) {
+				dirs = []string{crushGlobal}
+			} else if xdgData := os.Getenv("XDG_DATA_HOME"); xdgData != "" && filepath.IsAbs(xdgData) {
+				dirs = []string{filepath.Join(xdgData, "crush")}
+			}
+		}
 		// Keep the Hermes profiles container as a stable provider root. The
 		// provider enumerates its children on every discovery pass, so profiles
 		// created after startup become visible without rebuilding Config or the

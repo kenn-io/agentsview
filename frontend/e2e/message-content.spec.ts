@@ -269,7 +269,9 @@ test.describe("retained tool images", () => {
       { type: "agentsview_image", version: 1, text: "![second](asset://nested/second)" },
       { type: "text", text: "After" },
     ]);
-    const unsupportedResult = retainedResult.replace("image/png", "image/svg+xml");
+    const unsupportedResult = JSON.stringify([
+      { type: "input_image", image_url: smallPNG.replace("image/png", "image/svg+xml") },
+    ]);
     const sessionId = "retained-tool-image-1735";
     const now = "2026-09-11T12:00:00Z";
     const session = {

@@ -27,12 +27,6 @@ import (
 
 var sessionUsageHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
-type rawSessionIDResolver interface {
-	FindSessionIDsByRawSuffix(
-		ctx context.Context, raw string, limit int,
-	) ([]string, error)
-}
-
 func newSessionUsageCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "usage <id>",
@@ -304,26 +298,24 @@ func storeSessionUsageData(
 func resolveStoreSessionID(
 	ctx context.Context, store db.Store, sessionID string,
 ) (string, error) {
-	if resolver, ok := store.(rawSessionIDResolver); ok {
-		matches, err := resolver.FindSessionIDsByRawSuffix(
-			ctx, sessionID, tokenUseResolveMatchLimit,
-		)
-		if err != nil {
-			return "", err
+	matches, err := store.FindSessionIDsByRawSuffix(
+		ctx, sessionID, tokenUseResolveMatchLimit,
+	)
+	if err != nil {
+		return "", err
+	}
+	if len(matches) > 0 {
+		if matches[0] == sessionID {
+			return sessionID, nil
 		}
-		if len(matches) > 0 {
-			if matches[0] == sessionID {
-				return sessionID, nil
-			}
-			if len(matches) > 1 {
-				fmt.Fprintf(os.Stderr,
-					"warning: ambiguous session id %q matches "+
-						"multiple sessions, using most recent (%s)\n",
-					sessionID, matches[0],
-				)
-			}
-			return matches[0], nil
+		if len(matches) > 1 {
+			fmt.Fprintf(os.Stderr,
+				"warning: ambiguous session id %q matches "+
+					"multiple sessions, using most recent (%s)\n",
+				sessionID, matches[0],
+			)
 		}
+		return matches[0], nil
 	}
 	return resolveServiceSessionID(
 		ctx, service.NewReadOnlyBackend(store), sessionID,

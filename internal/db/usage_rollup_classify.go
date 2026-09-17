@@ -282,14 +282,15 @@ func usageRollupGeneralKeyIsSource(fact usageRollupFact) bool {
 }
 
 // Cross-identity discovery requires the usage_rollup_build_sessions temp
-// table populated by loadUsageRollupFacts on the same connection. The
+// table populated by loadUsageRollupFacts on the same connection. CROSS JOIN
+// keeps that bounded batch outermost instead of scanning every identity. The
 // redundant non-empty terms inside EXISTS let SQLite prove the partial
 // indexes usable.
 const usageRollupCrossSnapshotSQL = `SELECT DISTINCT
 	f.claude_message_id, f.claude_request_id
 	FROM usage_rollup_build_sessions selected
-	JOIN usage_cached_sessions cs ON cs.session_id = selected.session_id
-	JOIN usage_facts f ON f.cached_session_id = cs.id
+	CROSS JOIN usage_cached_sessions cs ON cs.session_id = selected.session_id
+	CROSS JOIN usage_facts f ON f.cached_session_id = cs.id
 	WHERE f.claude_message_id != '' AND f.claude_request_id != ''
 	  AND EXISTS (SELECT 1 FROM usage_facts other
 		WHERE other.claude_message_id = f.claude_message_id
@@ -299,8 +300,8 @@ const usageRollupCrossSnapshotSQL = `SELECT DISTINCT
 
 const usageRollupCrossSourceUUIDSQL = `SELECT DISTINCT f.source_uuid
 	FROM usage_rollup_build_sessions selected
-	JOIN usage_cached_sessions cs ON cs.session_id = selected.session_id
-	JOIN usage_facts f ON f.cached_session_id = cs.id
+	CROSS JOIN usage_cached_sessions cs ON cs.session_id = selected.session_id
+	CROSS JOIN usage_facts f ON f.cached_session_id = cs.id
 	WHERE f.source_uuid != ''
 	  AND EXISTS (SELECT 1 FROM usage_facts other
 		WHERE other.source_uuid = f.source_uuid AND other.source_uuid != ''
@@ -308,8 +309,8 @@ const usageRollupCrossSourceUUIDSQL = `SELECT DISTINCT f.source_uuid
 
 const usageRollupCrossUsageKeySQL = `SELECT DISTINCT f.usage_dedup_key
 	FROM usage_rollup_build_sessions selected
-	JOIN usage_cached_sessions cs ON cs.session_id = selected.session_id
-	JOIN usage_facts f ON f.cached_session_id = cs.id
+	CROSS JOIN usage_cached_sessions cs ON cs.session_id = selected.session_id
+	CROSS JOIN usage_facts f ON f.cached_session_id = cs.id
 	WHERE f.usage_dedup_key != ''
 	  AND (EXISTS (SELECT 1 FROM usage_facts other
 			WHERE other.usage_dedup_key = f.usage_dedup_key
