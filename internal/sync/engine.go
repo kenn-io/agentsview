@@ -642,6 +642,10 @@ type Engine struct {
 	duplicateRebuildMu      gosync.Mutex
 	duplicateRebuildRunning bool
 	duplicateRebuildPending bool
+	// duplicateRebuildClosed is set by Close under duplicateRebuildMu
+	// before draining so no rebuild can be scheduled — and no worker
+	// goroutine started — after shutdown has begun.
+	duplicateRebuildClosed bool
 	// duplicateRebuildDone is closed when the single-flight background
 	// rebuild goroutine fully drains (no pending re-run). Tests use it to
 	// keep scheduled rebuild work out of measured regions.
@@ -1164,12 +1168,21 @@ func pathWithinRoot(path, root string) bool {
 // the scheduler. Call once when the engine's owner shuts down;
 // safe to call repeatedly.
 func (e *Engine) Close() {
-	// Drain any in-flight or pending duplicate-group rebuild before the
-	// caller closes the database: the worker runs on context.Background()
-	// inside its own transaction, so shutdown must not race an active
-	// pass. The worker coalesces concurrent schedule requests into the
-	// same run loop, so one wait covers every request made so far.
-	e.WaitDuplicateGroupRebuildDrained()
+	// Refuse any newly scheduled rebuild, then drain the in-flight or
+	// pending worker before the caller closes the database: each rebuild
+	// pass runs in its own transaction under the exclusive sync lock, so
+	// waiting here means no rebuild transaction can still be open when
+	// the archive closes. The done channel is closed exactly once when
+	// the worker fully drains, so waiting on the snapshot taken under the
+	// mutex covers every schedule made before Close; a nil channel means
+	// no rebuild was ever scheduled.
+	e.duplicateRebuildMu.Lock()
+	e.duplicateRebuildClosed = true
+	ch := e.duplicateRebuildDone
+	e.duplicateRebuildMu.Unlock()
+	if ch != nil {
+		<-ch
+	}
 	e.signalSched.stop()
 }
 
@@ -4797,12 +4810,20 @@ func (e *Engine) EnsureDuplicateGroupsBootstrapped(
 // scheduleDuplicateGroupRebuild queues one background duplicate-group
 // membership rebuild after a sync pass changed sessions. Concurrent callers
 // coalesce: a running rebuild leaves a pending marker and re-runs itself so
-// a change missed by the in-flight pass is not lost. When a rebuild actually
-// changes membership it emits "sessions" so UI and mirror consumers see the
-// refreshed indicators; emission happens outside syncMu (the goroutine never
-// takes it) so Emitter implementations cannot widen a sync critical section.
+// a change missed by the in-flight pass is not lost. Each rebuild pass runs
+// through RunExclusive so it serializes with sync and resync writes: a full
+// resync swaps e.db to a temporary archive for its whole exclusive window,
+// and a worker that read e.db outside that lock could rebuild against the
+// temporary or swapped handle. Event emission happens inside
+// RebuildDuplicateGroups after its exclusive section releases, so emitters
+// cannot widen a sync critical section. After Close, scheduling is a no-op,
+// so no rebuild can start once shutdown has drained the worker.
 func (e *Engine) scheduleDuplicateGroupRebuild() {
 	e.duplicateRebuildMu.Lock()
+	if e.duplicateRebuildClosed {
+		e.duplicateRebuildMu.Unlock()
+		return
+	}
 	if e.duplicateRebuildRunning {
 		e.duplicateRebuildPending = true
 		e.duplicateRebuildMu.Unlock()
@@ -4814,11 +4835,12 @@ func (e *Engine) scheduleDuplicateGroupRebuild() {
 	e.duplicateRebuildMu.Unlock()
 	go func() {
 		for {
-			result, err := e.db.RebuildDuplicateGroups(context.Background())
-			if err != nil {
+			// RebuildDuplicateGroups serializes with sync and resync writes
+			// via RunExclusive and emits outside the exclusive section.
+			if _, err := e.RebuildDuplicateGroups(
+				context.Background(),
+			); err != nil {
 				log.Printf("warning: duplicate group rebuild: %v", err)
-			} else if result.NotifiedIDs > 0 {
-				e.emit("sessions")
 			}
 			e.duplicateRebuildMu.Lock()
 			if !e.duplicateRebuildPending {
