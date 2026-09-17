@@ -56,6 +56,40 @@ func TestProviderParseFailureUsesStickySkipCache(t *testing.T) {
 	assert.Equal(t, int32(3), provider.parseCalls.Load())
 }
 
+func TestAiderParseFailureDoesNotUseMtimeFailureCache(t *testing.T) {
+	const agent parser.AgentType = parser.AgentAider
+
+	_, engine, provider, _, path := newChangedPathOutcomeEngine(
+		t, agent, func(string) parser.ParseOutcome { return parser.ParseOutcome{} },
+	)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	provider.fingerprint = parser.SourceFingerprint{
+		Key: path, MTimeNS: info.ModTime().UnixNano(),
+	}
+	provider.parseErr = errors.New("malformed source")
+	file := parser.DiscoveredFile{
+		Path: path, Agent: agent,
+		ProviderSource: provider.source, ProviderProcess: true,
+	}
+
+	first := engine.processFile(t.Context(), file)
+	require.Error(t, first.err)
+	assert.False(t, first.cacheFailure)
+	if first.cacheFailure {
+		engine.cacheFailure(first.failureCacheKey, first.failureMtime)
+	}
+
+	mtime := info.ModTime()
+	provider.parseErr = nil
+	require.NoError(t, os.WriteFile(path, []byte("rewritten"), 0o600))
+	require.NoError(t, os.Chtimes(path, mtime, mtime))
+	second := engine.processFile(t.Context(), file)
+	require.NoError(t, second.err)
+	assert.False(t, second.cachedFailure)
+	assert.Equal(t, int32(2), provider.parseCalls.Load())
+}
+
 func TestChangedPathSyncPersistsProviderFailure(t *testing.T) {
 	const agent parser.AgentType = "changed-path-failure"
 

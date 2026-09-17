@@ -11357,6 +11357,9 @@ func (e *Engine) sourceFailureCacheIdentity(
 		strings.HasPrefix(file.Path, "s3://") {
 		return "", 0, false
 	}
+	if !e.shouldCacheSkip(file) {
+		return "", 0, false
+	}
 	factory, ok := e.providerFactories[file.Agent]
 	if !ok || factory == nil {
 		return "", 0, false
