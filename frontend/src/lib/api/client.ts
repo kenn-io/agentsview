@@ -251,10 +251,6 @@ export function getMarkdownExportUrl(sessionId: string, depth?: 1 | "all"): stri
   return `${url.pathname}${url.search}`;
 }
 
-export function getInsightMarkdownExportUrl(insightId: number): string {
-  return `${getGeneratedBase()}${InsightsService.getGetApiV1InsightsByIdMdUrl({ id: insightId })}`;
-}
-
 /** Download a session export using fetch with auth headers,
  *  avoiding token leakage in the URL for remote connections. */
 export async function downloadExport(sessionId: string): Promise<void> {

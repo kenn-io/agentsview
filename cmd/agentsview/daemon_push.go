@@ -77,7 +77,7 @@ func postDaemonPush[T, P any](
 				fallbackAttempted = true
 				continue
 			}
-			return zero, daemonPushError(resp.StatusCode, msg)
+			return zero, errors.New(daemonErrorMessage(resp.StatusCode, msg))
 		}
 		defer resp.Body.Close()
 		if strings.HasPrefix(
@@ -117,18 +117,6 @@ func daemonRejectsWatchScope(status int, body []byte) bool {
 		strings.Contains(message, "unknown") ||
 		strings.Contains(message, "additional") ||
 		strings.Contains(message, "not allowed")
-}
-
-// daemonPushError renders a non-200 daemon response, preferring the API's
-// {"error": ...} body over the raw payload.
-func daemonPushError(status int, body []byte) error {
-	var apiErr struct {
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Error != "" {
-		return errors.New(apiErr.Error)
-	}
-	return fmt.Errorf("HTTP %d: %s", status, strings.TrimSpace(string(body)))
 }
 
 // consumeDaemonPushEvents applies daemon progress and terminal events decoded
