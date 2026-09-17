@@ -852,8 +852,53 @@ func TestEnsureTransport_ArchiveWriteNewerDaemonDataVersionHintsRestart(t *testi
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "data version")
-	assert.Contains(t, err.Error(), "restart")
+	assert.Contains(t, err.Error(), "newer than this agentsview binary")
 	assert.Contains(t, err.Error(), "pg service")
+	assert.NotContains(t, err.Error(), "older agentsview version")
+}
+
+// TestEnsureTransport_ReadNewerDaemonDataVersionHintsClientUpgrade covers a
+// read command on an older binary that finds a daemon already on a newer
+// data version. It must not tell the user to restart the daemon, which is
+// the healthy side; it must point at upgrading the client.
+func TestEnsureTransport_ReadNewerDaemonDataVersionHintsClientUpgrade(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	host, port := testPingServer(t)
+	writeNewerDataVersionDaemonRuntime(t, dir, host, port, "1.0.0")
+
+	setTestVersion(t, "1.1.0")
+	forbidStopDaemonRuntimeForUpgrade(t,
+		"a read client must not replace a daemon on a newer data version")
+	forbidStartBackgroundServeForTransport(t,
+		"a read client must not replace a daemon on a newer data version")
+
+	cfg := config.Config{DataDir: dir}
+	_, err := ensureTransport(&cfg, transportIntentRead, 100*time.Millisecond)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "data version")
+	assert.Contains(t, err.Error(), "newer than this agentsview binary")
+	assert.NotContains(t, err.Error(), "older agentsview version")
+}
+
+// TestAppendDaemonCompatibilityHintPicksDirection pins the two hint
+// directions: an older daemon or archive keeps the daemon-restart guidance,
+// while a daemon that is ahead of the client gets the client-upgrade one.
+func TestAppendDaemonCompatibilityHintPicksDirection(t *testing.T) {
+	base := errors.New("daemon data version 1 is incompatible with client data version 2")
+
+	older := appendDaemonCompatibilityHint(transport{}, base)
+	require.ErrorIs(t, older, base)
+	assert.Contains(t, older.Error(), "older agentsview version")
+	assert.Contains(t, older.Error(), "agentsview daemon restart")
+	assert.NotContains(t, older.Error(), "newer than this agentsview binary")
+
+	ahead := appendDaemonCompatibilityHint(
+		transport{DirectDaemonAhead: true}, base,
+	)
+	require.ErrorIs(t, ahead, base)
+	assert.Contains(t, ahead.Error(), "newer than this agentsview binary")
+	assert.Contains(t, ahead.Error(), "pg push --watch")
+	assert.NotContains(t, ahead.Error(), "older agentsview version")
 }
 
 func TestShouldUpgradeDaemonRuntimeTreatsMissingDaemonVersionAsOlderRelease(t *testing.T) {
