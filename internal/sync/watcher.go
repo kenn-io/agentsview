@@ -1194,12 +1194,13 @@ func (w *Watcher) loop() {
 			if w.eventSink.Empty() {
 				continue
 			}
-			if immediate || timerC == nil {
+			retryTimerActive := timerC != nil && consecutiveFailures > 0
+			if immediate || !retryTimerActive {
 				if firstPendingAt.IsZero() {
 					firstPendingAt = time.Now()
 				}
 				pendingDelay = 0
-				if immediate && timerC != nil {
+				if timerC != nil {
 					stopTimer()
 				}
 			}
