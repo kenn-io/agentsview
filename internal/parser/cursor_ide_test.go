@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"os"
 	"path/filepath"
 	"testing"
@@ -23,6 +24,7 @@ type cursorIDETestBubble struct {
 	text       string
 	createdAt  string
 	tool       *cursorIDEToolFormerData
+	raw        []byte
 }
 
 // cursorIDETestComposer is one synthetic composerData document plus its
@@ -95,6 +97,9 @@ func createCursorIDEDB(t *testing.T, composers []cursorIDETestComposer) string {
 			}
 			raw, err := json.Marshal(bubble)
 			require.NoError(t, err)
+			if b.raw != nil {
+				raw = b.raw
+			}
 			_, err = db.Exec(
 				`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`,
 				cursorIDEBubbleKeyPrefix+c.id+":"+b.id, raw,
@@ -130,6 +135,13 @@ func assertCursorDiskKVStoredShape(t *testing.T, dbPath, key string, wantNull bo
 	assert.Equal(t, "blob", typ)
 	require.True(t, length.Valid)
 	assert.Zero(t, length.Int64)
+}
+
+func cursorIDEStringResult(t *testing.T, text string) jsontext.Value {
+	t.Helper()
+	raw, err := json.Marshal(text)
+	require.NoError(t, err)
+	return jsontext.Value(raw)
 }
 
 func TestCursorIDEProviderCapabilities(t *testing.T) {
@@ -174,7 +186,7 @@ func TestCursorIDEProviderDiscoverAndParse(t *testing.T) {
 						ToolCallID: "tool_d4d61399",
 						Name:       "glob_file_search",
 						RawArgs:    `{"targetDirectory":"/Users/alice/dev/dark-factory","globPattern":"**/*"}`,
-						Result:     `{"directories":[{"absPath":"/Users/alice/dev/dark-factory","files":[]}]}`,
+						Result:     cursorIDEStringResult(t, `{"directories":[{"absPath":"/Users/alice/dev/dark-factory","files":[]}]}`),
 					},
 				},
 			},
@@ -258,6 +270,135 @@ func TestCursorIDEProviderDiscoverAndParse(t *testing.T) {
 	for i, m := range messages {
 		assert.Equal(t, i, m.Ordinal)
 	}
+}
+
+func TestCursorIDEProviderObjectToolResult(t *testing.T) {
+	raw, err := os.ReadFile("testdata/cursor-ide-object-tool-result.json")
+	require.NoError(t, err)
+	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{
+		{id: "a-healthy", bubbles: []cursorIDETestBubble{{id: "before", bubbleType: 1, text: "before"}}},
+		{id: "object-result", bubbles: []cursorIDETestBubble{{id: "tool-bubble", bubbleType: 2, raw: raw}}},
+		{id: "z-healthy", bubbles: []cursorIDETestBubble{{id: "after", bubbleType: 1, text: "after"}}},
+	})
+	provider, ok := NewProvider(AgentCursorIDE, ProviderConfig{Roots: []string{filepath.Dir(dbPath)}, Machine: "test"})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0], Machine: "test", Fingerprint: fingerprint})
+	t.Logf("container results=%d error=%v", len(outcome.Results), err)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 3)
+	var ids []string
+	for _, entry := range outcome.Results {
+		result := entry.Result
+		ids = append(ids, result.Session.ID)
+		assert.False(t, result.Session.IsTruncated)
+		require.Len(t, result.Messages, 1)
+		msg := result.Messages[0]
+		switch result.Session.ID {
+		case "cursor-ide:a-healthy":
+			assert.Equal(t, "before", msg.Content)
+			assert.Equal(t, "before", msg.SourceUUID)
+		case "cursor-ide:z-healthy":
+			assert.Equal(t, "after", msg.Content)
+			assert.Equal(t, "after", msg.SourceUUID)
+		case "cursor-ide:object-result":
+			assert.Equal(t, "tool-bubble", msg.SourceUUID)
+			assert.Equal(t, RoleAssistant, msg.Role)
+			assert.True(t, msg.HasToolUse)
+			require.Len(t, msg.ToolCalls, 1)
+			assert.Equal(t, "todo_write", msg.ToolCalls[0].ToolName)
+			assert.Equal(t, "00000000-0000-4000-8000-000000000001", msg.ToolCalls[0].ToolUseID)
+			assert.Equal(t, `{"todos":[{"id":"sample-task","content":"sample-task","status":"TODO_STATUS_IN_PROGRESS","createdAt":"1782026756842","updatedAt":"1782026756842","dependencies":[]}],"merge":true}`, msg.ToolCalls[0].InputJSON)
+			require.Len(t, msg.ToolResults, 1)
+			want := `{"success":true,"readyTaskIds":[],"needsInProgressTodos":false,"finalTodos":[{"content":"sample-task","status":"in_progress","id":"sample-task","dependencies":[]}],"initialTodos":[{"content":"sample-task","status":"completed","id":"sample-task","dependencies":[]}],"wasMerge":true}`
+			tr := msg.ToolResults[0]
+			assert.Equal(t, "00000000-0000-4000-8000-000000000001", tr.ToolUseID)
+			assert.Equal(t, want, DecodeContent(tr.ContentRaw))
+			assert.Equal(t, len(want), tr.ContentLength)
+			var text string
+			require.NoError(t, json.Unmarshal([]byte(tr.ContentRaw), &text))
+			assert.Equal(t, want, text)
+		}
+	}
+	assert.ElementsMatch(t, []string{"cursor-ide:a-healthy", "cursor-ide:object-result", "cursor-ide:z-healthy"}, ids)
+}
+
+func TestParseCursorIDEComposer_ResultValues(t *testing.T) {
+	for _, tc := range []struct {
+		name, field, want, wantRaw string
+	}{
+		{"string", `,"result":"  café\n\"ok\"\\  "`, "  café\n\"ok\"\\  ", `"  café\n\"ok\"\\  "`},
+		{"object", `,"result":{ "ok": true }`, `{ "ok": true }`, `"{ \"ok\": true }"`},
+		{"array", `,"result":[1, "two"]`, `[1, "two"]`, `"[1, \"two\"]"`},
+		{"number-42", `,"result":42`, "42", `"42"`},
+		{"boolean", `,"result":true`, "true", `"true"`},
+		{"null", `,"result":null`, "", ""},
+		{"absent", "", "", ""},
+		{"empty-string", `,"result":""`, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []byte(`{"type":2,"text":"visible","toolFormerData":{"toolCallId":"call","name":"sample_tool","rawArgs":"{}"` + tc.field + `}}`)
+			dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{id: "result-values", bubbles: []cursorIDETestBubble{
+				{id: "tool", bubbleType: 2, raw: raw},
+				{id: "visible", bubbleType: 2, text: "answer"},
+				{id: "bookkeeping", bubbleType: 3},
+			}}})
+			conn, err := openCursorIDEDB(dbPath)
+			require.NoError(t, err)
+			defer conn.Close()
+			info, err := os.Stat(dbPath)
+			require.NoError(t, err)
+			result, err := parseCursorIDEComposer(context.Background(), conn, dbPath, "result-values", "test", info)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.False(t, result.Session.IsTruncated)
+			require.Len(t, result.Messages, 2)
+			msg := result.Messages[0]
+			assert.Equal(t, "tool", msg.SourceUUID)
+			assert.Equal(t, "visible", msg.Content)
+			assert.Equal(t, RoleAssistant, msg.Role)
+			assert.True(t, msg.HasToolUse)
+			require.Len(t, msg.ToolCalls, 1)
+			assert.Equal(t, "call", msg.ToolCalls[0].ToolUseID)
+			assert.Equal(t, "sample_tool", msg.ToolCalls[0].ToolName)
+			assert.Equal(t, "{}", msg.ToolCalls[0].InputJSON)
+			assert.Equal(t, "answer", result.Messages[1].Content)
+			assert.Equal(t, "visible", result.Messages[1].SourceUUID)
+			assert.Empty(t, result.Messages[1].ToolResults)
+			if tc.want == "" {
+				assert.Empty(t, msg.ToolResults)
+				return
+			}
+			require.Len(t, msg.ToolResults, 1)
+			tr := msg.ToolResults[0]
+			assert.Equal(t, "call", tr.ToolUseID)
+			assert.Equal(t, tc.wantRaw, tr.ContentRaw)
+			assert.Equal(t, tc.want, DecodeContent(tr.ContentRaw))
+			assert.Equal(t, len(tc.want), tr.ContentLength)
+			t.Logf("preserved text=%s ContentRaw=%s bytes=%d", DecodeContent(tr.ContentRaw), tr.ContentRaw, tr.ContentLength)
+		})
+	}
+}
+
+func TestParseCursorIDEComposer_MalformedResult(t *testing.T) {
+	const raw = `{"type":2,"toolFormerData":{"result":{"success":true}`
+	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{id: "malformed-result", bubbles: []cursorIDETestBubble{
+		{id: "before", bubbleType: 1, text: "before"},
+		{id: "broken", bubbleType: 2, raw: []byte(raw)},
+	}}})
+	conn, err := openCursorIDEDB(dbPath)
+	require.NoError(t, err)
+	defer conn.Close()
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	result, err := parseCursorIDEComposer(context.Background(), conn, dbPath, "malformed-result", "test", info)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	t.Logf("input=%s error=%v", raw, err)
 }
 
 func TestCursorIDEFindSourceAndFingerprint(t *testing.T) {

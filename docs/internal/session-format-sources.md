@@ -1539,6 +1539,18 @@ schemas keep their existing ordering behavior.
   update (3.16.29) has shrunk or wiped some users' `cursorDiskKV` rows, so the
   parser tolerates a `fullConversationHeadersOnly` entry whose `bubbleId` row
   is missing rather than failing the whole session.
+- **Tool results:**
+  [Issue #1798](https://github.com/kenn-io/agentsview/issues/1798) supplies
+  one redacted `todo_write` bubble with an object-valued
+  `toolFormerData.result`, rechecked 2026-09-16. The Cursor version is
+  unconfirmed. The checked-in
+  `internal/parser/testdata/cursor-ide-object-tool-result.json` replaces the
+  capture placeholders with synthetic values and keeps `rawArgs` and `params`
+  as JSON-encoded strings. This sample establishes the object shape only, with
+  no frequency or all-version claim. The parser preserves the existing string
+  result text and renders other valid non-null JSON values as raw JSON text.
+  Absent, null, and empty-string results emit no tool result. Nonempty
+  malformed bubble JSON still errors.
 - **NULL values:**
   [Issue #1676](https://github.com/kenn-io/agentsview/issues/1676) (reported
   2026-09-08; rechecked 2026-09-10) records 64 SQL NULL values among 2,189
