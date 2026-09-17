@@ -312,6 +312,32 @@ func TestParsePiebaldCurrentDirectoryNullKeepsFallbacks(t *testing.T) {
 	assert.Equal(t, "/repo/project", sess.Cwd)
 }
 
+func TestParsePiebaldCurrentDirectoryCaseInsensitive(t *testing.T) {
+	dbPath := newPiebaldTestDB(t)
+	execPiebaldTestSQL(t, dbPath,
+		`ALTER TABLE chats RENAME COLUMN current_directory TO Current_Directory`,
+	)
+	execPiebaldTestSQL(t, dbPath,
+		`INSERT INTO chats
+			(id, title, created_at, updated_at, is_deleted, message_count,
+			 current_directory, worktree_path, branch_name)
+		 VALUES (42, 'Case variant', '2026-05-01T10:00:00Z',
+			 '2026-05-01T10:05:00Z', 0, 1, '/repo/current', '/repo/worktree', 'main')`,
+	)
+	execPiebaldTestSQL(t, dbPath,
+		`INSERT INTO messages
+			(id, parent_chat_id, role, created_at, updated_at, status)
+		 VALUES (100, 42, 'user', '2026-05-01T10:00:01Z',
+			 '2026-05-01T10:00:01Z', 'completed')`,
+	)
+	seedPiebaldTextPart(t, dbPath, 200, 100, 0, "Case variant", false)
+
+	sess, _ := parsePiebaldOneSession(t, dbPath, "42", "machine")
+	require.NotNil(t, sess)
+	assert.Equal(t, "/repo/worktree", sess.Cwd)
+	assert.Equal(t, "main", sess.GitBranch)
+}
+
 func TestParsePiebaldSessionToolCall(t *testing.T) {
 	dbPath := newPiebaldTestDB(t)
 	execPiebaldTestSQL(t, dbPath,

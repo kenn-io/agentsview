@@ -673,6 +673,14 @@ func TestParseDiffPiebaldFailureBypassesMemo(t *testing.T) {
 		},
 	})
 	t.Cleanup(engine.Close)
+	key, _, ok := piebaldFailureSourcePaths(source)
+	require.True(t, ok)
+	identity, err := engine.capturePiebaldFailureIdentity(dbPath)
+	require.NoError(t, err)
+	engine.piebaldFailureMemo[key] = piebaldFailureMemoEntry{
+		identity: identity,
+		err:      errors.New("warm failure"),
+	}
 
 	report, err := engine.ParseDiff(t.Context(), ParseDiffOptions{
 		Agents: []parser.AgentType{parser.AgentPiebald},
@@ -680,7 +688,7 @@ func TestParseDiffPiebaldFailureBypassesMemo(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, report)
 	assert.Equal(t, 1, report.Totals.ParseErrors)
-	assert.Empty(t, engine.piebaldFailureMemo)
+	assert.Len(t, engine.piebaldFailureMemo, 1)
 	require.Len(t, provider.parseRequests, 1)
 }
 
@@ -732,6 +740,9 @@ func TestPiebaldTransientFailureClassesAreNotMemoized(t *testing.T) {
 		"busy":      sqlite3.Error{Code: sqlite3.ErrBusy},
 		"locked":    sqlite3.Error{Code: sqlite3.ErrLocked},
 		"interrupt": sqlite3.Error{Code: sqlite3.ErrInterrupt},
+		"io":        sqlite3.Error{Code: sqlite3.ErrIoErr},
+		"full":      sqlite3.Error{Code: sqlite3.ErrFull},
+		"nomem":     sqlite3.Error{Code: sqlite3.ErrNomem},
 	} {
 		t.Run(name, func(t *testing.T) {
 			require.True(t, piebaldFailureIsTransient(context.Background(), parseErr))

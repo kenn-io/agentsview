@@ -336,6 +336,16 @@ func TestSyncPiebaldFullSyncSuppressesStableParseFailure(t *testing.T) {
 		t, 42, "Broken Piebald", "A prompt.", "An answer.",
 		"2026-05-01T10:05:00Z",
 	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+	})
+	beforeMessages, err := env.db.GetAllMessages(t.Context(), "piebald:42")
+	require.NoError(t, err)
+	require.Len(t, beforeMessages, 2)
+	piebald.mustExec(t, "advance chat timestamp",
+		`UPDATE chats SET updated_at = '2026-05-01T10:06:00Z' WHERE id = 42`,
+	)
 	piebald.mustExec(t, "drop messages table", `DROP TABLE messages`)
 
 	var logs bytes.Buffer
@@ -351,4 +361,42 @@ func TestSyncPiebaldFullSyncSuppressesStableParseFailure(t *testing.T) {
 	second := env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, second.Failed)
 	assert.NotContains(t, logs.String(), "sync piebald parse")
+	afterMessages, err := env.db.GetAllMessages(t.Context(), "piebald:42")
+	require.NoError(t, err)
+	assert.Equal(t, beforeMessages, afterMessages)
+
+	piebald.mustExec(t, "restore messages table", `
+		CREATE TABLE messages (
+			id INTEGER PRIMARY KEY,
+			parent_chat_id INTEGER NOT NULL,
+			parent_message_id INTEGER,
+			role TEXT NOT NULL,
+			model TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			input_tokens BIGINT,
+			output_tokens BIGINT,
+			reasoning_tokens BIGINT,
+			cache_read_tokens BIGINT,
+			cache_write_tokens BIGINT,
+			status TEXT NOT NULL,
+			finish_reason TEXT,
+			error TEXT,
+			enabled INTEGER NOT NULL DEFAULT 1
+		)`,
+	)
+	piebald.mustExec(t, "restore messages",
+		`INSERT INTO messages
+			(id, parent_chat_id, role, model, created_at, updated_at, status)
+		 VALUES
+			(4201, 42, 'user', '', '2026-05-01T10:00:01Z', '2026-05-01T10:00:01Z', 'completed'),
+			(4202, 42, 'assistant', 'claude-test', '2026-05-01T10:00:02Z', '2026-05-01T10:00:03Z', 'completed')`,
+	)
+
+	logs.Reset()
+	recovered := env.engine.SyncAll(t.Context(), nil)
+	require.Zero(t, recovered.Failed)
+	require.Equal(t, 1, recovered.Synced)
+	assert.Contains(t, logs.String(), "piebald write")
+	assertSessionMessageCount(t, env.db, "piebald:42", 2)
 }
