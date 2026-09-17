@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 func TestMachineLabelCatalogDiscardsPartialResult(t *testing.T) {
@@ -91,7 +92,7 @@ func TestMachineLabelCatalogHTTPNullBodyReturnsEmpty(t *testing.T) {
 		context.Background(), &stderr,
 		func(ctx context.Context) (service.MachineLabelCatalog, error) {
 			return service.MachineLabels(
-				ctx, service.NewHTTPBackend(server.URL, "", true, ""),
+				ctx, servicehttp.NewHTTPBackend(server.URL, "", true, ""),
 			)
 		},
 	)

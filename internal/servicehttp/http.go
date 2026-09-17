@@ -163,14 +163,19 @@ func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }
 
 func (b *httpBackend) MachineLabels(
 	ctx context.Context,
-) (MachineLabelCatalog, error) {
-	var out struct {
-		MachineLabels MachineLabelCatalog `json:"machine_labels"`
-	}
-	if err := b.getJSON(ctx, "/api/v1/machines", &out); err != nil {
+) (service.MachineLabelCatalog, error) {
+	api, err := b.apiClient(b.client)
+	if err != nil {
 		return nil, err
 	}
-	return out.MachineLabels, nil
+	response, err := api.GetAPIV1MachinesWithResponse(ctx, &apiclient.GetAPIV1MachinesRequestOptions{})
+	if response == nil {
+		return nil, err
+	}
+	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+		return nil, err
+	}
+	return service.MachineLabelCatalog(response.JSON200.MachineLabels), nil
 }
 
 func (b *httpBackend) Get(

@@ -12,6 +12,7 @@ filter:
     operation-ids:
       - get-startup-probe
       - get-api-v1-version
+      - get-api-v1-machines
       - get-api-v1-sessions-id
       - get-api-v1-session-ids-resolve
       - get-api-v1-sessions

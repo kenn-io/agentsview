@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
 type machineLabelsStore struct {
@@ -55,7 +56,7 @@ func TestMachineLabelsFromHTTPBackend(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	got, err := service.MachineLabels(
-		context.Background(), service.NewHTTPBackend(server.URL, "", true, ""),
+		context.Background(), servicehttp.NewHTTPBackend(server.URL, "", true, ""),
 	)
 
 	require.NoError(t, err)
