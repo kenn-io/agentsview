@@ -30,6 +30,7 @@ func (s *Server) registerRawSyncRoutes() {
 		http.MethodPost, "/tokens", "Exchange a device credential",
 		s.humaRawSyncToken, s.humaTimeout(), maxBodyBytes(rawSyncTokenMaxBodyBytes),
 	)
+	s.registerRawSyncHealthRoute(group)
 	if s.rawSyncCustody == nil && !s.rawSyncSchemaOnly {
 		return
 	}

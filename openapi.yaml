@@ -5007,6 +5007,165 @@ components:
         - length
         - objects
       type: object
+    RawsyncExpiredLease:
+      additionalProperties: false
+      properties:
+        attempt_count:
+          format: int64
+          type: integer
+        configured_root_id:
+          type: string
+        device_id:
+          type: string
+        job_id:
+          format: int64
+          type: integer
+        lease_expires_at:
+          format: date-time
+          type: string
+        manifest_id:
+          type: string
+        processing_version:
+          type: string
+        provider:
+          type: string
+        source_key_sha256:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - job_id
+        - device_id
+        - manifest_id
+        - processing_version
+        - provider
+        - configured_root_id
+        - source_key_sha256
+        - attempt_count
+        - lease_expires_at
+        - updated_at
+      type: object
+    RawsyncJobAttemptWarning:
+      additionalProperties: false
+      properties:
+        attempt_count:
+          format: int64
+          type: integer
+        available_at:
+          format: date-time
+          type: string
+        configured_root_id:
+          type: string
+        device_id:
+          type: string
+        job_id:
+          format: int64
+          type: integer
+        last_error_class:
+          type: string
+        manifest_id:
+          type: string
+        processing_version:
+          type: string
+        provider:
+          type: string
+        source_key_sha256:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - job_id
+        - device_id
+        - manifest_id
+        - processing_version
+        - provider
+        - configured_root_id
+        - source_key_sha256
+        - attempt_count
+        - available_at
+        - updated_at
+        - last_error_class
+      type: object
+    RawsyncJobFailureClass:
+      additionalProperties: false
+      properties:
+        error_class:
+          type: string
+        job_count:
+          format: int64
+          type: integer
+        latest_failure_at:
+          format: date-time
+          type: string
+      required:
+        - error_class
+        - job_count
+        - latest_failure_at
+      type: object
+    RawsyncJobHealthReport:
+      additionalProperties: false
+      properties:
+        expired_lease_count:
+          format: int64
+          type: integer
+        expired_leases:
+          items:
+            $ref: "#/components/schemas/RawsyncExpiredLease"
+          type: array
+        failed_job_count:
+          format: int64
+          type: integer
+        failed_jobs_by_error_class:
+          items:
+            $ref: "#/components/schemas/RawsyncJobFailureClass"
+          type: array
+        max_attempts:
+          format: int32
+          type: integer
+        observed_at:
+          format: date-time
+          type: string
+        orphaned_manifest_count:
+          format: int64
+          type: integer
+        orphaned_manifests:
+          items:
+            $ref: "#/components/schemas/RawsyncOrphanedManifest"
+          type: array
+        retrying_near_limit:
+          items:
+            $ref: "#/components/schemas/RawsyncJobAttemptWarning"
+          type: array
+        retrying_near_limit_count:
+          format: int64
+          type: integer
+        stale_after_seconds:
+          format: int32
+          type: integer
+        stale_source_head_count:
+          format: int64
+          type: integer
+        stale_source_heads:
+          items:
+            $ref: "#/components/schemas/RawsyncStaleSourceHead"
+          type: array
+      required:
+        - observed_at
+        - max_attempts
+        - stale_after_seconds
+        - orphaned_manifests
+        - orphaned_manifest_count
+        - expired_leases
+        - expired_lease_count
+        - failed_jobs_by_error_class
+        - failed_job_count
+        - retrying_near_limit
+        - retrying_near_limit_count
+        - stale_source_heads
+        - stale_source_head_count
+      type: object
     RawsyncManifest:
       additionalProperties: false
       properties:
@@ -5052,6 +5211,68 @@ components:
       required:
         - sha256
         - length
+      type: object
+    RawsyncOrphanedManifest:
+      additionalProperties: false
+      properties:
+        accepted_at:
+          format: date-time
+          type: string
+        configured_root_id:
+          type: string
+        device_id:
+          type: string
+        generation:
+          format: int64
+          type: integer
+        kind:
+          type: string
+        manifest_id:
+          type: string
+        provider:
+          type: string
+        source_key_sha256:
+          type: string
+      required:
+        - manifest_id
+        - device_id
+        - provider
+        - configured_root_id
+        - source_key_sha256
+        - generation
+        - kind
+        - accepted_at
+      type: object
+    RawsyncStaleSourceHead:
+      additionalProperties: false
+      properties:
+        configured_root_id:
+          type: string
+        device_id:
+          type: string
+        generation:
+          format: int64
+          type: integer
+        kind:
+          type: string
+        manifest_id:
+          type: string
+        provider:
+          type: string
+        source_key_sha256:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - device_id
+        - provider
+        - configured_root_id
+        - source_key_sha256
+        - manifest_id
+        - generation
+        - kind
+        - updated_at
       type: object
     RecallEntriesResponse:
       additionalProperties: false
@@ -13392,6 +13613,108 @@ paths:
       summary: Push to PostgreSQL
       tags:
         - Push
+  /api/v1/raw-sync/health:
+    get:
+      operationId: get-api-v1-raw-sync-health
+      parameters:
+        - in: header
+          name: Authorization
+          schema:
+            type: string
+        - explode: false
+          in: query
+          name: max_attempts
+          required: true
+          schema:
+            format: int32
+            maximum: 2147483647
+            minimum: 1
+            type: integer
+        - explode: false
+          in: query
+          name: stale_after_seconds
+          required: true
+          schema:
+            format: int32
+            maximum: 2147483647
+            minimum: 1
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RawsyncJobHealthReport"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Report raw parse-job health
+      tags:
+        - RawSync
   /api/v1/raw-sync/manifests:
     post:
       operationId: post-api-v1-raw-sync-manifests
