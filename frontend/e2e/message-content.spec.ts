@@ -213,7 +213,9 @@ test.describe("Mixed content rendering", () => {
 });
 
 test.describe("retained tool images", () => {
-  test.describe.configure({ timeout: 60_000 });
+  // Rendering the 1.4 MB fixture in raw and fallback modes is slow in Linux
+  // WebKit under CPU contention. Keep the full payload and all assertions.
+  test.describe.configure({ timeout: 120_000 });
 
   test("renders retained, image-only, migrated, and fallback tool images", async ({
     page,
