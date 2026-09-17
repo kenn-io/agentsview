@@ -333,8 +333,7 @@ func CheckRawSyncWritePrivileges(
 				'raw_devices', 'raw_device_tokens', 'raw_upload_sessions',
 				'raw_objects', 'raw_manifests', 'raw_manifest_entries',
 				'raw_manifest_objects', 'raw_source_heads', 'raw_ingest_jobs'
-			]) AS required(table_name)
-			WHERE to_regclass(format('%I.%I', $1::text, table_name)) IS NOT NULL`,
+			]) AS required(table_name)`,
 			schema,
 		).Scan(&allTablesExist); err != nil {
 			return fmt.Errorf("checking raw sync schema: %w", err)

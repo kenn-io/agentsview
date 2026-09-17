@@ -136,11 +136,7 @@ func TestRawSyncCleanUploadsRequiresProvisionedSchema(t *testing.T) {
 	pg, dataDir, pgURL := newRawSyncCleanUploadsPG(t)
 	configureRawSyncCleanUploads(t, dataDir, pgURL)
 	_, err := pg.ExecContext(t.Context(),
-		"DROP SCHEMA "+rawSyncCleanUploadsSchema+" CASCADE",
-	)
-	require.NoError(t, err)
-	_, err = pg.ExecContext(t.Context(),
-		"CREATE SCHEMA "+rawSyncCleanUploadsSchema,
+		"DROP TABLE raw_upload_sessions",
 	)
 	require.NoError(t, err)
 
