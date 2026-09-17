@@ -311,76 +311,14 @@ func (db *DB) loadReportingUsageCandidates(
 	ids []string,
 	lowerBound, upperBound string,
 ) ([]activityReportUsageCandidate, []export.EffectivePricingRow, error) {
-	pricing, err := db.loadPricingMapFrom(ctx, source)
-	if err != nil {
-		return nil, nil, fmt.Errorf("loading pricing: %w", err)
-	}
-	if len(ids) == 0 {
-		return []activityReportUsageCandidate{}, pricing, nil
-	}
-
-	candidates := []activityReportUsageCandidate{}
-	const usageVarChunk = (maxSQLVars - 2) / 2
-	err = queryChunkedSize(ids, usageVarChunk, func(chunk []string) error {
-		placeholders, chunkArgs := inPlaceholders(chunk)
-		rowsSQL := dailyUsageRowsSQLWithWhere(
-			usageMessageEligibility+" AND m.session_id IN "+placeholders,
-			usageEventEligibility+" AND ue.session_id IN "+placeholders,
-		)
-		args := make([]any, 0, len(chunkArgs)*2+2)
-		args = append(args, chunkArgs...)
-		args = append(args, chunkArgs...)
-		args = append(args, lowerBound, upperBound)
-		rows, queryErr := source.QueryContext(
-			ctx,
-			dailyUsageRowSelectFromRowsWithMachine(rowsSQL, true)+`
-			AND u.ts >= ? AND u.ts <= ?`,
-			args...,
-		)
-		if queryErr != nil {
-			return fmt.Errorf("querying reporting usage: %w", queryErr)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			r, scanErr := scanDailyUsageRowWithMachine(rows, true)
-			if scanErr != nil {
-				return fmt.Errorf("scanning reporting usage: %w", scanErr)
-			}
-			ordinal := int64(-1)
-			if r.messageOrdinal.Valid {
-				ordinal = r.messageOrdinal.Int64
-			}
-			parsedTS, parseErr := parseTimestamp(r.ts)
-			candidates = append(candidates, activityReportUsageCandidate{
-				ordinal: ordinal,
-				scan:    r,
-				ts:      parsedTS,
-				validTS: parseErr == nil,
-				row: activity.UsageRow{
-					SessionID:       r.sessionID,
-					Model:           r.model,
-					Timestamp:       r.ts,
-					Project:         r.project,
-					Machine:         r.machine,
-					MessageOrdinal:  ordinal,
-					UsageSource:     r.usageSource,
-					Agent:           r.agent,
-					ProviderID:      r.providerID,
-					ClaudeMessageID: r.claudeMessageID,
-					ClaudeRequestID: r.claudeRequestID,
-					SourceUUID:      r.sourceUUID,
-					UsageDedupKey:   r.usageDedupKey,
-				},
-			})
-		}
-		return rows.Err()
-	})
+	candidates, pricing, _, err := db.loadActivityReportUsageCandidatesFrom(
+		ctx, source, ids, lowerBound, upperBound, true,
+	)
 	if err != nil {
 		return nil, nil, err
 	}
 	return candidates, pricing, nil
 }
-
 func reportingCreatedAtFrom(
 	ctx context.Context,
 	q sessionExportQuerier,

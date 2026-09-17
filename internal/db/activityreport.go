@@ -982,7 +982,7 @@ func (db *DB) activityReportUsageFrom(
 	lowerBound, upperBound string,
 	q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	candidates, rateResolver, err := db.loadActivityReportUsageCandidatesFrom(
+	candidates, _, rateResolver, err := db.loadActivityReportUsageCandidatesFrom(
 		ctx, source, ids, lowerBound, upperBound, false,
 	)
 	if err != nil {
@@ -1024,14 +1024,14 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 	ids []string,
 	lowerBound, upperBound string,
 	restrictToIDs bool,
-) ([]activityReportUsageCandidate, *export.PricingResolver, error) {
+) ([]activityReportUsageCandidate, []export.EffectivePricingRow, *export.PricingResolver, error) {
 	pricing, err := db.loadPricingMapFrom(ctx, source)
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading pricing: %w", err)
+		return nil, nil, nil, fmt.Errorf("loading pricing: %w", err)
 	}
 	rateResolver := export.NewPricingResolver(pricing)
 	if len(ids) == 0 {
-		return []activityReportUsageCandidate{}, rateResolver, nil
+		return []activityReportUsageCandidate{}, pricing, rateResolver, nil
 	}
 
 	var candidates []activityReportUsageCandidate
@@ -1103,10 +1103,10 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 		return loadRows(rowsSQL, args, nil)
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if restrictToIDs {
-		return candidates, rateResolver, nil
+		return candidates, pricing, rateResolver, nil
 	}
 
 	type snapshotKey struct {
@@ -1144,7 +1144,7 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 		}
 		encodedPairs, marshalErr := json.Marshal(pairs)
 		if marshalErr != nil {
-			return nil, nil, fmt.Errorf(
+			return nil, nil, nil, fmt.Errorf(
 				"encoding activity report Claude snapshot keys: %w", marshalErr)
 		}
 		rowsSQL := dailyUsageRowsSQLWithWhere(
@@ -1157,10 +1157,10 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 				)`,
 			usageEventEligibility+" AND 1 = 0")
 		if err := loadRows(rowsSQL, []any{string(encodedPairs)}, candidateIDs); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
-	return candidates, rateResolver, nil
+	return candidates, pricing, rateResolver, nil
 }
 
 func sortActivityReportUsageCandidates(
