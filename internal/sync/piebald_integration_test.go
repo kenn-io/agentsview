@@ -1,7 +1,9 @@
 package sync_test
 
 import (
+	"bytes"
 	"database/sql"
+	"log"
 	"path/filepath"
 	"testing"
 
@@ -325,4 +327,28 @@ func TestSyncPiebaldLegacySchema(t *testing.T) {
 	assertMessageContent(
 		t, env.db, "piebald:42", "Read this old chat.", "It imported.",
 	)
+}
+
+func TestSyncPiebaldFullSyncSuppressesStableParseFailure(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
+	piebald := createPiebaldDB(t, env.piebaldDir)
+	piebald.addChat(
+		t, 42, "Broken Piebald", "A prompt.", "An answer.",
+		"2026-05-01T10:05:00Z",
+	)
+	piebald.mustExec(t, "drop messages table", `DROP TABLE messages`)
+
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+
+	first := env.engine.SyncAll(t.Context(), nil)
+	require.Equal(t, 1, first.Failed)
+	require.Contains(t, logs.String(), "sync piebald parse")
+
+	logs.Reset()
+	second := env.engine.SyncAll(t.Context(), nil)
+	require.Equal(t, 1, second.Failed)
+	assert.NotContains(t, logs.String(), "sync piebald parse")
 }

@@ -9438,6 +9438,20 @@ func (e *Engine) syncProviderDBBacked(
 	discovered, sourceFailures := 0, 0
 	err := discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
 		discovered++
+		var piebaldFailure piebaldFailureLookup
+		piebaldRetry := false
+		if agent == parser.AgentPiebald &&
+			!e.forceParse && !e.forceFullParse {
+			var found bool
+			piebaldFailure, found = e.preparePiebaldFailure(source)
+			if found {
+				if piebaldFailure.err != nil {
+					sourceFailures++
+					return nil
+				}
+				piebaldRetry = piebaldFailure.retry
+			}
+		}
 		fingerprint, err := e.providerFingerprint(ctx, provider, source)
 		if err != nil {
 			log.Printf("sync %s fingerprint: %v", agent, err)
@@ -9447,19 +9461,30 @@ func (e *Engine) syncProviderDBBacked(
 		machine := e.machineForProviderSource(
 			agent, source, providerDiscoveredPath(source),
 		)
-		if e.providerDBBackedSourceFresh(agent, source, fingerprint) {
+		if !piebaldRetry && e.providerDBBackedSourceFresh(
+			agent, source, fingerprint,
+		) {
 			return queueBaseline(source)
 		}
 		outcome, err := provider.Parse(ctx, parser.ParseRequest{
 			Source:      source,
 			Fingerprint: fingerprint,
 			Machine:     machine,
-			ForceParse:  e.forceParse || e.forceFullParse,
+			ForceParse:  e.forceParse || e.forceFullParse || piebaldRetry,
 		})
 		if err != nil {
+			if agent == parser.AgentPiebald &&
+				!e.forceParse && !e.forceFullParse {
+				e.rememberPiebaldParseFailure(
+					ctx, source, piebaldFailure, err,
+				)
+			}
 			log.Printf("sync %s parse: %v", agent, err)
 			sourceFailures++
 			return nil
+		}
+		if agent == parser.AgentPiebald {
+			e.clearPiebaldFailure(source)
 		}
 		complete := providerOutcomeAllowsCleanSkipCache(outcome)
 		if !complete {

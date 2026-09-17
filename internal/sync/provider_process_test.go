@@ -633,10 +633,20 @@ func TestProcessFileProviderPiebaldForcePathsBypassFailureMemo(t *testing.T) {
 	assert.True(t, provider.parseRequests[1].ForceParse)
 	assert.True(t, provider.parseRequests[2].ForceParse)
 
+	provider.parseErr = nil
+	forcedSuccess := engine.processFile(t.Context(), forceParse)
+	require.NoError(t, forcedSuccess.err)
+	assert.Empty(t, engine.piebaldFailureMemo)
+
+	provider.parseErr = errors.New("forced Piebald parse failure")
 	repeated := engine.processFile(t.Context(), file)
 	require.Error(t, repeated.err)
+	assert.False(t, repeated.suppressedFailure)
+
+	repeated = engine.processFile(t.Context(), file)
+	require.Error(t, repeated.err)
 	assert.True(t, repeated.suppressedFailure)
-	assert.Equal(t, 3, countProcessFixtureCalls(provider.calls, "parse"))
+	assert.Equal(t, 5, countProcessFixtureCalls(provider.calls, "parse"))
 }
 
 func TestParseDiffPiebaldFailureBypassesMemo(t *testing.T) {
@@ -672,6 +682,32 @@ func TestParseDiffPiebaldFailureBypassesMemo(t *testing.T) {
 	assert.Equal(t, 1, report.Totals.ParseErrors)
 	assert.Empty(t, engine.piebaldFailureMemo)
 	require.Len(t, provider.parseRequests, 1)
+}
+
+func TestPiebaldFailureMemoClearsOnCacheInvalidation(t *testing.T) {
+	root := t.TempDir()
+	dbPath, _ := writeProcessProviderSource(t, root, "app.db")
+	virtualPath := dbPath + "#42"
+	source := processFixturePiebaldSource(virtualPath)
+	engine := newPiebaldProcessFixtureEngine(t, root, &processFixtureProvider{})
+	key, _, ok := piebaldFailureSourcePaths(source)
+	require.True(t, ok)
+	identity, err := engine.capturePiebaldFailureIdentity(dbPath)
+	require.NoError(t, err)
+	engine.piebaldFailureMemo[key] = piebaldFailureMemoEntry{
+		identity: identity,
+		err:      errors.New("stale failure"),
+	}
+
+	engine.clearWatcherOverflowCaches()
+	assert.Empty(t, engine.piebaldFailureMemo)
+
+	engine.piebaldFailureMemo[key] = piebaldFailureMemoEntry{
+		identity: identity,
+		err:      errors.New("stale failure"),
+	}
+	require.NoError(t, engine.ResetCachesAfterSwap())
+	assert.Empty(t, engine.piebaldFailureMemo)
 }
 
 func TestPiebaldTransientFailureClassesAreNotMemoized(t *testing.T) {
