@@ -226,6 +226,7 @@ func TestRawSyncStatusPostgresEmptyHTTP(t *testing.T) {
 
 func TestRawSyncStatusRollsBackAfterQueryFailure(t *testing.T) {
 	pg := newRawStatusTestDatabase(t, "agentsview_raw_status_failure_test")
+	pg.SetMaxOpenConns(1)
 	metadata, err := postgres.NewRawIngestStore(pg)
 	require.NoError(t, err)
 	identity := rawsync.AuthIdentity{TenantID: "tenant-failure", DeviceID: "dev-failure"}
@@ -233,13 +234,16 @@ func TestRawSyncStatusRollsBackAfterQueryFailure(t *testing.T) {
 	_, err = pg.ExecContext(t.Context(),
 		`ALTER TABLE raw_ingest_jobs RENAME TO raw_ingest_jobs_missing`)
 	require.NoError(t, err)
-	_, err = metadata.ReadRawSyncStatus(t.Context(), identity)
-	assert.Error(t, err)
-	_, renameErr := pg.ExecContext(t.Context(),
+	status, err := metadata.ReadRawSyncStatus(t.Context(), identity)
+	require.Error(t, err)
+	assert.Equal(t, rawsync.Status{}, status)
+	checkCtx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	_, renameErr := pg.ExecContext(checkCtx,
 		`ALTER TABLE raw_ingest_jobs_missing RENAME TO raw_ingest_jobs`)
 	require.NoError(t, renameErr)
 
-	status, err := metadata.ReadRawSyncStatus(t.Context(), identity)
+	status, err = metadata.ReadRawSyncStatus(checkCtx, identity)
 	require.NoError(t, err)
 	assert.Empty(t, status.SourceHeads)
 	assert.Empty(t, status.Devices)
