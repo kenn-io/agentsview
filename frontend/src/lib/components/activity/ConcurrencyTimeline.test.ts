@@ -5,6 +5,7 @@ import { mount, tick, unmount } from "svelte";
 import ConcurrencyTimeline from "./ConcurrencyTimeline.svelte";
 import type { Bucket, Report } from "../../api/types.js";
 import { testMoney } from "../../test/money.js";
+import { costDisplay } from "../../stores/costDisplay.svelte.js";
 
 class ResizeObserverMock {
   observe = vi.fn();
@@ -250,6 +251,7 @@ describe("ConcurrencyTimeline", () => {
   let originalResizeObserver: typeof ResizeObserver | undefined;
 
   beforeEach(() => {
+    costDisplay.setPreference("USD", null);
     originalResizeObserver = globalThis.ResizeObserver;
     Object.defineProperty(globalThis, "ResizeObserver", {
       configurable: true,
@@ -259,6 +261,7 @@ describe("ConcurrencyTimeline", () => {
   });
 
   afterEach(() => {
+    costDisplay.setPreference("USD", null);
     Object.defineProperty(globalThis, "ResizeObserver", {
       configurable: true,
       writable: true,
@@ -591,6 +594,15 @@ describe("ConcurrencyTimeline", () => {
       "Output Tokens 9K",
       "Cost $0.90",
     ]);
+    costDisplay.setPreference("EUR", 0.5);
+    await tick();
+    const convertedRows = Array.from(target.querySelectorAll(".tooltip-metrics > div"));
+    expect(convertedRows.map((row) => row.textContent?.replace(/\s+/g, " ").trim())).toContain(
+      "Cost €0.45",
+    );
+    expect(convertedRows.map((row) => row.textContent?.replace(/\s+/g, " ").trim())).toContain(
+      "Output Tokens 9K",
+    );
     unmount(c);
     target.remove();
   });

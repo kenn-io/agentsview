@@ -1,5 +1,6 @@
 import type { MoneyMoney } from "./api/generated/index.js";
 import { getLocale } from "./i18n/index.js";
+import { costDisplay } from "./stores/costDisplay.svelte.js";
 
 export type Money = MoneyMoney;
 
@@ -19,25 +20,28 @@ export function compareMoney(left: Money, right: Money): number {
 }
 
 export function formatMoney(value: Money): string {
-  const dollars = value.microdollars / 1_000_000;
-  const absoluteMicrodollars = Math.abs(value.microdollars);
-  if (absoluteMicrodollars > 0 && absoluteMicrodollars < 10_000) {
+  const { currency, eurPerUsd } = costDisplay.preference;
+  const amount =
+    (value.microdollars / 1_000_000) *
+    (currency === "EUR" ? eurPerUsd! : 1);
+  const absoluteAmount = Math.abs(amount);
+  if (absoluteAmount > 0 && absoluteAmount < 0.01) {
     const cents = new Intl.NumberFormat(getLocale(), {
       style: "currency",
-      currency: "USD",
+      currency,
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(0.01);
-    return value.microdollars < 0 ? `>-${cents}` : `<${cents}`;
+    return amount < 0 ? `>-${cents}` : `<${cents}`;
   }
 
-  const showCents = absoluteMicrodollars < 100_000_000;
+  const showCents = absoluteAmount < 100;
   return new Intl.NumberFormat(getLocale(), {
     style: "currency",
-    currency: "USD",
+    currency,
     minimumFractionDigits: showCents ? 2 : 0,
     maximumFractionDigits: showCents ? 2 : 0,
-  }).format(dollars);
+  }).format(amount);
 }
 
 export function formatSignedMoney(value: Money): string {

@@ -14,6 +14,7 @@ import { ui } from "../../stores/ui.svelte.js";
 import { testMoney } from "../../test/money.js";
 import type { Money } from "../../money.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
+import { costDisplay } from "../../stores/costDisplay.svelte.js";
 
 const { generateForSession } = vi.hoisted(() => ({
   generateForSession: vi.fn(),
@@ -205,6 +206,7 @@ async function flushPromises() {
 }
 
 beforeEach(() => {
+  costDisplay.setPreference("USD", null);
   generateForSession.mockReset();
   vi.mocked(copyToClipboard).mockReset().mockResolvedValue(true);
   openersService.getApiV1Openers.mockReset().mockResolvedValue({ openers: [] });
@@ -219,6 +221,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  costDisplay.setPreference("USD", null);
   setLocale("en");
   document.body.innerHTML = "";
   ui.sidebarOpen = true;
@@ -1423,6 +1426,27 @@ describe("SessionBreadcrumb", () => {
         expect(badge?.textContent?.trim()).toBe("$1.23");
       });
 
+      unmount(component);
+    });
+
+    it("refreshes the mounted cost badge when the display rate changes", async () => {
+      sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue(
+        makeUsage({ has_cost: true, cost: testMoney(10) }),
+      );
+
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: makeSession("claude"), onBack: () => {} },
+      });
+
+      await vi.waitFor(() => {
+        expect(document.querySelector(".cost-badge")?.textContent?.trim()).toBe("$10.00");
+      });
+      costDisplay.setPreference("EUR", 0.9);
+      await tick();
+
+      expect(document.querySelector(".cost-badge")?.textContent?.trim()).toBe("€9.00");
+      expect(sessionsService.getApiV1SessionsByIdUsage).toHaveBeenCalledOnce();
       unmount(component);
     });
 

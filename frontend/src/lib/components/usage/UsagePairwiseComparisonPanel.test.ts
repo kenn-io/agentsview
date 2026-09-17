@@ -7,6 +7,7 @@ import type {
   UsageSummaryResponse,
 } from "../../api/generated/index";
 import { testMoney } from "../../test/money.js";
+import { costDisplay } from "../../stores/costDisplay.svelte.js";
 
 function usageSummary(): UsageSummaryResponse {
   return {
@@ -126,6 +127,7 @@ function pairwiseComparison(): ServiceUsagePairwiseComparisonResponse {
 
 describe("UsagePairwiseComparisonPanel", () => {
   beforeEach(() => {
+    costDisplay.setPreference("USD", null);
     usage.summary = usageSummary();
     usage.pairwiseSelection = {
       left: { dimension: "model", value: "claude-sonnet-4-20250514" },
@@ -137,6 +139,7 @@ describe("UsagePairwiseComparisonPanel", () => {
   });
 
   afterEach(() => {
+    costDisplay.setPreference("USD", null);
     usage.summary = null;
     usage.pairwiseComparison = null;
     usage.pairwiseSelection = {
@@ -188,6 +191,23 @@ describe("UsagePairwiseComparisonPanel", () => {
     expect(text).toContain("+37.5%");
     expect(text).not.toContain("+$94.49");
 
+    unmount(component);
+  });
+
+  it("converts cost fields while preserving token counts and ratios", async () => {
+    const component = mount(UsagePairwiseComparisonPanel, {
+      target: document.body,
+    });
+    await tick();
+
+    costDisplay.setPreference("EUR", 0.5);
+    await tick();
+
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("+€0.75");
+    expect(text).toContain("+37.5%");
+    expect(text).toContain("300");
+    expect(text).toContain("150");
     unmount(component);
   });
 

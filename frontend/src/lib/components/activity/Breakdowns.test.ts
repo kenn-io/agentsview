@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 vi.mock("../../feature-flags.js", () => ({
   PROJECT_MAPPING_WORKSPACE_ENABLED: true,
@@ -8,6 +8,7 @@ import Breakdowns from "./Breakdowns.svelte";
 import { router } from "../../stores/router.svelte.js";
 import type { Report } from "../../api/types.js";
 import { testMoney } from "../../test/money.js";
+import { costDisplay } from "../../stores/costDisplay.svelte.js";
 
 function makeReport(): Report {
   return {
@@ -81,7 +82,12 @@ function makeReport(): Report {
 }
 
 describe("Breakdowns", () => {
+  beforeEach(() => {
+    costDisplay.setPreference("USD", null);
+  });
+
   afterEach(() => {
+    costDisplay.setPreference("USD", null);
     document.body.innerHTML = "";
   });
 
@@ -140,6 +146,13 @@ describe("Breakdowns", () => {
     await tick();
     expect(target.querySelector(".tooltip")?.textContent).toContain(
       "int $3.00 / sub $1.00 / auto $2.00",
+    );
+    costDisplay.setPreference("EUR", 0.5);
+    await tick();
+    costRow.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+    expect(target.querySelector(".tooltip")?.textContent).toContain(
+      "int €1.50 / sub €0.50 / auto €1.00",
     );
     unmount(c);
     target.remove();

@@ -3,6 +3,7 @@ import { m } from "../../i18n/index.js";
 export type SettingsPanelId =
   | "appearance"
   | "language"
+  | "currency"
   | "date-ranges"
   | "terminal"
   | "agent-directories"
@@ -43,6 +44,14 @@ export function settingsPanels(): SettingsPanelMeta[] {
       description: m.settings_language_description(),
       group: preferences,
       keywords: m.settings_search_keywords_language(),
+    },
+    {
+      id: "currency",
+      label: m.settings_currency_title(),
+      title: m.settings_currency_title(),
+      description: m.settings_currency_description(),
+      group: preferences,
+      keywords: m.settings_search_keywords_currency(),
     },
     {
       id: "date-ranges",

@@ -261,12 +261,46 @@ describe("SettingsPage", () => {
     restoredSearch.dispatchEvent(new Event("input", { bubbles: true }));
     await tick();
 
-    expect(restoredNav.querySelectorAll("button")).toHaveLength(11);
+    expect(restoredNav.querySelectorAll("button")).toHaveLength(12);
     expect(
       document.body.querySelector(".settings-page")?.classList.contains("settings-no-results"),
     ).toBe(false);
     expect(restoredNav.querySelector('[aria-current="true"]')?.textContent).toContain("Terminal");
 
+    unmount(component);
+  });
+
+  it("discovers the currency panel by exchange-rate keywords", async () => {
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    const component = mount(SettingsPage, { target: document.body });
+    await tick();
+    await tick();
+
+    const search = document.querySelector<HTMLInputElement>(
+      'input[type="search"][aria-label="Search settings"]',
+    );
+    expect(search).not.toBeNull();
+    search!.value = "exchange";
+    search!.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+
+    const nav = document.body.querySelector('nav[aria-label="Settings"]')!;
+    expect(nav.querySelectorAll("button")).toHaveLength(1);
+    expect(nav.textContent).toContain("Currency");
+    nav.querySelector("button")!.click();
+    await tick();
+
+    expect(document.querySelector("#currency-eur-per-usd")).not.toBeNull();
+    expect(document.body.textContent).toContain("EUR per USD");
     unmount(component);
   });
 

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { setLocale } from "../i18n/index.js";
+import { costDisplay } from "../stores/costDisplay.svelte.js";
 import { testMoney } from "../test/money.js";
 import {
   formatRelativeTime,
@@ -42,6 +43,16 @@ describe("formatRelativeTime", () => {
 });
 
 describe("formatCost", () => {
+  beforeEach(() => {
+    setLocale("en");
+    costDisplay.setPreference("USD", null);
+  });
+
+  afterEach(() => {
+    setLocale("en");
+    costDisplay.setPreference("USD", null);
+  });
+
   it.each([
     [0, "$0.00"],
     [0.004, "<$0.01"],
@@ -53,6 +64,11 @@ describe("formatCost", () => {
     [1234.5, "$1,235"],
   ])("formats %d as %s", (value, expected) => {
     expect(formatCost(testMoney(value))).toBe(expected);
+  });
+
+  it("uses the applied currency through the compatibility alias", () => {
+    costDisplay.setPreference("EUR", 0.9);
+    expect(formatCost(testMoney(10))).toBe("€9.00");
   });
 });
 

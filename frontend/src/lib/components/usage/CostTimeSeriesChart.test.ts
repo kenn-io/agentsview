@@ -10,6 +10,7 @@ import { settings } from "../../stores/settings.svelte.js";
 import type { DbDailyUsageEntry, UsageSummaryResponse } from "../../api/generated/index";
 import { usageChartColorMaps } from "../../utils/usageChartColors.js";
 import { setLocale } from "../../i18n/index.js";
+import { costDisplay } from "../../stores/costDisplay.svelte.js";
 
 const OBSERVED_WIDTH = 1648;
 const originalClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
@@ -155,6 +156,7 @@ describe("CostTimeSeriesChart", () => {
     usage.toggles.timeSeries.groupBy = "project";
     settings.chartPalette = "agentsview";
     setLocale("en");
+    costDisplay.setPreference("USD", null);
   });
 
   afterEach(() => {
@@ -167,6 +169,7 @@ describe("CostTimeSeriesChart", () => {
     usage.mode = "cost";
     usage.setSelectedTokenTypes(["input", "cache_write", "cache_read", "output"]);
     settings.chartPalette = "agentsview";
+    costDisplay.setPreference("USD", null);
     setLocale("en");
     document.body.innerHTML = "";
     if (originalClientWidth) {
@@ -467,6 +470,13 @@ describe("CostTimeSeriesChart", () => {
     expect(rows[0]!.textContent).toContain("$9.00");
     expect(rows[1]!.textContent).toContain("medium");
     expect(rows[2]!.textContent).toContain("small");
+
+    costDisplay.setPreference("EUR", 0.5);
+    await tick();
+    expect(document.querySelector(".usage-series-tooltip .tooltip-row")?.textContent).toContain(
+      "€4.50",
+    );
+    expect(document.querySelectorAll("path.lc-area-path")).toHaveLength(3);
 
     unmount(component);
   });

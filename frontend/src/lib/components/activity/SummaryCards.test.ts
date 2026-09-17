@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { mount, tick } from "svelte";
 import SummaryCards from "./SummaryCards.svelte";
 import type { Report } from "../../api/types.js";
 import { testMoney } from "../../test/money.js";
+import { costDisplay } from "../../stores/costDisplay.svelte.js";
 
 function makeReport(totals: Partial<Report["totals"]> = {}): Report {
   return {
@@ -69,7 +70,12 @@ async function render(report: Report): Promise<HTMLElement> {
 }
 
 describe("SummaryCards", () => {
+  beforeEach(() => {
+    costDisplay.setPreference("USD", null);
+  });
+
   afterEach(() => {
+    costDisplay.setPreference("USD", null);
     document.body.innerHTML = "";
   });
 
@@ -135,5 +141,20 @@ describe("SummaryCards", () => {
       }),
     );
     expect(sessionsSub(target)).toBe("1 interactive / 2 automated, 1 untimed");
+  });
+
+  it("refreshes the displayed cost on the same mounted report", async () => {
+    const report = makeReport({ cost: testMoney(10) });
+    const target = await render(report);
+    const totalCost = [...target.querySelectorAll(".card")].find(
+      (card) => card.querySelector(".card-label")?.textContent?.trim() === "Total Cost",
+    );
+
+    expect(totalCost?.querySelector(".card-value")?.textContent).toBe("$10.00");
+    costDisplay.setPreference("EUR", 0.9);
+    await tick();
+
+    expect(totalCost?.querySelector(".card-value")?.textContent).toBe("€9.00");
+    expect(report.totals.cost).toEqual({ microdollars: 10_000_000 });
   });
 });

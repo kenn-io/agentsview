@@ -23,6 +23,7 @@
   import ToolImageCleanup from "./ToolImageCleanup.svelte";
   import GithubSettings from "./GithubSettings.svelte";
   import LanguageSettings from "./LanguageSettings.svelte";
+  import CurrencySettings from "./CurrencySettings.svelte";
   import RemoteSettings from "./RemoteSettings.svelte";
   import { settingsPanels } from "./settingsPanels.js";
 
@@ -201,6 +202,8 @@
                 <AppearanceSettings />
               {:else if meta.id === "language"}
                 <LanguageSettings />
+              {:else if meta.id === "currency"}
+                <CurrencySettings />
               {:else if meta.id === "date-ranges"}
                 <DateRangeSettings />
               {:else if meta.id === "terminal"}

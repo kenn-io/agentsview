@@ -7,6 +7,7 @@ import type {
   UsageSummaryResponse,
 } from "../api/generated/index";
 import { testMoney } from "../test/money.js";
+import { costDisplay } from "./costDisplay.svelte.js";
 
 const usageServiceMocks = vi.hoisted(() => {
   const money = (dollars: number) => ({
@@ -386,6 +387,36 @@ function usagePairwiseComparison(): ServiceUsagePairwiseComparisonResponse {
     },
   };
 }
+
+describe("UsageStore display boundary", () => {
+  beforeEach(() => {
+    installStorage();
+    vi.clearAllMocks();
+    costDisplay.setPreference("USD", null);
+  });
+
+  afterEach(() => {
+    costDisplay.setPreference("USD", null);
+  });
+
+  it("keeps comparison requests in USD microdollars in EUR mode", async () => {
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(usageSummary(10));
+    costDisplay.setPreference("EUR", 0.9);
+    const { usage } = await loadStore();
+
+    await usage.fetchAll();
+
+    expect(usageServiceMocks.getApiV1UsageComparison.mock.lastCall?.[0]).toEqual(
+      expect.objectContaining({ current_microdollars: 10_000_000 }),
+    );
+    expect(usageServiceMocks.getApiV1UsageComparison.mock.lastCall?.[0]).not.toHaveProperty(
+      "currency",
+    );
+    expect(usageServiceMocks.getApiV1UsageComparison.mock.lastCall?.[0]).not.toHaveProperty(
+      "eur_per_usd",
+    );
+  });
+});
 
 afterEach(() => {});
 

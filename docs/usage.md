@@ -782,9 +782,11 @@ the agent consumed and how much it generated.
 As of 0.33.0, the header also shows the session's **estimated cost** next to the
 token summary, computed from the same data as
 [`agentsview session usage`](/docs/session-api/#agentsview-session-usage). Costs
-under a cent display as `<$0.01`, costs up to $100 with two decimals, and larger
-costs as whole dollars. The badge is hidden when the session has no token data
-or its models have no pricing.
+under one cent in the selected currency display as `<$0.01` or `<€0.01`.
+Costs under 100 units in that currency use two decimals, and larger costs use
+whole units. See [Currency display](/docs/token-usage/#currency-display) for
+the Settings instructions and rate behavior. The badge is hidden when the
+session has no token data or its models have no pricing.
 
 When the selected session has explicit `subagent` descendants, the automatic
 header request adds `rollup=true`. A complete priced aggregate shows a localized
@@ -1199,6 +1201,7 @@ organized into sections:
 | Section            | What You Can Configure                                                                                   |
 | ------------------ | -------------------------------------------------------------------------------------------------------- |
 | Language           | Interface language (English, French, Japanese, Korean, Simplified Chinese, or Traditional Chinese)       |
+| Currency           | Display USD or EUR with a browser-local manual EUR per USD rate                                           |
 | Appearance         | Theme (light/dark), high-contrast mode, chart colors, message layout, zoom, block visibility             |
 | Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality |
 | Session Providers  | Enable session providers, inspect their session directories, and add alternate agent homes               |

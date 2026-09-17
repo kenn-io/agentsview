@@ -232,9 +232,17 @@ cache creation without earning the reads back.
 
 ![Cache efficiency panel](/docs/assets/generated/screenshots/usage-cache-efficiency.png)
 
-The dashboard reads from the same `model_pricing` table that backs the CLI
-commands below, so the numbers line up exactly with what
+The dashboard reads the same USD source amounts from the `model_pricing` table
+that backs the CLI commands below, so the numbers line up exactly with what
 `agentsview usage daily` prints.
+
+### Currency display
+
+Open Settings > Currency to choose USD or EUR. To use EUR, enter a positive
+EUR per USD rate that you supply, then select Apply. The browser saves the
+pair and uses that rate for every displayed date. This changes presentation
+only. API, CLI, database, and billing values remain USD source amounts.
+AgentsView does not fetch or update the rate automatically.
 
 ### PostgreSQL-Backed Usage
 
