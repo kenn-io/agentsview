@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"database/sql"
 	"log"
+	"os"
 	"path/filepath"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
@@ -343,6 +345,14 @@ func TestSyncPiebaldFullSyncSuppressesStableParseFailure(t *testing.T) {
 	beforeMessages, err := env.db.GetAllMessages(t.Context(), "piebald:42")
 	require.NoError(t, err)
 	require.Len(t, beforeMessages, 2)
+	beforeBaseline, err := env.db.ListActiveSessionSourceOwnershipScopesPage(
+		t.Context(), "local", string(parser.AgentPiebald),
+		[]db.StoredSourcePathHintScope{
+			{Path: env.piebaldDir, IncludeVirtualMembers: true},
+		}, db.SessionSourceCursor{},
+	)
+	require.NoError(t, err)
+	require.Len(t, beforeBaseline, 1)
 	_, storedMtime, ok := env.db.GetSessionFileInfo("piebald:42")
 	require.True(t, ok, "session file info not found")
 	require.NoError(t, env.db.Update(func(tx *sql.Tx) error {
@@ -370,6 +380,14 @@ func TestSyncPiebaldFullSyncSuppressesStableParseFailure(t *testing.T) {
 	afterMessages, err := env.db.GetAllMessages(t.Context(), "piebald:42")
 	require.NoError(t, err)
 	assert.Equal(t, beforeMessages, afterMessages)
+	afterBaseline, err := env.db.ListActiveSessionSourceOwnershipScopesPage(
+		t.Context(), "local", string(parser.AgentPiebald),
+		[]db.StoredSourcePathHintScope{
+			{Path: env.piebaldDir, IncludeVirtualMembers: true},
+		}, db.SessionSourceCursor{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, beforeBaseline, afterBaseline)
 
 	piebald.mustExec(t, "restore messages table", `
 		CREATE TABLE messages (
@@ -412,4 +430,33 @@ func TestSyncPiebaldFullSyncSuppressesStableParseFailure(t *testing.T) {
 	require.Equal(t, 1, recovered.Synced)
 	assert.Contains(t, logs.String(), "piebald write")
 	assertSessionMessageCount(t, env.db, "piebald:42", 2)
+}
+
+func TestResyncBuildPiebaldFailureBypassesMemo(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
+	piebald := createPiebaldDB(t, env.piebaldDir)
+	piebald.addChat(
+		t, 42, "Broken Piebald", "A prompt.", "An answer.",
+		"2026-05-01T10:05:00Z",
+	)
+	piebald.mustExec(t, "drop messages table", `DROP TABLE messages`)
+
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+
+	first := env.engine.SyncAll(t.Context(), nil)
+	require.Equal(t, 1, first.Failed)
+	logs.Reset()
+	second := env.engine.SyncAll(t.Context(), nil)
+	require.Equal(t, 1, second.Failed)
+	assert.NotContains(t, logs.String(), "sync piebald parse")
+
+	logs.Reset()
+	tempPath, rebuild, rebuildErr := env.engine.ResyncBuild(t.Context(), nil)
+	defer os.Remove(tempPath)
+	require.NoError(t, rebuildErr)
+	assert.Equal(t, 1, rebuild.Failed)
+	assert.Contains(t, logs.String(), "sync piebald parse")
 }

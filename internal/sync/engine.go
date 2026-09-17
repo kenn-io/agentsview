@@ -2946,6 +2946,8 @@ func (e *Engine) resyncBuildLocked(
 	ctx context.Context, onProgress ProgressFunc, opts RebuildOptions,
 	ops rebuildOperations, restoreActiveWriterOnAbort bool,
 ) (stats SyncStats, retErr error) {
+	e.clearPiebaldFailureMemo()
+	defer e.clearPiebaldFailureMemo()
 	// Rebuild tombstones are committed only inside the replacement, and every
 	// aborted or failed build discards it. Hold them here and publish the
 	// count only on the successful return, so no failure branch stores or
