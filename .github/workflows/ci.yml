@@ -38,7 +38,7 @@ jobs:
         run: make lint-ci
 
       - name: Check Huma API contract
-        run: go run go.kenn.io/kit/cmd/huma-check@efb469cee12d24fd52640ea05b03ced275bf4370 -fix=false ./...
+        run: go run go.kenn.io/kit/cmd/huma-check@3e1f59e9011e878ec595aa04aebc8a77c5292c4d -fix=false ./...
 
   frontend:
     runs-on: ubuntu-latest

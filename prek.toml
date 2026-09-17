@@ -25,7 +25,7 @@ always_run = true
 id = "huma-check"
 name = "Check Huma API contract"
 language = "system"
-entry = "go run go.kenn.io/kit/cmd/huma-check@efb469cee12d24fd52640ea05b03ced275bf4370 -fix=false ./..."
+entry = "go run go.kenn.io/kit/cmd/huma-check@3e1f59e9011e878ec595aa04aebc8a77c5292c4d -fix=false ./..."
 pass_filenames = false
 always_run = true
 
