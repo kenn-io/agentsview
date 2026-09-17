@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -99,9 +100,23 @@ func TestRawSyncCleanUploadsFailures(t *testing.T) {
 
 func TestRawSyncCleanUploadsRequiresWritableSchema(t *testing.T) {
 	pg, dataDir, pgURL := newRawSyncCleanUploadsPG(t)
-	configureRawSyncCleanUploads(t, dataDir, pgURL)
-	_, err := pg.ExecContext(t.Context(), "DROP TABLE raw_ingest_jobs")
+	const role = "agentsview_raw_cleanup_runtime"
+	const password = "agentsview_raw_cleanup_runtime_password"
+	_, err := pg.ExecContext(t.Context(), "DROP ROLE IF EXISTS "+role)
 	require.NoError(t, err)
+	_, err = pg.ExecContext(t.Context(),
+		"CREATE ROLE "+role+" LOGIN PASSWORD '"+password+"'",
+	)
+	require.NoError(t, err)
+	_, err = pg.ExecContext(t.Context(),
+		"GRANT USAGE ON SCHEMA "+rawSyncCleanUploadsSchema+" TO "+role,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pg.ExecContext(context.Background(), "DROP ROLE IF EXISTS "+role) })
+	parsedURL, err := url.Parse(pgURL)
+	require.NoError(t, err)
+	parsedURL.User = url.UserPassword(role, password)
+	configureRawSyncCleanUploads(t, dataDir, parsedURL.String())
 	var logs bytes.Buffer
 	previousLog := log.Writer()
 	log.SetOutput(&logs)

@@ -324,14 +324,20 @@ func CheckRawSyncWritePrivileges(
 		return err
 	}
 	if missing != "" {
-		var tableExists bool
+		var allTablesExist bool
 		if err := db.QueryRowContext(ctx, `
-			SELECT to_regclass(format('%I.%I', $1::text, 'raw_upload_sessions')) IS NOT NULL`,
+			SELECT count(*) = 9
+			FROM unnest(ARRAY[
+				'raw_devices', 'raw_device_tokens', 'raw_upload_sessions',
+				'raw_objects', 'raw_manifests', 'raw_manifest_entries',
+				'raw_manifest_objects', 'raw_source_heads', 'raw_ingest_jobs'
+			]) AS required(table_name)
+			WHERE to_regclass(format('%I.%I', $1::text, table_name)) IS NOT NULL`,
 			schema,
-		).Scan(&tableExists); err != nil {
+		).Scan(&allTablesExist); err != nil {
 			return fmt.Errorf("checking raw sync schema: %w", err)
 		}
-		if !tableExists {
+		if !allTablesExist {
 			return errors.New("raw sync schema is not provisioned")
 		}
 		return fmt.Errorf("raw sync write privileges missing: %s", missing)
