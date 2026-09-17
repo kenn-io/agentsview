@@ -32,6 +32,7 @@ func TestPreparePGRawSyncServicesRegistersHostedRoutes(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/raw-sync/tokens",
 		"/api/v1/raw-sync/status",
+		"/api/v1/raw-sync/health",
 		"/api/v1/raw-sync/objects/missing",
 		"/api/v1/raw-sync/manifests",
 		"/api/v1/raw-sync/uploads",
@@ -63,6 +64,23 @@ func TestPreparePGRawSyncServicesWiresRuntimeStatusRoute(t *testing.T) {
 	srv.Handler().ServeHTTP(recorder, request)
 
 	assert.Equal(t, http.StatusUnauthorized, recorder.Code, recorder.Body.String())
+}
+
+func TestPreparePGRawSyncServicesHealthDoesNotOpenRepository(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	repositoryParent := filepath.Join(dataDir, pgRawSyncDataDirectory)
+	require.NoError(t, os.WriteFile(repositoryParent, []byte("occupied"), 0o600))
+
+	option, cleanup, err := preparePGRawSyncServices(
+		t.Context(), dataDir, newEmptyRawUploadTestDB(t),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
+
+	spec := server.OpenAPISpec(server.VersionInfo{}, option)
+	assert.Contains(t, spec.Paths, "/api/v1/raw-sync/health")
 }
 
 func TestPreparePGRawSyncServicesSkipsReadOnlySchema(t *testing.T) {
