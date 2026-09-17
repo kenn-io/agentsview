@@ -1003,9 +1003,6 @@ func (w *Watcher) start(openDispatch bool) error {
 		w.dispatchEnabled.Store(true)
 	}
 	w.lifecycleMu.Unlock()
-	if openDispatch {
-		w.eventSink.signalImmediate()
-	}
 	return nil
 }
 
