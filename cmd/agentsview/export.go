@@ -171,6 +171,7 @@ func openExportReadOnlyDB(appCfg config.Config) (*db.DB, error) {
 }
 
 func newExportSessionsCommand() *cobra.Command {
+	var profile *SyncConfig
 	cfg := exportSessionsConfig{
 		Limit:  db.MaxSessionLimit,
 		Format: exportSessionsFormat("json"),
@@ -181,6 +182,7 @@ func newExportSessionsCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			defer startSyncProfile(*profile)()
 			cfg.MinToolFailuresSet = cmd.Flags().Changed("min-tool-failures")
 			if cfg.JSON {
 				if cmd.Flags().Changed("format") && cfg.Format != "json" {
@@ -191,6 +193,7 @@ func newExportSessionsCommand() *cobra.Command {
 			return runExportSessions(cmd, cfg)
 		},
 	}
+	profile = bindExportProfile(cmd)
 
 	flags := cmd.Flags()
 	flags.StringVar(&cfg.Project, "project", "",

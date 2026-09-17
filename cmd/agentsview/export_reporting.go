@@ -26,6 +26,7 @@ func defaultExportReportingDeps() exportReportingDeps {
 }
 
 func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
+	var profile *SyncConfig
 	var schemaVersion *int
 	var projectKeys *[]string
 	var bucket *string
@@ -35,6 +36,7 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			defer startSyncProfile(*profile)()
 			if err := validateReportingSchemaVersion(*schemaVersion); err != nil {
 				return err
 			}
@@ -77,6 +79,7 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 			)
 		},
 	}
+	profile = bindExportProfile(command)
 	schemaVersion = bindReportingSchemaVersion(command)
 	projectKeys = bindReportingProjectKeys(command)
 	bucket = bindReportingBucket(command)
@@ -84,6 +87,7 @@ func newExportHourCommand(deps exportReportingDeps) *cobra.Command {
 }
 
 func newExportDayCommand(deps exportReportingDeps) *cobra.Command {
+	var profile *SyncConfig
 	var schemaVersion *int
 	var projectKeys *[]string
 	var bucket *string
@@ -93,6 +97,7 @@ func newExportDayCommand(deps exportReportingDeps) *cobra.Command {
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			defer startSyncProfile(*profile)()
 			if err := validateReportingSchemaVersion(*schemaVersion); err != nil {
 				return err
 			}
@@ -124,6 +129,7 @@ func newExportDayCommand(deps exportReportingDeps) *cobra.Command {
 			return writeCanonicalReportingDocument(cmd, day)
 		},
 	}
+	profile = bindExportProfile(command)
 	schemaVersion = bindReportingSchemaVersion(command)
 	projectKeys = bindReportingProjectKeys(command)
 	bucket = bindReportingBucket(command)
@@ -131,6 +137,7 @@ func newExportDayCommand(deps exportReportingDeps) *cobra.Command {
 }
 
 func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
+	var profile *SyncConfig
 	var fromValue string
 	var toValue string
 	var schemaVersion *int
@@ -142,6 +149,7 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			defer startSyncProfile(*profile)()
 			if err := validateReportingSchemaVersion(*schemaVersion); err != nil {
 				return err
 			}
@@ -217,6 +225,7 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 			return writeCanonicalReportingDocument(cmd, digest)
 		},
 	}
+	profile = bindExportProfile(command)
 	schemaVersion = bindReportingSchemaVersion(command)
 	projectKeys = bindReportingProjectKeys(command)
 	bucket = bindReportingBucket(command)
