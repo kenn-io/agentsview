@@ -326,7 +326,9 @@ func CheckRawSyncWritePrivileges(
 	if missing != "" {
 		var allTablesExist bool
 		if err := db.QueryRowContext(ctx, `
-			SELECT count(*) = 9
+			SELECT COALESCE(bool_and(
+				to_regclass(format('%I.%I', $1::text, table_name)) IS NOT NULL
+			), false)
 			FROM unnest(ARRAY[
 				'raw_devices', 'raw_device_tokens', 'raw_upload_sessions',
 				'raw_objects', 'raw_manifests', 'raw_manifest_entries',

@@ -35,7 +35,7 @@ func TestRawSyncCleanUploadsCommand(t *testing.T) {
 		now.Add(-2*time.Hour), now.Add(-time.Hour), nil,
 	)
 	insertRawSyncCleanUpload(
-		t, pg, futureID, 2, "open", 0,
+		t, pg, futureID, 2, "open", 6,
 		now, now.Add(time.Hour), nil,
 	)
 	terminalCompletedAt := now.Add(-30 * time.Minute)

@@ -83,9 +83,9 @@ Repeating the command can revisit the same preserved entries, so spool entries
 beyond that window require the long-running server, which keeps its cursor
 between the existing startup pass and its 15-minute cleanup passes. The
 command prints `Raw upload cleanup pass completed.` only after the pass
-succeeds. The PostgreSQL target
-must have the provisioned raw-sync schema and its write privileges. The command
-checks that capability before creating the upload spool.
+succeeds. The PostgreSQL target must have the provisioned raw-sync schema and
+its write privileges. The command checks that capability before creating the
+upload spool.
 
 ______________________________________________________________________
 
