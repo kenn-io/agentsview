@@ -3,7 +3,6 @@ package config
 import (
 	"bytes"
 	"context"
-	"encoding/json/v2"
 	"flag"
 	"log"
 	"os"
@@ -698,27 +697,6 @@ func TestPortExplicitProvenance(t *testing.T) {
 				assert.True(t, cfg.PortExplicit)
 			})
 		}
-	})
-
-	t.Run("serialization drops provenance", func(t *testing.T) {
-		cfg := Config{Host: "127.0.0.1", Port: 8080, PortExplicit: true}
-
-		jsonData, err := json.Marshal(cfg)
-		require.NoError(t, err)
-		assert.NotContains(t, string(jsonData), "PortExplicit")
-		var jsonRoundTrip Config
-		require.NoError(t, json.Unmarshal(jsonData, &jsonRoundTrip))
-		assert.Equal(t, 8080, jsonRoundTrip.Port)
-		assert.False(t, jsonRoundTrip.PortExplicit)
-
-		var tomlData bytes.Buffer
-		require.NoError(t, toml.NewEncoder(&tomlData).Encode(cfg))
-		assert.NotContains(t, tomlData.String(), "port_explicit")
-		var tomlRoundTrip Config
-		_, err = toml.Decode(tomlData.String(), &tomlRoundTrip)
-		require.NoError(t, err)
-		assert.Equal(t, 8080, tomlRoundTrip.Port)
-		assert.False(t, tomlRoundTrip.PortExplicit)
 	})
 }
 

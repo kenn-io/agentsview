@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -35,6 +34,21 @@ func TestServeBackgroundChildArgsRemovesBackgroundFlag(t *testing.T) {
 			name: "bare flag",
 			args: []string{"serve", "--background", "--port", "0"},
 			want: []string{"serve", "--port", "0"},
+		},
+		{
+			name: "explicit port equals form",
+			args: []string{"serve", "--background", "--replace", "--port=9000"},
+			want: []string{"serve", "--port=9000"},
+		},
+		{
+			name: "explicit port separate value",
+			args: []string{"serve", "--background", "--port", "9000"},
+			want: []string{"serve", "--port", "9000"},
+		},
+		{
+			name: "omitted port stays omitted",
+			args: []string{"serve", "--background", "--replace"},
+			want: []string{"serve"},
 		},
 		{
 			name: "equals form",
@@ -87,88 +101,6 @@ func TestServeBackgroundChildArgsRemovesReplaceFlag(t *testing.T) {
 		"serve", "-background=true", "-replace=true", "--host", "127.0.0.1",
 	})
 	assert.Equal(t, []string{"serve", "--host", "127.0.0.1"}, got)
-}
-
-func TestServeBackgroundChildArgsPortProvenance(t *testing.T) {
-	tests := []struct {
-		name      string
-		args      func(int) []string
-		writePort bool
-		explicit  bool
-		wantChild func(int) []string
-	}{
-		{
-			name: "equals form",
-			args: func(port int) []string {
-				return []string{
-					"serve", "--background", "--replace",
-					"--port=" + strconv.Itoa(port),
-				}
-			},
-			explicit: true,
-			wantChild: func(port int) []string {
-				return []string{"serve", "--port=" + strconv.Itoa(port)}
-			},
-		},
-		{
-			name: "separate value",
-			args: func(port int) []string {
-				return []string{
-					"serve", "--replace", "--port", strconv.Itoa(port),
-					"--background",
-				}
-			},
-			explicit: true,
-			wantChild: func(port int) []string {
-				return []string{"serve", "--port", strconv.Itoa(port)}
-			},
-		},
-		{
-			name:      "omitted port from config",
-			args:      func(int) []string { return []string{"serve", "--background", "--replace"} },
-			writePort: true,
-			wantChild: func(int) []string { return []string{"serve"} },
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			listener, port := heldLoopbackPort(t)
-			defer listener.Close()
-			childArgs := serveBackgroundChildArgs(tt.args(port))
-			assert.Equal(t, tt.wantChild(port), childArgs)
-
-			dataDir := testDataDir(t)
-			if tt.writePort {
-				require.NoError(t, os.WriteFile(
-					filepath.Join(dataDir, "config.toml"),
-					[]byte(fmt.Sprintf("port = %d\n", port)), 0o600,
-				))
-			}
-			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
-			config.RegisterServePFlags(fs)
-			require.NoError(t, fs.Parse(childArgs[1:]))
-			cfg, err := config.LoadPFlags(fs)
-			require.NoError(t, err)
-			assert.Equal(t, tt.explicit, cfg.PortExplicit)
-
-			var prepared config.Config
-			output := captureStdout(t, func() {
-				prepared, err = prepareServeRuntimeConfig(cfg,
-					serveRuntimeOptions{RequestedPort: cfg.Port})
-			})
-			if tt.explicit {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), fmt.Sprintf("requested port %d", port))
-				assert.Equal(t, cfg.Port, prepared.Port)
-				assert.Empty(t, output)
-				return
-			}
-			require.NoError(t, err)
-			assert.NotEqual(t, port, prepared.Port)
-			assert.Contains(t, output, "in use, using")
-		})
-	}
 }
 
 func TestRunServeBackgroundReplaceOverridesDevRefusal(t *testing.T) {
@@ -1967,7 +1899,7 @@ func TestEnsureBackgroundServePreservesNoSyncWhenReplacingOlderDaemon(
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "1.0.0", "", false, false, true,
+		dir, host, port, "1.0.0", "", false, false, true, nil,
 	)
 	require.NoError(t, err)
 
@@ -2029,7 +1961,7 @@ func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(
 			writeRuntime: func(t *testing.T, dir, host string, port int) {
 				t.Helper()
 				_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-					dir, host, port, "1.0.0", "", false, false, true,
+					dir, host, port, "1.0.0", "", false, false, true, nil,
 				)
 				require.NoError(t, err)
 			},
@@ -2117,7 +2049,7 @@ func TestRunServeBackgroundConfigOnlyDoesNotAdoptReplacedDaemonNoSync(
 			writeRuntime: func(t *testing.T, dir, host string, port int) {
 				t.Helper()
 				_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-					dir, host, port, "1.0.0", "", false, false, true,
+					dir, host, port, "1.0.0", "", false, false, true, nil,
 				)
 				require.NoError(t, err)
 			},
@@ -2545,7 +2477,7 @@ func TestRunServeBackgroundKeepsInvocationNoSyncWhenReplacingSyncingDaemon(
 	dir := runtimeTestDir(t)
 	oldHost, oldPort := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, oldHost, oldPort, "1.0.0", "", false, false, false,
+		dir, oldHost, oldPort, "1.0.0", "", false, false, false, nil,
 	)
 	require.NoError(t, err)
 	setTestVersion(t, "1.1.0")

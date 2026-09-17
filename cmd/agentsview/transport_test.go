@@ -454,7 +454,7 @@ func TestEnsureTransport_ArchiveWriteRestartsOlderDaemon(t *testing.T) {
 	dir := daemonRuntimeDir(t)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "1.0.0", "", false, false, true,
+		dir, host, port, "1.0.0", "", false, false, true, nil,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
@@ -487,7 +487,7 @@ func TestEnsureTransport_ReadIntentRestartsOlderDaemon(t *testing.T) {
 	dir := daemonRuntimeDir(t)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "1.0.0", "", false, false, true,
+		dir, host, port, "1.0.0", "", false, false, true, nil,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
@@ -545,7 +545,7 @@ func TestEnsureTransport_ReadIntentPreservesExplicitNoSyncWhenRestartingOlderDae
 	dir := daemonRuntimeDir(t)
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "1.0.0", "", false, false, false,
+		dir, host, port, "1.0.0", "", false, false, false, nil,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
@@ -1261,7 +1261,7 @@ func TestServicesUseRunningDaemonBrowserURL(t *testing.T) {
 	defer server.Close()
 	host, port := splitTestServerURL(t, server.URL)
 	dir := t.TempDir()
-	path, err := WriteDaemonRuntimeWithAuthAndNoSync(dir, host, port, "test", "https://viewer.example/base", false, false, false)
+	path, err := WriteDaemonRuntimeWithAuthAndNoSync(dir, host, port, "test", "https://viewer.example/base", false, false, false, nil)
 	require.NoError(t, err)
 	rt := daemonRuntimeFromRecord(readRuntimeRecord(t, path))
 	tr := transportFromRuntime(rt)

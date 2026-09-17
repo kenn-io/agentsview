@@ -350,6 +350,7 @@ func stopWritableDaemonsForUpdate(
 		if !result.Stopped {
 			result.Host = rt.Host
 			result.Port = rt.Port
+			result.ExplicitPort = rt.ExplicitPort
 			result.RequireAuth = rt.RequireAuth
 			result.RequireAuthKnown = rt.RequireAuthKnown
 			result.NoSync = rt.NoSync

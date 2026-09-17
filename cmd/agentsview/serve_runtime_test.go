@@ -144,6 +144,37 @@ func TestPrepareServeRuntimeConfigPortPolicy(t *testing.T) {
 	}
 }
 
+func TestPrepareRunServeRuntimeConfigRestartPreservesConfiguredURLRewrite(t *testing.T) {
+	listener, runtimePort := heldLoopbackPort(t)
+	defer listener.Close()
+	configuredPort := runtimePort - 1
+	publicURL := fmt.Sprintf("https://viewer.example.test:%d", configuredPort)
+
+	got, rtOpts, err := prepareRunServeRuntimeConfig(config.Config{
+		Host:          "127.0.0.1",
+		Port:          configuredPort,
+		PublicURL:     publicURL,
+		PublicOrigins: []string{publicURL},
+	}, runtimePort, nil)
+	require.NoError(t, err)
+	assert.NotEqual(t, runtimePort, got.Port)
+	assert.False(t, got.PortExplicit)
+	assert.Equal(t, configuredPort, rtOpts.RequestedPort)
+	assert.Equal(t, fmt.Sprintf(
+		"https://viewer.example.test:%d", got.Port,
+	), got.PublicURL)
+	assert.Equal(t, []string{got.PublicURL}, got.PublicOrigins)
+
+	srv := server.New(got, nil, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	runtime, err := startServerWithOptionalCaddy(ctx, got, srv, rtOpts)
+	require.NoError(t, err)
+	assert.Equal(t, got.PublicURL, runtime.PublicURL)
+	require.NoError(t, srv.Shutdown(context.Background()))
+	require.ErrorIs(t, <-runtime.ServeErrCh, http.ErrServerClosed)
+}
+
 func TestWaitForBackendReadyRejectsUnrelatedHTTPListener(t *testing.T) {
 	authHeaders := make(chan string, 1)
 	ts := httptest.NewServer(http.HandlerFunc(

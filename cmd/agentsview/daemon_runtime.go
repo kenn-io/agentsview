@@ -32,6 +32,7 @@ const (
 	runtimeHost            = "host"
 	runtimeBrowserURL      = "browser_url"
 	runtimePort            = "port"
+	runtimeExplicitPort    = "explicit_port"
 	runtimeRequireAuth     = "require_auth"
 	runtimeNoSync          = "no_sync"
 	runtimeAPIVersion      = "api_version"
@@ -55,6 +56,7 @@ type DaemonRuntime struct {
 	Host             string
 	BrowserURL       string
 	Port             int
+	ExplicitPort     *int // Original --port value, including zero; nil if not recorded.
 	ReadOnly         bool
 	RequireAuth      bool
 	RequireAuthKnown bool
@@ -88,13 +90,13 @@ func WriteDaemonRuntimeWithAuth(
 ) (string, error) {
 	return WriteDaemonRuntimeWithAuthAndNoSync(
 		dataDir, host, port, version, browserURL, readOnly, requireAuth, false,
-		caddyPID...,
+		nil, caddyPID...,
 	)
 }
 
 func WriteDaemonRuntimeWithAuthAndNoSync(
 	dataDir string, host string, port int, version, browserURL string,
-	readOnly bool, requireAuth bool, noSync bool, caddyPID ...int,
+	readOnly bool, requireAuth bool, noSync bool, explicitPort *int, caddyPID ...int,
 ) (string, error) {
 	ep := daemon.Endpoint{
 		Network: daemon.NetworkTCP,
@@ -110,6 +112,9 @@ func WriteDaemonRuntimeWithAuthAndNoSync(
 		runtimeNoSync:      strconv.FormatBool(noSync),
 		runtimeAPIVersion:  strconv.Itoa(daemonAPIVersion),
 		runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion()),
+	}
+	if explicitPort != nil {
+		rec.Metadata[runtimeExplicitPort] = strconv.Itoa(*explicitPort)
 	}
 	// Persist this process's OS create time so `serve stop` can confirm a
 	// PID still belongs to the recorded daemon (and was not reused) by
@@ -132,7 +137,7 @@ func WriteDaemonRuntimeWithAuthAndNoSync(
 	if err != nil {
 		if !readOnly {
 			publishStartupStateFallback(
-				dataDir, host, port, browserURL, requireAuth, noSync, caddy, err,
+				dataDir, host, port, browserURL, requireAuth, noSync, explicitPort, caddy, err,
 			)
 		}
 		return "", err
@@ -341,6 +346,9 @@ func findStartupStateFallback(dataDir, authToken string) *DaemonRuntime {
 		runtimeDataVersion: strconv.Itoa(st.DataVersion),
 		runtimeCreateTime:  st.CreateTime,
 	}
+	if st.ExplicitPort != nil {
+		rec.Metadata[runtimeExplicitPort] = strconv.Itoa(*st.ExplicitPort)
+	}
 	if st.RequireAuthKnown {
 		rec.Metadata[runtimeRequireAuth] = strconv.FormatBool(st.RequireAuth)
 	}
@@ -514,9 +522,13 @@ func daemonRuntimeFromRecord(rec daemon.RuntimeRecord) *DaemonRuntime {
 	requireAuth := false
 	requireAuthKnown := false
 	noSync := false
+	var explicitPort *int
 	apiVersion := 0
 	dataVersion := 0
 	if rec.Metadata != nil {
+		if port, err := strconv.Atoi(rec.Metadata[runtimeExplicitPort]); err == nil {
+			explicitPort = new(port)
+		}
 		readOnly, _ = strconv.ParseBool(rec.Metadata[runtimeReadOnly])
 		if raw, ok := rec.Metadata[runtimeRequireAuth]; ok {
 			requireAuth, _ = strconv.ParseBool(raw)
@@ -529,6 +541,7 @@ func daemonRuntimeFromRecord(rec daemon.RuntimeRecord) *DaemonRuntime {
 	return &DaemonRuntime{
 		Record:           rec,
 		Port:             port,
+		ExplicitPort:     explicitPort,
 		Host:             host,
 		BrowserURL:       rec.Metadata[runtimeBrowserURL],
 		ReadOnly:         readOnly,

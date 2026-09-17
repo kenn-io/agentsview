@@ -1,17 +1,16 @@
 package main
 
 import (
-	"context"
 	"errors"
-	"fmt"
-	"net/http"
+	"net"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/update"
 )
 
@@ -161,6 +160,77 @@ func TestRestartDaemonAfterUpdateArgsPreserveRuntimeBind(t *testing.T) {
 	}, args)
 }
 
+func TestUpdateRestartPreservesPortChoice(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		ephemeral bool
+		occupied  bool
+	}{
+		{name: "explicit port preserves forwarded URL"},
+		{name: "explicit port rejects collision", occupied: true},
+		{name: "explicit zero keeps automatic selection", ephemeral: true, occupied: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := testDataDir(t)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(
+				"port = 8080\npublic_url = \"http://viewer.example.test:8080\"\n"+
+					"public_origins = [\"http://viewer.example.test:8080\"]\n",
+			), 0o600))
+			listener, port := heldLoopbackPort(t)
+			require.NoError(t, listener.Close())
+			if tt.ephemeral {
+				port = 0
+			}
+			cmd := newServeCommand()
+			require.NoError(t, cmd.Flags().Parse([]string{"--port", strconv.Itoa(port)}))
+			cfg, err := config.LoadPFlags(cmd.Flags())
+			require.NoError(t, err)
+			first, _, err := prepareRunServeRuntimeConfig(cfg, 0, nil)
+			require.NoError(t, err)
+			require.Equal(t, "http://viewer.example.test:8080", first.PublicURL)
+			_, err = WriteDaemonRuntimeWithAuthAndNoSync(
+				dir, first.Host, first.Port, "test", first.PublicURL, false, false, false, new(port),
+			)
+			require.NoError(t, err)
+			oldStop := stopDaemonRuntimeForUpgrade
+			stopDaemonRuntimeForUpgrade = func(_ config.Config, rt *DaemonRuntime) error {
+				require.Equal(t, first.Port, rt.Port)
+				return nil
+			}
+			t.Cleanup(func() { stopDaemonRuntimeForUpgrade = oldStop })
+			stopped, err := stopWritableDaemonsForUpdate(config.Config{DataDir: dir})
+			require.NoError(t, err)
+			require.True(t, stopped.Stopped)
+			if tt.occupied {
+				listener, err := net.Listen("tcp", net.JoinHostPort(first.Host, strconv.Itoa(first.Port)))
+				require.NoError(t, err)
+				t.Cleanup(func() { listener.Close() })
+			}
+			args := serveBackgroundChildArgs(restartDaemonAfterUpdateArgs(config.Config{}, stopped))
+			cmd = newServeCommand()
+			require.NoError(t, cmd.Flags().Parse(args[1:]))
+			cfg, err = config.LoadPFlags(cmd.Flags())
+			require.NoError(t, err)
+			restartPort, err := cmd.Flags().GetInt("restart-port")
+			require.NoError(t, err)
+			restarted, _, err := prepareRunServeRuntimeConfig(cfg, restartPort, nil)
+			if tt.occupied && !tt.ephemeral {
+				require.ErrorContains(t, err, "requested port")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, "http://viewer.example.test:8080", restarted.PublicURL)
+			assert.Equal(t, []string{"http://viewer.example.test:8080"}, restarted.PublicOrigins)
+			if tt.ephemeral {
+				assert.Positive(t, restarted.Port)
+				assert.NotEqual(t, first.Port, restarted.Port)
+			} else {
+				assert.Equal(t, first.Port, restarted.Port)
+			}
+		})
+	}
+}
+
 func TestRestartDaemonAfterUpdateArgsDropsLegacyNonLoopbackWithoutAuthConfig(t *testing.T) {
 	args := restartDaemonAfterUpdateArgs(config.Config{}, updateDaemonStopResult{
 		Host: "0.0.0.0",
@@ -195,36 +265,4 @@ func TestRestartDaemonAfterUpdateArgsKeepsLegacyNonLoopbackWithAuthConfig(t *tes
 		"serve", "--background", "--host", "0.0.0.0", "--restart-port", "18080",
 		"--require-auth",
 	}, args)
-}
-
-func TestApplyServeRestartPortPreservesConfiguredURLRewrite(t *testing.T) {
-	listener, runtimePort := heldLoopbackPort(t)
-	defer listener.Close()
-	configuredPort := runtimePort - 1
-	publicURL := fmt.Sprintf("https://viewer.example.test:%d", configuredPort)
-
-	got, rtOpts, err := prepareRunServeRuntimeConfig(config.Config{
-		Host:          "127.0.0.1",
-		Port:          configuredPort,
-		PortExplicit:  true,
-		PublicURL:     publicURL,
-		PublicOrigins: []string{publicURL},
-	}, runtimePort, nil)
-	require.NoError(t, err)
-	assert.NotEqual(t, runtimePort, got.Port)
-	assert.False(t, got.PortExplicit)
-	assert.Equal(t, configuredPort, rtOpts.RequestedPort)
-	assert.Equal(t, fmt.Sprintf(
-		"https://viewer.example.test:%d", got.Port,
-	), got.PublicURL)
-	assert.Equal(t, []string{got.PublicURL}, got.PublicOrigins)
-
-	srv := server.New(got, nil, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	runtime, err := startServerWithOptionalCaddy(ctx, got, srv, rtOpts)
-	require.NoError(t, err)
-	assert.Equal(t, got.PublicURL, runtime.PublicURL)
-	require.NoError(t, srv.Shutdown(context.Background()))
-	require.ErrorIs(t, <-runtime.ServeErrCh, http.ErrServerClosed)
 }

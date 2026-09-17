@@ -726,7 +726,7 @@ func TestWriteDaemonRuntimeFailurePreservesUpdateLaunchArgs(t *testing.T) {
 	require.NoError(t, os.Mkdir(runtimePath, 0o700))
 
 	_, err = WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "test", "https://viewer.example/base", false, true, true,
+		dir, host, port, "test", "https://viewer.example/base", false, true, true, new(port),
 	)
 	require.Error(t, err)
 
@@ -750,6 +750,8 @@ func TestWriteDaemonRuntimeFailurePreservesUpdateLaunchArgs(t *testing.T) {
 	args := restartDaemonAfterUpdateArgs(config.Config{}, result)
 	assert.Contains(t, args, "--require-auth")
 	assert.Contains(t, args, "--no-sync")
+	assert.Contains(t, args, "--port")
+	assert.NotContains(t, args, "--restart-port")
 }
 
 func TestWriteDaemonRuntimeFailurePreservesManagedCaddyIdentity(t *testing.T) {
@@ -765,7 +767,7 @@ func TestWriteDaemonRuntimeFailurePreservesManagedCaddyIdentity(t *testing.T) {
 	require.True(t, ok)
 
 	_, err = WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, host, port, "test", "", false, false, false, os.Getpid(),
+		dir, host, port, "test", "", false, false, false, nil, os.Getpid(),
 	)
 	require.Error(t, err)
 
@@ -986,7 +988,7 @@ func TestWriteAndRemoveDaemonRuntime(t *testing.T) {
 	endpoint := newPingDaemon(t)
 
 	path, err := WriteDaemonRuntimeWithAuthAndNoSync(
-		dir, endpoint.Host, endpoint.Port, "1.0.0", "", false, true, true,
+		dir, endpoint.Host, endpoint.Port, "1.0.0", "", false, true, true, nil,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, runtimePathForTest(dir, os.Getpid()), path)
