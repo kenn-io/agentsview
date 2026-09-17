@@ -356,12 +356,12 @@
   }
 
   .generate-btn:active:not(:disabled) {
-    transform: scale(0.98);
+    transform: var(--press-transform);
     box-shadow: none;
   }
 
   .generate-btn:disabled {
-    opacity: 0.45;
+    opacity: var(--opacity-disabled);
     box-shadow: none;
     cursor: default;
   }

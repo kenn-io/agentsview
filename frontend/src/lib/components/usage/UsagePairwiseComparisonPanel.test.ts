@@ -159,7 +159,7 @@ describe("UsagePairwiseComparisonPanel", () => {
     await tick();
 
     const trigger = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Left comparison dimension"]',
+      'button[aria-label^="Left comparison dimension:"]',
     );
     expect(trigger).toBeTruthy();
     if (!trigger) return;

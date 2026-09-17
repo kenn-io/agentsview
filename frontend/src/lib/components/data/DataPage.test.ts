@@ -499,7 +499,7 @@ describe("DataPage", () => {
     await flush();
     expect(api.getApiV1DataProjectRules).toHaveBeenCalledTimes(1);
 
-    await fireEvent.click(screen.getByRole("button", { name: "Select machine" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Select machine:/ }));
     await fireEvent.mouseDown(screen.getByRole("option", { name: "Workstation machine-b" }));
     await flush();
 

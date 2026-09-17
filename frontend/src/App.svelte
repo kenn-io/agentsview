@@ -1080,7 +1080,7 @@
   }
 
   .auth-card-btn:disabled {
-    opacity: 0.6;
+    opacity: var(--opacity-disabled);
     cursor: default;
   }
 
