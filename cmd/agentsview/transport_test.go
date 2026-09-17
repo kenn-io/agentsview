@@ -1253,6 +1253,11 @@ func TestUrlFromDaemonRuntime_BindAllMapsToLoopback(t *testing.T) {
 	}
 }
 
+func TestDaemonOriginURLStripsPathQueryFragmentAndCredentials(t *testing.T) {
+	assert.Equal(t, "https://viewer.example:8443",
+		daemonOriginURL("https://user:password@viewer.example:8443/viewer/?x=1#top"))
+}
+
 func TestServicesUseRunningDaemonBrowserURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/base/api/v1/sessions/codex:session:42", r.URL.Path)
