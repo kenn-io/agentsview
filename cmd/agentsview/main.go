@@ -23,6 +23,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/notify"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/remotesync"
@@ -284,6 +285,29 @@ func runServe(cfg config.Config, opts serveOptions) {
 
 	broadcaster := server.NewBroadcaster(cfg.EventsCoalesceInterval)
 
+	// Desktop-notification hub. It subscribes to the sync engine's
+	// refresh scopes through the broadcaster, but treats them as
+	// hints only: notify decisions come from the archive
+	// (termination_status plus persisted dedup cursors). Startup
+	// sync is gated by hub.MarkReady after the startup block below.
+	notificationHub := notify.NewHub(
+		database, notify.DefaultConfig, time.Now(),
+		cfg.EventsCoalesceInterval,
+	)
+	notificationScopes := make(chan string, 16)
+	go func() {
+		scopes, unsub := broadcaster.Subscribe()
+		defer unsub()
+		for ev := range scopes {
+			select {
+			case notificationScopes <- ev.Scope:
+			default:
+			}
+		}
+		close(notificationScopes)
+	}()
+	go notificationHub.Run(ctx, notificationScopes)
+
 	vectorServe, err := setupVectorServing(ctx, cfg, database, idleTracker)
 	if err != nil {
 		fatal("setting up vector index: %v", err)
@@ -402,6 +426,20 @@ func runServe(cfg config.Config, opts serveOptions) {
 						engine.ReconcileWatchRoots,
 						queueWatchRetry,
 						engine.RecordStartupReconciled,
+						// Only now is the startup state final. The
+						// reconciliation above is a real sync: it
+						// writes transcript for sessions that changed
+						// while the worker was running, and those
+						// writes must stay silent like any other
+						// startup sync. Marking the hub ready before
+						// it ran would turn the gap reconciliation
+						// into a burst of notifications for work the
+						// user did not just do.
+						func() {
+							if ctx.Err() == nil {
+								notificationHub.MarkReady(time.Now())
+							}
+						},
 					)
 				}
 			} else if database.NeedsResync() {
@@ -449,6 +487,36 @@ func runServe(cfg config.Config, opts serveOptions) {
 		go startPeriodicSync(
 			ctx, cfg, engine, database, writeLock, idleTracker, validRemotes, emitter,
 		)
+	}
+
+	// Startup sync has finished: everything the sync touched before
+	// this point must stay notification-silent, so this is where the
+	// notification hub's gate opens. Check decides nothing at all
+	// until MarkReady, which is what keeps startup's own writes from
+	// being announced as turns the user just took.
+	//
+	// The worker path is the exception. Its startup sync ran out of
+	// process, and the gap reconciliation that finishes it is
+	// deferred until the server is listening, so this is not the end
+	// of startup writes for that path — the hub is marked ready at
+	// the end of completeWorkerStartup instead. That is the path
+	// where the gate is load-bearing: server.New has installed the
+	// live policy by then, so a reconciliation write would otherwise
+	// be announced as a turn the user did not take.
+	//
+	// The in-process path above is silenced twice over. The hub
+	// still carries the placeholder notify.DefaultConfig (Enabled
+	// false) until server.New swaps in the live policy, so Decide
+	// returns nothing while startup runs. That placeholder is not a
+	// substitute for the gate — it only covers the paths that
+	// finish startup before the server exists.
+	//
+	// This sits outside the !NoSync block deliberately: --no-sync
+	// runs no startup sync at all, so there is nothing to wait for,
+	// and leaving the gate shut there would silence notifications
+	// for the whole process lifetime.
+	if completeWorkerStartup == nil {
+		notificationHub.MarkReady(time.Now())
 	}
 
 	identityBackfillEngine := engine
@@ -503,6 +571,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		server.WithDataDir(cfg.DataDir),
 		server.WithBaseContext(ctx),
 		server.WithBroadcaster(broadcaster),
+		server.WithNotificationHub(notificationHub),
 		server.WithIdleTracker(idleTracker),
 		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),

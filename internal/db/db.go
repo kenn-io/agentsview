@@ -2139,6 +2139,18 @@ func legacySchemaColumnMigrations() []schemaColumnMigration {
 func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
 		{
+			// Transcript-only change marker, written solely by the
+			// transcript-mutation path. Deliberately not backfilled:
+			// a row that predates it has no recorded transcript
+			// change, so it stays NULL until its transcript actually
+			// moves. Backfilling from local_modified_at would stamp
+			// metadata-only churn (renames, relinking, rescans) as
+			// transcript activity and would also have to run after
+			// that column's own migration.
+			"sessions", "transcript_modified_at",
+			"ALTER TABLE sessions ADD COLUMN transcript_modified_at TEXT",
+		},
+		{
 			"session_project_assignments", "original_project",
 			"ALTER TABLE session_project_assignments ADD COLUMN original_project TEXT NOT NULL DEFAULT '';" +
 				" UPDATE session_project_assignments SET original_project = COALESCE(" +
@@ -2975,6 +2987,17 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	); err != nil {
 		return fmt.Errorf(
 			"creating idx_sessions_local_modified: %w", err,
+		)
+	}
+	// Same reasoning as the index above, for the notification
+	// candidate scan: transcript_modified_at is a migrated column
+	// that legacy archives gain just above.
+	if _, err := w.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_transcript_modified
+		 ON sessions(transcript_modified_at)`,
+	); err != nil {
+		return fmt.Errorf(
+			"creating idx_sessions_transcript_modified: %w", err,
 		)
 	}
 	if _, err := w.ExecContext(ctx,

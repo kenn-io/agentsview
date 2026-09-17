@@ -33,6 +33,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     file_hash   TEXT,
     local_modified_at TEXT,
     transcript_revision TEXT NOT NULL DEFAULT '0',
+    -- SQLite-only transcript bookkeeping (like last_write_incremental):
+    -- stamped only by the transcript-mutation write path, so metadata-only
+    -- updates (renames, relinking, secret rescans, signal backfills) leave
+    -- it untouched. Desktop-notification candidate discovery reads it
+    -- instead of local_modified_at for exactly that reason. Deliberately
+    -- not mirrored to PostgreSQL or DuckDB.
+    transcript_modified_at TEXT,
     parent_session_id TEXT,
     parser_parent_session_id TEXT,
     relationship_type TEXT NOT NULL DEFAULT '',

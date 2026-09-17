@@ -3,6 +3,7 @@
  */
 import type {
   GithubConfigResponse,
+  NotificationsConfigBody,
   SetGithubConfigInputBody,
   SetGithubConfigResponse,
   TerminalConfigBody,
@@ -61,6 +62,60 @@ export const postApiV1ConfigGithub = async (
     method: "POST",
     headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
     body: JSON.stringify(setGithubConfigInputBody),
+  });
+};
+
+export const getGetApiV1ConfigNotificationsUrl = () => {
+  return `/api/v1/config/notifications`;
+};
+
+/**
+ * @summary Get notification config
+ */
+export const getApiV1ConfigNotifications = async (
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<NotificationsConfigBody> => {
+  return orvalFetch<NotificationsConfigBody>(getGetApiV1ConfigNotificationsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getPostApiV1ConfigNotificationsUrl = () => {
+  return `/api/v1/config/notifications`;
+};
+
+/**
+ * @summary Set notification config
+ */
+export const postApiV1ConfigNotifications = async (
+  notificationsConfigBody: NotificationsConfigBody,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<NotificationsConfigBody> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return orvalFetch<NotificationsConfigBody>(getPostApiV1ConfigNotificationsUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
+    body: JSON.stringify(notificationsConfigBody),
   });
 };
 

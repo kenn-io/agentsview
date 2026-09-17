@@ -119,12 +119,23 @@ SELECT
 // coreDDL creates the tables and indexes. It uses unqualified
 // names because Open() sets search_path to the target schema.
 //
-// The sessions table deliberately omits SQLite's machine-local sync
-// bookkeeping cluster (next_ordinal, last_entry_uuid,
-// claude_linear_parse, last_write_incremental): parsers never run
-// against this read-side store, so mirroring those columns would be
-// inert plumbing. Their absence from push SQL and
+// The sessions table deliberately omits SQLite's machine-local
+// bookkeeping columns. Some are sync state (next_ordinal,
+// last_entry_uuid, claude_linear_parse, last_write_incremental,
+// local_modified_at, source_missing_at, sync_marker,
+// transcript_modified_at); the rest describe the local file the
+// parser read (file_size, file_mtime, file_inode, file_device,
+// file_hash). Parsers, the file watcher, and the notification hub
+// never run against this read-side store, so mirroring those
+// columns would be inert plumbing that still has to be kept in
+// step. Their absence from push SQL, sessionInsertArgs, and
 // sessionPushFingerprint is intentional.
+//
+// transcript_modified_at is the notification hub's candidate
+// watermark and the newest member of that set: it is stamped only
+// by the archive's transcript-write path and read by exactly one
+// SQLite query, so it is not part of the session model the push
+// path serialises. See docs/agents/storage.md.
 const coreDDL = `
 CREATE TABLE IF NOT EXISTS sync_metadata (
     key   TEXT PRIMARY KEY,

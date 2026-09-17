@@ -140,6 +140,36 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   explain why and preserve the same behavior.
 - DuckDB is a derived mirror and is not part of this parity rule.
 
+### Session columns that stay SQLite-only
+
+The mirror does not carry every `sessions` column, and that is an exception
+rather than drift. Parsers, the file watcher, the sync engine, and the
+notification hub never run against PostgreSQL, so a column that only serves
+those paths has nothing to mirror. Adding one to `coreDDL`, the push upsert, and
+`sessionPushFingerprint` would be inert plumbing that still has to be kept in
+step.
+
+Thirteen columns stay local:
+
+- Machine-local parse state: `next_ordinal`, `last_entry_uuid`,
+  `claude_linear_parse`.
+- Parse-diff bookkeeping: `last_write_incremental`.
+- Local push and sync watermarks: `local_modified_at`, `sync_marker`,
+  `source_missing_at`.
+- Local file checkpoint state: `file_size`, `file_mtime`, `file_hash`,
+  `file_inode`, `file_device`.
+- Notification candidate watermark: `transcript_modified_at`.
+
+`transcript_modified_at` is the newest member. The archive stamps it only on the
+transcript-write path, and desktop-notification candidate discovery is its only
+reader. It is not part of the session model the push path serialises, so the
+PostgreSQL schema, projection, push upsert, predicate, arguments, fingerprint,
+and compatibility probe have nothing to carry.
+
+`internal/postgres/session_column_parity_test.go` pins the set: a new
+SQLite-only `sessions` column fails that test until it is named there with its
+reason, and a column that starts being mirrored fails until it is removed.
+
 ### Usage cache divergence
 
 SQLite's aggregate usage APIs read timezone-specific daily rollups from a

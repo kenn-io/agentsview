@@ -831,7 +831,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "프로젝트 {countNumber}개" }
+      "match": {
+        "countPlural=other": "프로젝트 {countNumber}개"
+      }
     }
   ],
   "data_summary_sessions": [
@@ -842,7 +844,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "세션 {countNumber}개" }
+      "match": {
+        "countPlural=other": "세션 {countNumber}개"
+      }
     }
   ],
   "data_summary_machines": [
@@ -875,7 +879,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "규칙이 적용된 세션 {countNumber}개" }
+      "match": {
+        "countPlural=other": "규칙이 적용된 세션 {countNumber}개"
+      }
     }
   ],
   "data_selection_hint": "프로젝트를 클릭한 다음 Shift-클릭하여 범위를 선택하세요.",
@@ -953,7 +959,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "활성화된 규칙 {countNumber}개가 이 프로젝트를 대상으로 함" }
+      "match": {
+        "countPlural=other": "활성화된 규칙 {countNumber}개가 이 프로젝트를 대상으로 함"
+      }
     }
   ],
   "data_recorded_original": "규칙의 원본 레이블로 기록됨",
@@ -984,7 +992,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "세션 {countNumber}개" }
+      "match": {
+        "countPlural=other": "세션 {countNumber}개"
+      }
     }
   ],
   "data_reclassify_cwd_unavailable": "이 폴더는 사용할 수 없거나 파일 시스템 루트를 나타내므로 안전하게 매핑할 수 없습니다.",
@@ -1003,7 +1013,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "세션 {countNumber}개 일치" }
+      "match": {
+        "countPlural=other": "세션 {countNumber}개 일치"
+      }
     }
   ],
   "data_reclassify_sessions_changing": [
@@ -1014,7 +1026,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "세션 {countNumber}개 변경 예정" }
+      "match": {
+        "countPlural=other": "세션 {countNumber}개 변경 예정"
+      }
     }
   ],
   "data_reclassify_projects_affected": [
@@ -1025,7 +1039,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "프로젝트 {countNumber}개" }
+      "match": {
+        "countPlural=other": "프로젝트 {countNumber}개"
+      }
     }
   ],
   "data_reclassify_normalized_target": "{project}(으)로 저장됩니다",
@@ -1038,7 +1054,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "세션 {countNumber}개" }
+      "match": {
+        "countPlural=other": "세션 {countNumber}개"
+      }
     }
   ],
   "data_reclassify_session_preview_count": [
@@ -2240,5 +2258,26 @@
   "go_to_session_ambiguous": "여러 세션 ID 또는 UUID가 일치합니다. 기존 링크에서 원하는 세션을 여세요.",
   "go_to_session_capped": "일치하는 세션 ID 또는 UUID가 너무 많습니다. 기존 링크에서 원하는 세션을 여세요.",
   "go_to_session_failed": "세션을 조회하지 못했습니다. 다시 시도하세요.",
-  "shortcuts_go_to_session": "찾기를 닫았을 때 세션으로 이동"
+  "shortcuts_go_to_session": "찾기를 닫았을 때 세션으로 이동",
+  "appearance_text_size": "텍스트 크기",
+  "settings_notifications_title": "데스크톱 알림",
+  "settings_notifications_description": "에이전트가 턴을 마치거나 새 응답을 보낼 때 알림 받기",
+  "settings_notifications_keywords": "알림 데스크톱 응답 알림 notifications",
+  "settings_notifications_enable": "데스크톱 알림 사용",
+  "settings_notifications_turn_end_hint": "에이전트가 명확한 중단점에 도달해 사용자 입력을 기다릴 때 알림 (에이전트 자체의 턴 종료 신호 기준).",
+  "settings_notifications_new_reply": "새 응답마다도 알림",
+  "settings_notifications_new_reply_hint": "선택적 대체 알림: 에이전트가 작업 중일 때도 알림. 연속 출력은 하나로 병합되며 작업 완료를 표시하지 않습니다.",
+  "settings_notifications_merge_window": "병합 창 (초)",
+  "settings_notifications_merge_window_hint": "같은 세션에 대한 알림 사이의 최소 간격",
+  "settings_notifications_suppress_subagents": "하위 에이전트 세션 음소거",
+  "settings_notifications_agents": "에이전트 필터",
+  "settings_notifications_agents_hint": "쉼표로 구분된 허용 목록, 비우면 모든 에이전트",
+  "settings_notifications_projects": "프로젝트 필터",
+  "settings_notifications_projects_hint": "쉼표로 구분된 허용 목록, 비우면 모든 프로젝트",
+  "settings_notifications_saved": "알림 설정이 저장되었습니다.",
+  "settings_notifications_saving": "저장 중…",
+  "settings_notifications_save": "저장",
+  "notification_new_reply_title_suffix": "새 응답",
+  "notification_turn_end_body": "에이전트가 이번 턴을 마치고 사용자 입력을 기다리고 있습니다.",
+  "notification_turn_end_title_suffix": "응답 완료"
 }

@@ -116,6 +116,81 @@ func TestChartPaletteRejectsInvalidValue(t *testing.T) {
 	}
 }
 
+func TestNotificationsConfigDefaultsAndLoads(t *testing.T) {
+	suppressOff := false
+	tests := []struct {
+		name string
+		toml string
+		want NotificationsConfig
+	}{
+		{
+			// An absent section must stay zero-valued so the server
+			// defaults (suppress subagents, one-minute merge window)
+			// still apply.
+			name: "omitted stays zero",
+			toml: "",
+			want: NotificationsConfig{},
+		},
+		{
+			name: "all fields",
+			toml: "[notifications]\n" +
+				"enabled = true\n" +
+				"notify_new_reply = true\n" +
+				"merge_window_seconds = 42\n" +
+				"agents = [\"claude\", \"codex\"]\n" +
+				"projects = [\"agentsview\"]\n" +
+				"suppress_subagents = false\n",
+			want: NotificationsConfig{
+				Enabled:            true,
+				NotifyNewReply:     true,
+				MergeWindowSeconds: 42,
+				Agents:             []string{"claude", "codex"},
+				Projects:           []string{"agentsview"},
+				SuppressSubagents:  &suppressOff,
+			},
+		},
+		{
+			name: "empty section stays zero",
+			toml: "[notifications]\n",
+			want: NotificationsConfig{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Default()
+			require.NoError(t, err)
+			require.NoError(t, cfg.applyConfigTOML(tt.toml))
+			assert.Equal(t, tt.want, cfg.Notifications)
+		})
+	}
+}
+
+// TestNotificationsTableIsDefinedInTOMLMeta pins the guard used by
+// applyConfigTOML: BurntSushi/toml must report the [notifications] table
+// itself as defined, and must not report an absent table as defined.
+func TestNotificationsTableIsDefinedInTOMLMeta(t *testing.T) {
+	var file struct {
+		Notifications NotificationsConfig `toml:"notifications"`
+	}
+
+	meta, err := toml.Decode(
+		"[notifications]\nenabled = true\n", &file,
+	)
+	require.NoError(t, err)
+	assert.True(t, meta.IsDefined("notifications"),
+		"a present [notifications] table must be defined")
+
+	meta, err = toml.Decode("[notifications]\n", &file)
+	require.NoError(t, err)
+	assert.True(t, meta.IsDefined("notifications"),
+		"an empty [notifications] table must still be defined")
+
+	meta, err = toml.Decode("host = \"127.0.0.1\"\n", &file)
+	require.NoError(t, err)
+	assert.False(t, meta.IsDefined("notifications"),
+		"an absent [notifications] table must not be defined")
+}
+
 func TestZoomLevelConfig(t *testing.T) {
 	for _, level := range []int{67, 75, 80, 90, 100, 110, 120, 125, 130, 150, 175, 200} {
 		t.Run(strconv.Itoa(level), func(t *testing.T) {

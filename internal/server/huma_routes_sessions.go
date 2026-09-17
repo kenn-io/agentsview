@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/notify"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sessionwatch"
@@ -1024,6 +1025,12 @@ func (s *Server) humaEvents(
 		}
 		sub, unsub := s.broadcaster.Subscribe()
 		defer unsub()
+		var notifSub <-chan notify.Notification
+		var notifUnsub func()
+		if s.notificationHub != nil {
+			notifSub, notifUnsub = s.notificationHub.Subscribe()
+			defer notifUnsub()
+		}
 		heartbeat := time.NewTicker(
 			sessionwatch.PollInterval * sessionwatch.HeartbeatTicks,
 		)
@@ -1037,6 +1044,11 @@ func (s *Server) humaEvents(
 					return
 				}
 				stream.SendJSON("data_changed", map[string]string{"scope": ev.Scope})
+			case n, ok := <-notifSub:
+				if !ok {
+					continue
+				}
+				stream.SendJSON("notification", n)
 			case <-heartbeat.C:
 				stream.Send("heartbeat", time.Now().Format(time.RFC3339))
 			}

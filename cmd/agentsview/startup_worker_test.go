@@ -100,14 +100,23 @@ func TestCompleteWorkerStartupReconciliationLogsLifecycle(t *testing.T) {
 			reconcileCalls := 0
 			queued := false
 			var recordedErr error
+			// Order the completion callback observes: it must not
+			// fire before the startup acknowledgment, or a fence
+			// built on it would cover startup writes.
+			var order []string
 			completeWorkerStartupReconciliation(
 				t.Context(), tc.roots, syncpkg.SyncStats{},
 				func(context.Context, []string, bool) error {
 					reconcileCalls++
+					order = append(order, "reconcile")
 					return tc.err
 				},
 				func(syncpkg.WatchBatch) { queued = true },
-				func(_ syncpkg.SyncStats, errorValue error) { recordedErr = errorValue },
+				func(_ syncpkg.SyncStats, errorValue error) {
+					recordedErr = errorValue
+					order = append(order, "record")
+				},
+				func() { order = append(order, "completed") },
 			)
 
 			output := logs.String()
@@ -119,6 +128,13 @@ func TestCompleteWorkerStartupReconciliationLogsLifecycle(t *testing.T) {
 			assert.Equal(t, len(tc.roots) > 0, reconcileCalls > 0)
 			assert.Equal(t, tc.wantQueued, queued)
 			assert.Equal(t, tc.err, recordedErr)
+			// The completion callback is the daemon's cue that
+			// startup writes are over; it must come last.
+			wantOrder := []string{"record", "completed"}
+			if len(tc.roots) > 0 {
+				wantOrder = []string{"reconcile", "record", "completed"}
+			}
+			assert.Equal(t, wantOrder, order)
 		})
 	}
 }

@@ -23,6 +23,10 @@ func syncLifecycleOutcome(ctx context.Context, err error) string {
 // completeWorkerStartupReconciliation closes the worker-to-watcher event gap
 // and acknowledges the worker result. The callbacks keep this orchestration
 // testable while preserving the engine's existing lock and dispatch behavior.
+//
+// onCompleted runs last, after the reconciliation and its startup
+// acknowledgment: it is where the daemon establishes fences that must not
+// see startup writes, such as the desktop-notification readiness watermark.
 func completeWorkerStartupReconciliation(
 	ctx context.Context,
 	roots []string,
@@ -30,6 +34,7 @@ func completeWorkerStartupReconciliation(
 	reconcile func(context.Context, []string, bool) error,
 	queueRetry func(syncpkg.WatchBatch),
 	record func(syncpkg.SyncStats, error),
+	onCompleted func(),
 ) {
 	started := time.Now()
 	log.Printf("startup gap reconciliation started: roots=%d", len(roots))
@@ -44,6 +49,9 @@ func completeWorkerStartupReconciliation(
 		queueRetry(gapReconciliationRetryBatch(gapErr))
 	}
 	record(workerStats, gapErr)
+	if onCompleted != nil {
+		onCompleted()
+	}
 
 	outcome := syncLifecycleOutcome(ctx, gapErr)
 	if gapErr != nil {

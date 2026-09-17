@@ -17,6 +17,71 @@ func (s *Server) registerConfigRoutes() {
 	s.post(group, "/github", "Set GitHub config", s.humaSetGithubConfig)
 	s.get(group, "/terminal", "Get terminal config", s.humaGetTerminalConfig)
 	s.post(group, "/terminal", "Set terminal config", s.humaSetTerminalConfig)
+	s.get(group, "/notifications", "Get notification config", s.humaGetNotificationsConfig)
+	s.post(group, "/notifications", "Set notification config", s.humaSetNotificationsConfig)
+}
+
+type notificationsConfigBody struct {
+	Enabled            bool     `json:"enabled" doc:"Master switch for desktop notifications"`
+	NotifyNewReply     bool     `json:"notify_new_reply" doc:"Optional fallback reminder for sessions without a reliable end-of-turn signal"`
+	MergeWindowSeconds int      `json:"merge_window_seconds,omitempty" doc:"Minimum seconds between new-reply reminders per session"`
+	Agents             []string `json:"agents,omitempty" doc:"Restrict notifications to these agents; empty means all"`
+	Projects           []string `json:"projects,omitempty" doc:"Restrict notifications to these projects; empty means all"`
+	SuppressSubagents  *bool    `json:"suppress_subagents,omitempty" doc:"Suppress notifications for subagent sessions (default true)"`
+}
+
+func notificationsConfigBodyFromConfig(nc config.NotificationsConfig) notificationsConfigBody {
+	return notificationsConfigBody{
+		Enabled:            nc.Enabled,
+		NotifyNewReply:     nc.NotifyNewReply,
+		MergeWindowSeconds: nc.MergeWindowSeconds,
+		Agents:             nc.Agents,
+		Projects:           nc.Projects,
+		SuppressSubagents:  nc.SuppressSubagents,
+	}
+}
+
+func (b notificationsConfigBody) config() config.NotificationsConfig {
+	return config.NotificationsConfig{
+		Enabled:            b.Enabled,
+		NotifyNewReply:     b.NotifyNewReply,
+		MergeWindowSeconds: b.MergeWindowSeconds,
+		Agents:             b.Agents,
+		Projects:           b.Projects,
+		SuppressSubagents:  b.SuppressSubagents,
+	}
+}
+
+type notificationsConfigInput struct {
+	Body notificationsConfigBody
+}
+
+func (s *Server) humaGetNotificationsConfig(
+	_ context.Context,
+	_ *emptyInput,
+) (*jsonOutput[notificationsConfigBody], error) {
+	s.mu.RLock()
+	nc := s.cfg.Notifications
+	s.mu.RUnlock()
+	return &jsonOutput[notificationsConfigBody]{
+		Body: notificationsConfigBodyFromConfig(nc),
+	}, nil
+}
+
+func (s *Server) humaSetNotificationsConfig(
+	_ context.Context,
+	in *notificationsConfigInput,
+) (*jsonOutput[notificationsConfigBody], error) {
+	nc := in.Body.config()
+	s.mu.Lock()
+	err := s.cfg.SaveNotificationsConfig(nc)
+	s.mu.Unlock()
+	if err != nil {
+		return nil, apiError(http.StatusInternalServerError, "failed to save notification config")
+	}
+	return &jsonOutput[notificationsConfigBody]{
+		Body: notificationsConfigBodyFromConfig(nc),
+	}, nil
 }
 
 type terminalMode string

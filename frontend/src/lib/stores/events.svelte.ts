@@ -1,4 +1,8 @@
-import { watchEvents, type DataChangedEvent } from "../api/client.js";
+import {
+  watchEvents,
+  type DataChangedEvent,
+  type DesktopNotification,
+} from "../api/client.js";
 
 type Listener = (e: DataChangedEvent) => void;
 
@@ -26,6 +30,16 @@ class EventsStore {
   private permanentlyFailed = false;
   private available = false;
   private visibilityHandlerInstalled = false;
+  // Optional sink for notification frames so the notifications
+  // store shares this one SSE connection instead of opening its own.
+  private notificationHandler: ((n: DesktopNotification) => void) | null =
+    null;
+
+  /** Route notification frames delivered on the shared stream to
+   * the given handler (pass null to detach). */
+  setNotificationHandler(fn: ((n: DesktopNotification) => void) | null) {
+    this.notificationHandler = fn;
+  }
 
   /** Enable or disable the live event stream for the current backend mode. */
   setAvailable(available: boolean) {
@@ -107,6 +121,7 @@ class EventsStore {
         for (const fn of this.listeners.values()) fn(e);
       },
       {
+        onNotification: (n) => this.notificationHandler?.(n),
         onPermanentFailure: () => {
           this.permanentlyFailed = true;
           if (this.healTimer !== null) {

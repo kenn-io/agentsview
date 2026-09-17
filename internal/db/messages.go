@@ -2047,6 +2047,13 @@ func bumpInsertedTranscriptRevisionTx(tx transactionQueries, sessionID string) e
 	return bumpTranscriptRevision(tx, sessionID, false)
 }
 
+// bumpTranscriptRevision is the single choke point for "this session's
+// transcript changed". It is the only writer of transcript_modified_at,
+// which is what makes that column a transcript-only marker: every
+// metadata-only path (rename, subagent relinking, secret rescans,
+// signal backfill) bumps local_modified_at but never comes through
+// here, so it cannot masquerade as transcript activity for consumers
+// such as desktop-notification candidate discovery.
 func bumpTranscriptRevision(
 	tx transactionQueries, sessionID string, touchModified bool,
 ) error {
@@ -2056,10 +2063,15 @@ func bumpTranscriptRevision(
 	// privacy boundary) must fail closed until a rescan re-stamps it. The
 	// incremental sync path re-scans in a separate later write; the atomic
 	// replace path re-stamps inside this same transaction.
+	//
+	// transcript_modified_at is stamped in both variants: it marks content
+	// change, not push eligibility, so the insert path needs it too (a
+	// session first seen in this transaction has brand-new transcript).
 	query := `UPDATE sessions
 		 SET transcript_revision = CAST(
 			CAST(transcript_revision AS INTEGER) + 1 AS TEXT
 		 ),
+		     transcript_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
 		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
 		     secrets_rules_version = ''
 		 WHERE id = ?`
@@ -2068,6 +2080,7 @@ func bumpTranscriptRevision(
 		 SET transcript_revision = CAST(
 			CAST(transcript_revision AS INTEGER) + 1 AS TEXT
 		 ),
+		     transcript_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
 		     secrets_rules_version = ''
 		 WHERE id = ?`
 	}

@@ -829,7 +829,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 个项目" }
+      "match": {
+        "countPlural=other": "{countNumber} 个项目"
+      }
     }
   ],
   "data_summary_sessions": [
@@ -840,7 +842,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 个会话" }
+      "match": {
+        "countPlural=other": "{countNumber} 个会话"
+      }
     }
   ],
   "data_summary_machines": [
@@ -873,7 +877,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 个会话受规则管理" }
+      "match": {
+        "countPlural=other": "{countNumber} 个会话受规则管理"
+      }
     }
   ],
   "data_selection_hint": "点击一个项目，然后按住 Shift 点击以选择一个范围。",
@@ -951,7 +957,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 条已启用的规则以此项目为目标" }
+      "match": {
+        "countPlural=other": "{countNumber} 条已启用的规则以此项目为目标"
+      }
     }
   ],
   "data_recorded_original": "已记录为规则的原始标签",
@@ -982,7 +990,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 个会话" }
+      "match": {
+        "countPlural=other": "{countNumber} 个会话"
+      }
     }
   ],
   "data_reclassify_cwd_unavailable": "此文件夹无法安全映射，因为它不可用或表示文件系统根目录。",
@@ -1001,7 +1011,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "匹配 {countNumber} 个会话" }
+      "match": {
+        "countPlural=other": "匹配 {countNumber} 个会话"
+      }
     }
   ],
   "data_reclassify_sessions_changing": [
@@ -1012,7 +1024,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "将更改 {countNumber} 个会话" }
+      "match": {
+        "countPlural=other": "将更改 {countNumber} 个会话"
+      }
     }
   ],
   "data_reclassify_projects_affected": [
@@ -1023,7 +1037,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 个项目" }
+      "match": {
+        "countPlural=other": "{countNumber} 个项目"
+      }
     }
   ],
   "data_reclassify_normalized_target": "将保存为 {project}",
@@ -1036,7 +1052,9 @@
         "local countNumber = count: number"
       ],
       "selectors": ["countPlural"],
-      "match": { "countPlural=other": "{countNumber} 个会话" }
+      "match": {
+        "countPlural=other": "{countNumber} 个会话"
+      }
     }
   ],
   "data_reclassify_session_preview_count": [
@@ -2240,5 +2258,26 @@
   "go_to_session_ambiguous": "有多个会话匹配此 ID 或 UUID。请通过现有链接打开目标会话。",
   "go_to_session_capped": "匹配此 ID 或 UUID 的会话太多。请通过现有链接打开目标会话。",
   "go_to_session_failed": "无法查找该会话。请重试。",
-  "shortcuts_go_to_session": "关闭查找后跳转到会话"
+  "shortcuts_go_to_session": "关闭查找后跳转到会话",
+  "appearance_text_size": "文字大小",
+  "settings_notifications_title": "桌面通知",
+  "settings_notifications_description": "在 Agent 结束本轮回复或有新回复时获得通知",
+  "settings_notifications_keywords": "通知 桌面 提醒 回复 结束 notifications",
+  "settings_notifications_enable": "启用桌面通知",
+  "settings_notifications_turn_end_hint": "当 Agent 到达明确的停止点并等待你输入时通知（基于 Agent 自身的回合结束信号）。",
+  "settings_notifications_new_reply": "同时提醒每条新回复",
+  "settings_notifications_new_reply_hint": "可选的兜底提醒：Agent 仍在工作时也会通知。连续输出会合并为一条；不会宣称任务已完成。",
+  "settings_notifications_merge_window": "合并窗口（秒）",
+  "settings_notifications_merge_window_hint": "同一会话两次提醒之间的最小间隔",
+  "settings_notifications_suppress_subagents": "忽略子 Agent 会话",
+  "settings_notifications_agents": "Agent 过滤",
+  "settings_notifications_agents_hint": "逗号分隔的白名单，留空表示全部 Agent",
+  "settings_notifications_projects": "项目过滤",
+  "settings_notifications_projects_hint": "逗号分隔的白名单，留空表示全部项目",
+  "settings_notifications_saved": "通知设置已保存。",
+  "settings_notifications_saving": "保存中…",
+  "settings_notifications_save": "保存",
+  "notification_new_reply_title_suffix": "新回复",
+  "notification_turn_end_body": "Agent 已完成本轮回复，正在等待你的输入。",
+  "notification_turn_end_title_suffix": "回复已完成"
 }
