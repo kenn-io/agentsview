@@ -106,12 +106,14 @@ type searchSessionInput struct {
 }
 
 type resolveSessionIDsInput struct {
-	Partial string `query:"partial" required:"true" doc:"Session ID substring"`
-	Limit   int    `query:"limit" minimum:"0" maximum:"1000" doc:"Maximum number of matching IDs"`
+	Partial   string `query:"partial" required:"true" doc:"Session ID substring or raw suffix"`
+	Limit     int    `query:"limit" minimum:"0" maximum:"1000" doc:"Maximum number of matching IDs"`
+	RawSuffix bool   `query:"raw_suffix" doc:"Use literal exact, colon-suffix, or host-tilde-suffix matching"`
 }
 
 type resolveSessionIDsResponse struct {
-	IDs []string `json:"ids"`
+	IDs       []string `json:"ids"`
+	RawSuffix bool     `json:"raw_suffix,omitempty"`
 }
 
 func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
@@ -246,7 +248,13 @@ func (s *Server) humaResolveSessionIDs(
 	ctx context.Context,
 	in *resolveSessionIDsInput,
 ) (*jsonOutput[resolveSessionIDsResponse], error) {
-	ids, err := s.sessions.FindSessionIDsByPartial(ctx, in.Partial, in.Limit)
+	var ids []string
+	var err error
+	if in.RawSuffix {
+		ids, err = s.sessions.FindSessionIDsByRawSuffix(ctx, in.Partial, in.Limit)
+	} else {
+		ids, err = s.sessions.FindSessionIDsByPartial(ctx, in.Partial, in.Limit)
+	}
 	if err != nil {
 		if handled := handleHumaContextError(err); handled != nil {
 			return nil, handled
@@ -257,7 +265,7 @@ func (s *Server) humaResolveSessionIDs(
 		return nil, serverError(err)
 	}
 	return &jsonOutput[resolveSessionIDsResponse]{
-		Body: resolveSessionIDsResponse{IDs: ids},
+		Body: resolveSessionIDsResponse{IDs: ids, RawSuffix: in.RawSuffix},
 	}, nil
 }
 
@@ -1315,7 +1323,15 @@ func (s *Server) humaResumeSession(
 		}
 		model = primaryResumeModel(counts)
 	}
-	cmd := resumeCommand(string(session.Agent), tmpl, rawID, model)
+	resumeTarget := rawID
+	if session.Agent == string(parser.AgentPi) && session.FilePath != nil &&
+		*session.FilePath != "" {
+		resumeTarget = *session.FilePath
+		if host != "" {
+			resumeTarget = strings.TrimPrefix(resumeTarget, host+":")
+		}
+	}
+	cmd := resumeCommand(string(session.Agent), tmpl, resumeTarget, model)
 	if string(session.Agent) == "claude" {
 		if req.SkipPermissions {
 			cmd += " --dangerously-skip-permissions"
@@ -1335,7 +1351,7 @@ func (s *Server) humaResumeSession(
 	}
 	responseCmd := cmd
 	switch string(session.Agent) {
-	case "claude", "kiro":
+	case "claude", "kiro", "pi":
 		if host != "" {
 			responseCmd = commandWithDir(cmd, launchDir)
 		} else {

@@ -72,6 +72,18 @@ include sessions whose activity overlaps the requested days in UTC. Either bound
 can be omitted; omitting both preserves unrestricted date matching. Malformed
 dates and ranges where `date_from` is after `date_to` return an error.
 
+Set `session_id` to a raw UUID or full stored session ID when you need one
+session. The lookup returns one metadata row, includes active sessions, ignores
+the other search arguments, and returns an error when the ID is missing or its
+raw suffix matches more than one session. A raw UUID matches an exact stored ID,
+an agent ID ending in `:<uuid>`, or a host ID ending in `~<uuid>`; the delimiter
+is part of the match, so a fork entry separated by `-` is not selected. The row
+has an empty `snippet`, `match_ordinal` set to `0`, and no `next_cursor`. Call
+`get_messages` with that ordinal to read the first message. For a known full ID,
+`get_session_overview` remains the way to get a compact message preview.
+Remote bare UUID lookup requires an updated server; an exact full stored ID still
+uses the existing `Get` path.
+
 `search_sessions` and `search_content` exclude sessions active in the last ten
 minutes by default, including the current conversation. Set
 `include_active: true` when you need that recent work.

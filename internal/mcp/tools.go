@@ -82,7 +82,8 @@ func (t *toolset) lookupActivity(
 type searchSessionsIn struct {
 	DateFrom      string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
 	DateTo        string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
-	Query         string `json:"query" jsonschema:"Search terms across all agent sessions. Every term must appear (AND), not an exact phrase; wrap the whole query in double quotes for an exact phrase, e.g. \"build failed\". Punctuation in a term (hyphens, colons) is handled safely."`
+	Query         string `json:"query,omitempty" jsonschema:"Search terms across all agent sessions. Required unless session_id is set. Every term must appear (AND), not an exact phrase; wrap the whole query in double quotes for an exact phrase, e.g. \"build failed\". Punctuation in a term (hyphens, colons) is handled safely."`
+	SessionID     string `json:"session_id,omitempty" jsonschema:"Look up one session by its raw UUID or full stored session ID. Returns one metadata row, includes active sessions, and takes precedence over the other search arguments. Missing IDs and ambiguous raw UUIDs return errors."`
 	Project       string `json:"project,omitempty" jsonschema:"Restrict to one project (repo/directory name)."`
 	Sort          string `json:"sort,omitempty" jsonschema:"relevance (default) or recency."`
 	Limit         int    `json:"limit,omitempty" jsonschema:"Max results, default 10, max 30."`
@@ -110,6 +111,48 @@ type searchSessionsOut struct {
 func (t *toolset) searchSessions(
 	ctx context.Context, _ *mcp.CallToolRequest, in searchSessionsIn,
 ) (*mcp.CallToolResult, searchSessionsOut, error) {
+	if in.SessionID != "" {
+		detail, err := t.svc.Get(ctx, in.SessionID)
+		if err != nil {
+			return nil, searchSessionsOut{}, err
+		}
+		if detail == nil {
+			ids, err := t.svc.FindSessionIDsByRawSuffix(ctx, in.SessionID, 2)
+			if err != nil {
+				return nil, searchSessionsOut{}, err
+			}
+			if len(ids) > 1 {
+				return nil, searchSessionsOut{}, fmt.Errorf(
+					"ambiguous session UUID %q: use a full stored session ID",
+					in.SessionID,
+				)
+			}
+			if len(ids) == 1 {
+				detail, err = t.svc.Get(ctx, ids[0])
+				if err != nil {
+					return nil, searchSessionsOut{}, err
+				}
+			}
+		}
+		if detail == nil {
+			return nil, searchSessionsOut{}, fmt.Errorf(
+				"session not found: %s", in.SessionID,
+			)
+		}
+		row := toSessionRow(detail.Session)
+		ended := row.EndedAt
+		if ended == "" {
+			ended = row.StartedAt
+		}
+		return nil, searchSessionsOut{Results: []sessionHit{{
+			SessionID: row.SessionID,
+			WebURL:    row.WebURL,
+			Project:   row.Project,
+			Agent:     row.Agent,
+			Name:      row.Name,
+			EndedAt:   ended,
+		}}}, nil
+	}
 	res, err := t.svc.Search(ctx, service.SearchRequest{
 		DateFrom: in.DateFrom,
 		DateTo:   in.DateTo,
