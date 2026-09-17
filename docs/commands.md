@@ -67,6 +67,21 @@ there is no public enrollment command yet. Accepted raw generations are not yet
 parsed into hosted sessions. See [Hosted Raw Sync](/docs/hosted-raw-sync/) for
 the current boundary.
 
+`raw-sync clean-uploads` runs one server-side cleanup pass for the PostgreSQL
+upload sessions and private spool used by `agentsview pg serve`:
+
+```bash
+agentsview raw-sync clean-uploads
+```
+
+The command uses the effective PostgreSQL target and AgentsView data directory
+from the current configuration. It can run while `pg serve` is stopped. Each
+pass uses the existing bound of up to 128 rows per SQL batch and 128 spool
+entries per directory scan. The command starts a fresh spool cursor on every
+invocation. The long-running server keeps its cursor between the existing
+startup pass and its 15-minute cleanup passes. The command prints `Raw upload
+cleanup pass completed.` only after the pass succeeds.
+
 ______________________________________________________________________
 
 ### `agentsview daemon`
