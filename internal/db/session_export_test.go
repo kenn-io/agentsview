@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
@@ -21,6 +22,38 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAllSessionExportKeepsTerminationCutoffAcrossPages(t *testing.T) {
+	d := testSessionExportDB(t)
+	synctest.Test(t, func(t *testing.T) {
+		// Keep the older activity timestamps within the valid 2000..2100 range.
+		time.Sleep(time.Hour)
+		for _, id := range []string{"active-a", "active-b"} {
+			ts := time.Now().UTC().Add(-9 * time.Minute).Format(time.RFC3339)
+			insertExportSession(t, d, Session{
+				ID: id, Project: "termination", StartedAt: &ts, EndedAt: &ts,
+			})
+		}
+		pages, err := d.exportAllSessionSummaries(context.Background(), SessionExportOptions{
+			Filter: SessionFilter{Project: "termination", Termination: "active"},
+			Limit:  1,
+		}, func(page int, _ *sql.Tx) error {
+			if page == 1 {
+				// Both sessions age out of the active window during the export.
+				time.Sleep(2 * time.Minute)
+			}
+			return nil
+		}, nil)
+		require.NoError(t, err)
+		var ids []string
+		for _, page := range pages {
+			for _, row := range page.Rows {
+				ids = append(ids, row.ID)
+			}
+		}
+		assert.Equal(t, []string{"active-a", "active-b"}, ids)
+	})
+}
 
 func TestSessionSummaryExportRowsAreContentFreeAndMetadataScoped(t *testing.T) {
 	d := testSessionExportDB(t)

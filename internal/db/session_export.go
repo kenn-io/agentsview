@@ -29,6 +29,8 @@ const (
 
 type sessionExportActivitySource struct {
 	materialized bool
+	where        string
+	args         []any
 	observe      func(string, []any)
 }
 
@@ -258,7 +260,9 @@ func (db *DB) exportAllSessionSummaries(
 	for {
 		result, err := db.exportSessionSummariesTx(
 			ctx, tx, opts, false,
-			sessionExportActivitySource{materialized: true, observe: observe},
+			sessionExportActivitySource{
+				materialized: true, where: where, args: args, observe: observe,
+			},
 		)
 		if err != nil {
 			return nil, err
@@ -317,9 +321,14 @@ func (db *DB) exportSessionSummariesTx(
 		}
 	}
 
-	where, args := buildSessionExportFilterForAlias(
-		opts.Filter, activitySource.sessionAlias(),
-	)
+	// Reuse the materialization filter so time-based termination cutoffs
+	// cannot change between pages of the same export snapshot.
+	where, args := activitySource.where, activitySource.args
+	if !activitySource.materialized {
+		where, args = buildSessionExportFilterForAlias(
+			opts.Filter, activitySource.sessionAlias(),
+		)
+	}
 	databaseID, err := sessionExportMetadataValue(
 		ctx, tx, archiveMetadataDatabaseIDKey, ErrDatabaseIDMissing,
 		"database id",
