@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
-import type { SessionTiming } from "../../api/types/timing.js";
+import type { DbSessionTiming as SessionTiming } from "../../api/generated/index.js";
 import SubagentCalls from "./SubagentCalls.svelte";
 
 afterEach(() => {

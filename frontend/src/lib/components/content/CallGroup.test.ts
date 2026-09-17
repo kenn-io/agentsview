@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
-import type { CallTiming } from "../../api/types/timing.js";
+import type { DbCallTiming as CallTiming } from "../../api/generated/index.js";
 import CallGroup from "./CallGroup.svelte";
 
 afterEach(() => {

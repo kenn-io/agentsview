@@ -62,7 +62,12 @@ describe("ToolCallGroup", () => {
   ])("uses call evidence for $label, running=$running", async ({ duration, running, turnDurationMs, label }) => {
     const message = makeToolMessage(1);
     message.tool_calls = [
-      { tool_use_id: "call-1", tool_name: "Bash", input_json: '{"command":"pwd"}' },
+      {
+        tool_use_id: "call-1",
+        tool_name: "Bash",
+        category: "Bash",
+        input_json: '{"command":"pwd"}',
+      },
     ];
     sessionTiming.timing = {
       session_id: "s1",
