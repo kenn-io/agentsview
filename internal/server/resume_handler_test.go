@@ -547,7 +547,10 @@ func TestResumeSession(t *testing.T) {
 				assert.False(t, resp.Launched, "expected launched=false for command_only")
 				assert.Equal(t, "cd '"+tt.wantCwd+"' && "+tt.wantSuffix, resp.Command)
 				assert.Equal(t, tt.wantCwd, resp.Cwd)
-				assert.NotContains(t, resp.Command, "~")
+				// Windows temp paths can contain 8.3 short names such as
+				// RUNNER~1, so only check the parts outside the cwd.
+				assert.NotContains(t,
+					strings.ReplaceAll(resp.Command, tt.wantCwd, ""), "~")
 			})
 		}
 	})

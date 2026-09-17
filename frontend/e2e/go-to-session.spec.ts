@@ -21,9 +21,18 @@ const UNKNOWN_UUID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const TARGET_ID = `remote-host~codex:${TARGET_UUID}`;
 const MISSING_ID = `remote-host~codex:${MISSING_UUID}`;
 const OPAQUE_ID = "test-session-project-reclassification-nested";
-const TARGET_PATH = `/sessions/${encodeURIComponent(TARGET_ID)}`;
-const MISSING_PATH = `/sessions/${encodeURIComponent(MISSING_ID)}`;
-const OPAQUE_PATH = `/sessions/${encodeURIComponent(OPAQUE_ID)}`;
+
+// Mirrors sessionPath in src/lib/stores/router.svelte.ts: the provider prefix
+// and the session UUID are separate path segments.
+function sessionPath(id: string): string {
+  const separator = id.indexOf(":");
+  if (separator === -1) return `/sessions/${encodeURIComponent(id)}`;
+  return `/sessions/${encodeURIComponent(id.slice(0, separator))}/${encodeURIComponent(id.slice(separator + 1))}`;
+}
+
+const TARGET_PATH = sessionPath(TARGET_ID);
+const MISSING_PATH = sessionPath(MISSING_ID);
+const OPAQUE_PATH = sessionPath(OPAQUE_ID);
 
 const now = "2026-09-14T12:00:00Z";
 
