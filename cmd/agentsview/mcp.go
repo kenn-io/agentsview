@@ -102,7 +102,7 @@ Add to your MCP client config (e.g. Claude Desktop):
 				opts.BackendURL, _ = cmd.Flags().GetString("server")
 				if opts.BackendURL == "" && !pgReadRequested(cmd) {
 					if runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); runtime != nil {
-						opts.BackendURL = runtime.Record.Endpoint().BaseURL()
+						opts.BackendURL = urlFromDaemonRuntime(runtime)
 					}
 				}
 				serveErr = mcpserver.ServeHTTP(ctx, opts, addr)

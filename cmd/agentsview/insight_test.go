@@ -11,12 +11,17 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/insight"
+	"go.kenn.io/agentsview/internal/server"
 )
 
 func runInsightCommand(
@@ -487,6 +492,47 @@ func TestInsightTransportModes(t *testing.T) {
 		assert.Contains(t, err.Error(), "daemon autostart is disabled")
 		assert.Empty(t, stdout)
 	})
+}
+
+func TestInsightCommandsDiscoverBasePathDaemon(t *testing.T) {
+	for _, token := range []string{"", "test-token"} {
+		t.Run(token, func(t *testing.T) {
+			dataDir := t.TempDir()
+			t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+			t.Setenv("AGENTSVIEW_AUTH_TOKEN", token)
+			t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+			database := dbtest.OpenTestDB(t)
+			id, err := database.InsertInsight(testInsight(0))
+			require.NoError(t, err)
+			ts := httptest.NewUnstartedServer(nil)
+			host, port := splitTestServerURL(t, "http://"+ts.Listener.Addr().String())
+			srv := server.New(config.Config{
+				Host: host, Port: port, DataDir: dataDir,
+				AuthToken: token, RequireAuth: token != "",
+			}, database, nil, server.WithBasePath("/viewer"),
+				server.WithGenerateFunc(func(context.Context, string, string) (insight.Result, error) {
+					return insight.Result{Agent: "claude", Content: "Activity summary."}, nil
+				}),
+			)
+			ts.Config.Handler = srv.Handler()
+			ts.Start()
+			t.Cleanup(ts.Close)
+			_, err = WriteDaemonRuntimeWithAuth(
+				dataDir, host, port, "test", ts.URL+"/viewer", true, token != "",
+			)
+			require.NoError(t, err)
+
+			for _, args := range [][]string{
+				{"insight", "list", "--json"},
+				{"insight", "get", strconv.FormatInt(id, 10), "--json"},
+				{"insight", "generate", "--date-from", "2026-09-15", "--date-to", "2026-09-15", "--json"},
+			} {
+				stdout, _, err := runInsightCommand(t, args...)
+				require.NoError(t, err)
+				assert.Contains(t, stdout, "Activity summary.")
+			}
+		})
+	}
 }
 
 func TestInsightCredentials(t *testing.T) {

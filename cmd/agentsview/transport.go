@@ -445,8 +445,8 @@ func transportFromRuntime(rt *DaemonRuntime) transport {
 }
 
 // urlFromDaemonRuntime returns the HTTP URL a CLI client should use
-// to reach the daemon described by rt. Bind-all addresses are
-// mapped to loopback. IPv6 hosts are bracketed via
+// to reach the daemon described by rt, including its base path.
+// Bind-all addresses are mapped to loopback. IPv6 hosts are bracketed via
 // net.JoinHostPort so the URL is well-formed.
 func urlFromDaemonRuntime(rt *DaemonRuntime) string {
 	host := rt.Host
