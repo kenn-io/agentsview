@@ -485,16 +485,6 @@ func probeRuntime(
 	return daemon.ProbeHTTP(ctx, client, ep.BaseURL(), opts)
 }
 
-// PublicURL is an origin; the runtime browser URL also includes the server's
-// base path. Reuse that path while keeping CLI requests on the local endpoint.
-func daemonRuntimeBasePath(browserURL string) string {
-	u, err := url.Parse(browserURL)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimRight(u.EscapedPath(), "/")
-}
-
 type bearerAuthTransport struct {
 	token string
 	base  http.RoundTripper

@@ -1430,7 +1430,7 @@ func TestEmbeddingsDaemonClientOriginOmitsBasePath(t *testing.T) {
 	) {
 		gotPath = r.URL.Path
 		gotOrigin = r.Header.Get("Origin")
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(http.StatusAccepted)
 	}))
 	t.Cleanup(ts.Close)
 

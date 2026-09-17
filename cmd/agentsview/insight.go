@@ -287,7 +287,7 @@ func doInsightRequest(
 		_ = resp.Body.Close()
 		return nil, &insightHTTPError{
 			status: resp.StatusCode,
-			err:    daemonPushError(resp.StatusCode, responseBody),
+			err:    errors.New(daemonErrorMessage(resp.StatusCode, responseBody)),
 		}
 	}
 	return resp, nil
