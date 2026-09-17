@@ -314,19 +314,29 @@ func checkRawSyncWritePrivileges(
 	return missing, nil
 }
 
-// CheckRawSyncWritePrivileges reports whether the current role can use every
+// CheckRawSyncWritePrivileges verifies that the current role can use every
 // table and owned sequence required by the raw-sync control plane.
 func CheckRawSyncWritePrivileges(
 	ctx context.Context, db *sql.DB, schema string,
-) (bool, error) {
+) error {
 	missing, err := checkRawSyncWritePrivileges(ctx, db, schema)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if missing != "" {
-		return false, fmt.Errorf("raw sync write privileges missing: %s", missing)
+		var tableExists bool
+		if err := db.QueryRowContext(ctx, `
+			SELECT to_regclass(format('%I.%I', $1::text, 'raw_upload_sessions')) IS NOT NULL`,
+			schema,
+		).Scan(&tableExists); err != nil {
+			return fmt.Errorf("checking raw sync schema: %w", err)
+		}
+		if !tableExists {
+			return errors.New("raw sync schema is not provisioned")
+		}
+		return fmt.Errorf("raw sync write privileges missing: %s", missing)
 	}
-	return true, nil
+	return nil
 }
 
 // CanWriteRawSyncSchema reports whether the current role can use every table

@@ -100,7 +100,7 @@ func TestRawSyncCleanUploadsFailures(t *testing.T) {
 func TestRawSyncCleanUploadsRequiresWritableSchema(t *testing.T) {
 	pg, dataDir, pgURL := newRawSyncCleanUploadsPG(t)
 	configureRawSyncCleanUploads(t, dataDir, pgURL)
-	_, err := pg.ExecContext(t.Context(), "DROP TABLE raw_upload_sessions")
+	_, err := pg.ExecContext(t.Context(), "DROP TABLE raw_ingest_jobs")
 	require.NoError(t, err)
 	var logs bytes.Buffer
 	previousLog := log.Writer()
@@ -113,6 +113,27 @@ func TestRawSyncCleanUploadsRequiresWritableSchema(t *testing.T) {
 	assert.Empty(t, output)
 	assert.Contains(t, err.Error(), "raw sync write privileges missing")
 	assert.NotContains(t, logs.String(), "pg serve")
+	_, statErr := os.Stat(filepath.Join(dataDir, "raw-upload-spool"))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestRawSyncCleanUploadsRequiresProvisionedSchema(t *testing.T) {
+	pg, dataDir, pgURL := newRawSyncCleanUploadsPG(t)
+	configureRawSyncCleanUploads(t, dataDir, pgURL)
+	_, err := pg.ExecContext(t.Context(),
+		"DROP SCHEMA "+rawSyncCleanUploadsSchema+" CASCADE",
+	)
+	require.NoError(t, err)
+	_, err = pg.ExecContext(t.Context(),
+		"CREATE SCHEMA "+rawSyncCleanUploadsSchema,
+	)
+	require.NoError(t, err)
+
+	output, err := executeCommand(newRootCommand(), "raw-sync", "clean-uploads")
+
+	require.Error(t, err)
+	assert.Empty(t, output)
+	assert.Contains(t, err.Error(), "raw sync schema is not provisioned")
 	_, statErr := os.Stat(filepath.Join(dataDir, "raw-upload-spool"))
 	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }

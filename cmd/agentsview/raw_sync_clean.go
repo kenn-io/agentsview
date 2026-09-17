@@ -44,14 +44,11 @@ func runRawSyncCleanUploads() (err error) {
 		return fmt.Errorf("opening PostgreSQL: %w", err)
 	}
 	defer func() { err = errors.Join(err, database.Close()) }()
-	writable, err := postgres.CheckRawSyncWritePrivileges(
+	err = postgres.CheckRawSyncWritePrivileges(
 		context.Background(), database, pgCfg.Schema,
 	)
 	if err != nil {
 		return fmt.Errorf("checking raw-sync schema: %w", err)
-	}
-	if !writable {
-		return errors.New("raw-sync schema is not writable")
 	}
 
 	store, err := postgres.NewRawUploadStore(database, appCfg.DataDir)
