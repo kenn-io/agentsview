@@ -1254,11 +1254,16 @@ func (w *Watcher) loop() {
 				if !retryRetained {
 					consecutiveFailures = 0
 				}
-				if wasEmpty && !w.eventSink.Empty() {
+				switch {
+				case retryRetained:
+					// Concurrent events must not bypass the retained retry's backoff.
 					firstPendingAt = time.Now()
 					pendingDelay = watcherRetryDelay(
 						max(w.batchDelay, w.minInterval), consecutiveFailures,
 					)
+				case wasEmpty && !w.eventSink.Empty():
+					firstPendingAt = time.Now()
+					pendingDelay = 0
 				}
 			} else {
 				lastDispatch = result.startedAt
