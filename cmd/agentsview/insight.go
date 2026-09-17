@@ -271,7 +271,7 @@ func doInsightRequest(
 	if method == http.MethodPost {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "text/event-stream")
-		if origin := insightOrigin(tr.URL); origin != "" {
+		if origin := daemonOriginURL(tr.URL); origin != "" {
 			req.Header.Set("Origin", origin)
 		}
 	}
@@ -305,19 +305,6 @@ func insightRequestBaseURL(raw string) string {
 	parsed.ForceQuery = false
 	parsed.Fragment = ""
 	return strings.TrimSuffix(parsed.String(), "/")
-}
-
-func insightOrigin(raw string) string {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return ""
-	}
-	parsed.Path = ""
-	parsed.RawPath = ""
-	parsed.RawQuery = ""
-	parsed.ForceQuery = false
-	parsed.Fragment = ""
-	return parsed.String()
 }
 
 func postInsightGenerate(

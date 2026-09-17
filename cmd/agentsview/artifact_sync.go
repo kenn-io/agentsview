@@ -157,7 +157,8 @@ func runDaemonArtifactExchange(
 	if err != nil {
 		return artifact.SyncResult{}, &daemonArtifactExchangeError{cause: err}
 	}
-	response, err := apiclient.RawRequest(baseURL, daemonArtifactExchangeHTTPClient, func(api *apiclient.Client) error {
+	requestBaseURL := baseURL + daemonRequestBasePath(tr.URL)
+	response, err := apiclient.RawRequest(requestBaseURL, daemonArtifactExchangeHTTPClient, func(api *apiclient.Client) error {
 		_, err := api.PostAPIV1ArtifactsExchangeWithResponse(ctx, &apiclient.PostAPIV1ArtifactsExchangeRequestOptions{Body: &apiclient.ArtifactExchangeRequest{Target: target, Full: new(full)}})
 		return err
 	}, func(_ context.Context, req *http.Request) error {
@@ -196,7 +197,6 @@ func validatedLoopbackDaemonURL(rawURL string) (string, error) {
 	if parsed.Scheme != "http" ||
 		parsed.User != nil ||
 		parsed.Host == "" ||
-		(parsed.Path != "" && parsed.Path != "/") ||
 		parsed.RawQuery != "" ||
 		parsed.Fragment != "" {
 		return "", errors.New("unsafe daemon endpoint")
@@ -207,7 +207,15 @@ func validatedLoopbackDaemonURL(rawURL string) (string, error) {
 		(ip == nil || !ip.IsLoopback()) {
 		return "", errors.New("daemon endpoint is not loopback")
 	}
-	return strings.TrimSuffix(parsed.String(), "/"), nil
+	return daemonOriginURL(rawURL), nil
+}
+
+func daemonRequestBasePath(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(parsed.EscapedPath(), "/")
 }
 
 func runLocalAndArtifactFolderSync(

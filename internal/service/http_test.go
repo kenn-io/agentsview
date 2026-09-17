@@ -1236,11 +1236,15 @@ func TestHTTPBackend_AuthToken(t *testing.T) {
 }
 
 func TestHTTPBackendSessionBrowserLinks(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/base/api/v1/sessions":
 			fmt.Fprint(w, `{"sessions":[{"id":"codex:session:42"}]}`)
-		case "/base/api/v1/sessions/codex:session:42", "/base/api/v1/sessions/sync":
+		case "/base/api/v1/sessions/codex:session:42":
+			fmt.Fprint(w, `{"id":"codex:session:42"}`)
+		case "/base/api/v1/sessions/sync":
+			assert.Equal(t, server.URL, r.Header.Get("Origin"))
 			fmt.Fprint(w, `{"id":"codex:session:42"}`)
 		case "/base/api/v1/search":
 			fmt.Fprint(w, `{"results":[{"session_id":"codex:session:42"}]}`)

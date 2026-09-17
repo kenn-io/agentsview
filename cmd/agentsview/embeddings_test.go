@@ -1423,6 +1423,25 @@ func TestEmbeddingsBuildRejectsBackstopWithRepair(t *testing.T) {
 	assert.ErrorContains(t, err, "if any flags in the group")
 }
 
+func TestEmbeddingsDaemonClientOriginOmitsBasePath(t *testing.T) {
+	var gotPath, gotOrigin string
+	ts := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		gotPath = r.URL.Path
+		gotOrigin = r.Header.Get("Origin")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(ts.Close)
+
+	client := embeddingsDaemonClient{baseURL: ts.URL + "/viewer"}
+	err := client.startBuild(t.Context(), vector.BuildRequest{})
+
+	require.NoError(t, err)
+	assert.Equal(t, "/viewer/api/v1/embeddings/build", gotPath)
+	assert.Equal(t, ts.URL, gotOrigin)
+}
+
 func TestEmbeddingsBuildRejectsRepairWithFullRebuild(t *testing.T) {
 	cmd := newEmbeddingsBuildCommand()
 	cmd.SetArgs([]string{"--repair-invalid", "--full-rebuild", "--yes"})

@@ -256,14 +256,15 @@ func TestRunDaemonArtifactExchangeUsesAuthenticatedLoopbackEndpoint(
 ) {
 	target := filepath.Join(t.TempDir(), "archive")
 	var got server.ArtifactExchangeRequest
-	ts := httptest.NewServer(http.HandlerFunc(func(
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter,
 		r *http.Request,
 	) {
 		require.Equal(t, http.MethodPost, r.Method)
-		require.Equal(t, "/api/v1/artifacts/exchange", r.URL.Path)
+		require.Equal(t, "/viewer/api/v1/artifacts/exchange", r.URL.Path)
 		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
-		require.Equal(t, tsURL(t, r), r.Header.Get("Origin"))
+		require.Equal(t, ts.URL, r.Header.Get("Origin"))
 		require.NoError(t, json.UnmarshalRead(r.Body, &got))
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.MarshalWrite(w, artifact.SyncResult{
@@ -275,7 +276,7 @@ func TestRunDaemonArtifactExchangeUsesAuthenticatedLoopbackEndpoint(
 
 	result, err := runDaemonArtifactExchange(
 		t.Context(),
-		transport{Mode: transportHTTP, URL: ts.URL + "/"},
+		transport{Mode: transportHTTP, URL: ts.URL + "/viewer"},
 		"test-token",
 		target,
 		true,

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -457,6 +458,21 @@ func urlFromDaemonRuntime(rt *DaemonRuntime) string {
 		host = "::1"
 	}
 	return "http://" + net.JoinHostPort(host, strconv.Itoa(rt.Port)) + rt.BasePath
+}
+
+func daemonOriginURL(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	parsed.User = nil
+	parsed.Path = ""
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	parsed.Fragment = ""
+	parsed.RawFragment = ""
+	return strings.TrimSuffix(parsed.String(), "/")
 }
 
 // newService builds the SessionService matching the detected
