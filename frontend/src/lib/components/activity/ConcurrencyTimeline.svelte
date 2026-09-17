@@ -125,6 +125,15 @@
     tooltip = null;
   }
 
+  // ActivityPage keeps this chart mounted and replaces the report in place.
+  // Slot hits are keyed by index, so a date change can drop or reuse them
+  // without mouseleave. Clear any hover box captured against the previous
+  // report before the new bars paint.
+  $effect.pre(() => {
+    void report;
+    hideTip();
+  });
+
   function fmtSelectionRange(start: number, end: number): string {
     const first = buckets[start];
     const last = buckets[end - 1];

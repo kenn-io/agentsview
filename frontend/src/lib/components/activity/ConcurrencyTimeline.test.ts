@@ -500,6 +500,71 @@ describe("ConcurrencyTimeline", () => {
     target.remove();
   });
 
+  it("dismisses the hover tooltip when the next day has not reached that time", async () => {
+    // ActivityPage keeps this chart mounted and replaces the report in place.
+    // Slot hits are keyed by index, so a date change can drop or reuse them
+    // without mouseleave. The leftover box is the bug: yesterday's 12:00-15:00
+    // hover still showing after today's live bars end at 06:00.
+    const yesterday = makeReport({
+      range_start: "2026-06-16T00:00:00Z",
+      range_end: "2026-06-17T00:00:00Z",
+      effective_end: "2026-06-17T00:00:00Z",
+      bucket_count: 5,
+      elapsed_bucket_count: 5,
+      partial: false,
+      as_of: null,
+    });
+    const { rerender, container } = render(ConcurrencyTimeline, { report: yesterday });
+    await tick();
+    const lateHit = container.querySelectorAll(".slot-hit")[4] as SVGRectElement;
+    lateHit.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+    const tip = container.querySelector(".tooltip");
+    expect(tip).toBeTruthy();
+    expect(tip!.querySelector(".tooltip-date")?.textContent).toBe("Tue 12:00–15:00");
+
+    await rerender({
+      report: makeReport({
+        range_start: "2026-06-17T00:00:00Z",
+        range_end: "2026-06-18T00:00:00Z",
+        effective_end: "2026-06-17T06:00:00Z",
+        bucket_count: 8,
+        elapsed_bucket_count: 2,
+        partial: true,
+        as_of: "2026-06-17T06:00:00Z",
+        peak: { agents: 1, at: "2026-06-17T00:00:00Z" },
+        buckets: [
+          {
+            start: "2026-06-17T00:00:00Z",
+            end: "2026-06-17T03:00:00Z",
+            max_agents: 1,
+            agent_minutes: 4,
+            output_tokens: 0,
+            cost: testMoney(0),
+          },
+          {
+            start: "2026-06-17T03:00:00Z",
+            end: "2026-06-17T06:00:00Z",
+            max_agents: 1,
+            agent_minutes: 4,
+            output_tokens: 0,
+            cost: testMoney(0),
+          },
+          {
+            start: "2026-06-17T06:00:00Z",
+            end: "2026-06-17T09:00:00Z",
+            max_agents: 0,
+            agent_minutes: 0,
+            output_tokens: 0,
+            cost: testMoney(0),
+          },
+        ],
+      }),
+    });
+    await tick();
+    expect(container.querySelector(".tooltip")).toBeNull();
+  });
+
   it("shows structured compact metrics with cost in the tooltip", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);
