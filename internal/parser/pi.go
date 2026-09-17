@@ -98,9 +98,7 @@ func parsePiLikeSession(
 		parentSessionID = idPrefix + piPersistedPathSessionID(branchedFrom)
 	} else if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" &&
 		(agent == AgentPi || agent == AgentOMP || agent == AgentPrimeAgent) {
-		if agent == AgentPrimeAgent {
-			parentSession = primeParentSessionID(path, parentSession)
-		} else if agent == AgentPi {
+		if agent == AgentPrimeAgent || agent == AgentPi {
 			parentSession = primeParentSessionID(path, parentSession)
 		}
 		parentSessionID = idPrefix + parentSession

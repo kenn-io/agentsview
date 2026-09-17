@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -347,8 +348,10 @@ func TestPiProviderDiscoversAndParsesNativeParentSession(t *testing.T) {
 		`{"type":"message","id":"p1","timestamp":"2026-07-14T06:45:54Z","message":{"role":"user","content":"root"}}`,
 		"",
 	}, "\n"))
+	parentPathJSON, err := json.Marshal(parentPath)
+	require.NoError(t, err)
 	writeSourceFile(t, childPath, strings.Join([]string{
-		`{"type":"session","version":3,"id":"child-uuid","timestamp":"2026-07-14T06:48:08.907Z","cwd":"/home/u/repos/x","parentSession":"` + parentPath + `"}`,
+		`{"type":"session","version":3,"id":"child-uuid","timestamp":"2026-07-14T06:48:08.907Z","cwd":"/home/u/repos/x","parentSession":` + string(parentPathJSON) + `}`,
 		`{"type":"message","id":"c1","timestamp":"2026-07-14T06:48:09Z","message":{"role":"user","content":"child"}}`,
 		"",
 	}, "\n"))

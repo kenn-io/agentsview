@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -568,8 +569,10 @@ func TestPiProviderNativeParentSessionUsesHeaderIdentity(t *testing.T) {
 	root := t.TempDir()
 	parentPath := filepath.Join(root, "2026-07-03T06-00-00-000Z_parent-file.jsonl")
 	childPath := filepath.Join(root, "2026-07-03T06-30-00-000Z_child-file.jsonl")
+	parentPathJSON, err := json.Marshal(parentPath)
+	require.NoError(t, err)
 	parentContent := `{"type":"session","version":3,"id":"header-id-does-not-match-filename","timestamp":"2026-07-03T06:00:00.000Z","cwd":"/repos/x"}` + "\n"
-	childContent := `{"type":"session","version":3,"id":"child","timestamp":"2026-07-03T06:30:00.000Z","cwd":"/repos/x","parentSession":"` + parentPath + `"}` + "\n"
+	childContent := `{"type":"session","version":3,"id":"child","timestamp":"2026-07-03T06:30:00.000Z","cwd":"/repos/x","parentSession":` + string(parentPathJSON) + `}` + "\n"
 	require.NoError(t, os.WriteFile(parentPath, []byte(parentContent), 0o644))
 	require.NoError(t, os.WriteFile(childPath, []byte(childContent), 0o644))
 
