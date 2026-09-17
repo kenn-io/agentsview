@@ -199,3 +199,6 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
+
+// Binary upload and numeric-header fixes pending https://github.com/doordash-oss/oapi-codegen-dd/pull/123.
+replace github.com/doordash-oss/oapi-codegen-dd/v3 => github.com/mariusvniekerk/oapi-codegen-dd/v3 v3.75.16-0.20260917163643-42d8a7200312

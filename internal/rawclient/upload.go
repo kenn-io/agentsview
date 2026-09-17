@@ -1,7 +1,6 @@
 package rawclient
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -168,16 +167,13 @@ func (c *Client) appendChunk(
 	if int64(len(chunk)) > c.chunkBytes {
 		return 0, false, fmt.Errorf("rawclient: chunk of %d bytes exceeds upload chunk size %d", len(chunk), c.chunkBytes)
 	}
+	var body apiclient.PatchAPIV1RawSyncUploadsUploadIDBody
+	body.InitFromBytes(chunk, "")
 	response, err := c.do(ctx, func(api *apiclient.Client) (*apiclient.PatchAPIV1RawSyncUploadsUploadIDResp, error) {
 		return api.PatchAPIV1RawSyncUploadsUploadIDWithResponse(ctx, &apiclient.PatchAPIV1RawSyncUploadsUploadIDRequestOptions{
 			PathParams: &apiclient.PatchAPIV1RawSyncUploadsUploadIDPath{UploadID: url.PathEscape(uploadID)},
-		}, func(_ context.Context, req *http.Request) error {
-			req.Header.Set("Upload-Offset", strconv.FormatInt(offset, 10))
-			req.Header.Set("Content-Type", "application/octet-stream")
-			req.Body = io.NopCloser(bytes.NewReader(chunk))
-			req.ContentLength = int64(len(chunk))
-			req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(chunk)), nil }
-			return nil
+			Body:       &body,
+			Header:     &apiclient.PatchAPIV1RawSyncUploadsUploadIDHeaders{UploadOffset: offset},
 		})
 	})
 	if err != nil {
