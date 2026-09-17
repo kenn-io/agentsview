@@ -47,9 +47,10 @@ func (e *Engine) preparePiebaldFailure(
 	if err != nil {
 		e.skipMu.Lock()
 		entry, found := e.piebaldFailureMemo[key]
-		if found && !entry.retryNeeded {
-			delete(e.piebaldFailureMemo, key)
-			found = false
+		if found {
+			entry.err = nil
+			entry.retryNeeded = true
+			e.piebaldFailureMemo[key] = entry
 		}
 		e.skipMu.Unlock()
 		return piebaldFailureLookup{key: key, retry: found}, found

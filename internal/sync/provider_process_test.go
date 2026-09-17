@@ -534,7 +534,7 @@ func TestProcessFileProviderPiebaldFailureMemoTracksWALButIgnoresSHM(t *testing.
 	assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
 }
 
-func TestProcessFileProviderPiebaldFailureMemoNeedsSourceIdentity(t *testing.T) {
+func TestProcessFileProviderPiebaldFailureMemoRetainsRetryAfterStatFailure(t *testing.T) {
 	root := t.TempDir()
 	dbPath, fingerprint := writeProcessProviderSource(t, root, "app.db")
 	virtualPath := dbPath + "#42"
@@ -543,20 +543,42 @@ func TestProcessFileProviderPiebaldFailureMemoNeedsSourceIdentity(t *testing.T) 
 		processFixturePiebaldSource(virtualPath), fingerprint,
 		parser.ParseOutcome{},
 	)
-	provider.parseErr = errors.New("parse failed without stat")
+	provider.parseErr = errors.New("stable parse failure")
 	engine := newPiebaldProcessFixtureEngine(t, root, provider)
-	engine.stat = func(string) (os.FileInfo, error) {
-		return nil, errors.New("stat unavailable")
-	}
+	filePath := virtualPath
+	fileSize := fingerprint.Size
+	fileMtime := fingerprint.MTimeNS
+	require.NoError(t, engine.db.UpsertSession(db.Session{
+		ID:          "piebald:42",
+		Agent:       string(parser.AgentPiebald),
+		Project:     "fixture-project",
+		Machine:     "devbox",
+		FilePath:    &filePath,
+		FileSize:    &fileSize,
+		FileMtime:   &fileMtime,
+		DataVersion: db.CurrentDataVersion(),
+	}))
 	file := parser.DiscoveredFile{Path: virtualPath, Agent: parser.AgentPiebald}
 
 	first := engine.processFile(t.Context(), file)
-	second := engine.processFile(t.Context(), file)
-	require.Error(t, first.err)
-	require.Error(t, second.err)
+	require.ErrorIs(t, first.err, provider.parseErr)
 	assert.False(t, first.suppressedFailure)
+
+	engine.stat = func(string) (os.FileInfo, error) {
+		return nil, errors.New("stat unavailable")
+	}
+	second := engine.processFile(t.Context(), file)
+	require.ErrorIs(t, second.err, provider.parseErr)
 	assert.False(t, second.suppressedFailure)
+	assert.True(t, engine.piebaldFailureMemo[virtualPath].retryNeeded)
 	assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
+
+	engine.stat = os.Stat
+	provider.parseErr = nil
+	third := engine.processFile(t.Context(), file)
+	require.NoError(t, third.err)
+	assert.False(t, third.suppressedFailure)
+	assert.True(t, provider.parseRequests[2].ForceParse)
 	assert.Empty(t, engine.piebaldFailureMemo)
 }
 
