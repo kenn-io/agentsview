@@ -1067,6 +1067,7 @@ type directStreamingProvider struct {
 	parseForce       atomic.Bool
 	source           *parser.SourceRef
 	parseErr         error
+	fingerprintErr   error
 	parseOutcome     parser.ParseOutcome
 	fingerprint      parser.SourceFingerprint
 }
@@ -1118,6 +1119,9 @@ func (provider *directStreamingProvider) SourcesForChangedPath(
 func (provider *directStreamingProvider) Fingerprint(
 	context.Context, parser.SourceRef,
 ) (parser.SourceFingerprint, error) {
+	if provider.fingerprintErr != nil {
+		return parser.SourceFingerprint{}, provider.fingerprintErr
+	}
 	return provider.fingerprint, nil
 }
 

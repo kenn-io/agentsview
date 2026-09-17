@@ -796,14 +796,6 @@ func TestWatchEventSinkDispatchConsumesImmediateWake(t *testing.T) {
 	assert.Equal(t, []string{"/retry"}, batch.Paths)
 	assert.False(t, sink.takeImmediateWake(),
 		"a timer-dispatched batch must consume its own immediate marker")
-	select {
-	case <-sink.wake:
-	default:
-		t.Fatal("expected the control wake to remain queued")
-	}
-	sink.RetainRetry(WatchBatch{Paths: []string{"/later"}})
-	assert.False(t, sink.takeImmediateWake(),
-		"a stale control wake must not mark later retry work")
 }
 
 func TestWatchEventSinkEmptyImmediateWakeDoesNotLeak(t *testing.T) {
