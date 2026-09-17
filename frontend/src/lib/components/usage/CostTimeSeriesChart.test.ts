@@ -471,12 +471,14 @@ describe("CostTimeSeriesChart", () => {
     expect(rows[1]!.textContent).toContain("medium");
     expect(rows[2]!.textContent).toContain("small");
 
+    expect(Array.from(document.querySelectorAll("text.y-label"), (label) => label.textContent)).toContain("$10.00");
     costDisplay.setPreference("EUR", 0.5);
     await tick();
     expect(document.querySelector(".usage-series-tooltip .tooltip-row")?.textContent).toContain(
       "€4.50",
     );
     expect(document.querySelectorAll("path.lc-area-path")).toHaveLength(3);
+    expect(Array.from(document.querySelectorAll("text.y-label"), (label) => label.textContent)).toContain("€5.00");
 
     unmount(component);
   });

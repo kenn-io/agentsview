@@ -818,7 +818,7 @@
   "settings_language_japanese": "日本語",
   "settings_language_no_results": "언어를 찾을 수 없습니다",
   "settings_currency_title": "통화",
-  "settings_currency_description": "표시되는 비용에 사용할 통화를 선택하세요. 환율은 직접 입력하고 업데이트합니다. 모든 표시 날짜에 적용되며 이 브라우저에 저장됩니다.",
+  "settings_currency_description": "표시되는 비용에 사용할 통화를 선택하세요.",
   "settings_currency_label": "표시 통화",
   "settings_currency_usd": "USD",
   "settings_currency_eur": "EUR",

@@ -816,7 +816,7 @@
   "settings_language_japanese": "日本語",
   "settings_language_no_results": "未找到語言",
   "settings_currency_title": "貨幣",
-  "settings_currency_description": "選擇顯示費用使用的貨幣。匯率由你提供並更新。此設定適用於所有顯示日期，並儲存在此瀏覽器中。",
+  "settings_currency_description": "選擇顯示費用使用的貨幣。",
   "settings_currency_label": "顯示貨幣",
   "settings_currency_usd": "USD",
   "settings_currency_eur": "EUR",

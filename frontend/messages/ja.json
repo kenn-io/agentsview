@@ -843,7 +843,7 @@
   "settings_language_japanese": "日本語",
   "settings_language_no_results": "言語が見つかりません",
   "settings_currency_title": "通貨",
-  "settings_currency_description": "表示するコストの通貨を選択します。為替レートは自分で入力して更新します。すべての表示日付に適用され、このブラウザに保存されます。",
+  "settings_currency_description": "表示するコストの通貨を選択します。",
   "settings_currency_label": "表示通貨",
   "settings_currency_usd": "USD",
   "settings_currency_eur": "EUR",
