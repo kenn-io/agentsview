@@ -1072,6 +1072,7 @@ type directStreamingProvider struct {
 	parseOutcome     parser.ParseOutcome
 	fingerprint      parser.SourceFingerprint
 	allowDiscover    bool
+	allowFindSource  bool
 }
 
 func (provider *directStreamingProvider) Discover(context.Context) ([]parser.SourceRef, error) {
@@ -1105,6 +1106,19 @@ func (provider *directStreamingProvider) DiscoverEach(
 		return yield(*provider.source)
 	}
 	return nil
+}
+
+func (provider *directStreamingProvider) FindSource(
+	_ context.Context, req parser.FindSourceRequest,
+) (parser.SourceRef, bool, error) {
+	if !provider.allowFindSource || provider.source == nil {
+		return parser.SourceRef{}, false, nil
+	}
+	if req.StoredFilePath == provider.source.DisplayPath ||
+		req.FingerprintKey == provider.source.FingerprintKey {
+		return *provider.source, true, nil
+	}
+	return parser.SourceRef{}, false, nil
 }
 
 func (*directStreamingProvider) WatchPlan(context.Context) (parser.WatchPlan, error) {

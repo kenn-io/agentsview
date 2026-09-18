@@ -21173,6 +21173,9 @@ func (e *Engine) processAndWriteSessionFile(
 		sessionsChanged = res.sourceCwdChanged
 		if res.cacheFailure {
 			e.cacheFailure(res.failureCacheKey, res.failureMtime)
+			if ctx.Err() == nil {
+				e.persistFailureSkipCache()
+			}
 		}
 		if res.cacheSkip && res.mtime != 0 && !res.noCacheSkip {
 			e.cacheSkip(res.skipCacheKey(path), res.mtime, res.sourceFingerprint)

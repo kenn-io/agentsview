@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"errors"
 	"os"
 	"testing"
@@ -130,6 +131,57 @@ func TestFailedReconciliationPersistsProviderFailure(t *testing.T) {
 	require.True(t, ok)
 	_, failure := decodeSkipFailureMtime(value)
 	assert.True(t, failure)
+}
+
+func TestSyncSingleSessionPersistsProviderFailure(t *testing.T) {
+	const sessionID = "single-session-failure"
+
+	database, engine, provider, _, path := newChangedPathOutcomeEngine(
+		t, parser.AgentClaude, func(string) parser.ParseOutcome {
+			return parser.ParseOutcome{}
+		},
+	)
+	provider.allowFindSource = true
+	seedActiveBaselineSource(t, database, parser.AgentClaude, sessionID, path)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	provider.fingerprint = parser.SourceFingerprint{
+		Key: path, MTimeNS: info.ModTime().UnixNano(),
+	}
+	provider.parseErr = errors.New("malformed source")
+
+	require.Error(t, engine.SyncSingleSessionContext(t.Context(), sessionID))
+	persisted, err := database.LoadSkippedFiles()
+	require.NoError(t, err)
+	value, ok := persisted[providerAgentSkipCacheKey(path, parser.AgentClaude)]
+	require.True(t, ok)
+	_, failure := decodeSkipFailureMtime(value)
+	assert.True(t, failure)
+}
+
+func TestCanceledSyncSingleSessionDoesNotPersistProviderFailure(t *testing.T) {
+	const sessionID = "single-session-canceled-failure"
+
+	database, engine, provider, _, path := newChangedPathOutcomeEngine(
+		t, parser.AgentClaude, func(string) parser.ParseOutcome {
+			return parser.ParseOutcome{}
+		},
+	)
+	provider.allowFindSource = true
+	seedActiveBaselineSource(t, database, parser.AgentClaude, sessionID, path)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	provider.fingerprint = parser.SourceFingerprint{
+		Key: path, MTimeNS: info.ModTime().UnixNano(),
+	}
+	provider.parseErr = errors.New("malformed source")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	provider.parseCancel = cancel
+	require.Error(t, engine.SyncSingleSessionContext(ctx, sessionID))
+	persisted, err := database.LoadSkippedFiles()
+	require.NoError(t, err)
+	assert.Empty(t, persisted)
 }
 
 func TestMissingSourceFailureUsesSentinelUntilSourceAppears(t *testing.T) {
