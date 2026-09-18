@@ -1971,6 +1971,25 @@ components:
         - no_code_context_count
         - runaway_tool_loop_count
       type: object
+    DbRateLimitSeries:
+      additionalProperties: false
+      properties:
+        current:
+          $ref: "#/components/schemas/ParserRateLimitSnapshot"
+        limit_id:
+          type: string
+        machine:
+          type: string
+        points:
+          items:
+            $ref: "#/components/schemas/ParserRateLimitSnapshot"
+          type: array
+      required:
+        - machine
+        - limit_id
+        - current
+        - points
+      type: object
     DbRecallEntry:
       additionalProperties: false
       properties:
@@ -4776,6 +4795,69 @@ components:
           type: array
       required:
         - ordinals
+      type: object
+    ParserRateLimitCredits:
+      additionalProperties: false
+      properties:
+        balance:
+          type:
+            - string
+            - "null"
+        has_credits:
+          type:
+            - boolean
+            - "null"
+        unlimited:
+          type:
+            - boolean
+            - "null"
+      required:
+        - has_credits
+        - unlimited
+        - balance
+      type: object
+    ParserRateLimitSnapshot:
+      additionalProperties: false
+      properties:
+        credits:
+          $ref: "#/components/schemas/ParserRateLimitCredits"
+        limit_id:
+          type: string
+        limit_name:
+          type: string
+        observed_at:
+          format: date-time
+          type: string
+        primary:
+          $ref: "#/components/schemas/ParserRateLimitWindow"
+        secondary:
+          $ref: "#/components/schemas/ParserRateLimitWindow"
+      required:
+        - observed_at
+        - limit_id
+      type: object
+    ParserRateLimitWindow:
+      additionalProperties: false
+      properties:
+        resets_at:
+          format: int64
+          type:
+            - integer
+            - "null"
+        used_percent:
+          format: double
+          type:
+            - number
+            - "null"
+        window_minutes:
+          format: int64
+          type:
+            - integer
+            - "null"
+      required:
+        - used_percent
+        - window_minutes
+        - resets_at
       type: object
     PinMessageResponse:
       additionalProperties: false
@@ -13392,6 +13474,115 @@ paths:
       summary: Push to PostgreSQL
       tags:
         - Push
+  /api/v1/rate-limits:
+    get:
+      operationId: get-api-v1-rate-limits
+      parameters:
+        - description: Filter by machine
+          explode: false
+          in: query
+          name: machine
+          schema:
+            description: Filter by machine
+            type: string
+        - description: Inclusive history start, Unix seconds
+          explode: false
+          in: query
+          name: since
+          schema:
+            description: Inclusive history start, Unix seconds
+            format: int64
+            maximum: 9223372036
+            minimum: 0
+            type: integer
+        - description: Exclusive history end, Unix seconds
+          explode: false
+          in: query
+          name: until
+          schema:
+            description: Exclusive history end, Unix seconds
+            format: int64
+            maximum: 9223372036
+            minimum: 0
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/DbRateLimitSeries"
+                type: array
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Get recent Codex rate limits
+      tags:
+        - Usage
   /api/v1/raw-sync/manifests:
     post:
       operationId: post-api-v1-raw-sync-manifests

@@ -17,6 +17,9 @@ import (
 )
 
 func (s *Server) registerUsageRoutes() {
+	rates := huma.NewGroup(s.api, "/api/v1")
+	configureRouteGroup(rates, "Usage")
+	s.get(rates, "/rate-limits", "Get recent Codex rate limits", s.humaRateLimits)
 	group := huma.NewGroup(s.api, "/api/v1/usage")
 	configureRouteGroup(group, "Usage")
 

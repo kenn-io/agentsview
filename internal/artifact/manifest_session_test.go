@@ -14,7 +14,7 @@ import (
 
 // TestManifestSessionMatchesDBSessionWireFormat pins the manifest wire DTO to
 // the JSON-visible fields of db.Session with a fully populated value: every
-// exported field gets a distinct non-zero value, so a missing, extra, or
+// JSON-visible field gets a distinct non-zero value, so a missing, extra, or
 // transposed DTO field changes the canonical JSON and fails the comparison.
 //
 // If this test fails after adding a field to db.Session, that is the wire
@@ -92,16 +92,15 @@ func TestManifestQualitySignalsMatchesDBWireFormat(t *testing.T) {
 	assert.Nil(t, manifestQualitySignalsFromDB(nil))
 }
 
-// populateWireFixture fills every exported field of a struct with a distinct
+// populateWireFixture fills every JSON-visible field of a struct with a distinct
 // deterministic non-zero value so field transpositions are detectable.
 func populateWireFixture(t *testing.T, v reflect.Value, seed int) {
 	t.Helper()
 	for i := 0; i < v.NumField(); i++ {
 		field := v.Field(i)
-		if !field.CanSet() {
-			continue
+		if field.CanSet() && v.Type().Field(i).Tag.Get("json") != "-" {
+			setWireFixtureValue(t, field, seed+i)
 		}
-		setWireFixtureValue(t, field, seed+i)
 	}
 }
 

@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // ErrInvalidCursor is returned when a cursor cannot be decoded or verified.
@@ -301,6 +303,8 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 
 // Session represents a row in the sessions table.
 type Session struct {
+	RateLimits []parser.RateLimitSnapshot `json:"-"`
+
 	// WebURL is a client-derived browser link, never persisted.
 	WebURL                string  `json:"web_url,omitempty"`
 	ID                    string  `json:"id"`
@@ -1536,7 +1540,7 @@ func (db *DB) upsertSession(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	writer := db.getWriter()
-	if !db.usageOnlyStorage() {
+	if !db.usageOnlyStorage() && s.RateLimits == nil {
 		return upsertSessionExec(
 			writer.Exec,
 			writer.QueryRow,
@@ -1563,8 +1567,10 @@ func (db *DB) upsertSession(
 	if err != nil {
 		return result, err
 	}
-	if err := settleUsageOnlySessionTx(tx, s.ID); err != nil {
-		return result, err
+	if db.usageOnlyStorage() {
+		if err := settleUsageOnlySessionTx(tx, s.ID); err != nil {
+			return result, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("committing session upsert: %w", err)
@@ -1653,6 +1659,11 @@ func upsertSessionExec(
 	if err != nil {
 		return sessionUpsertResult{},
 			fmt.Errorf("upserting session %s: %w", s.ID, err)
+	}
+	if s.Agent == string(parser.AgentCodex) {
+		if err := writeRateLimits(exec, s.ID, s.Machine, s.RateLimits, true); err != nil {
+			return sessionUpsertResult{}, err
+		}
 	}
 	return result, nil
 }
@@ -2773,6 +2784,7 @@ type MessageTokenUsageUpdate struct {
 }
 
 type IncrementalSessionUpdate struct {
+	RateLimits               []parser.RateLimitSnapshot
 	EndedAt                  *string
 	TerminationStatus        *string
 	MsgCount                 int
@@ -3023,6 +3035,15 @@ func updateSessionIncrementalTx(
 		return fmt.Errorf(
 			"incremental update session %s: updated %d rows", id, rows,
 		)
+	}
+	if len(update.RateLimits) > 0 {
+		var machine, agent string
+		if err := tx.QueryRow("SELECT machine, agent FROM sessions WHERE id = ?", id).Scan(&machine, &agent); err != nil {
+			return err
+		}
+		if agent == string(parser.AgentCodex) {
+			return writeRateLimits(tx.Exec, id, machine, update.RateLimits, false)
+		}
 	}
 	return nil
 }

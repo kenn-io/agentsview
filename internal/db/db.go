@@ -497,7 +497,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // header ID, and native Pi sessions with a resolved parent are classified as
 // forks. Re-parse stored native Pi sessions to repair lineage edges and fork
 // classification.)
-const dataVersion = 110
+// (111: Codex token-count events retain rate-limit windows and credits.)
+const dataVersion = 111
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

@@ -15,6 +15,8 @@ const archiveMachineKeysSQL = `SELECT machine FROM sessions
 	UNION SELECT machine FROM session_project_identity_snapshots
 	UNION SELECT machine FROM local_session_source_baselines`
 
+const rateLimitMachineKeysSQL = ` UNION SELECT machine FROM rate_limit_snapshots`
+
 type MachineIdentityCandidate struct {
 	Machine       string
 	Sessions      int
@@ -24,10 +26,20 @@ type MachineIdentityCandidate struct {
 // ListMachineIdentityCandidates includes orphaned and trashed sessions and
 // machines retained only in rules, so ownership can be selected before startup.
 func (db *DB) ListMachineIdentityCandidates(ctx context.Context) ([]MachineIdentityCandidate, error) {
+	query := archiveMachineKeysSQL
+	var hasRateLimits bool
+	if err := db.getReader().QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'rate_limit_snapshots'
+	)`).Scan(&hasRateLimits); err != nil {
+		return nil, err
+	}
+	if hasRateLimits {
+		query += rateLimitMachineKeysSQL
+	}
 	rows, err := db.getReader().QueryContext(ctx, `SELECT machines.machine,
 		(SELECT count(*) FROM sessions WHERE machine = machines.machine),
 		(SELECT count(*) FROM worktree_project_mappings WHERE machine = machines.machine)
-		FROM (`+archiveMachineKeysSQL+`) machines ORDER BY machines.machine`)
+		FROM (`+query+`) machines ORDER BY machines.machine`)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +101,7 @@ func (db *DB) adoptMachineIdentity(
 		if explicit {
 			for _, machine := range machines {
 				var known bool
-				if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM (`+archiveMachineKeysSQL+`)
+				if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM (`+archiveMachineKeysSQL+rateLimitMachineKeysSQL+`)
 					WHERE machine = ?) OR EXISTS (SELECT 1 FROM pg_sync_state WHERE key = ?)`, machine, MachineAliasKeyPrefix+machine).Scan(&known); err != nil {
 					return err
 				}
@@ -136,7 +148,7 @@ func (db *DB) adoptMachineIdentity(
 
 // unownedMachineKeysTx lists named machines that no recorded owner explains.
 func unownedMachineKeysTx(ctx context.Context, tx *sql.Tx, identity string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT machine FROM (`+archiveMachineKeysSQL+`)
+	rows, err := tx.QueryContext(ctx, `SELECT machine FROM (`+archiveMachineKeysSQL+rateLimitMachineKeysSQL+`)
 		WHERE machine NOT IN ('', 'local', ?) ORDER BY machine`, identity)
 	if err != nil {
 		return nil, fmt.Errorf("checking archive ownership: %w", err)
@@ -189,6 +201,7 @@ func adoptMachineRowsTx(ctx context.Context, tx *sql.Tx, machine, identity strin
 	for _, table := range []string{
 		"worktree_project_mappings", "project_identity_observations",
 		"session_project_identity_snapshots", "local_session_source_baselines",
+		"rate_limit_snapshots",
 	} {
 		if _, err := tx.ExecContext(ctx, "UPDATE "+table+" SET machine = ? WHERE machine = ?", identity, machine); err != nil {
 			return fmt.Errorf("adopting %s: %w", table, err)

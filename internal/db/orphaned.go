@@ -400,6 +400,14 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 			return fmt.Errorf("copying sync state: %w", err)
 		}
 	}
+	if oldDBHasTable(ctx, tx, "rate_limit_snapshots") {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.rate_limit_snapshots
+			SELECT * FROM old_db.rate_limit_snapshots r WHERE NOT EXISTS (
+				SELECT 1 FROM main.sessions s WHERE s.id = r.source_id AND s.deleted_at IS NULL
+			)`); err != nil {
+			return fmt.Errorf("copying archived rate limits: %w", err)
+		}
+	}
 	if oldDBHasTable(ctx, tx, "subagent_parent_repair_queue") {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO main.subagent_parent_repair_queue (session_id)
