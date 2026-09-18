@@ -19,7 +19,8 @@ function waitForApiResponse(page: Page, method: string, pathname: string) {
       return response.request().method() === method && url.pathname === pathname && response.ok();
     })
     .then(async (response) => {
-      await response.body();
+      // Synchronize completion without depending on Chromium retaining the response body.
+      expect(await response.finished()).toBeNull();
       return response;
     });
 }
