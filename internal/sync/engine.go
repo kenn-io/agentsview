@@ -21205,11 +21205,9 @@ func (e *Engine) processAndWriteSessionFile(
 	defer res.releaseStaged()
 	if res.err != nil {
 		sessionsChanged = res.sourceCwdChanged
-		if res.cacheFailure {
+		if res.cacheFailure && ctx.Err() == nil {
 			e.cacheFailure(res.failureCacheKey, res.failureMtime)
-			if ctx.Err() == nil {
-				e.persistFailureSkipCache()
-			}
+			e.persistFailureSkipCache()
 		}
 		if res.cacheSkip && res.mtime != 0 && !res.noCacheSkip {
 			e.cacheSkip(res.skipCacheKey(path), res.mtime, res.sourceFingerprint)

@@ -182,6 +182,8 @@ func TestCanceledSyncSingleSessionDoesNotPersistProviderFailure(t *testing.T) {
 	persisted, err := database.LoadSkippedFiles()
 	require.NoError(t, err)
 	assert.Empty(t, persisted)
+	assert.NotContains(t, engine.SnapshotSkipCache(),
+		providerAgentSkipCacheKey(path, parser.AgentClaude))
 }
 
 func TestMissingSourceFailureUsesSentinelUntilSourceAppears(t *testing.T) {
