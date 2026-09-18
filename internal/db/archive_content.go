@@ -296,6 +296,7 @@ func usageOnlyMessages(messages []Message) []Message {
 			continue
 		}
 		message.Content = ""
+		message.VisibleText = nil
 		message.ThinkingText = ""
 		message.ToolCalls = usageOnlyToolCalls(message.ToolCalls)
 		message.ToolResults = nil
@@ -373,9 +374,7 @@ func usageOnlySubagentLinks(
 // from rows the write path only updates in part: session titles the upsert
 // leaves untouched and pin notes a message replacement carries across.
 func clearUsageOnlyTextTx(
-	tx interface {
-		Exec(string, ...any) (sql.Result, error)
-	},
+	tx transactionQueries,
 	sessionID string,
 ) error {
 	if _, err := tx.Exec(
@@ -401,7 +400,7 @@ func clearUsageOnlyTextTx(
 		}
 	}
 
-	return nil
+	return clearUsageOnlyConversationTx(tx, sessionID)
 }
 
 // settleUsageOnlySessionTx brings an existing session row that predates the
@@ -597,6 +596,9 @@ func compactCopiedSessionsForUsageTx(
 	ctx context.Context, tx *sql.Tx, tempIDsTable string,
 ) error {
 	inCopied := ` IN (SELECT id FROM ` + tempIDsTable + `)`
+	if _, err := tx.ExecContext(ctx, `UPDATE conversation_messages SET body=NULL,digest='',text_bytes=0,gap='archive_content_excluded' WHERE session_id`+inCopied); err != nil {
+		return err
+	}
 	statements := []struct {
 		label string
 		sql   string
@@ -661,6 +663,9 @@ func compactCopiedSessionsForUsageTx(
 		return fmt.Errorf("listing copied sessions: %w", err)
 	}
 	for _, id := range ids {
+		if err := clearUsageOnlyConversationTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
+			return err
+		}
 		if err := settleUsageOnlySignalsTx(tx, id); err != nil {
 			return fmt.Errorf("settling copied signals for %s: %w", id, err)
 		}

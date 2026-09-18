@@ -18,6 +18,31 @@ computes later with its pricing catalog. A compatible upstream implementation,
 independent parser, or recorded fixture is useful evidence for a format, but is
 called out when it is not the product's own producer source.
 
+## Conversation export coverage
+
+Conversation export needs a provider-owned proof that a stored message is
+user-visible prose. `claude` and `codex` are the only proved providers in the
+current parser. Their limits are recorded in their sections below.
+
+The compatible parser routes `cowork`, `qoder`, and `icodemate` through Claude
+parser code, and `traex` through Codex parser code. Those routes deliberately
+clear the conversation projection because shared parser structure is not
+evidence that the other producer has the same visibility and native-identity
+contracts.
+
+The remaining provider keys are explicitly unsupported and leave `VisibleText`
+nil and `ConversationSourceID` empty: `openclaude`, `copilot`, `gemini`,
+`gemini-apps`, `mimocode`, `opencode`, `opencodereview`, `kilo`, `kilo-legacy`,
+`openhands`, `cursor`, `cursor-ide`, `iflow`, `amp`, `zencoder`,
+`vscode-copilot`, `windsurf`, `trae`, `visualstudio-copilot`, `pi`, `tau`,
+`prime-agent`, `omp`, `qwen`, `commandcode`, `deepseek-tui`, `deepseek-harness`,
+`openclaw`, `qclaw`, `kimi`, `kimi-work`, `claude-ai`, `chatgpt`, `kiro`,
+`kiro-ide`, `cortex`, `hermes`, `grok`, `goose`, `workbuddy`, `forge`, `devin`,
+`piebald`, `warp`, `positron`, `posit-assistant`, `zcode`, `antigravity`,
+`antigravity-cli`, `vibe`, `zed`, `qwenpaw`, `gptme`, `shelley`, `aider`,
+`reasonix`, `evener`, `roocode`, `poolside`, `omnigent`, `codebuff`, and the
+legacy `freebuff` alias.
+
 ## Pricing Catalog Evidence
 
 Agentsview uses Pydantic GenAI Prices v2 as its historical and conditional
@@ -229,13 +254,33 @@ add an archived or maintained mirror without replacing the original identity.
 - **Agentsview:** `internal/parser/claude.go` and
   `internal/parser/claude_provider.go`; local observations and fixtures are
   the implementation evidence for fields not documented upstream. Reverified
-  2026-07-22 against local CLI transcripts: `type=attachment` records with
-  `attachment.type=queued_command` are written mid-stream, in file order
-  between consecutive `assistant` records that share one `message.id`, so a
-  queued command can fall inside a streaming run that straddles an incremental
-  sync boundary. Reverified 2026-07-23 against the transcript shape reported
-  in [#1238](https://github.com/kenn-io/agentsview/issues/1238): Claude Code
-  for VS Code writes standalone `user` records wrapped in `ide_opened_file` or
+  2026-09-15 with synthetic parser fixtures that the conversation-text
+  projection reads the original content shape separately from the existing UI
+  flattening. String content and ordered `text` blocks contribute prose;
+  thinking, redacted-thinking, image, document, tool-call, and tool-result
+  blocks do not. The non-text block types are defined by the
+  [Messages API](https://platform.claude.com/docs/en/api/go/messages). A mixed
+  image/text prompt retains its text. Recognized system records produce an
+  explicit empty projection, while an unfamiliar block makes the projection
+  unproven. User records use their entry `uuid` as native source identity.
+  Assistant streaming chunks use their shared `message.id`, not the last
+  chunk's `uuid`; non-consecutive reuse is identity-ambiguous. Queued commands
+  without a `uuid` have no invented identity. Assistant records flagged
+  `isApiErrorMessage` produce no conversation prose. This source flag appears
+  in the public transcript reproduction in
+  [Claude Code #40305](https://github.com/anthropics/claude-code/issues/40305);
+  the compacted parser record must retain it. Synthetic fixtures exercise
+  both extraction paths and the normal parser-to-export path, including
+  content gaps. These are local format observations because Claude Code does
+  not publish its transcript schema. The queued-command behavior was
+  reverified 2026-07-22 against local CLI transcripts: `type=attachment`
+  records with `attachment.type=queued_command` are written mid-stream, in
+  file order between consecutive `assistant` records that share one
+  `message.id`, so a queued command can fall inside a streaming run that
+  straddles an incremental sync boundary. Reverified 2026-07-23 against the
+  transcript shape reported in
+  [#1238](https://github.com/kenn-io/agentsview/issues/1238): Claude Code for
+  VS Code writes standalone `user` records wrapped in `ide_opened_file` or
   `ide_selection` tags for editor context rather than operator prompts.
   Reverified 2026-07-24 against local CLI transcripts: current transcripts
   carry two top-level launch/prompt-provenance keys that the parser now
@@ -482,17 +527,28 @@ add an archived or maintained mirror without replacing the original identity.
 
 - **Agentsview:** `internal/parser/codex.go` and
   `internal/parser/codex_provider.go`; usage is taken from the last-turn
-  counters rather than repeatedly counting cumulative totals. Fork and
-  subagent rollouts can begin with a re-stamped copy of the parent's
-  transcript, including its `token_count` records. Agentsview follows the
-  explicit parent id, compares the ordered `turn_context.turn_id` sequence as
-  opaque identifiers, and discards the leading turns also present in the
-  parent. UUID versions and identifier bytes carry no chronological meaning;
-  the first turn id absent from the parent begins child-owned usage. Missing
-  parents fail open, and child-only subagent transcripts are left unchanged. A
-  local corpus measured 2026-09-07 contained 2,044 Codex JSONL files, with
-  1,565 carrying `source.subagent` and none carrying `guardian_review`; the
-  published producer source supplies the guardian format evidence. Legacy
+  counters rather than repeatedly counting cumulative totals. Reverified
+  2026-09-15 against the pinned protocol types and synthetic parser fixtures:
+  a `message` response item carries an optional native `id`, a role, typed
+  content blocks, and an optional assistant `phase`. The conversation-text
+  projection accepts user `input_text` and assistant `output_text` only when
+  the assistant phase is `commentary` or `final_answer`; images and tool items
+  contribute no prose. Missing phases, unfamiliar blocks, and legacy untyped
+  shapes remain unproven instead of being treated as visible. Native source
+  identity comes only from the response item's optional `id`, never its
+  timestamp, ordinal, or text. The shared TraeX provider path is structurally
+  compatible, but this Codex evidence does not independently establish TraeX
+  conversation-export coverage. Codex fork and subagent rollouts can begin
+  with a re-stamped copy of the parent's transcript, including its
+  `token_count` records. Agentsview follows the explicit parent id, compares
+  the ordered `turn_context.turn_id` sequence as opaque identifiers, and
+  discards the leading turns also present in the parent. UUID versions and
+  identifier bytes carry no chronological meaning; the first turn id absent
+  from the parent begins child-owned usage. Missing parents fail open, and
+  child-only subagent transcripts are left unchanged. A local corpus measured
+  2026-09-07 contained 2,044 Codex JSONL files, with 1,565 carrying
+  `source.subagent` and none carrying `guardian_review`; the published
+  producer source supplies the guardian format evidence. Legacy
   `session_index.jsonl` files from aliased homes also travel through remote
   archive export and import. Reverified on 2026-09-07 with
   `TestRemoteCodexAliasTitleSurvivesArchiveImport`, which checks the imported
