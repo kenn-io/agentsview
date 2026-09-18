@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"path/filepath"
 	"strings"
 )
 
@@ -13,35 +12,6 @@ import (
 // value verbatim.
 
 const augureDesktopIDPrefix = string(AgentAugureDesktop) + ":"
-
-// augureDesktopForkMarker is the directory name an archive root must carry
-// for the Augure Desktop provider to claim it. The marker is the store's own
-// root name, not the schema: a generic state.db layout stays with Hermes
-// (lesson 75: schema shape is never a format marker).
-const augureDesktopForkMarker = ".augure-desktop"
-
-// augureDesktopForkMarkerWindows is the marker's Windows spelling, matching
-// the fork's %LOCALAPPDATA%\augure-desktop data root (no leading dot; see
-// hermes_constants.py's DEFAULT_HERMES_HOME_DIRNAME_WINDOWS).
-const augureDesktopForkMarkerWindows = "augure-desktop"
-
-// isAugureDesktopForkRoot reports whether the path resolves under an
-// augure-desktop-named directory.
-func isAugureDesktopForkRoot(root string) bool {
-	cleaned := filepath.Clean(root)
-	for {
-		base := filepath.Base(cleaned)
-		if base == augureDesktopForkMarker ||
-			base == augureDesktopForkMarkerWindows {
-			return true
-		}
-		parent := filepath.Dir(cleaned)
-		if parent == cleaned {
-			return false
-		}
-		cleaned = parent
-	}
-}
 
 // relabelHermesResultAsAugureDesktop rewrites a Hermes-format parse result
 // onto the Augure Desktop agent: the session and parent IDs gain the

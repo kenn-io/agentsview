@@ -724,7 +724,9 @@ var Registry = []AgentDef{
 		// Distinct agent because session IDs are a separate namespace from
 		// ~/.hermes and the products version their state.db independently.
 		// The fork marker is the store's own root name (.augure-desktop),
-		// not the schema: the provider declines roots without it.
+		// not the schema: default discovery is marker-named so a stock
+		// Hermes store is never claimed, while explicitly configured roots
+		// are trusted as given (TraeX precedent).
 		Type:        AgentAugureDesktop,
 		DisplayName: "Augure Desktop",
 		EnvVar:      "AUGURE_DESKTOP_DIR",

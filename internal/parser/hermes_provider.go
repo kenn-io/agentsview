@@ -58,65 +58,16 @@ func newHermesProviderFactory(def AgentDef) ProviderFactory {
 }
 
 // newAugureDesktopProviderFactory serves Augure Desktop v3's Hermes-schema
-// state.db with the Hermes provider, relabeling every parsed session onto
-// the augure-desktop: ID prefix. Configured roots are accepted as given
-// (the user pointed the agent at them deliberately); the fork gate exists
-// so default discovery under a Hermes root can never claim a stock store.
+// state.db with the shared Hermes provider, relabeling every parsed session
+// onto the augure-desktop: ID prefix. Configured roots are accepted as
+// given, matching the TraeX fork: the defaults are fork-marker-named by
+// construction, so auto-discovery can never hand this provider a stock
+// Hermes-shaped store, and an explicitly configured root — a restored
+// backup or custom install dir — is the user's call.
 func newAugureDesktopProviderFactory(def AgentDef) ProviderFactory {
-	return &augureDesktopProviderFactory{
+	return hermesProviderFactory{
 		def:  cloneAgentDef(def),
 		spec: hermesProviderSpecForAgent(AgentAugureDesktop),
-		fallback: hermesProviderFactory{
-			def:  cloneAgentDef(def),
-			spec: hermesProviderSpecForAgent(AgentHermes),
-		},
-	}
-}
-
-// augureDesktopProviderFactory is the Hermes provider factory plus the
-// fork-marker gate: roots without an .augure-desktop path component are
-// silently empty rather than claimed, so a root that merely looks like
-// Hermes (a state.db in a non-fork path) stays with the Hermes agent.
-type augureDesktopProviderFactory struct {
-	def      AgentDef
-	spec     hermesProviderSpec
-	fallback hermesProviderFactory
-}
-
-func (f *augureDesktopProviderFactory) Definition() AgentDef {
-	return cloneAgentDef(f.def)
-}
-
-func (f *augureDesktopProviderFactory) Capabilities() Capabilities {
-	return hermesProviderCapabilities()
-}
-
-func (f *augureDesktopProviderFactory) NewProvider(
-	cfg ProviderConfig,
-) Provider {
-	cfg = cfg.Clone()
-	var roots []string
-	for _, root := range cfg.Roots {
-		if isAugureDesktopForkRoot(root) {
-			roots = append(roots, root)
-		}
-	}
-	if len(roots) == 0 {
-		// Every configured root was rejected: serve the empty root set
-		// through the Hermes factory so the provider still satisfies the
-		// capability contract (empty discovery, valid WatchPlan) without
-		// claiming anything.
-		empty := f.fallback
-		empty.def = cloneAgentDef(f.def)
-		return empty.NewProvider(ProviderConfig{Roots: nil, Machine: cfg.Machine})
-	}
-	cfg.Roots = roots
-	return &hermesProvider{
-		Def:     cloneAgentDef(f.def),
-		Caps:    hermesProviderCapabilities(),
-		Config:  cfg,
-		spec:    f.spec,
-		sources: newHermesSourceSet(f.spec.agent, cfg.Roots),
 	}
 }
 

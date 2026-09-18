@@ -177,10 +177,11 @@ func TestAugureDesktopProviderParsesStateDB(t *testing.T) {
 	assert.Equal(t, "List the parser files.", result.Messages[0].Content)
 }
 
-// TestAugureDesktopForkGateDeclinesNonForkRoots is the negative test: a root
-// that looks like Hermes (a state.db in a non-.augure-desktop path) is NOT
-// claimed by this provider.
-func TestAugureDesktopForkGateDeclinesNonForkRoots(t *testing.T) {
+// TestAugureDesktopAcceptsConfiguredCustomRoot pins the reviewer-trust
+// contract: an explicitly configured root is accepted even without the
+// .augure-desktop marker (a restored backup or custom install dir), because
+// auto-discovery only ever proposes marker-named defaults.
+func TestAugureDesktopAcceptsConfiguredCustomRoot(t *testing.T) {
 	root := t.TempDir()
 	createAugureDesktopStateDB(t, root)
 
@@ -192,27 +193,19 @@ func TestAugureDesktopForkGateDeclinesNonForkRoots(t *testing.T) {
 
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
-	assert.Empty(t, sources,
-		"a stock Hermes-shaped root must stay with the Hermes agent")
-
-	plan, err := provider.WatchPlan(context.Background())
-	require.NoError(t, err)
-	assert.Empty(t, plan.Roots)
+	require.Len(t, sources, 1,
+		"a configured custom root must be parsed, not silently dropped")
+	assert.Equal(t, AgentAugureDesktop, sources[0].Provider)
 }
 
-// TestAugureDesktopForkGateAcceptsWindowsMarker covers the Windows spelling
-// of the fork marker (%LOCALAPPDATA%\augure-desktop, no leading dot).
-func TestAugureDesktopForkGateAcceptsWindowsMarker(t *testing.T) {
-	assert.True(t, isAugureDesktopForkRoot(
-		"/Users/u/AppData/Local/augure-desktop",
-	))
-	assert.True(t, isAugureDesktopForkRoot("/home/u/.augure-desktop"))
-	assert.True(t, isAugureDesktopForkRoot(
-		"/home/u/.augure-desktop/sessions",
-	))
-	assert.False(t, isAugureDesktopForkRoot("/home/u/.hermes/sessions"))
-	assert.False(t, isAugureDesktopForkRoot("/home/u/.augure/sessions"))
-	assert.False(t, isAugureDesktopForkRoot("/home/u/augure-desktop-like"))
+// TestAugureDesktopDefaultRootSpelling covers the two default root spellings
+// (the POSIX .augure-desktop and the Windows %LOCALAPPDATA%\augure-desktop)
+// that keep default discovery disjoint from Hermes without any runtime gate.
+func TestAugureDesktopDefaultRootSpelling(t *testing.T) {
+	spec, ok := AgentByType(AgentAugureDesktop)
+	require.True(t, ok)
+	assert.Equal(t, []string{".augure-desktop", "AppData/Local/augure-desktop"},
+		spec.DefaultDirs)
 }
 
 // TestAugureDesktopSessionIDRelabel guards the prefix swap semantics shared

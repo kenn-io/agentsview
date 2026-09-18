@@ -714,8 +714,9 @@ add an archived or maintained mirror without replacing the original identity.
   `internal/parser/hermes_provider.go`) onto the `augure-desktop:` ID prefix
   through the `hermesProviderSpec` seam; `internal/sync` treats it like Hermes
   for fingerprint-hash freshness and provider fingerprint file info. The
-  provider declines roots without the fork marker so a stock Hermes-shaped
-  store stays with Hermes. Remote sync is excluded for the same
+  default roots are marker-named, which keeps default discovery disjoint
+  from Hermes without a runtime gate; explicitly configured roots are
+  accepted as given (TraeX precedent). Remote sync is excluded for the same
   raw-state.db/WAL reasons the registry entry documents.
 
 ## GitHub Copilot CLI (`copilot`)
