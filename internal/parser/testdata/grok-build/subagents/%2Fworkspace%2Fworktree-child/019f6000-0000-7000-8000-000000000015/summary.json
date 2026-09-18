@@ -1,0 +1,17 @@
+{
+  "info": {
+    "id": "019f6000-0000-7000-8000-000000000015",
+    "cwd": "/workspace/worktree-child"
+  },
+  "session_summary": "Patch the parser in isolation",
+  "generated_title": "Worktree child",
+  "session_kind": "subagent",
+  "created_at": "2026-07-18T10:09:00Z",
+  "updated_at": "2026-07-18T10:12:00Z",
+  "num_messages": 2,
+  "num_chat_messages": 2,
+  "current_model_id": "grok-4.5",
+  "git_root_dir": "/workspace/project",
+  "head_branch": "main",
+  "agent_name": "grok-build"
+}

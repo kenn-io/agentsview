@@ -17,20 +17,21 @@ import (
 )
 
 type grokSummaryFields struct {
-	Summary            string
-	FirstPrompt        string
-	ModelID            string
-	CreatedAt          string
-	UpdatedAt          string
-	LastActiveAt       string
-	Hostname           string
-	NumMessages        int
-	WorktreeLabel      string
-	GitRootDir         string
-	Cwd                string
-	HeadBranch         string
-	ParentSessionID    string
-	SourceWorkspaceDir string
+	Summary             string
+	FirstPrompt         string
+	ModelID             string
+	CreatedAt           string
+	UpdatedAt           string
+	LastActiveAt        string
+	Hostname            string
+	NumMessages         int
+	WorktreeLabel       string
+	GitRootDir          string
+	Cwd                 string
+	HeadBranch          string
+	ParentSessionID     string
+	SourceWorkspaceDir  string
+	ProducerSessionKind string
 }
 
 type grokSignalMetrics struct {
@@ -85,7 +86,12 @@ func ParseGrokSummary(
 	endedAt := grokEndedAt(summary)
 	parentSessionID := strings.TrimSpace(summary.ParentSessionID)
 	relationshipType := RelNone
-	if parentSessionID != "" {
+	if subagentParent, _, ok := grokSubagentParentFromDisk(
+		sessionDir, summary.ProducerSessionKind,
+	); ok {
+		parentSessionID = "grok:" + subagentParent
+		relationshipType = RelSubagent
+	} else if parentSessionID != "" {
 		parentSessionID = "grok:" + parentSessionID
 		relationshipType = RelFork
 	}
@@ -104,6 +110,7 @@ func ParseGrokSummary(
 	}
 	enrichGrokMessageTimestamps(messages, timestampAnchors)
 	enrichGrokToolResultEvents(messages, timestampAnchors)
+	grokAttachSpawnedSubagents(messages)
 
 	firstPrompt := ""
 	for _, msg := range messages {
@@ -1135,6 +1142,9 @@ func decodeGrokSummary(data []byte) grokSummaryFields {
 		),
 		SourceWorkspaceDir: strings.TrimSpace(
 			root.Get("source_workspace_dir").String(),
+		),
+		ProducerSessionKind: strings.TrimSpace(
+			root.Get("session_kind").String(),
 		),
 	}
 }
