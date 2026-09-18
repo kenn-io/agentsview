@@ -53,7 +53,8 @@ type workerResult struct {
 	// /sync and /resync responses keep result parity with in-process passes
 	// (total sessions, orphan counts, warnings, anomalies). The summary
 	// counters above remain the authoritative status inputs.
-	Stats *sync.SyncStats `json:"stats,omitempty"`
+	Stats            *sync.SyncStats  `json:"stats,omitempty"`
+	FailureSkipCache map[string]int64 `json:"failureSkipCache,omitempty"`
 }
 
 // newSyncWorkerCommand registers the hidden self-exec'd worker. The daemon runs
@@ -275,6 +276,7 @@ func runSyncWorkerResyncBuild(
 
 	_, stats, buildErr := engine.ResyncBuild(ctx, onProgress)
 	result := resyncBuildResultFromStats(ctx, stats, buildErr)
+	result.FailureSkipCache = engine.SnapshotFailureSkipCache()
 	emit(workerLine{Result: &result})
 	if result.Status != "ok" || !result.DiscoveryComplete {
 		if buildErr != nil {

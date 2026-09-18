@@ -14340,6 +14340,38 @@ func (e *Engine) SnapshotRetrySafeSkipCache() map[string]int64 {
 	return out
 }
 
+// SnapshotFailureSkipCache returns encoded failure markers that can survive a
+// failed replacement-database build in another process.
+func (e *Engine) SnapshotFailureSkipCache() map[string]int64 {
+	e.skipMu.RLock()
+	defer e.skipMu.RUnlock()
+	out := make(map[string]int64)
+	for key, value := range e.skipCache {
+		if _, failure := decodeSkipFailureMtime(value); failure {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+// MergeFailureSkipCache merges retry-safe failure markers and persists them
+// through the active archive writer.
+func (e *Engine) MergeFailureSkipCache(entries map[string]int64) int {
+	if len(entries) == 0 || e.ephemeral {
+		return 0
+	}
+	e.skipMu.Lock()
+	merged := mergeFailureSkipCache(e.skipCache, entries)
+	if merged > 0 {
+		e.skipCacheDirty = true
+	}
+	e.skipMu.Unlock()
+	if merged == 0 {
+		return 0
+	}
+	return e.persistFailureSkipCache()
+}
+
 func (e *Engine) markRetryUnsafeSkipSource(path string) {
 	if path == "" {
 		return
