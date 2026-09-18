@@ -622,6 +622,10 @@ func TestCopiedTranscriptsDropUnrecoverableToolText(t *testing.T) {
 			message: Message{Role: "user", Model: "model-a", Content: "unpaired agent result"},
 		},
 		{
+			name: "legacy-augure-code", agent: "augure-code", version: 104,
+			message: Message{Role: "user", Model: "model-a", Content: "unpaired agent result"},
+		},
+		{
 			name: "legacy-zencoder", agent: "zencoder", version: 104,
 			message: Message{Role: "user", IsSystem: true, Content: "system text from a tool result"},
 		},
@@ -634,6 +638,10 @@ func TestCopiedTranscriptsDropUnrecoverableToolText(t *testing.T) {
 			message: Message{Role: "assistant", Content: "ordinary reply"}, want: "ordinary reply",
 		},
 		{
+			name: "legacy-augure-code-reply", agent: "augure-code", version: 104,
+			message: Message{Role: "assistant", Content: "ordinary reply"}, want: "ordinary reply",
+		},
+		{
 			name: "legacy-zencoder-prompt", agent: "zencoder", version: 104,
 			message: Message{Role: "user", Content: "ordinary prompt"}, want: "ordinary prompt",
 		},
@@ -643,6 +651,10 @@ func TestCopiedTranscriptsDropUnrecoverableToolText(t *testing.T) {
 		},
 		{
 			name: "marked-traex", agent: "traex", version: 105,
+			message: Message{Role: "user", Content: "ordinary prompt"}, want: "ordinary prompt",
+		},
+		{
+			name: "marked-augure-code", agent: "augure-code", version: 105,
 			message: Message{Role: "user", Content: "ordinary prompt"}, want: "ordinary prompt",
 		},
 		{

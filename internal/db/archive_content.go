@@ -530,13 +530,15 @@ func dropCopiedToolContentTx(
 			UPDATE messages SET content = '', content_length = 0
 			WHERE is_system = 1 AND session_id` +
 			inUnmarked(`'`+string(parser.AgentZencoder)+`'`)},
-		// Codex and TraeX stored unpaired agent notifications as ordinary
-		// user rows, with no field that distinguishes them from prompts.
-		{"unmarked Codex and TraeX tool output", `
+		// Codex, TraeX, and Augure Code stored unpaired agent notifications
+		// as ordinary user rows, with no field that distinguishes them from
+		// prompts.
+		{"unmarked Codex, TraeX, and Augure Code tool output", `
 			UPDATE messages SET content = '', content_length = 0
 			WHERE role = 'user' AND session_id` +
 			inUnmarked(`'`+string(parser.AgentCodex)+`', '`+
-				string(parser.AgentTraeX)+`'`)},
+				string(parser.AgentTraeX)+`', '`+
+				string(parser.AgentAugureCode)+`'`)},
 		// gptme stored tool output as assistant rows without a model, while
 		// model replies carry the model name.
 		{"unmarked gptme tool output", `
