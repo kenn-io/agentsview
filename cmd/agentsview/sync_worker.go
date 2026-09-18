@@ -34,9 +34,8 @@ func runningAsSyncWorker() bool {
 // parse stdout strictly. A run streams zero or more Progress lines followed by
 // exactly one Result line.
 type workerLine struct {
-	Progress         *sync.Progress   `json:"progress,omitempty"`
-	Result           *workerResult    `json:"result,omitempty"`
-	FailureSkipCache map[string]int64 `json:"failureSkipCache,omitempty"`
+	Progress *sync.Progress `json:"progress,omitempty"`
+	Result   *workerResult  `json:"result,omitempty"`
 }
 
 // workerResult is the single terminal record a sync-worker run emits. Status is
@@ -54,8 +53,7 @@ type workerResult struct {
 	// /sync and /resync responses keep result parity with in-process passes
 	// (total sessions, orphan counts, warnings, anomalies). The summary
 	// counters above remain the authoritative status inputs.
-	Stats            *sync.SyncStats  `json:"stats,omitempty"`
-	FailureSkipCache map[string]int64 `json:"failureSkipCache,omitempty"`
+	Stats *sync.SyncStats `json:"stats,omitempty"`
 }
 
 // newSyncWorkerCommand registers the hidden self-exec'd worker. The daemon runs
@@ -276,7 +274,6 @@ func runSyncWorkerResyncBuild(
 	defer engine.Close()
 
 	_, stats, buildErr := engine.ResyncBuild(ctx, onProgress)
-	emitFailureSkipCache(emit, engine.SnapshotFailureSkipCache())
 	result := resyncBuildResultFromStats(ctx, stats, buildErr)
 	emit(workerLine{Result: &result})
 	if result.Status != "ok" || !result.DiscoveryComplete {
@@ -286,14 +283,6 @@ func runSyncWorkerResyncBuild(
 		return fmt.Errorf("sync worker %s: %s", mode, result.Status)
 	}
 	return nil
-}
-
-func emitFailureSkipCache(
-	emit func(workerLine), entries map[string]int64,
-) {
-	for key, value := range entries {
-		emit(workerLine{FailureSkipCache: map[string]int64{key: value}})
-	}
 }
 
 // resyncBuildResultFromStats maps a resync build outcome to a terminal result.

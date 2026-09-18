@@ -28,6 +28,7 @@ import (
 	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/signals"
+	"go.kenn.io/agentsview/internal/sync/failurecache"
 	"go.kenn.io/agentsview/internal/timeutil"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -573,12 +574,19 @@ type Engine struct {
 	lastSyncStats      SyncStats
 	currentProgress    *Progress
 	progressStallAfter time.Duration
-	// skipCache tracks paths that should be skipped on subsequent syncs, keyed
-	// by path with the file mtime at time of caching. Failure entries set the
-	// high bit of the stored value; zero then represents a missing source.
-	// S3 entries also keep an in-memory source fingerprint when one is available.
+	// skipCache tracks paths that should be skipped on
+	// subsequent syncs, keyed by path with the file mtime
+	// at time of caching. Covers parse errors and
+	// non-interactive sessions (nil result). The file is
+	// retried when its mtime changes. S3 entries also keep an
+	// in-memory source fingerprint when one is available.
 	skipMu    gosync.RWMutex
 	skipCache map[string]int64
+	// failures remembers sources whose parse failed and will keep failing
+	// until the file changes. It is separate from skipCache: a failure is
+	// recorded by a pass that did not complete, and skipCache persists only
+	// after a complete one.
+	failures failurecache.Cache
 	// skipCacheDirty is protected by skipMu and cleared only for a persistence attempt.
 	skipCacheDirty   bool
 	skipFingerprints map[string]string
@@ -760,34 +768,6 @@ func (e *Engine) forceParseRequested(file parser.DiscoveredFile) bool {
 func (e *Engine) forceParseBypassesCache(file parser.DiscoveredFile) bool {
 	return e.forceParse || file.ForceParse ||
 		(e.forceFullParse && !e.forceFullParseAllowsCache)
-}
-
-const skipCacheFailureFlag uint64 = 1 << 63
-
-func encodeSkipFailureMtime(mtime int64) int64 {
-	return int64(uint64(mtime) | skipCacheFailureFlag)
-}
-
-func decodeSkipFailureMtime(value int64) (int64, bool) {
-	bits := uint64(value)
-	if bits&skipCacheFailureFlag == 0 {
-		return 0, false
-	}
-	return int64(bits &^ skipCacheFailureFlag), true
-}
-
-func mergeFailureSkipCache(
-	destination, source map[string]int64,
-) int {
-	merged := 0
-	for path, value := range source {
-		if _, failure := decodeSkipFailureMtime(value); !failure {
-			continue
-		}
-		destination[path] = value
-		merged++
-	}
-	return merged
 }
 
 // ReconciliationResult is the structured acknowledgement for the most recent
@@ -1027,6 +1007,11 @@ func NewEngine(
 		reconciliationSpoolFactory: func(path string) (reconciliationSpoolStore, error) {
 			return newReconciliationSpool(path)
 		},
+	}
+	if !cfg.Ephemeral {
+		if err := e.failures.Load(database); err != nil {
+			log.Printf("%v", err)
+		}
 	}
 	if len(cfg.InitialSkipCache) > 0 {
 		e.InjectSkipCache(cfg.InitialSkipCache)
@@ -2944,18 +2929,11 @@ func (e *Engine) resyncAllWithOptionsLocked(
 			// replacement's skip entries and its tombstone count. A
 			// post-install failure keeps both: the replacement is the live
 			// archive there.
-			merged := 0
 			e.skipMu.Lock()
-			if ctx.Err() == nil {
-				merged = mergeFailureSkipCache(preBuildSkipCache, e.skipCache)
-			}
 			e.skipCache = preBuildSkipCache
 			e.skipCacheDirty = true
 			e.skipHashKeys = preBuildSkipHashKeys
 			e.skipMu.Unlock()
-			if merged > 0 && ctx.Err() == nil {
-				e.persistFailureSkipCache()
-			}
 			stats.Tombstoned = 0
 		}
 		e.setLastSyncStats(stats)
@@ -3107,28 +3085,11 @@ func (e *Engine) resyncBuildLocked(
 	e.skipMu.Unlock()
 
 	restoreSkipCache := func() {
-		merged := 0
 		e.skipMu.Lock()
-		if ctx.Err() == nil {
-			merged = mergeFailureSkipCache(savedSkipCache, e.skipCache)
-		}
 		e.skipCache = savedSkipCache
 		e.skipCacheDirty = true
 		e.skipHashKeys = savedSkipHashKeys
 		e.skipMu.Unlock()
-		if merged == 0 || ctx.Err() != nil {
-			return
-		}
-		if origDB.WriterClosed() {
-			if !restoreActiveWriterOnAbort {
-				return
-			}
-			if err := origDB.ReopenWriter(); err != nil {
-				log.Printf("resync: reopen writer for failure cache: %v", err)
-				return
-			}
-		}
-		e.persistFailureSkipCache()
 	}
 
 	// 2. Open a fresh DB at the temp path.
@@ -4050,6 +4011,9 @@ func (e *Engine) ReloadSkipCache() error {
 			return fmt.Errorf("reloading skip cache after swap: %w", err)
 		}
 		skipCache = loaded
+		if err := e.failures.Load(e.db); err != nil {
+			return fmt.Errorf("reloading skip cache after swap: %w", err)
+		}
 	}
 	skipHashKeys, _ := normalizeSourceHashSkipCache(skipCache, nil)
 
@@ -4984,7 +4948,7 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 			if persistEligible {
 				e.persistSkipCache()
 			} else {
-				e.persistFailureSkipCache()
+				e.flushFailureCache()
 			}
 		} else if persistEligible {
 			e.persistSkipCache()
@@ -5536,7 +5500,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		}
 	}
 	if retErr != nil && ctx.Err() == nil && !passEpilogueDeferred(ctx) {
-		e.persistFailureSkipCache()
+		e.flushFailureCache()
 	}
 	metrics = mergeMetrics(spool.Metrics())
 	if cleanupErr := spool.CloseAndRemove(); cleanupErr != nil {
@@ -10269,7 +10233,7 @@ func (e *Engine) collectAndBatchWithOptions(
 			}
 			e.noteSQLiteContainerResult(r.containerResultPath(), false)
 			if r.cacheFailure && !r.cachedFailure {
-				e.cacheFailure(r.failureCacheKey, r.failureMtime)
+				e.failures.Record(r.failureCacheKey, r.failureIdentity)
 			}
 			if r.cacheSkip && r.mtime != 0 && !r.noCacheSkip {
 				e.cacheSkip(r.skipCacheKey(), r.mtime, r.sourceFingerprint)
@@ -11075,7 +11039,7 @@ type processResult struct {
 	cacheFailure     bool
 	cachedFailure    bool
 	failureCacheKey  string
-	failureMtime     int64
+	failureIdentity  failurecache.Identity
 	// claudeRowlessFreshnessKey is staged by a successful complete Claude
 	// parse. The collector promotes it only when the parse leaves no admitted
 	// session row and a CWD-rejected stale fork still needs filter-scoped
@@ -11278,9 +11242,6 @@ func (e *Engine) shouldUseCachedSkip(
 		cachedFingerprint = e.skipFingerprints[file.Path]
 	}
 	e.skipMu.RUnlock()
-	if _, failure := decodeSkipFailureMtime(cachedMtime); failure {
-		return false
-	}
 	if !cached || cachedMtime != mtime {
 		return false
 	}
@@ -11390,42 +11351,45 @@ func (e *Engine) pathInStaleIdentitySet(
 	return stale
 }
 
+// sourceFailureCacheIdentity returns the failure-cache key and current identity
+// of a source file. ok is false for sources whose freshness a single mtime
+// cannot describe; those never use the failure cache.
 func (e *Engine) sourceFailureCacheIdentity(
 	file parser.DiscoveredFile,
-) (string, int64, bool) {
+) (key string, id failurecache.Identity, ok bool) {
 	if file.Path == "" || file.Agent == "" ||
 		strings.HasPrefix(file.Path, "s3://") {
-		return "", 0, false
+		return "", id, false
 	}
 	if !e.shouldCacheSkip(file) {
-		return "", 0, false
+		return "", id, false
 	}
 	factory, ok := e.providerFactories[file.Agent]
 	if !ok || factory == nil {
-		return "", 0, false
+		return "", id, false
 	}
 	if _, _, virtual := parser.ParseVirtualSourcePath(file.Path); virtual {
-		return "", 0, false
+		return "", id, false
 	}
-	key := providerAgentSkipCacheKey(file.Path, file.Agent)
+	key = providerAgentSkipCacheKey(file.Path, file.Agent)
 	info, err := e.lstatSource(file.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return key, 0, true
+			return key, failurecache.Identity{Missing: true}, true
 		}
-		return "", 0, false
+		return "", id, false
 	}
 	if !info.Mode().IsRegular() {
-		return "", 0, false
+		return "", id, false
 	}
 	caps := factory.Capabilities()
 	if caps.Source.CompositeFingerprint == parser.CapabilitySupported ||
 		caps.Source.MultiFileStatHash == parser.CapabilitySupported ||
 		caps.Sync.FingerprintHashInCacheKey ||
 		caps.Sync.FingerprintHashRequiredForFreshness {
-		return "", 0, false
+		return "", id, false
 	}
-	return key, info.ModTime().UnixNano(), true
+	return key, failurecache.Identity{MTimeNS: info.ModTime().UnixNano()}, true
 }
 
 func (e *Engine) sourcePathMissing(file parser.DiscoveredFile) bool {
@@ -11472,40 +11436,29 @@ func (e *Engine) markSourceFailure(
 		errors.Is(result.err, context.DeadlineExceeded) {
 		return result
 	}
-	key, mtime, ok := e.sourceFailureCacheIdentity(file)
+	key, id, ok := e.sourceFailureCacheIdentity(file)
 	if !ok {
 		return result
 	}
 	result.cacheFailure = true
 	result.failureCacheKey = key
-	result.failureMtime = mtime
+	result.failureIdentity = id
 	return result
 }
 
 func (e *Engine) cachedSourceFailure(
 	file parser.DiscoveredFile,
 ) (processResult, bool) {
-	key, mtime, ok := e.sourceFailureCacheIdentity(file)
+	key, id, ok := e.sourceFailureCacheIdentity(file)
 	if !ok {
 		return processResult{}, false
 	}
-	if e.pathNeedsCachedSkipBypass(file.Agent, file.Path) {
-		e.clearSkip(key)
+	if e.pathNeedsCachedSkipBypass(file.Agent, file.Path) ||
+		e.forceParseBypassesCache(file) {
+		e.failures.Clear(key)
 		return processResult{}, false
 	}
-	if e.forceParseBypassesCache(file) {
-		e.clearSkip(key)
-		return processResult{}, false
-	}
-	e.skipMu.RLock()
-	encoded, exists := e.skipCache[key]
-	cachedMtime, failure := decodeSkipFailureMtime(encoded)
-	e.skipMu.RUnlock()
-	if !exists || !failure {
-		return processResult{}, false
-	}
-	if cachedMtime != mtime {
-		e.clearSkip(key)
+	if !e.failures.Check(key, id) {
 		return processResult{}, false
 	}
 	return processResult{
@@ -11513,7 +11466,7 @@ func (e *Engine) cachedSourceFailure(
 		cacheFailure:    true,
 		cachedFailure:   true,
 		failureCacheKey: key,
-		failureMtime:    mtime,
+		failureIdentity: id,
 	}, true
 }
 
@@ -11941,8 +11894,7 @@ func (e *Engine) processProviderFile(
 		e.skipMu.RLock()
 		cachedMtime, cached := e.skipCache[cacheKey]
 		e.skipMu.RUnlock()
-		_, cachedFailure := decodeSkipFailureMtime(cachedMtime)
-		if cached && !cachedFailure && cachedMtime == fingerprint.MTimeNS {
+		if cached && cachedMtime == fingerprint.MTimeNS {
 			// A cached skip must not hide a session whose stored row needs
 			// self-healing (e.g. a parser data-version bump or generated
 			// roborev CI worktree project): clear the entry and fall through
@@ -13229,9 +13181,7 @@ func (e *Engine) claudeRowlessFreshnessMarked(
 	defer e.skipMu.RUnlock()
 	for _, path := range paths {
 		key := e.claudeRowlessFreshnessCacheKey(path, contentHash)
-		cachedMtime, cached := e.skipCache[key]
-		_, cachedFailure := decodeSkipFailureMtime(cachedMtime)
-		if key != "" && cached && !cachedFailure && cachedMtime == mtime {
+		if key != "" && e.skipCache[key] == mtime {
 			return true
 		}
 	}
@@ -14182,13 +14132,6 @@ func (e *Engine) cacheSkip(
 	return work
 }
 
-func (e *Engine) cacheFailure(path string, mtime int64) int {
-	if path == "" {
-		return 0
-	}
-	return e.cacheSkip(path, encodeSkipFailureMtime(mtime))
-}
-
 // clearSkip removes a skip-cache entry when a file produces a valid session.
 // Its work count has the same cardinality-regression role as cacheSkip's.
 func (e *Engine) clearSkip(path string) int {
@@ -14340,38 +14283,6 @@ func (e *Engine) SnapshotRetrySafeSkipCache() map[string]int64 {
 	return out
 }
 
-// SnapshotFailureSkipCache returns encoded failure markers that can survive a
-// failed replacement-database build in another process.
-func (e *Engine) SnapshotFailureSkipCache() map[string]int64 {
-	e.skipMu.RLock()
-	defer e.skipMu.RUnlock()
-	out := make(map[string]int64)
-	for key, value := range e.skipCache {
-		if _, failure := decodeSkipFailureMtime(value); failure {
-			out[key] = value
-		}
-	}
-	return out
-}
-
-// MergeFailureSkipCache merges retry-safe failure markers and persists them
-// through the active archive writer.
-func (e *Engine) MergeFailureSkipCache(entries map[string]int64) int {
-	if len(entries) == 0 || e.ephemeral {
-		return 0
-	}
-	e.skipMu.Lock()
-	merged := mergeFailureSkipCache(e.skipCache, entries)
-	if merged > 0 {
-		e.skipCacheDirty = true
-	}
-	e.skipMu.Unlock()
-	if merged == 0 {
-		return 0
-	}
-	return e.persistFailureSkipCache()
-}
-
 func (e *Engine) markRetryUnsafeSkipSource(path string) {
 	if path == "" {
 		return
@@ -14391,40 +14302,20 @@ func (e *Engine) persistSkipCache() int {
 	return e.persistSkipCacheInto(e.db)
 }
 
-// persistFailureSkipCache keeps newly recorded failure markers durable after
-// an incomplete pass without promoting ordinary skip entries from that pass.
-func (e *Engine) persistFailureSkipCache() int {
+// flushFailureCache makes recorded source failures durable. Passes that end
+// incomplete call it directly: a failed pass is exactly when new failures were
+// recorded, and it must not promote that pass's ordinary skip entries.
+func (e *Engine) flushFailureCache() {
+	e.flushFailureCacheInto(e.db)
+}
+
+func (e *Engine) flushFailureCacheInto(target *db.DB) {
 	if e.ephemeral {
-		return 0
+		return
 	}
-	durable, err := e.db.LoadSkippedFiles()
-	if err != nil {
-		log.Printf("loading persisted skip cache: %v", err)
-		return 0
+	if err := e.failures.Flush(target); err != nil {
+		log.Printf("%v", err)
 	}
-	e.skipMu.RLock()
-	snapshot := make(map[string]int64, len(e.skipCache))
-	maps.Copy(snapshot, e.skipCache)
-	e.skipMu.RUnlock()
-	for path, value := range durable {
-		if _, failure := decodeSkipFailureMtime(value); !failure {
-			continue
-		}
-		current, exists := snapshot[path]
-		if !exists || current != value {
-			delete(durable, path)
-		}
-	}
-	for path, value := range snapshot {
-		if _, failure := decodeSkipFailureMtime(value); failure {
-			durable[path] = value
-		}
-	}
-	if err := e.db.ReplaceSkippedFiles(durable); err != nil {
-		log.Printf("persisting failure skip cache: %v", err)
-		return 0
-	}
-	return len(durable)
 }
 
 // persistSkipCacheInto writes the current skip cache into target. A resync build
@@ -14434,6 +14325,7 @@ func (e *Engine) persistSkipCacheInto(target *db.DB) int {
 	if e.ephemeral {
 		return 0
 	}
+	e.flushFailureCacheInto(target)
 	e.skipMu.Lock()
 	if target == e.db && !e.skipCacheDirty {
 		count := len(e.skipCache)
@@ -21206,8 +21098,8 @@ func (e *Engine) processAndWriteSessionFile(
 	if res.err != nil {
 		sessionsChanged = res.sourceCwdChanged
 		if res.cacheFailure && ctx.Err() == nil {
-			e.cacheFailure(res.failureCacheKey, res.failureMtime)
-			e.persistFailureSkipCache()
+			e.failures.Record(res.failureCacheKey, res.failureIdentity)
+			e.flushFailureCache()
 		}
 		if res.cacheSkip && res.mtime != 0 && !res.noCacheSkip {
 			e.cacheSkip(res.skipCacheKey(path), res.mtime, res.sourceFingerprint)

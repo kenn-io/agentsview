@@ -17,7 +17,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -1201,34 +1200,4 @@ func TestRunWorkerResyncBuildDropsTombstonesWhenSwapFailsBeforeInstall(
 		"the worker stats payload must not carry discarded tombstones")
 	assert.NoError(t, writeOneSession(database),
 		"writes must recover without a daemon restart")
-}
-
-func TestRunWorkerResyncBuildMergesFailureSkipCacheAfterAbort(t *testing.T) {
-	cfg := testConfigWithClaudeFixture(t)
-	database, _ := openTestWriteDB(t, cfg)
-	engine := sync.NewEngine(database, sync.EngineConfig{})
-	defer engine.Close()
-
-	key := filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "project", "broken.jsonl")
-	failureValue := int64(-1 << 63)
-	failureValue |= 42
-	restore := stubLaunchSyncWorker(t, func(
-		_ context.Context, _ config.Config, mode string, _ func(workerLine),
-	) (workerResult, error) {
-		assert.Equal(t, "resync-build", mode)
-		return workerResult{
-			Status:           "aborted",
-			FailureSkipCache: map[string]int64{key: failureValue},
-		}, errors.New("resync worker aborted")
-	})
-	defer restore()
-
-	_, err, spawnFailed := runWorkerResyncBuild(
-		context.Background(), context.Background(), cfg, engine, database, nil,
-	)
-	require.False(t, spawnFailed)
-	require.ErrorContains(t, err, "resync worker aborted")
-	persisted, err := database.LoadSkippedFiles()
-	require.NoError(t, err)
-	assert.Equal(t, failureValue, persisted[key])
 }

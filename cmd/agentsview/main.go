@@ -1183,8 +1183,6 @@ func runWorkerResyncBuild(
 				database.ReopenWriter,
 			); rerr != nil {
 				launchErr = errors.Join(launchErr, rerr)
-			} else if ctx.Err() == nil {
-				engine.MergeFailureSkipCache(result.FailureSkipCache)
 			}
 			return launchErr
 		}
@@ -1213,9 +1211,6 @@ func runWorkerResyncBuild(
 						serr, fmt.Errorf("recovery reopen: %w", rerr),
 					)
 				}
-			}
-			if !installed && ctx.Err() == nil {
-				engine.MergeFailureSkipCache(result.FailureSkipCache)
 			}
 			return fmt.Errorf("swap resync database: %w", serr)
 		}

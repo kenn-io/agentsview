@@ -14,7 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-func TestProviderParseFailureUsesStickySkipCache(t *testing.T) {
+func TestProviderParseFailureIsCachedUntilSourceChanges(t *testing.T) {
 	const agent parser.AgentType = "sticky-failure"
 
 	_, engine, provider, _, path := newChangedPathOutcomeEngine(
@@ -34,7 +34,7 @@ func TestProviderParseFailureUsesStickySkipCache(t *testing.T) {
 	first := engine.processFile(t.Context(), file)
 	require.Error(t, first.err)
 	assert.True(t, first.cacheFailure)
-	engine.cacheFailure(first.failureCacheKey, first.failureMtime)
+	engine.failures.Record(first.failureCacheKey, first.failureIdentity)
 
 	second := engine.processFile(t.Context(), file)
 	require.Error(t, second.err)
@@ -49,7 +49,7 @@ func TestProviderParseFailureUsesStickySkipCache(t *testing.T) {
 	assert.False(t, third.cachedFailure)
 	assert.Equal(t, int32(2), provider.parseCalls.Load())
 
-	engine.cacheFailure(third.failureCacheKey, third.failureMtime)
+	engine.failures.Record(third.failureCacheKey, third.failureIdentity)
 	file.ForceParse = true
 	forced := engine.processFile(t.Context(), file)
 	require.Error(t, forced.err)
@@ -78,7 +78,7 @@ func TestAiderParseFailureDoesNotUseMtimeFailureCache(t *testing.T) {
 	require.Error(t, first.err)
 	assert.False(t, first.cacheFailure)
 	if first.cacheFailure {
-		engine.cacheFailure(first.failureCacheKey, first.failureMtime)
+		engine.failures.Record(first.failureCacheKey, first.failureIdentity)
 	}
 
 	mtime := info.ModTime()
@@ -94,7 +94,7 @@ func TestAiderParseFailureDoesNotUseMtimeFailureCache(t *testing.T) {
 func TestChangedPathSyncPersistsProviderFailure(t *testing.T) {
 	const agent parser.AgentType = "changed-path-failure"
 
-	_, engine, provider, _, path := newChangedPathOutcomeEngine(
+	database, engine, provider, _, path := newChangedPathOutcomeEngine(
 		t, agent, func(string) parser.ParseOutcome { return parser.ParseOutcome{} },
 	)
 	info, err := os.Stat(path)
@@ -105,10 +105,10 @@ func TestChangedPathSyncPersistsProviderFailure(t *testing.T) {
 	provider.parseErr = errors.New("changed-path parse failure")
 
 	require.Error(t, engine.SyncPathsContext(t.Context(), []string{path}))
-	stored, ok := engine.SnapshotSkipCache()[providerAgentSkipCacheKey(path, agent)]
-	require.True(t, ok)
-	_, failure := decodeSkipFailureMtime(stored)
-	assert.True(t, failure)
+	persisted, err := database.LoadSourceFailures()
+	require.NoError(t, err)
+	assert.Equal(t, db.SourceFailure{MTimeNS: info.ModTime().UnixNano()},
+		persisted[providerAgentSkipCacheKey(path, agent)])
 }
 
 func TestFailedReconciliationPersistsProviderFailure(t *testing.T) {
@@ -125,12 +125,10 @@ func TestFailedReconciliationPersistsProviderFailure(t *testing.T) {
 	provider.parseErr = errors.New("malformed source")
 
 	require.Error(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
-	persisted, err := database.LoadSkippedFiles()
+	persisted, err := database.LoadSourceFailures()
 	require.NoError(t, err)
-	value, ok := persisted[providerAgentSkipCacheKey(path, agent)]
-	require.True(t, ok)
-	_, failure := decodeSkipFailureMtime(value)
-	assert.True(t, failure)
+	assert.Equal(t, db.SourceFailure{MTimeNS: info.ModTime().UnixNano()},
+		persisted[providerAgentSkipCacheKey(path, agent)])
 }
 
 func TestSyncSingleSessionPersistsProviderFailure(t *testing.T) {
@@ -151,12 +149,10 @@ func TestSyncSingleSessionPersistsProviderFailure(t *testing.T) {
 	provider.parseErr = errors.New("malformed source")
 
 	require.Error(t, engine.SyncSingleSessionContext(t.Context(), sessionID))
-	persisted, err := database.LoadSkippedFiles()
+	persisted, err := database.LoadSourceFailures()
 	require.NoError(t, err)
-	value, ok := persisted[providerAgentSkipCacheKey(path, parser.AgentClaude)]
-	require.True(t, ok)
-	_, failure := decodeSkipFailureMtime(value)
-	assert.True(t, failure)
+	assert.Equal(t, db.SourceFailure{MTimeNS: info.ModTime().UnixNano()},
+		persisted[providerAgentSkipCacheKey(path, parser.AgentClaude)])
 }
 
 func TestCanceledSyncSingleSessionDoesNotPersistProviderFailure(t *testing.T) {
@@ -179,14 +175,16 @@ func TestCanceledSyncSingleSessionDoesNotPersistProviderFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	provider.parseCancel = cancel
 	require.Error(t, engine.SyncSingleSessionContext(ctx, sessionID))
-	persisted, err := database.LoadSkippedFiles()
+	persisted, err := database.LoadSourceFailures()
 	require.NoError(t, err)
 	assert.Empty(t, persisted)
-	assert.NotContains(t, engine.SnapshotSkipCache(),
-		providerAgentSkipCacheKey(path, parser.AgentClaude))
+	assert.False(t, engine.failures.Check(
+		providerAgentSkipCacheKey(path, parser.AgentClaude),
+		db.SourceFailure{MTimeNS: info.ModTime().UnixNano()},
+	), "a canceled pass must not record a failure")
 }
 
-func TestMissingSourceFailureUsesSentinelUntilSourceAppears(t *testing.T) {
+func TestMissingSourceFailureIsCachedUntilSourceAppears(t *testing.T) {
 	const agent parser.AgentType = "missing-failure"
 
 	_, engine, provider, _, path := newChangedPathOutcomeEngine(
@@ -203,8 +201,8 @@ func TestMissingSourceFailureUsesSentinelUntilSourceAppears(t *testing.T) {
 
 	first := engine.processFile(t.Context(), file)
 	require.Error(t, first.err)
-	assert.Equal(t, int64(0), first.failureMtime)
-	engine.cacheFailure(first.failureCacheKey, first.failureMtime)
+	assert.True(t, first.failureIdentity.Missing)
+	engine.failures.Record(first.failureCacheKey, first.failureIdentity)
 
 	second := engine.processFile(t.Context(), file)
 	require.Error(t, second.err)
@@ -249,8 +247,8 @@ func TestPersistedSourceFailureSuppressesParseAfterRestart(t *testing.T) {
 
 	first := engine.processFile(t.Context(), file)
 	require.Error(t, first.err)
-	engine.cacheFailure(first.failureCacheKey, first.failureMtime)
-	require.Equal(t, 1, engine.persistSkipCache())
+	engine.failures.Record(first.failureCacheKey, first.failureIdentity)
+	engine.flushFailureCache()
 
 	restarted := NewEngine(database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{agent: {root}},
@@ -347,7 +345,7 @@ func TestFailureCacheBypassesStaleDataVersion(t *testing.T) {
 	first := engine.processFile(t.Context(), file)
 	require.Error(t, first.err)
 	require.True(t, first.cacheFailure)
-	engine.cacheFailure(first.failureCacheKey, first.failureMtime)
+	engine.failures.Record(first.failureCacheKey, first.failureIdentity)
 
 	second := engine.processFile(t.Context(), file)
 	require.Error(t, second.err)

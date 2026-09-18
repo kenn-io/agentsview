@@ -1342,8 +1342,11 @@ func TestChangedPathSyncCancellationDoesNotPersistSkipCache(t *testing.T) {
 	provider.fingerprint = parser.SourceFingerprint{
 		Key: path, MTimeNS: info.ModTime().UnixNano(),
 	}
-	failureKey := providerAgentSkipCacheKey(path, agent)
-	engine.cacheFailure(failureKey, info.ModTime().UnixNano())
+	engine.cacheSkip(filepath.Join(filepath.Dir(path), "seeded-skip.jsonl"), 42)
+	engine.failures.Record(
+		providerAgentSkipCacheKey(path, agent),
+		db.SourceFailure{MTimeNS: info.ModTime().UnixNano()},
+	)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
@@ -1357,9 +1360,12 @@ func TestChangedPathSyncCancellationDoesNotPersistSkipCache(t *testing.T) {
 	engine.syncMu.Unlock()
 	require.Error(t, err)
 
-	persisted, err := database.LoadSkippedFiles()
+	skipped, err := database.LoadSkippedFiles()
 	require.NoError(t, err)
-	assert.Empty(t, persisted)
+	assert.Empty(t, skipped)
+	failures, err := database.LoadSourceFailures()
+	require.NoError(t, err)
+	assert.Empty(t, failures)
 }
 
 func TestSyncPathsWriteFailureDoesNotBaselineExistingActiveSource(t *testing.T) {
@@ -2971,7 +2977,7 @@ func TestReconcileWatchRootsCancellationDuringLaterSpoolPage(t *testing.T) {
 		},
 	})
 	t.Cleanup(engine.Close)
-	engine.cacheFailure(filepath.Join(root, "seeded-failure.jsonl"), 42)
+	engine.cacheSkip(filepath.Join(root, "seeded-skip.jsonl"), 42)
 	ctx, cancel := context.WithCancel(t.Context())
 	engine.reconciliationSpoolFactory = func(path string) (reconciliationSpoolStore, error) {
 		spool, err := newReconciliationSpool(path)

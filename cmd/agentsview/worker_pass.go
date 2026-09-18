@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"maps"
 	"os"
 	"os/exec"
 	"time"
@@ -461,13 +460,8 @@ func readWorkerResult(
 			onLine(line)
 		}
 		if line.Result != nil {
-			terminal := *line.Result
-			mergeWorkerFailureSkipCache(&terminal, result.FailureSkipCache)
-			result = terminal
-		}
-		mergeWorkerFailureSkipCache(&result, line.FailureSkipCache)
-		if line.Result != nil {
 			resultCount++
+			result = *line.Result
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -485,18 +479,6 @@ func readWorkerResult(
 		)
 	}
 	return result, nil
-}
-
-func mergeWorkerFailureSkipCache(
-	result *workerResult, entries map[string]int64,
-) {
-	if len(entries) == 0 {
-		return
-	}
-	if result.FailureSkipCache == nil {
-		result.FailureSkipCache = make(map[string]int64, len(entries))
-	}
-	maps.Copy(result.FailureSkipCache, entries)
 }
 
 // syncWorkerChildArgs builds the child argv for the sync worker. It always

@@ -1423,6 +1423,7 @@ and its triggers.
 | `pinned_messages`    | Pinned message references with session linkage                               |
 | `stats`              | Aggregate counts (session_count, message_count)                              |
 | `skipped_files`      | Cache of non-interactive session files                                       |
+| `source_failures`    | Cache of session files whose last parse failed                               |
 | `messages_fts`       | FTS5 virtual table for full-text search                                      |
 | `messages_cjk_fts`   | Optional CJK FTS5 index using the `simple` character tokenizer               |
 
@@ -1479,6 +1480,9 @@ that metadata shows a parse may be needed.
 
 Files that fail to parse or contain no interactive content are cached in the
 `skipped_files` table and skipped on subsequent syncs until their mtime changes.
+Provider sources that are missing or malformed are cached in the
+`source_failures` table the same way, even when the sync pass that found them
+did not complete.
 
 Sync summaries include a `Parser anomalies (this run)` section whenever the
 current run observes parser or sanitizer anomalies. The section can include

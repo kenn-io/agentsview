@@ -100,13 +100,10 @@ func newResyncFailureEngine(t *testing.T) (
 	return engine, database, provider, root, path
 }
 
-func TestAbortedResyncPreservesFailureSkipCache(t *testing.T) {
+func TestAbortedResyncKeepsSourceFailures(t *testing.T) {
 	for _, useBuild := range []bool{false, true} {
 		t.Run(map[bool]string{false: "resync-all", true: "resync-build"}[useBuild], func(t *testing.T) {
-			engine, database, provider, root, path := newResyncFailureEngine(t)
-			ordinaryPath := filepath.Join(root, "ordinary-skip.jsonl")
-			engine.cacheSkip(ordinaryPath, 42)
-			require.Equal(t, 1, engine.persistSkipCache())
+			engine, _, provider, _, path := newResyncFailureEngine(t)
 			provider.parseErr = errors.New("malformed source")
 
 			var stats SyncStats
@@ -119,30 +116,21 @@ func TestAbortedResyncPreservesFailureSkipCache(t *testing.T) {
 			}
 			require.True(t, stats.Aborted)
 
-			failureKey := providerAgentSkipCacheKey(path, provider.Def.Type)
-			persisted, err := database.LoadSkippedFiles()
-			require.NoError(t, err)
-			assert.Equal(t, int64(42), persisted[ordinaryPath])
-			value, ok := persisted[failureKey]
-			require.True(t, ok, "failure marker missing for %s", path)
-			_, failure := decodeSkipFailureMtime(value)
-			assert.True(t, failure)
-
-			restarted := NewEngine(database, EngineConfig{
-				AgentDirs: map[parser.AgentType][]string{provider.Def.Type: {root}},
-				Machine:   "local",
+			parsed := provider.parseCalls.Load()
+			next := engine.processFile(t.Context(), parser.DiscoveredFile{
+				Path: path, Agent: provider.Def.Type,
+				ProviderSource: provider.source, ProviderProcess: true,
 			})
-			t.Cleanup(restarted.Close)
-			assert.Equal(t, value, restarted.SnapshotSkipCache()[failureKey])
+			require.Error(t, next.err)
+			assert.True(t, next.cachedFailure)
+			assert.Equal(t, parsed, provider.parseCalls.Load(),
+				"the pass after an aborted resync must not reparse the broken source")
 		})
 	}
 }
 
-func TestCanceledResyncDoesNotPersistFailureSkipCache(t *testing.T) {
-	engine, database, provider, root, path := newResyncFailureEngine(t)
-	ordinaryPath := filepath.Join(root, "ordinary-skip.jsonl")
-	engine.cacheSkip(ordinaryPath, 42)
-	require.Equal(t, 1, engine.persistSkipCache())
+func TestCanceledResyncDoesNotRecordSourceFailure(t *testing.T) {
+	engine, _, provider, _, path := newResyncFailureEngine(t)
 	provider.parseErr = errors.New("malformed source")
 	ctx, cancel := context.WithCancel(context.Background())
 	provider.parseCancel = cancel
@@ -151,41 +139,14 @@ func TestCanceledResyncDoesNotPersistFailureSkipCache(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	assert.True(t, stats.Aborted)
 
-	persisted, err := database.LoadSkippedFiles()
-	require.NoError(t, err)
-	assert.Equal(t, int64(42), persisted[ordinaryPath])
-	_, failure := decodeSkipFailureMtime(
-		persisted[providerAgentSkipCacheKey(path, provider.Def.Type)],
-	)
-	assert.False(t, failure,
-		"cancellation must not persist a rebuild-only failure marker")
-}
-
-func TestResyncSwapFailurePreservesFailureSkipCache(t *testing.T) {
-	engine, database, provider, root, path := newResyncFailureEngine(t)
-	ordinaryPath := filepath.Join(root, "ordinary-skip.jsonl")
-	engine.cacheSkip(ordinaryPath, 42)
-	require.Equal(t, 1, engine.persistSkipCache())
-	failureKey := providerAgentSkipCacheKey(path, provider.Def.Type)
-	var removed atomic.Bool
-
-	stats := engine.ResyncAll(context.Background(), func(p Progress) {
-		if p.Phase == PhaseSwappingDatabase &&
-			removed.CompareAndSwap(false, true) {
-			engine.cacheFailure(failureKey, 42)
-			require.NoError(t, os.Remove(engine.ResyncTempPath()))
-		}
+	provider.parseCancel = nil
+	next := engine.processFile(t.Context(), parser.DiscoveredFile{
+		Path: path, Agent: provider.Def.Type,
+		ProviderSource: provider.source, ProviderProcess: true,
 	})
-	require.True(t, removed.Load())
-	assert.True(t, stats.Aborted)
-
-	persisted, err := database.LoadSkippedFiles()
-	require.NoError(t, err)
-	assert.Equal(t, int64(42), persisted[ordinaryPath])
-	value, ok := persisted[failureKey]
-	require.True(t, ok)
-	_, failure := decodeSkipFailureMtime(value)
-	assert.True(t, failure)
+	require.Error(t, next.err)
+	assert.False(t, next.cachedFailure,
+		"a failure seen while the pass was being canceled may be an artifact of cancellation")
 }
 
 // TestResyncBuildThenSwapMatchesResyncAll drives the split resync path
