@@ -75,7 +75,7 @@ func ProbeMirror(ctx context.Context, path string) (MirrorProbe, error) {
 		return MirrorProbe{}, fmt.Errorf("statting duckdb mirror %s: %w", path, err)
 	}
 
-	conn, err := OpenReadOnly(path)
+	conn, err := OpenReadOnly(ctx, path)
 	if err != nil {
 		return MirrorProbe{
 			FileExists:   true,

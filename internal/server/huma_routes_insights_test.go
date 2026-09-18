@@ -9,8 +9,6 @@ import (
 )
 
 func TestInsightGenerateOptionsMapsConfig(t *testing.T) {
-	require := require.New(t)
-
 	t.Setenv("AGENTSVIEW_INSIGHTS_KEY", "key")
 	cfg := config.Config{
 		Insights: config.InsightsConfig{
@@ -24,12 +22,12 @@ func TestInsightGenerateOptionsMapsConfig(t *testing.T) {
 		},
 	}
 	opts := insightGenerateOptions(cfg)
-	require.NotNil(opts.Endpoint)
-	require.Equal("http://127.0.0.1:30000/v1", opts.Endpoint.Endpoint)
-	require.Equal("local-model", opts.Endpoint.Model)
-	require.Equal("key", opts.Endpoint.APIKey)
-	require.True(opts.Endpoint.AllowHTTP)
-	require.Equal("gemini-bin", opts.Agents["gemini"].Binary)
-	require.Equal("sandbox", opts.Agents["gemini"].Sandbox)
-	require.True(opts.Agents["gemini"].AllowUnsafe)
+	require.NotNil(t, opts.Endpoint)
+	require.Equal(t, "http://127.0.0.1:30000/v1", opts.Endpoint.Endpoint)
+	require.Equal(t, "local-model", opts.Endpoint.Model)
+	require.Equal(t, "key", opts.Endpoint.APIKey)
+	require.True(t, opts.Endpoint.AllowHTTP)
+	require.Equal(t, "gemini-bin", opts.Agents["gemini"].Binary)
+	require.Equal(t, "sandbox", opts.Agents["gemini"].Sandbox)
+	require.True(t, opts.Agents["gemini"].AllowUnsafe)
 }

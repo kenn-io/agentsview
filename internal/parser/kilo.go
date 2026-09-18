@@ -1,8 +1,9 @@
 package parser
 
-import "context"
-
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 // Kilo uses OpenCode's storage format, but sessions are exposed as a
 // distinct agent with the kilo: ID prefix. The OpenCode-format provider

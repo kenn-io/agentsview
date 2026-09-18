@@ -33,8 +33,6 @@ func seedOpenCodeContainerSessions(
 func TestReconcileProviderRootsOpenCodeContainerSyncsAndTombstonesMembers(
 	t *testing.T,
 ) {
-	require := require.New(t)
-
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	base := int64(1704067200000)
@@ -55,7 +53,7 @@ func TestReconcileProviderRootsOpenCodeContainerSyncsAndTombstonesMembers(
 	oc.mustExec(t, "delete session",
 		"DELETE FROM session WHERE id = ?", "oc-container-removed")
 
-	require.NoError(env.engine.ReconcileProviderRoots(
+	require.NoError(t, env.engine.ReconcileProviderRoots(
 		t.Context(), parser.AgentOpenCode, []string{oc.path},
 	))
 
@@ -64,13 +62,13 @@ func TestReconcileProviderRootsOpenCodeContainerSyncsAndTombstonesMembers(
 	removed, err := env.db.GetSession(
 		t.Context(), "opencode:oc-container-removed",
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.NotNil(t, removed,
 		"a container-scoped pass leaves a removed member browsable")
 	archived, err := env.db.GetSessionFull(
 		t.Context(), "opencode:oc-container-removed",
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	assertSourceMissingState(t, archived)
 }
 

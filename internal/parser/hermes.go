@@ -3,9 +3,8 @@
 // ABOUTME: user/assistant/tool roles, and function-call tool invocations.
 package parser
 
-import "context"
-
 import (
+	"context"
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -21,7 +20,6 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/tidwall/gjson"
-
 	"go.kenn.io/agentsview/internal/money"
 )
 

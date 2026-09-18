@@ -63,8 +63,6 @@ func hoursAgo(n int) string {
 }
 
 func Test_insertSessionFixture_isAutomated_patch(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSessionFixture(t, d, sessionFixture{
 		id: "auto-1", userMsgs: 5, startedAt: hoursAgo(1),
@@ -76,14 +74,14 @@ func Test_insertSessionFixture_isAutomated_patch(t *testing.T) {
 	})
 
 	var autoFlag, humanFlag int
-	require.NoError(d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT is_automated FROM sessions WHERE id = ?", "auto-1",
 	).Scan(&autoFlag), "read auto-1")
-	require.NoError(d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT is_automated FROM sessions WHERE id = ?", "human-1",
 	).Scan(&humanFlag), "read human-1")
-	require.Equal(1, autoFlag, "auto-1 is_automated")
-	require.Equal(0, humanFlag, "human-1 is_automated")
+	require.Equal(t, 1, autoFlag, "auto-1 is_automated")
+	require.Equal(t, 0, humanFlag, "human-1 is_automated")
 }
 
 func Test_loadSessionsInWindow_isAutomated(t *testing.T) {
@@ -106,8 +104,8 @@ func Test_loadSessionsInWindow_isAutomated(t *testing.T) {
 	for _, r := range rows {
 		byID[r.id] = r.isAutomated
 	}
-	require.Equal(t, true, byID["auto"], "auto.isAutomated")
-	require.Equal(t, false, byID["human"], "human.isAutomated")
+	require.True(t, byID["auto"], "auto.isAutomated")
+	require.False(t, byID["human"], "human.isAutomated")
 }
 
 // insertSessionFixture inserts a sessionFixture via the standard
@@ -177,7 +175,7 @@ func insertSessionFixture(t *testing.T, d *DB, f sessionFixture) {
 	if f.isAutomated {
 		want = 1
 	}
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(t.Context(),
 		"UPDATE sessions SET is_automated = ? WHERE id = ?",
 		want, f.id,
 	)
@@ -206,7 +204,7 @@ func seedAssistantActivity(
 	for i := range n {
 		msgs = append(msgs, asstMsg(sessionID, i+1, "reply"))
 	}
-	require.NoError(t, d.InsertMessages(msgs),
+	require.NoError(t, d.InsertMessages(t.Context(), msgs),
 		"seedAssistantActivity %s: InsertMessages", sessionID)
 	if toolCalls == 0 {
 		return
@@ -216,7 +214,7 @@ func seedAssistantActivity(
 	// INSERT ... SELECT ordinal to find the message_id.
 	for i := range toolCalls {
 		ord := (i % n) + 1
-		_, err := d.getWriter().Exec(`
+		_, err := d.getWriter().Exec(t.Context(), `
 			INSERT INTO tool_calls
 				(message_id, session_id, tool_name, category)
 			SELECT id, session_id, 'Read', 'file'
@@ -244,11 +242,11 @@ func seedToolCallsByCategory(
 	for i, cat := range categories {
 		msgs = append(msgs, asstMsg(sessionID, i+1, "reply-"+cat))
 	}
-	require.NoError(t, d.InsertMessages(msgs),
+	require.NoError(t, d.InsertMessages(t.Context(), msgs),
 		"seedToolCallsByCategory %s: InsertMessages", sessionID)
 	for i, cat := range categories {
 		ord := i + 1
-		_, err := d.getWriter().Exec(`
+		_, err := d.getWriter().Exec(t.Context(), `
 			INSERT INTO tool_calls
 				(message_id, session_id, tool_name, category)
 			SELECT id, session_id, ?, ?
@@ -291,7 +289,7 @@ func seedModelMessages(
 		)
 		msgs = append(msgs, m)
 	}
-	require.NoError(t, d.InsertMessages(msgs),
+	require.NoError(t, d.InsertMessages(t.Context(), msgs),
 		"seedModelMessages %s: InsertMessages", sessionID)
 }
 
@@ -345,8 +343,6 @@ func TestPickMaxLabel_TiesBreakByPriority(t *testing.T) {
 }
 
 func TestGetSessionStats_TotalsAndArchetypes(t *testing.T) {
-	assert := assert.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -370,17 +366,17 @@ func TestGetSessionStats_TotalsAndArchetypes(t *testing.T) {
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
 	require.NoError(t, err, "GetSessionStats")
 
-	assert.Equal(2, stats.SchemaVersion, "schema_version: got")
-	assert.Equal(5, stats.Totals.SessionsAll, "sessions_all")
-	assert.Equal(2, stats.Totals.SessionsAutomation,
+	assert.Equal(t, 2, stats.SchemaVersion, "schema_version: got")
+	assert.Equal(t, 5, stats.Totals.SessionsAll, "sessions_all")
+	assert.Equal(t, 2, stats.Totals.SessionsAutomation,
 		"sessions_automation")
-	assert.Equal(3, stats.Totals.SessionsHuman, "sessions_human")
+	assert.Equal(t, 3, stats.Totals.SessionsHuman, "sessions_human")
 	// Invariant: human + automation + subagent must equal all. This
 	// fixture has no subagents, so subagent is 0 and the partition still
 	// reduces to human + automation.
-	assert.Equal(0, stats.Totals.SessionsSubagent,
+	assert.Equal(t, 0, stats.Totals.SessionsSubagent,
 		"sessions_subagent (no subagents seeded)")
-	assert.Equal(stats.Totals.SessionsAll,
+	assert.Equal(t, stats.Totals.SessionsAll,
 		stats.Totals.SessionsHuman+stats.Totals.SessionsAutomation+
 			stats.Totals.SessionsSubagent,
 		"invariant: human (%d) + automation (%d) + subagent (%d) != all (%d)",
@@ -388,43 +384,43 @@ func TestGetSessionStats_TotalsAndArchetypes(t *testing.T) {
 		stats.Totals.SessionsAutomation,
 		stats.Totals.SessionsSubagent,
 		stats.Totals.SessionsAll)
-	assert.Equal(161, stats.Totals.UserMessagesTotal,
+	assert.Equal(t, 161, stats.Totals.UserMessagesTotal,
 		"user_messages_total")
 
-	assert.Equal(2, stats.Archetypes.Automation,
+	assert.Equal(t, 2, stats.Archetypes.Automation,
 		"archetypes.automation")
-	assert.Equal(0, stats.Archetypes.Quick, "archetypes.quick")
-	assert.Equal(0, stats.Archetypes.Standard,
+	assert.Equal(t, 0, stats.Archetypes.Quick, "archetypes.quick")
+	assert.Equal(t, 0, stats.Archetypes.Standard,
 		"archetypes.standard")
-	assert.Equal(2, stats.Archetypes.Deep, "archetypes.deep")
-	assert.Equal(1, stats.Archetypes.Marathon,
+	assert.Equal(t, 2, stats.Archetypes.Deep, "archetypes.deep")
+	assert.Equal(t, 1, stats.Archetypes.Marathon,
 		"archetypes.marathon")
 	// 2 automation, 2 deep — tie broken by priority: automation first.
-	assert.Equal("automation", stats.Archetypes.Primary,
+	assert.Equal(t, "automation", stats.Archetypes.Primary,
 		"archetypes.primary")
 	// Human subset: 2 deep, 1 marathon. Deep wins.
-	assert.Equal("deep", stats.Archetypes.PrimaryHuman,
+	assert.Equal(t, "deep", stats.Archetypes.PrimaryHuman,
 		"archetypes.primary_human")
 
 	// Window bookkeeping: Since = now-28d, Until = now, days = 28.
-	assert.Equal(28, stats.Window.Days, "window.days: got")
-	assert.NotEmpty(stats.Window.Since,
+	assert.Equal(t, 28, stats.Window.Days, "window.days: got")
+	assert.NotEmpty(t, stats.Window.Since,
 		"window.since (until=%q)", stats.Window.Until)
-	assert.NotEmpty(stats.Window.Until,
+	assert.NotEmpty(t, stats.Window.Until,
 		"window.until (since=%q)", stats.Window.Since)
 	_, errSince := time.Parse(time.RFC3339, stats.Window.Since)
-	assert.NoError(errSince, "window.since not RFC3339")
+	require.NoError(t, errSince, "window.since not RFC3339")
 	_, errUntil := time.Parse(time.RFC3339, stats.Window.Until)
-	assert.NoError(errUntil, "window.until not RFC3339")
+	require.NoError(t, errUntil, "window.until not RFC3339")
 
 	// Filters echo the inputs and default Agent to "all".
-	assert.Equal("all", stats.Filters.Agent, "filters.agent")
-	assert.Equal("UTC", stats.Filters.Timezone,
+	assert.Equal(t, "all", stats.Filters.Agent, "filters.agent")
+	assert.Equal(t, "UTC", stats.Filters.Timezone,
 		"filters.timezone")
-	assert.NotNil(stats.Filters.ProjectsExcluded,
+	assert.NotNil(t, stats.Filters.ProjectsExcluded,
 		"filters.projects_excluded must be non-nil slice")
 
-	assert.NotEmpty(stats.GeneratedAt, "generated_at")
+	assert.NotEmpty(t, stats.GeneratedAt, "generated_at")
 }
 
 // TestGetSessionStats_SubagentTotals verifies the two-bucket split in
@@ -434,8 +430,6 @@ func TestGetSessionStats_TotalsAndArchetypes(t *testing.T) {
 // signal-less shape does not skew those. The subagent here is one-shot
 // (userMsgs 1) and short, like a real workflow subagent.
 func TestGetSessionStats_SubagentTotals(t *testing.T) {
-	assert := assert.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -459,18 +453,18 @@ func TestGetSessionStats_SubagentTotals(t *testing.T) {
 	require.NoError(t, err, "GetSessionStats")
 
 	// Additive totals include the subagent.
-	assert.Equal(2, stats.Totals.SessionsAll, "sessions_all")
-	assert.Equal(25, stats.Totals.MessagesTotal, "messages_total")
-	assert.Equal(11, stats.Totals.UserMessagesTotal,
+	assert.Equal(t, 2, stats.Totals.SessionsAll, "sessions_all")
+	assert.Equal(t, 25, stats.Totals.MessagesTotal, "messages_total")
+	assert.Equal(t, 11, stats.Totals.UserMessagesTotal,
 		"user_messages_total")
 
 	// SessionsHuman stays root-only: a subagent is not a human session.
-	assert.Equal(1, stats.Totals.SessionsHuman, "sessions_human")
-	assert.Equal(0, stats.Totals.SessionsAutomation,
+	assert.Equal(t, 1, stats.Totals.SessionsHuman, "sessions_human")
+	assert.Equal(t, 0, stats.Totals.SessionsAutomation,
 		"sessions_automation")
 	// The subagent lands in its own bucket so the partition holds.
-	assert.Equal(1, stats.Totals.SessionsSubagent, "sessions_subagent")
-	assert.Equal(stats.Totals.SessionsAll,
+	assert.Equal(t, 1, stats.Totals.SessionsSubagent, "sessions_subagent")
+	assert.Equal(t, stats.Totals.SessionsAll,
 		stats.Totals.SessionsHuman+stats.Totals.SessionsAutomation+
 			stats.Totals.SessionsSubagent,
 		"invariant: all == human + automation + subagent")
@@ -481,7 +475,7 @@ func TestGetSessionStats_SubagentTotals(t *testing.T) {
 	for _, b := range stats.Distributions.UserMessages.ScopeAll.Buckets {
 		gotN += b.Count
 	}
-	assert.Equal(1, gotN,
+	assert.Equal(t, 1, gotN,
 		"user-messages distribution must exclude the subagent")
 
 	// Duration distribution likewise root-only (subagent's 8 min absent).
@@ -489,20 +483,20 @@ func TestGetSessionStats_SubagentTotals(t *testing.T) {
 	for _, b := range stats.Distributions.DurationMinutes.ScopeAll.Buckets {
 		durN += b.Count
 	}
-	assert.Equal(1, durN,
+	assert.Equal(t, 1, durN,
 		"duration distribution must exclude the subagent")
 
 	// Agent portfolio all-session maps count the subagent so they
 	// reconcile with the inclusive totals; the _human maps stay
 	// root-only (a subagent is not human).
 	ap := stats.AgentPortfolio
-	assert.Equal(2, ap.BySessions["claude"], "by_sessions counts subagent")
-	assert.Equal(25, ap.ByMessages["claude"], "by_messages counts subagent")
-	assert.Equal(int64(1400), ap.ByTokens["claude"],
+	assert.Equal(t, 2, ap.BySessions["claude"], "by_sessions counts subagent")
+	assert.Equal(t, 25, ap.ByMessages["claude"], "by_messages counts subagent")
+	assert.Equal(t, int64(1400), ap.ByTokens["claude"],
 		"by_tokens counts subagent spend (1000 + 400)")
-	assert.Equal(1, ap.BySessionsHuman["claude"],
+	assert.Equal(t, 1, ap.BySessionsHuman["claude"],
 		"by_sessions_human stays root-only")
-	assert.Equal(int64(1000), ap.ByTokensHuman["claude"],
+	assert.Equal(t, int64(1000), ap.ByTokensHuman["claude"],
 		"by_tokens_human excludes the subagent")
 
 	// Reconciliation: the all-session agent-portfolio sums must equal
@@ -515,15 +509,13 @@ func TestGetSessionStats_SubagentTotals(t *testing.T) {
 	for _, v := range ap.ByMessages {
 		sumMessages += v
 	}
-	assert.Equal(stats.Totals.SessionsAll, sumSessions,
+	assert.Equal(t, stats.Totals.SessionsAll, sumSessions,
 		"sum(by_sessions) must equal sessions_all")
-	assert.Equal(stats.Totals.MessagesTotal, sumMessages,
+	assert.Equal(t, stats.Totals.MessagesTotal, sumMessages,
 		"sum(by_messages) must equal messages_total")
 }
 
 func Test_computeTotalsAndArchetypes_flagAuthority(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	// Short non-automated session — must count as human, bucket as "quick".
 	insertSessionFixture(t, d, sessionFixture{
@@ -542,17 +534,14 @@ func Test_computeTotalsAndArchetypes_flagAuthority(t *testing.T) {
 	})
 
 	got, err := d.GetSessionStats(t.Context(), StatsFilter{Since: "1d"})
-	require.NoError(err, "GetSessionStats")
-	require.Equal(1, got.Totals.SessionsHuman, "SessionsHuman")
-	require.Equal(1, got.Totals.SessionsAutomation, "SessionsAutomation")
-	require.Equal(1, got.Archetypes.Quick, "Archetypes.Quick")
-	require.Equal(1, got.Archetypes.Automation, "Archetypes.Automation")
+	require.NoError(t, err, "GetSessionStats")
+	require.Equal(t, 1, got.Totals.SessionsHuman, "SessionsHuman")
+	require.Equal(t, 1, got.Totals.SessionsAutomation, "SessionsAutomation")
+	require.Equal(t, 1, got.Archetypes.Quick, "Archetypes.Quick")
+	require.Equal(t, 1, got.Archetypes.Automation, "Archetypes.Automation")
 }
 
 func TestGetSessionStats_FilterByAgent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -566,15 +555,15 @@ func TestGetSessionStats_FilterByAgent(t *testing.T) {
 	})
 
 	all, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
-	require.NoError(err, "GetSessionStats all")
-	assert.Equal(2, all.Totals.SessionsAll, "all agents")
+	require.NoError(t, err, "GetSessionStats all")
+	assert.Equal(t, 2, all.Totals.SessionsAll, "all agents")
 
 	onlyClaude, err := d.GetSessionStats(
 		ctx, StatsFilter{Since: "28d", Agent: "claude"},
 	)
-	require.NoError(err, "GetSessionStats claude")
-	assert.Equal(1, onlyClaude.Totals.SessionsAll, "agent=claude")
-	assert.Equal("claude", onlyClaude.Filters.Agent,
+	require.NoError(t, err, "GetSessionStats claude")
+	assert.Equal(t, 1, onlyClaude.Totals.SessionsAll, "agent=claude")
+	assert.Equal(t, "claude", onlyClaude.Filters.Agent,
 		"agent filter echoed")
 
 	// Comma-separated agents with surrounding whitespace must match
@@ -582,15 +571,12 @@ func TestGetSessionStats_FilterByAgent(t *testing.T) {
 	multi, err := d.GetSessionStats(
 		ctx, StatsFilter{Since: "28d", Agent: "claude, codex"},
 	)
-	require.NoError(err, "GetSessionStats multi-agent")
-	assert.Equal(2, multi.Totals.SessionsAll,
+	require.NoError(t, err, "GetSessionStats multi-agent")
+	assert.Equal(t, 2, multi.Totals.SessionsAll,
 		"comma-separated agents with whitespace match both")
 }
 
 func TestGetSessionStats_FilterByProject(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -607,16 +593,16 @@ func TestGetSessionStats_FilterByProject(t *testing.T) {
 		Since:           "28d",
 		IncludeProjects: []string{"alpha"},
 	})
-	require.NoError(err, "include alpha")
-	assert.Equal(2, includeAlpha.Totals.SessionsAll,
+	require.NoError(t, err, "include alpha")
+	assert.Equal(t, 2, includeAlpha.Totals.SessionsAll,
 		"include=alpha")
 
 	excludeAlpha, err := d.GetSessionStats(ctx, StatsFilter{
 		Since:           "28d",
 		ExcludeProjects: []string{"alpha"},
 	})
-	require.NoError(err, "exclude alpha")
-	assert.Equal(2, excludeAlpha.Totals.SessionsAll,
+	require.NoError(t, err, "exclude alpha")
+	assert.Equal(t, 2, excludeAlpha.Totals.SessionsAll,
 		"exclude=alpha want 2 (beta + gamma)")
 }
 
@@ -625,15 +611,13 @@ func TestWindowBounds(t *testing.T) {
 	now := time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
 
 	t.Run("default 28d", func(t *testing.T) {
-		assert := assert.New(t)
-
 		from, to, days, err := windowBounds(StatsFilter{}, now)
 		require.NoError(t, err, "windowBounds")
-		assert.Equal(28, days, "days: got")
-		assert.True(to.Equal(now),
+		assert.Equal(t, 28, days, "days: got")
+		assert.True(t, to.Equal(now),
 			"until: got %v want %v", to, now)
 		wantFrom := now.Add(-28 * 24 * time.Hour)
-		assert.True(from.Equal(wantFrom),
+		assert.True(t, from.Equal(wantFrom),
 			"since: got %v want %v", from, wantFrom)
 	})
 
@@ -654,17 +638,15 @@ func TestWindowBounds(t *testing.T) {
 	})
 
 	t.Run("bare date", func(t *testing.T) {
-		assert := assert.New(t)
-
 		from, _, _, err := windowBounds(
 			StatsFilter{Since: "2026-04-01"}, now,
 		)
 		require.NoError(t, err, "windowBounds")
-		assert.Equal(2026, from.Year(),
+		assert.Equal(t, 2026, from.Year(),
 			"since parsed: got %v want 2026-04-01", from)
-		assert.Equal(time.April, from.Month(),
+		assert.Equal(t, time.April, from.Month(),
 			"since parsed: got %v want 2026-04-01", from)
-		assert.Equal(1, from.Day(),
+		assert.Equal(t, 1, from.Day(),
 			"since parsed: got %v want 2026-04-01", from)
 	})
 
@@ -685,36 +667,38 @@ func TestParseWindowPoint(t *testing.T) {
 		want             time.Time
 		wantErrSubstring string
 	}{
-		{name: "Nd duration anchors at now", in: "7d",
-			want: time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC)},
-		{name: "Nh duration", in: "48h",
-			want: time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)},
-		{name: "bare date is start of UTC day", in: "2026-04-01",
-			want: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)},
-		{name: "garbage is a hard error", in: "7x",
-			wantErrSubstring: "Nd, Nh, or YYYY-MM-DD"},
+		{
+			name: "Nd duration anchors at now", in: "7d",
+			want: time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "Nh duration", in: "48h",
+			want: time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "bare date is start of UTC day", in: "2026-04-01",
+			want: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "garbage is a hard error", in: "7x",
+			wantErrSubstring: "Nd, Nh, or YYYY-MM-DD",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			got, err := ParseWindowPoint(tc.in, now)
 			if tc.wantErrSubstring != "" {
-				require.Error(err, "expected an error")
-				assert.Contains(err.Error(), tc.wantErrSubstring)
+				require.Error(t, err, "expected an error")
+				assert.Contains(t, err.Error(), tc.wantErrSubstring)
 				return
 			}
-			require.NoError(err)
-			assert.True(got.Equal(tc.want), "got %v want %v", got, tc.want)
+			require.NoError(t, err)
+			assert.True(t, got.Equal(tc.want), "got %v want %v", got, tc.want)
 		})
 	}
 }
 
 func TestGetSessionStats_Distributions(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -757,37 +741,37 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 	}
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
-	require.NoError(err, "GetSessionStats")
+	require.NoError(t, err, "GetSessionStats")
 
 	// duration scope_all: 0.5→bucket0, 0.9→bucket0, 3→bucket1,
 	// 10→bucket2, 25/30→bucket3, 120→bucket5 (top).
 	gotAll := stats.Distributions.DurationMinutes.ScopeAll.Buckets
 	wantCountsAll := []int{2, 1, 1, 2, 0, 1}
-	require.Len(gotAll, len(wantCountsAll),
+	require.Len(t, gotAll, len(wantCountsAll),
 		"duration scope_all buckets")
 	for i, w := range wantCountsAll {
-		assert.Equal(w, gotAll[i].Count,
+		assert.Equal(t, w, gotAll[i].Count,
 			"duration scope_all bucket %d", i)
 	}
 	// duration scope_human (c,d,e,f): bucket1=1, bucket2=1,
 	// bucket3=1, bucket5=1.
 	gotHuman := stats.Distributions.DurationMinutes.ScopeHuman.Buckets
 	wantCountsHuman := []int{0, 1, 1, 1, 0, 1}
-	require.Len(gotHuman, len(wantCountsHuman),
+	require.Len(t, gotHuman, len(wantCountsHuman),
 		"duration scope_human buckets")
 	for i, w := range wantCountsHuman {
-		assert.Equal(w, gotHuman[i].Count,
+		assert.Equal(t, w, gotHuman[i].Count,
 			"duration scope_human bucket %d", i)
 	}
 
 	// Means (arithmetic over included sessions).
 	wantAllMean := (0.5 + 0.9 + 10 + 25 + 120 + 3 + 30) / 7.0
 	gotAllMean := stats.Distributions.DurationMinutes.ScopeAll.Mean
-	assert.InDelta(wantAllMean, gotAllMean, 0.01,
+	assert.InDelta(t, wantAllMean, gotAllMean, 0.01,
 		"duration scope_all mean")
 	wantHumanMean := (10.0 + 25.0 + 120.0 + 3.0) / 4.0
 	gotHumanMean := stats.Distributions.DurationMinutes.ScopeHuman.Mean
-	assert.InDelta(wantHumanMean, gotHumanMean, 0.01,
+	assert.InDelta(t, wantHumanMean, gotHumanMean, 0.01,
 		"duration scope_human mean")
 
 	// user_messages scope_all uses userMessagesEdgesAll
@@ -795,10 +779,10 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 	// 0→0, 1→0, 3→1, 10→2, 30→3, 1→0, 4→1.
 	gotUM := stats.Distributions.UserMessages.ScopeAll.Buckets
 	wantUM := []int{3, 2, 1, 1, 0, 0}
-	require.Len(gotUM, len(wantUM),
+	require.Len(t, gotUM, len(wantUM),
 		"user_messages scope_all buckets")
 	for i, w := range wantUM {
-		assert.Equal(w, gotUM[i].Count,
+		assert.Equal(t, w, gotUM[i].Count,
 			"user_messages scope_all bucket %d", i)
 	}
 	// user_messages scope_human uses userMessagesEdgesHuman (5 buckets,
@@ -807,13 +791,13 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 	// mean and bucket accumulation.
 	gotUMH := stats.Distributions.UserMessages.ScopeHuman.Buckets
 	wantUMH := []int{1, 1, 1, 0, 0}
-	require.Len(gotUMH, len(wantUMH),
+	require.Len(t, gotUMH, len(wantUMH),
 		"user_messages scope_human buckets")
 	for i, w := range wantUMH {
-		assert.Equal(w, gotUMH[i].Count,
+		assert.Equal(t, w, gotUMH[i].Count,
 			"user_messages scope_human bucket %d", i)
 	}
-	assert.InDelta((3.0+10.0+30.0)/3.0,
+	assert.InDelta(t, (3.0+10.0+30.0)/3.0,
 		stats.Distributions.UserMessages.ScopeHuman.Mean, 0.01,
 		"user_messages scope_human mean filters values below 2")
 
@@ -822,21 +806,21 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 	gotPCAll := stats.Distributions.PeakContextTokens.ScopeAll.Buckets
 	wantPCAll := []int{2, 2, 2, 0, 1, 0}
 	for i, w := range wantPCAll {
-		assert.Equal(w, gotPCAll[i].Count,
+		assert.Equal(t, w, gotPCAll[i].Count,
 			"peak_context scope_all bucket %d", i)
 	}
 	// peak_context scope_human (c,d,e,f): 12k/25k→1,
 	// 60k→2, 150k→4.
 	gotPC := stats.Distributions.PeakContextTokens.ScopeHuman.Buckets
-	assert.Equal(2, gotPC[1].Count,
+	assert.Equal(t, 2, gotPC[1].Count,
 		"peak_context scope_human: %+v", gotPC)
-	assert.Equal(1, gotPC[2].Count,
+	assert.Equal(t, 1, gotPC[2].Count,
 		"peak_context scope_human: %+v", gotPC)
-	assert.Equal(1, gotPC[4].Count,
+	assert.Equal(t, 1, gotPC[4].Count,
 		"peak_context scope_human: %+v", gotPC)
-	assert.False(stats.Distributions.PeakContextTokens.ClaudeOnly,
+	assert.False(t, stats.Distributions.PeakContextTokens.ClaudeOnly,
 		"peak_context.claude_only is always false since #646")
-	assert.Equal(0,
+	assert.Equal(t, 0,
 		stats.Distributions.PeakContextTokens.NullCount,
 		"peak_context.null_count")
 
@@ -845,10 +829,10 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 	// toolsPerTurnEdges = [0,1,2,4,7,11,+Inf].
 	gotTPT := stats.Distributions.ToolsPerTurn.ScopeAll.Buckets
 	wantTPT := []int{0, 3, 1, 0, 0, 0}
-	require.Len(gotTPT, len(wantTPT),
+	require.Len(t, gotTPT, len(wantTPT),
 		"tools_per_turn scope_all buckets")
 	for i, w := range wantTPT {
-		assert.Equal(w, gotTPT[i].Count,
+		assert.Equal(t, w, gotTPT[i].Count,
 			"tools_per_turn scope_all bucket %d", i)
 	}
 }
@@ -899,8 +883,6 @@ func TestGetSessionStats_Distributions_NullPeakContext(t *testing.T) {
 }
 
 func TestGetSessionStats_Distributions_PeakContextNonClaude(t *testing.T) {
-	assert := assert.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -939,19 +921,19 @@ func TestGetSessionStats_Distributions_PeakContextNonClaude(t *testing.T) {
 	for _, b := range pc.ScopeAll.Buckets {
 		total += b.Count
 	}
-	assert.Equal(2, total,
+	assert.Equal(t, 2, total,
 		"scope_all bucket total want 2 (both hermes rows with data): %+v",
 		pc.ScopeAll.Buckets)
 	// peakContextEdges: 25k → [10k,50k) bucket 1; 120k → [100k,150k) bucket 3.
-	assert.Equal(1, pc.ScopeAll.Buckets[1].Count,
+	assert.Equal(t, 1, pc.ScopeAll.Buckets[1].Count,
 		"25k hermes session in bucket 1: %+v", pc.ScopeAll.Buckets)
-	assert.Equal(1, pc.ScopeAll.Buckets[3].Count,
+	assert.Equal(t, 1, pc.ScopeAll.Buckets[3].Count,
 		"120k hermes session in bucket 3: %+v", pc.ScopeAll.Buckets)
-	assert.InDelta((25_000.0+120_000.0)/2.0, pc.ScopeAll.Mean, 0.01,
+	assert.InDelta(t, (25_000.0+120_000.0)/2.0, pc.ScopeAll.Mean, 0.01,
 		"scope_all mean over the two hermes rows with data")
-	assert.Equal(1, pc.NullCount,
+	assert.Equal(t, 1, pc.NullCount,
 		"null_count want 1 (h3: hermes reports the metric, h3 lacks it)")
-	assert.False(pc.ClaudeOnly, "claude_only must be false")
+	assert.False(t, pc.ClaudeOnly, "claude_only must be false")
 }
 
 // seedVelocityMessages inserts len(offsetsSec) messages for sessionID,
@@ -985,13 +967,11 @@ func seedVelocityMessages(
 			Timestamp:     ts,
 		})
 	}
-	require.NoError(t, d.InsertMessages(msgs),
+	require.NoError(t, d.InsertMessages(t.Context(), msgs),
 		"seedVelocityMessages %s: InsertMessages", sessionID)
 }
 
 func TestGetSessionStats_Velocity(t *testing.T) {
-	assert := assert.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -1033,33 +1013,31 @@ func TestGetSessionStats_Velocity(t *testing.T) {
 	// percentileFloat: P50 idx=int(5*0.5)=2 → 15, P90 idx=4 → 30.
 	// Mean = (5+10+15+20+30)/5 = 16.
 	tc := stats.Velocity.TurnCycleSeconds
-	assert.Equal(15.0, tc.P50, "TurnCycleSeconds.P50")
-	assert.Equal(30.0, tc.P90, "TurnCycleSeconds.P90")
-	assert.InDelta(16.0, tc.Mean, 0.001,
+	assert.InDelta(t, 15.0, tc.P50, 0, "TurnCycleSeconds.P50")
+	assert.InDelta(t, 30.0, tc.P90, 0, "TurnCycleSeconds.P90")
+	assert.InDelta(t, 16.0, tc.Mean, 0.001,
 		"TurnCycleSeconds.Mean")
 
 	// First response seconds, sorted = [10,30].
 	// percentileFloat: P50 idx=int(2*0.5)=1 → 30, P90 idx=1 → 30.
 	// Mean = (10+30)/2 = 20.
 	fr := stats.Velocity.FirstResponseSeconds
-	assert.Equal(30.0, fr.P50, "FirstResponseSeconds.P50")
-	assert.Equal(30.0, fr.P90, "FirstResponseSeconds.P90")
-	assert.InDelta(20.0, fr.Mean, 0.001,
+	assert.InDelta(t, 30.0, fr.P50, 0, "FirstResponseSeconds.P50")
+	assert.InDelta(t, 30.0, fr.P90, 0, "FirstResponseSeconds.P90")
+	assert.InDelta(t, 20.0, fr.Mean, 0.001,
 		"FirstResponseSeconds.Mean")
 
 	// MessagesPerActiveHour: active seconds=130, messages=10.
 	// activeMinutes = 130/60, per-hour = 10 / (activeMinutes/60)
 	//               = 10 * 60 / (130/60) = 36000/130 ≈ 276.923.
 	want := 36000.0 / 130.0
-	assert.InDelta(want, stats.Velocity.MessagesPerActiveHour,
+	assert.InDelta(t, want, stats.Velocity.MessagesPerActiveHour,
 		0.01, "MessagesPerActiveHour")
 }
 
 // Empty case: no sessions at all. The velocity accumulator stays zeroed
 // and every output field must read as 0 rather than NaN / unset.
 func TestGetSessionStats_Velocity_Empty(t *testing.T) {
-	assert := assert.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -1067,14 +1045,14 @@ func TestGetSessionStats_Velocity_Empty(t *testing.T) {
 	require.NoError(t, err, "GetSessionStats")
 
 	tc := stats.Velocity.TurnCycleSeconds
-	assert.Equal(0.0, tc.P50, "TurnCycleSeconds.P50 want zero: %+v", tc)
-	assert.Equal(0.0, tc.P90, "TurnCycleSeconds.P90 want zero: %+v", tc)
-	assert.Equal(0.0, tc.Mean, "TurnCycleSeconds.Mean want zero: %+v", tc)
+	assert.InDelta(t, 0.0, tc.P50, 0, "TurnCycleSeconds.P50 want zero: %+v", tc)
+	assert.InDelta(t, 0.0, tc.P90, 0, "TurnCycleSeconds.P90 want zero: %+v", tc)
+	assert.InDelta(t, 0.0, tc.Mean, 0, "TurnCycleSeconds.Mean want zero: %+v", tc)
 	fr := stats.Velocity.FirstResponseSeconds
-	assert.Equal(0.0, fr.P50, "FirstResponseSeconds.P50 want zero: %+v", fr)
-	assert.Equal(0.0, fr.P90, "FirstResponseSeconds.P90 want zero: %+v", fr)
-	assert.Equal(0.0, fr.Mean, "FirstResponseSeconds.Mean want zero: %+v", fr)
-	assert.Equal(0.0, stats.Velocity.MessagesPerActiveHour,
+	assert.InDelta(t, 0.0, fr.P50, 0, "FirstResponseSeconds.P50 want zero: %+v", fr)
+	assert.InDelta(t, 0.0, fr.P90, 0, "FirstResponseSeconds.P90 want zero: %+v", fr)
+	assert.InDelta(t, 0.0, fr.Mean, 0, "FirstResponseSeconds.Mean want zero: %+v", fr)
+	assert.InDelta(t, 0.0, stats.Velocity.MessagesPerActiveHour, 0,
 		"MessagesPerActiveHour")
 }
 
@@ -1082,8 +1060,6 @@ func TestGetSessionStats_Velocity_Empty(t *testing.T) {
 // both the turn-cycle and first-response series, so P50 / P90 / Mean
 // must all collapse to the same value.
 func TestGetSessionStats_Velocity_SingleTurn(t *testing.T) {
-	assert := assert.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -1102,19 +1078,19 @@ func TestGetSessionStats_Velocity_SingleTurn(t *testing.T) {
 	require.NoError(t, err, "GetSessionStats")
 
 	tc := stats.Velocity.TurnCycleSeconds
-	assert.Equal(60.0, tc.P50, "TurnCycleSeconds.P50")
-	assert.Equal(60.0, tc.P90, "TurnCycleSeconds.P90")
-	assert.InDelta(60.0, tc.Mean, 0.001,
+	assert.InDelta(t, 60.0, tc.P50, 0, "TurnCycleSeconds.P50")
+	assert.InDelta(t, 60.0, tc.P90, 0, "TurnCycleSeconds.P90")
+	assert.InDelta(t, 60.0, tc.Mean, 0.001,
 		"TurnCycleSeconds.Mean")
 	fr := stats.Velocity.FirstResponseSeconds
-	assert.Equal(60.0, fr.P50, "FirstResponseSeconds.P50")
-	assert.Equal(60.0, fr.P90, "FirstResponseSeconds.P90")
-	assert.InDelta(60.0, fr.Mean, 0.001,
+	assert.InDelta(t, 60.0, fr.P50, 0, "FirstResponseSeconds.P50")
+	assert.InDelta(t, 60.0, fr.P90, 0, "FirstResponseSeconds.P90")
+	assert.InDelta(t, 60.0, fr.Mean, 0.001,
 		"FirstResponseSeconds.Mean")
-	assert.Greater(stats.Velocity.MessagesPerActiveHour, 0.0,
+	assert.Greater(t, stats.Velocity.MessagesPerActiveHour, 0.0,
 		"MessagesPerActiveHour want > 0")
 	want := 120.0
-	assert.InDelta(want, stats.Velocity.MessagesPerActiveHour,
+	assert.InDelta(t, want, stats.Velocity.MessagesPerActiveHour,
 		0.001, "MessagesPerActiveHour")
 }
 
@@ -1137,13 +1113,11 @@ func TestGetSessionStats_Velocity_ZeroActive(t *testing.T) {
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
 	require.NoError(t, err, "GetSessionStats")
 
-	assert.Equal(t, 0.0, stats.Velocity.MessagesPerActiveHour,
+	assert.InDelta(t, 0.0, stats.Velocity.MessagesPerActiveHour, 0,
 		"MessagesPerActiveHour")
 }
 
 func TestGetSessionStats_ToolMixAndModelMix(t *testing.T) {
-	assert := assert.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -1198,23 +1172,23 @@ func TestGetSessionStats_ToolMixAndModelMix(t *testing.T) {
 		"Grep": 1,
 	}
 	gotCats := stats.ToolMix.ByCategory
-	assert.Len(gotCats, len(wantCats),
+	assert.Len(t, gotCats, len(wantCats),
 		"ToolMix.ByCategory len (got=%v)", gotCats)
 	for cat, want := range wantCats {
-		assert.Equal(want, gotCats[cat],
+		assert.Equal(t, want, gotCats[cat],
 			"ToolMix.ByCategory[%q]", cat)
 	}
-	assert.Equal(6, stats.ToolMix.TotalCalls, "ToolMix.TotalCalls")
+	assert.Equal(t, 6, stats.ToolMix.TotalCalls, "ToolMix.TotalCalls")
 
 	wantTokens := map[string]int64{
 		"claude-opus-4-7":   3000,
 		"claude-sonnet-4-6": 500,
 	}
 	gotTokens := stats.ModelMix.ByTokens
-	assert.Len(gotTokens, len(wantTokens),
+	assert.Len(t, gotTokens, len(wantTokens),
 		"ModelMix.ByTokens len (got=%v)", gotTokens)
 	for model, want := range wantTokens {
-		assert.Equal(want, gotTokens[model],
+		assert.Equal(t, want, gotTokens[model],
 			"ModelMix.ByTokens[%q]", model)
 	}
 }
@@ -1223,8 +1197,6 @@ func TestGetSessionStats_ToolMixAndModelMix(t *testing.T) {
 // messages attached to sessions outside the window or not matching
 // the agent filter must not appear in ToolMix or ModelMix.
 func TestGetSessionStats_ToolMixAndModelMix_Filters(t *testing.T) {
-	assert := assert.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -1277,41 +1249,39 @@ func TestGetSessionStats_ToolMixAndModelMix_Filters(t *testing.T) {
 	require.NoError(t, err, "GetSessionStats")
 
 	// Only in1's 2 tool_calls survive.
-	assert.Equal(2, stats.ToolMix.TotalCalls, "ToolMix.TotalCalls")
-	assert.Equal(1, stats.ToolMix.ByCategory["Bash"],
+	assert.Equal(t, 2, stats.ToolMix.TotalCalls, "ToolMix.TotalCalls")
+	assert.Equal(t, 1, stats.ToolMix.ByCategory["Bash"],
 		"ToolMix.ByCategory: want Bash=1 Read=1, got %v",
 		stats.ToolMix.ByCategory)
-	assert.Equal(1, stats.ToolMix.ByCategory["Read"],
+	assert.Equal(t, 1, stats.ToolMix.ByCategory["Read"],
 		"ToolMix.ByCategory: want Bash=1 Read=1, got %v",
 		stats.ToolMix.ByCategory)
-	assert.Equal(0, stats.ToolMix.ByCategory["Edit"],
+	assert.Equal(t, 0, stats.ToolMix.ByCategory["Edit"],
 		"out-of-window Edit leaked")
-	assert.Equal(0, stats.ToolMix.ByCategory["Grep"],
+	assert.Equal(t, 0, stats.ToolMix.ByCategory["Grep"],
 		"wrong-agent Grep leaked")
 
 	// Only in1's 800 tokens survive.
-	assert.Equal(int64(800),
+	assert.Equal(t, int64(800),
 		stats.ModelMix.ByTokens["claude-opus-4-7"],
 		"ModelMix.ByTokens[claude-opus-4-7]")
-	assert.NotContains(stats.ModelMix.ByTokens, "codex-gpt-5",
+	assert.NotContains(t, stats.ModelMix.ByTokens, "codex-gpt-5",
 		"wrong-agent model leaked")
 }
 
 // Empty-window case: no sessions → both mixes must serialize as empty
 // maps (not nil) so the JSON output keeps stable keys.
 func TestGetSessionStats_ToolMixAndModelMix_Empty(t *testing.T) {
-	assert := assert.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
 	require.NoError(t, err, "GetSessionStats")
-	assert.NotNil(stats.ToolMix.ByCategory,
+	assert.NotNil(t, stats.ToolMix.ByCategory,
 		"ToolMix.ByCategory: want non-nil map")
-	assert.Equal(0, stats.ToolMix.TotalCalls,
+	assert.Equal(t, 0, stats.ToolMix.TotalCalls,
 		"ToolMix.TotalCalls")
-	assert.NotNil(stats.ModelMix.ByTokens,
+	assert.NotNil(t, stats.ModelMix.ByTokens,
 		"ModelMix.ByTokens: want non-nil map")
 }
 
@@ -1319,8 +1289,6 @@ func TestGetSessionStats_ToolMixAndModelMix_Empty(t *testing.T) {
 // per agent across the window. Primary names the agent with the most
 // sessions, with alphabetical tie-breaking for determinism.
 func TestGetSessionStats_AgentPortfolio(t *testing.T) {
-	assert := assert.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -1372,34 +1340,32 @@ func TestGetSessionStats_AgentPortfolio(t *testing.T) {
 
 	ap := stats.AgentPortfolio
 	wantSessions := map[string]int{"claude": 3, "codex": 2, "cursor": 1}
-	assert.Len(ap.BySessions, len(wantSessions),
+	assert.Len(t, ap.BySessions, len(wantSessions),
 		"BySessions len (got=%v)", ap.BySessions)
 	for k, v := range wantSessions {
-		assert.Equal(v, ap.BySessions[k],
+		assert.Equal(t, v, ap.BySessions[k],
 			"BySessions[%q]", k)
 	}
 
 	wantMessages := map[string]int{"claude": 22, "codex": 9, "cursor": 4}
 	for k, v := range wantMessages {
-		assert.Equal(v, ap.ByMessages[k],
+		assert.Equal(t, v, ap.ByMessages[k],
 			"ByMessages[%q]", k)
 	}
 
 	wantTokens := map[string]int64{"claude": 600, "codex": 150, "cursor": 80}
 	for k, v := range wantTokens {
-		assert.Equal(v, ap.ByTokens[k],
+		assert.Equal(t, v, ap.ByTokens[k],
 			"ByTokens[%q]", k)
 	}
 
-	assert.Equal("claude", ap.Primary, "Primary")
+	assert.Equal(t, "claude", ap.Primary, "Primary")
 }
 
 // Tie-break: two agents at equal session counts must resolve to the
 // lexicographically smallest agent name. claude vs codex both at 2 →
 // claude wins because "claude" < "codex".
 func TestGetSessionStats_AgentPortfolio_TieBreak(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -1424,11 +1390,11 @@ func TestGetSessionStats_AgentPortfolio_TieBreak(t *testing.T) {
 	})
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
-	require.NoError(err, "GetSessionStats")
-	require.Equal(2, stats.AgentPortfolio.BySessions["claude"],
+	require.NoError(t, err, "GetSessionStats")
+	require.Equal(t, 2, stats.AgentPortfolio.BySessions["claude"],
 		"precondition: claude/codex must tie at 2 (got %v)",
 		stats.AgentPortfolio.BySessions)
-	require.Equal(2, stats.AgentPortfolio.BySessions["codex"],
+	require.Equal(t, 2, stats.AgentPortfolio.BySessions["codex"],
 		"precondition: claude/codex must tie at 2 (got %v)",
 		stats.AgentPortfolio.BySessions)
 	assert.Equal(t, "claude", stats.AgentPortfolio.Primary,
@@ -1438,45 +1404,41 @@ func TestGetSessionStats_AgentPortfolio_TieBreak(t *testing.T) {
 // Empty-window case: AgentPortfolio maps must be non-nil (JSON encodes
 // {} not null) and Primary must be empty without crashing.
 func TestGetSessionStats_AgentPortfolio_Empty(t *testing.T) {
-	assert := assert.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
 	require.NoError(t, err, "GetSessionStats")
 	ap := stats.AgentPortfolio
-	assert.NotNil(ap.BySessions,
+	assert.NotNil(t, ap.BySessions,
 		"BySessions: want non-nil map")
-	assert.NotNil(ap.ByMessages,
+	assert.NotNil(t, ap.ByMessages,
 		"ByMessages: want non-nil map")
-	assert.NotNil(ap.ByTokens,
+	assert.NotNil(t, ap.ByTokens,
 		"ByTokens: want non-nil map")
-	assert.NotNil(ap.BySessionsHuman,
+	assert.NotNil(t, ap.BySessionsHuman,
 		"BySessionsHuman: want non-nil map")
-	assert.NotNil(ap.ByMessagesHuman,
+	assert.NotNil(t, ap.ByMessagesHuman,
 		"ByMessagesHuman: want non-nil map")
-	assert.NotNil(ap.ByTokensHuman,
+	assert.NotNil(t, ap.ByTokensHuman,
 		"ByTokensHuman: want non-nil map")
-	assert.Empty(ap.BySessions,
+	assert.Empty(t, ap.BySessions,
 		"empty window: got non-empty maps %+v", ap)
-	assert.Empty(ap.ByMessages,
+	assert.Empty(t, ap.ByMessages,
 		"empty window: got non-empty maps %+v", ap)
-	assert.Empty(ap.ByTokens,
+	assert.Empty(t, ap.ByTokens,
 		"empty window: got non-empty maps %+v", ap)
-	assert.Empty(ap.BySessionsHuman,
+	assert.Empty(t, ap.BySessionsHuman,
 		"empty window: got non-empty human maps %+v", ap)
-	assert.Empty(ap.ByMessagesHuman,
+	assert.Empty(t, ap.ByMessagesHuman,
 		"empty window: got non-empty human maps %+v", ap)
-	assert.Empty(ap.ByTokensHuman,
+	assert.Empty(t, ap.ByTokensHuman,
 		"empty window: got non-empty human maps %+v", ap)
-	assert.Empty(ap.Primary, "Primary")
-	assert.Empty(ap.PrimaryHuman, "PrimaryHuman")
+	assert.Empty(t, ap.Primary, "Primary")
+	assert.Empty(t, ap.PrimaryHuman, "PrimaryHuman")
 }
 
 func Test_computeAgentPortfolio_humanScoped(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSessionFixture(t, d, sessionFixture{
 		id: "claude-human", agent: "claude", userMsgs: 3,
@@ -1495,29 +1457,29 @@ func Test_computeAgentPortfolio_humanScoped(t *testing.T) {
 	})
 
 	got, err := d.GetSessionStats(t.Context(), StatsFilter{Since: "1d"})
-	require.NoError(err, "GetSessionStats")
+	require.NoError(t, err, "GetSessionStats")
 	ap := got.AgentPortfolio
 
 	// All-sessions view: every agent present.
-	require.Equal(1, ap.BySessions["claude"],
+	require.Equal(t, 1, ap.BySessions["claude"],
 		"BySessions = %v, want claude=1,codex=1,gemini=1", ap.BySessions)
-	require.Equal(1, ap.BySessions["codex"],
+	require.Equal(t, 1, ap.BySessions["codex"],
 		"BySessions = %v, want claude=1,codex=1,gemini=1", ap.BySessions)
-	require.Equal(1, ap.BySessions["gemini"],
+	require.Equal(t, 1, ap.BySessions["gemini"],
 		"BySessions = %v, want claude=1,codex=1,gemini=1", ap.BySessions)
 	// primary ties on count; lexicographic min wins → claude.
-	require.Equal("claude", ap.Primary, "Primary")
+	require.Equal(t, "claude", ap.Primary, "Primary")
 
 	// Human-scoped view: only claude.
-	require.NotContains(ap.BySessionsHuman, "codex",
+	require.NotContains(t, ap.BySessionsHuman, "codex",
 		"BySessionsHuman must exclude codex: %v",
 		ap.BySessionsHuman)
-	require.NotContains(ap.BySessionsHuman, "gemini",
+	require.NotContains(t, ap.BySessionsHuman, "gemini",
 		"BySessionsHuman must exclude gemini: %v",
 		ap.BySessionsHuman)
-	require.Equal(1, ap.BySessionsHuman["claude"], "BySessionsHuman[claude]")
-	require.Equal(int64(100), ap.ByTokensHuman["claude"], "ByTokensHuman[claude]")
-	require.Equal("claude", ap.PrimaryHuman, "PrimaryHuman")
+	require.Equal(t, 1, ap.BySessionsHuman["claude"], "BySessionsHuman[claude]")
+	require.Equal(t, int64(100), ap.ByTokensHuman["claude"], "ByTokensHuman[claude]")
+	require.Equal(t, "claude", ap.PrimaryHuman, "PrimaryHuman")
 }
 
 // cacheTokenBreakdown names the four token dimensions the cache
@@ -1551,7 +1513,7 @@ func seedCacheEconomicsMessage(
 	m.OutputTokens = b.output
 	m.HasOutputTokens = true
 	m.TokenUsage = jsontext.Value(payload)
-	require.NoError(t, d.InsertMessages([]Message{m}),
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{m}),
 		"seedCacheEconomicsMessage %s ord=%d", sessionID, ordinal)
 }
 
@@ -1562,13 +1524,10 @@ func seedCacheEconomicsMessage(
 // weighted-mean overall rule, the bucket assignment, and the two
 // dollar calculations against hand-computed values.
 func TestGetSessionStats_CacheEconomics(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
-	require.NoError(d.UpsertModelPricing([]ModelPricing{
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
 		{
 			ModelPattern:         "claude-opus-4-7",
 			InputPerMTok:         money.MustParseDollars("15.0"),
@@ -1634,24 +1593,24 @@ func TestGetSessionStats_CacheEconomics(t *testing.T) {
 		})
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
-	require.NoError(err, "GetSessionStats")
+	require.NoError(t, err, "GetSessionStats")
 
 	ce := stats.CacheEconomics
-	require.NotNil(ce, "CacheEconomics: want populated")
-	assert.True(ce.ClaudeOnly, "ClaudeOnly")
+	require.NotNil(t, ce, "CacheEconomics: want populated")
+	assert.True(t, ce.ClaudeOnly, "ClaudeOnly")
 
 	// Overall = sum(cache_read) / sum(denominator) (weighted mean).
 	// = (9000 + 3000 + 100) / (10100 + 3550 + 200)
 	// = 12100 / 13850 ≈ 0.873646.
 	wantOverall := 12100.0 / 13850.0
-	assert.InDelta(wantOverall, ce.CacheHitRatio.Overall, 1e-6,
+	assert.InDelta(t, wantOverall, ce.CacheHitRatio.Overall, 1e-6,
 		"CacheHitRatio.Overall")
 
 	wantBuckets := []int{0, 0, 1, 2, 0}
-	require.Len(ce.CacheHitRatio.Buckets, len(wantBuckets),
+	require.Len(t, ce.CacheHitRatio.Buckets, len(wantBuckets),
 		"CacheHitRatio.Buckets")
 	for i, w := range wantBuckets {
-		assert.Equal(w, ce.CacheHitRatio.Buckets[i].Count,
+		assert.Equal(t, w, ce.CacheHitRatio.Buckets[i].Count,
 			"CacheHitRatio.Buckets[%d]", i)
 	}
 
@@ -1663,7 +1622,7 @@ func TestGetSessionStats_CacheEconomics(t *testing.T) {
 	//   ce3 opus = (100*15 + 50*75 + 0 + 100*1.5)/1e6
 	//           = (1500 + 3750 + 150)/1e6 = 0.0054
 	wantSpent := money.MustParseDollars("0.078863")
-	assert.Equal(wantSpent, ce.DollarsSpent, "DollarsSpent")
+	assert.Equal(t, wantSpent, ce.DollarsSpent, "DollarsSpent")
 
 	// cost_without_cache reprices input + cache_creation + cache_read
 	// at the input rate, keeping output unchanged. cache_creation
@@ -1678,16 +1637,13 @@ func TestGetSessionStats_CacheEconomics(t *testing.T) {
 	//           = (3000 + 3750)/1e6 = 0.00675
 	wantWithoutCache := money.MustParseDollars("0.2094")
 	wantSavings := money.MustSub(wantWithoutCache, wantSpent)
-	assert.Equal(wantSavings, ce.DollarsSavedVsUncached,
+	assert.Equal(t, wantSavings, ce.DollarsSavedVsUncached,
 		"DollarsSavedVsUncached")
 }
 
 func TestGetSessionStats_CacheEconomicsUsesHistoricalRates(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
-	require.NoError(d.UpsertModelPricing([]ModelPricing{{
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern:         "gpt-5.6-luna",
 		InputPerMTok:         money.MustParseDollars("9"),
 		OutputPerMTok:        money.MustParseDollars("9"),
@@ -1712,31 +1668,28 @@ func TestGetSessionStats_CacheEconomicsUsesHistoricalRates(t *testing.T) {
 				cacheCreation: 50_000, cacheRead: 50_000,
 			},
 		)
-		_, err := d.getWriter().Exec(
+		_, err := d.getWriter().Exec(t.Context(),
 			`UPDATE messages SET timestamp = ? WHERE session_id = ?`,
 			fixture.timestamp, fixture.id,
 		)
-		require.NoError(err, "set historical message timestamp")
+		require.NoError(t, err, "set historical message timestamp")
 	}
 
 	stats, err := d.GetSessionStats(t.Context(), StatsFilter{Since: "28d"})
-	require.NoError(err)
-	require.NotNil(stats.CacheEconomics)
-	assert.Equal(money.MustParseDollars("0.501"),
+	require.NoError(t, err)
+	require.NotNil(t, stats.CacheEconomics)
+	assert.Equal(t, money.MustParseDollars("0.501"),
 		stats.CacheEconomics.DollarsSpent)
-	assert.Equal(money.MustParseDollars("0.039"),
+	assert.Equal(t, money.MustParseDollars("0.039"),
 		stats.CacheEconomics.DollarsSavedVsUncached)
 }
 
 func TestGetSessionStats_CacheEconomicsClampsRawTokenUsage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	const maxTokens = MaxPlausibleTokens
 
-	require.NoError(d.UpsertModelPricing([]ModelPricing{{
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern:         "claude-sonnet-4-6",
 		InputPerMTok:         money.MustParseDollars("1.0"),
 		OutputPerMTok:        money.MustParseDollars("2.0"),
@@ -1757,13 +1710,13 @@ func TestGetSessionStats_CacheEconomicsClampsRawTokenUsage(t *testing.T) {
 		})
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
-	require.NoError(err, "GetSessionStats")
+	require.NoError(t, err, "GetSessionStats")
 	ce := stats.CacheEconomics
-	require.NotNil(ce, "CacheEconomics: want populated")
+	require.NotNil(t, ce, "CacheEconomics: want populated")
 
-	assert.InDelta(1.0/3.0, ce.CacheHitRatio.Overall, 1e-9,
+	assert.InDelta(t, 1.0/3.0, ce.CacheHitRatio.Overall, 1e-9,
 		"CacheHitRatio.Overall")
-	assert.Equal(1, ce.CacheHitRatio.Buckets[1].Count,
+	assert.Equal(t, 1, ce.CacheHitRatio.Buckets[1].Count,
 		"clamped ratio 1/3 should land in bucket [0.25,0.5)")
 	wantSpent, err := money.CostPerMillion([]money.RatedTokens{
 		{Tokens: maxTokens, Rate: money.MustParseDollars("1")},
@@ -1771,18 +1724,18 @@ func TestGetSessionStats_CacheEconomicsClampsRawTokenUsage(t *testing.T) {
 		{Tokens: maxTokens, Rate: money.MustParseDollars("3")},
 		{Tokens: maxTokens, Rate: money.MustParseDollars("4")},
 	})
-	require.NoError(err)
-	assert.Equal(wantSpent, ce.DollarsSpent, "DollarsSpent")
+	require.NoError(t, err)
+	assert.Equal(t, wantSpent, ce.DollarsSpent, "DollarsSpent")
 	wantWithoutCache, err := money.CostPerMillion([]money.RatedTokens{
 		{Tokens: maxTokens, Rate: money.MustParseDollars("1")},
 		{Tokens: maxTokens, Rate: money.MustParseDollars("2")},
 		{Tokens: maxTokens, Rate: money.MustParseDollars("1")},
 		{Tokens: maxTokens, Rate: money.MustParseDollars("1")},
 	})
-	require.NoError(err)
-	assert.Equal(wantWithoutCache,
+	require.NoError(t, err)
+	assert.Equal(t, wantWithoutCache,
 		money.MustAdd(ce.DollarsSavedVsUncached, ce.DollarsSpent), "DollarsWithoutCache")
-	assert.Equal(money.MustSub(wantWithoutCache, wantSpent),
+	assert.Equal(t, money.MustSub(wantWithoutCache, wantSpent),
 		ce.DollarsSavedVsUncached, "DollarsSavedVsUncached")
 }
 
@@ -1821,13 +1774,10 @@ func TestGetSessionStats_CacheEconomics_NoClaude(t *testing.T) {
 // skipped from both the histogram and the overall weighted mean,
 // without tripping the nil-vs-populated rule.
 func TestGetSessionStats_CacheEconomics_ZeroDenominatorSkipped(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
-	require.NoError(d.UpsertModelPricing([]ModelPricing{{
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern: "claude-opus-4-7",
 		InputPerMTok: money.MustParseDollars("15.0"), OutputPerMTok: money.MustParseDollars("75.0"),
 		CacheCreationPerMTok: money.MustParseDollars("18.75"), CacheReadPerMTok: money.MustParseDollars("1.5"),
@@ -1853,21 +1803,21 @@ func TestGetSessionStats_CacheEconomics_ZeroDenominatorSkipped(t *testing.T) {
 		cacheTokenBreakdown{input: 0, output: 10, cacheRead: 0})
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
-	require.NoError(err, "GetSessionStats")
+	require.NoError(t, err, "GetSessionStats")
 	ce := stats.CacheEconomics
-	require.NotNil(ce, "CacheEconomics: want populated")
+	require.NotNil(t, ce, "CacheEconomics: want populated")
 	// Only "ok" contributes: ratio = 300 / (100+300) = 0.75 → bucket 3.
 	total := 0
 	for _, b := range ce.CacheHitRatio.Buckets {
 		total += b.Count
 	}
-	assert.Equal(1, total,
+	assert.Equal(t, 1, total,
 		"histogram total want 1 (zero-denom skipped)")
-	assert.Equal(1, ce.CacheHitRatio.Buckets[3].Count,
+	assert.Equal(t, 1, ce.CacheHitRatio.Buckets[3].Count,
 		"bucket 3 [0.75,0.95)")
 	// Overall = 300/400 = 0.75 exactly (zero-denom session excluded
 	// from both numerator and denominator).
-	assert.InDelta(0.75, ce.CacheHitRatio.Overall, 1e-9, "Overall")
+	assert.InDelta(t, 0.75, ce.CacheHitRatio.Overall, 1e-9, "Overall")
 }
 
 func TestPickPrimaryAgent(t *testing.T) {
@@ -1952,9 +1902,6 @@ func findHourlyUTC(
 }
 
 func TestGetSessionStats_Temporal_HourlyGrouping(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -1983,41 +1930,38 @@ func TestGetSessionStats_Temporal_HourlyGrouping(t *testing.T) {
 	)
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
-	require.NoError(err, "GetSessionStats")
+	require.NoError(t, err, "GetSessionStats")
 	hours := stats.Temporal.HourlyUTC
-	require.Len(hours, 3,
+	require.Len(t, hours, 3,
 		"hourly_utc want 3 entries: %+v", hours)
 
 	// Entries must be sorted by TS ascending.
 	for i := 1; i < len(hours); i++ {
-		assert.Less(hours[i-1].TS, hours[i].TS,
+		assert.Less(t, hours[i-1].TS, hours[i].TS,
 			"hourly_utc not ascending")
 	}
 
 	// H-5: 2 user messages, 1 distinct session.
-	if e := findHourlyUTC(hours, utcHourBoundary(5)); assert.NotNilf(e,
+	if e := findHourlyUTC(hours, utcHourBoundary(5)); assert.NotNilf(t, e,
 		"missing hour entry %q", utcHourBoundary(5)) {
-		assert.Equal(2, e.UserMessages, "H-5 user_messages")
-		assert.Equal(1, e.Sessions, "H-5 sessions: got")
+		assert.Equal(t, 2, e.UserMessages, "H-5 user_messages")
+		assert.Equal(t, 1, e.Sessions, "H-5 sessions: got")
 	}
 	// H-4: 1 user message, 1 session.
-	if e := findHourlyUTC(hours, utcHourBoundary(4)); assert.NotNilf(e,
+	if e := findHourlyUTC(hours, utcHourBoundary(4)); assert.NotNilf(t, e,
 		"missing hour entry %q", utcHourBoundary(4)) {
-		assert.Equal(1, e.UserMessages, "H-4 user_messages")
-		assert.Equal(1, e.Sessions, "H-4 sessions: got")
+		assert.Equal(t, 1, e.UserMessages, "H-4 user_messages")
+		assert.Equal(t, 1, e.Sessions, "H-4 sessions: got")
 	}
 	// H-3: 2 user messages from 2 distinct sessions.
-	if e := findHourlyUTC(hours, utcHourBoundary(3)); assert.NotNilf(e,
+	if e := findHourlyUTC(hours, utcHourBoundary(3)); assert.NotNilf(t, e,
 		"missing hour entry %q", utcHourBoundary(3)) {
-		assert.Equal(2, e.UserMessages, "H-3 user_messages")
-		assert.Equal(2, e.Sessions, "H-3 sessions: got")
+		assert.Equal(t, 2, e.UserMessages, "H-3 user_messages")
+		assert.Equal(t, 2, e.Sessions, "H-3 sessions: got")
 	}
 }
 
 func TestGetSessionStats_Temporal_MidnightBoundary(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -2039,30 +1983,27 @@ func TestGetSessionStats_Temporal_MidnightBoundary(t *testing.T) {
 	)
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
-	require.NoError(err, "GetSessionStats")
+	require.NoError(t, err, "GetSessionStats")
 	beforeTS := before.Truncate(time.Hour).
 		Format("2006-01-02T15:00:00Z")
 	afterTS := after.Truncate(time.Hour).
 		Format("2006-01-02T15:00:00Z")
-	require.NotEqual(afterTS, beforeTS,
+	require.NotEqual(t, afterTS, beforeTS,
 		"test setup: before %q and after %q collapsed to "+
 			"the same hour", beforeTS, afterTS)
-	if e := findHourlyUTC(stats.Temporal.HourlyUTC, beforeTS); assert.NotNilf(e,
+	if e := findHourlyUTC(stats.Temporal.HourlyUTC, beforeTS); assert.NotNilf(t, e,
 		"missing before-midnight hour %q", beforeTS) {
-		assert.Equal(1, e.UserMessages,
+		assert.Equal(t, 1, e.UserMessages,
 			"before-midnight user_messages")
 	}
-	if e := findHourlyUTC(stats.Temporal.HourlyUTC, afterTS); assert.NotNilf(e,
+	if e := findHourlyUTC(stats.Temporal.HourlyUTC, afterTS); assert.NotNilf(t, e,
 		"missing after-midnight hour %q", afterTS) {
-		assert.Equal(1, e.UserMessages,
+		assert.Equal(t, 1, e.UserMessages,
 			"after-midnight user_messages")
 	}
 }
 
 func TestGetSessionStats_Temporal_OutOfWindowExcluded(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -2086,18 +2027,16 @@ func TestGetSessionStats_Temporal_OutOfWindowExcluded(t *testing.T) {
 	)
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "2d"})
-	require.NoError(err, "GetSessionStats")
+	require.NoError(t, err, "GetSessionStats")
 	// Exactly one hour bucket, with a single user message (from "in").
-	require.Len(stats.Temporal.HourlyUTC, 1,
+	require.Len(t, stats.Temporal.HourlyUTC, 1,
 		"hourly_utc want 1 entry: %+v", stats.Temporal.HourlyUTC)
 	got := stats.Temporal.HourlyUTC[0]
-	assert.Equal(1, got.UserMessages, "in-window user_messages")
-	assert.Equal(1, got.Sessions, "in-window sessions: got")
+	assert.Equal(t, 1, got.UserMessages, "in-window user_messages")
+	assert.Equal(t, 1, got.Sessions, "in-window sessions: got")
 }
 
 func TestGetSessionStats_Temporal_SessionsDistinctPerHour(t *testing.T) {
-	assert := assert.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -2118,42 +2057,39 @@ func TestGetSessionStats_Temporal_SessionsDistinctPerHour(t *testing.T) {
 	require.NoError(t, err, "GetSessionStats")
 	if e := findHourlyUTC(
 		stats.Temporal.HourlyUTC, utcHourBoundary(6),
-	); assert.NotNil(e, "missing H-6 entry") {
-		assert.Equal(3, e.UserMessages, "H-6 user_messages")
-		assert.Equal(1, e.Sessions,
+	); assert.NotNil(t, e, "missing H-6 entry") {
+		assert.Equal(t, 3, e.UserMessages, "H-6 user_messages")
+		assert.Equal(t, 1, e.Sessions,
 			"H-6 sessions (same session 3 msgs)")
 	}
 	if e := findHourlyUTC(
 		stats.Temporal.HourlyUTC, utcHourBoundary(5),
-	); assert.NotNil(e, "missing H-5 entry") {
-		assert.Equal(1, e.UserMessages, "H-5 user_messages")
-		assert.Equal(1, e.Sessions, "H-5 sessions: got")
+	); assert.NotNil(t, e, "missing H-5 entry") {
+		assert.Equal(t, 1, e.UserMessages, "H-5 user_messages")
+		assert.Equal(t, 1, e.Sessions, "H-5 sessions: got")
 	}
 }
 
 func TestGetSessionStats_Temporal_EmptyWindowEmptySlice(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
-	require.NoError(err, "GetSessionStats")
-	assert.NotNil(stats.Temporal.HourlyUTC,
+	require.NoError(t, err, "GetSessionStats")
+	assert.NotNil(t, stats.Temporal.HourlyUTC,
 		"hourly_utc must be a non-nil empty slice, got nil")
-	assert.Len(stats.Temporal.HourlyUTC, 0, "hourly_utc: got len")
+	assert.Empty(t, stats.Temporal.HourlyUTC, "hourly_utc: got len")
 	// Reporter timezone may now be empty when the host only exposes the
 	// Local sentinel; otherwise it must still be a loadable IANA name.
 	if stats.Temporal.ReporterTimezone != "" {
 		_, tzErr := time.LoadLocation(stats.Temporal.ReporterTimezone)
-		assert.NoError(tzErr,
+		require.NoError(t, tzErr,
 			"reporter_timezone must stay loadable when populated")
 	}
 	// JSON encoding must emit [] not null.
 	raw, err := json.Marshal(stats.Temporal.HourlyUTC)
-	require.NoError(err, "json.Marshal")
-	assert.Equal("[]", string(raw), "hourly_utc JSON")
+	require.NoError(t, err, "json.Marshal")
+	assert.Equal(t, "[]", string(raw), "hourly_utc JSON")
 }
 
 func TestGetSessionStats_Temporal_ReporterTimezone_FilterWins(t *testing.T) {
@@ -2170,36 +2106,23 @@ func TestGetSessionStats_Temporal_ReporterTimezone_FilterWins(t *testing.T) {
 }
 
 func TestReporterTimezone_Precedence(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
-	prev, hadTZ := os.LookupEnv("TZ")
-	t.Cleanup(func() {
-		if hadTZ {
-			_ = os.Setenv("TZ", prev)
-		} else {
-			_ = os.Unsetenv("TZ")
-		}
-	})
 	oldLocal := time.Local                      //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
 	t.Cleanup(func() { time.Local = oldLocal }) //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
 
 	// Filter wins over env.
-	err := os.Setenv("TZ", "Europe/Berlin")
-	require.NoError(err, "set TZ")
-	assert.Equal("Asia/Tokyo",
+	t.Setenv("TZ", "Europe/Berlin")
+	assert.Equal(t, "Asia/Tokyo",
 		reporterTimezone(StatsFilter{Timezone: "Asia/Tokyo"}),
 		"filter wins")
 
 	// No filter → env wins.
-	assert.Equal("Europe/Berlin",
+	assert.Equal(t, "Europe/Berlin",
 		reporterTimezone(StatsFilter{}), "env wins")
 
 	// No filter, no env, valid local name → local wins.
-	err = os.Unsetenv("TZ")
-	require.NoError(err, "unset TZ")
+	require.NoError(t, os.Unsetenv("TZ"), "unset TZ")
 	time.Local = time.FixedZone("America/New_York", -5*60*60) //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
-	assert.Equal("America/New_York",
+	assert.Equal(t, "America/New_York",
 		reporterTimezone(StatsFilter{}),
 		"valid local name should pass through")
 
@@ -2209,17 +2132,18 @@ func TestReporterTimezone_Precedence(t *testing.T) {
 	mapped := reporterTimezone(StatsFilter{})
 	if mapped != "" {
 		_, err := time.LoadLocation(mapped)
-		assert.NoError(err, "platform timezone must be loadable")
+		assert.NoError(t, err, "platform timezone must be loadable")
 	}
 }
 
 func TestReporterTimezoneUsesPlatformMapping(t *testing.T) {
 	previousTZ, hadTZ := os.LookupEnv("TZ")
+	if hadTZ {
+		t.Setenv("TZ", previousTZ)
+	}
 	require.NoError(t, os.Unsetenv("TZ"))
 	t.Cleanup(func() {
-		if hadTZ {
-			_ = os.Setenv("TZ", previousTZ)
-		} else {
+		if !hadTZ {
 			_ = os.Unsetenv("TZ")
 		}
 	})
@@ -2239,14 +2163,13 @@ func TestReporterTimezoneUsesPlatformMapping(t *testing.T) {
 }
 
 func TestGetSessionStatsReportsPlatformTimezone(t *testing.T) {
-	require := require.New(t)
-
 	previousTZ, hadTZ := os.LookupEnv("TZ")
-	require.NoError(os.Unsetenv("TZ"))
+	if hadTZ {
+		t.Setenv("TZ", previousTZ)
+	}
+	require.NoError(t, os.Unsetenv("TZ"))
 	t.Cleanup(func() {
-		if hadTZ {
-			_ = os.Setenv("TZ", previousTZ)
-		} else {
+		if !hadTZ {
 			_ = os.Unsetenv("TZ")
 		}
 	})
@@ -2256,23 +2179,21 @@ func TestGetSessionStatsReportsPlatformTimezone(t *testing.T) {
 
 	stats, err := testDB(t).GetSessionStats(
 		t.Context(), StatsFilter{Since: "28d"})
-	require.NoError(err)
+	require.NoError(t, err)
 	if runtime.GOOS == "windows" {
-		require.NotEmpty(stats.Temporal.ReporterTimezone)
+		require.NotEmpty(t, stats.Temporal.ReporterTimezone)
 	}
 	if stats.Temporal.ReporterTimezone != "" {
 		_, err := time.LoadLocation(stats.Temporal.ReporterTimezone)
-		require.NoError(err)
+		require.NoError(t, err)
 	}
 	raw, err := json.Marshal(stats.Temporal)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"reporter_timezone"`)
 	t.Logf("stats reporter timezone: %q", stats.Temporal.ReporterTimezone)
 }
 
 func TestGetSessionStats_Temporal_FilterByAgentFlowsThrough(t *testing.T) {
-	assert := assert.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -2297,10 +2218,10 @@ func TestGetSessionStats_Temporal_FilterByAgentFlowsThrough(t *testing.T) {
 	require.NoError(t, err, "GetSessionStats")
 	if e := findHourlyUTC(
 		stats.Temporal.HourlyUTC, utcHourBoundary(3),
-	); assert.NotNil(e, "missing H-3 entry") {
-		assert.Equal(1, e.UserMessages,
+	); assert.NotNil(t, e, "missing H-3 entry") {
+		assert.Equal(t, 1, e.UserMessages,
 			"filter=claude user_messages")
-		assert.Equal(1, e.Sessions, "filter=claude sessions")
+		assert.Equal(t, 1, e.Sessions, "filter=claude sessions")
 	}
 }
 
@@ -2355,9 +2276,6 @@ func TestGetSessionStats_Temporal_SkipsEmptyTimestamps(t *testing.T) {
 // (distinct sums: retries=7, compactions=10, churn=15) so a field-swap
 // regression in the loader or aggregator would be caught.
 func TestGetSessionStats_Outcomes_Happy(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -2429,36 +2347,36 @@ func TestGetSessionStats_Outcomes_Happy(t *testing.T) {
 	})
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
-	require.NoError(err, "GetSessionStats")
+	require.NoError(t, err, "GetSessionStats")
 	out := stats.Outcomes
-	require.NotNil(out, "Outcomes: want populated")
-	assert.True(out.ClaudeOnly, "ClaudeOnly")
+	require.NotNil(t, out, "Outcomes: want populated")
+	assert.True(t, out.ClaudeOnly, "ClaudeOnly")
 	// Two "completed" -> Success.
-	assert.Equal(2, out.Success, "Success: got")
+	assert.Equal(t, 2, out.Success, "Success: got")
 	// One "abandoned" + one "errored" -> Failure.
-	assert.Equal(2, out.Failure, "Failure: got")
+	assert.Equal(t, 2, out.Failure, "Failure: got")
 	// One explicit "unknown" -> Unknown.
-	assert.Equal(1, out.Unknown, "Unknown: got")
-	require.NotNil(out.GradeDistribution,
+	assert.Equal(t, 1, out.Unknown, "Unknown: got")
+	require.NotNil(t, out.GradeDistribution,
 		"GradeDistribution: want non-nil")
 	wantGrades := map[string]int{"A": 1, "B": 1, "C": 1, "D": 1}
-	assert.Len(out.GradeDistribution, len(wantGrades),
+	assert.Len(t, out.GradeDistribution, len(wantGrades),
 		"GradeDistribution size (%+v)", out.GradeDistribution)
 	for grade, want := range wantGrades {
-		assert.Equal(want, out.GradeDistribution[grade],
+		assert.Equal(t, want, out.GradeDistribution[grade],
 			"GradeDistribution[%q]", grade)
 	}
-	assert.NotContains(out.GradeDistribution, "",
+	assert.NotContains(t, out.GradeDistribution, "",
 		"GradeDistribution: empty-string key present (%+v)",
 		out.GradeDistribution)
 	// ToolRetryRate = (1+0+3+2+1) / (2+4+6+8+5) = 7/25 = 0.28
-	assert.InDelta(0.28, out.ToolRetryRate, 1e-9,
+	assert.InDelta(t, 0.28, out.ToolRetryRate, 1e-9,
 		"ToolRetryRate")
 	// CompactionsPerSession = (3+1+0+2+4) / 5 = 10/5 = 2.0
-	assert.InDelta(2.0, out.CompactionsPerSession, 1e-9,
+	assert.InDelta(t, 2.0, out.CompactionsPerSession, 1e-9,
 		"CompactionsPerSession")
 	// AvgEditChurn = (5+0+4+6+0) / 5 = 15/5 = 3.0
-	assert.InDelta(3.0, out.AvgEditChurn, 1e-9, "AvgEditChurn")
+	assert.InDelta(t, 3.0, out.AvgEditChurn, 1e-9, "AvgEditChurn")
 }
 
 // TestGetSessionStats_Outcomes_NoClaude verifies that Outcomes stays
@@ -2488,9 +2406,6 @@ func TestGetSessionStats_Outcomes_NoClaude(t *testing.T) {
 // pointer, with a non-nil empty GradeDistribution map (not nil) and
 // zeroed rates when no tools were recorded.
 func TestGetSessionStats_Outcomes_NoGrade(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -2503,15 +2418,15 @@ func TestGetSessionStats_Outcomes_NoGrade(t *testing.T) {
 	})
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
-	require.NoError(err, "GetSessionStats")
+	require.NoError(t, err, "GetSessionStats")
 	out := stats.Outcomes
-	require.NotNil(out, "Outcomes: want populated")
-	assert.NotNil(out.GradeDistribution,
+	require.NotNil(t, out, "Outcomes: want populated")
+	assert.NotNil(t, out.GradeDistribution,
 		"GradeDistribution: want empty map")
-	assert.Empty(out.GradeDistribution, "GradeDistribution")
-	assert.Equal(0.0, out.ToolRetryRate,
+	assert.Empty(t, out.GradeDistribution, "GradeDistribution")
+	assert.InDelta(t, 0.0, out.ToolRetryRate, 0,
 		"ToolRetryRate want 0 (no tools)")
-	assert.Equal(1, out.Success, "Success: got")
+	assert.Equal(t, 1, out.Success, "Success: got")
 }
 
 // seedToolCallsByName inserts one assistant message per entry in calls and
@@ -2529,7 +2444,7 @@ func seedToolCallsByName(
 	for i, c := range calls {
 		msgs = append(msgs, asstMsg(sessionID, i+1, "reply-"+c.toolName))
 	}
-	require.NoError(t, d.InsertMessages(msgs),
+	require.NoError(t, d.InsertMessages(t.Context(), msgs),
 		"seedToolCallsByName %s: InsertMessages", sessionID)
 	for i, c := range calls {
 		ord := i + 1
@@ -2537,7 +2452,7 @@ func seedToolCallsByName(
 		if c.skillName != "" {
 			skill = c.skillName
 		}
-		_, err := d.getWriter().Exec(`
+		_, err := d.getWriter().Exec(t.Context(), `
 			INSERT INTO tool_calls
 				(message_id, session_id, tool_name, category, skill_name)
 			SELECT id, session_id, ?, ?, ?
@@ -2569,9 +2484,6 @@ type toolCallSeed struct {
 //   - DistinctSkills: {"brainstorm", "writing-plans", "brainstorm"}
 //     -> 2 distinct names
 func TestGetSessionStats_Adoption_Happy(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -2629,21 +2541,21 @@ func TestGetSessionStats_Adoption_Happy(t *testing.T) {
 	})
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
-	require.NoError(err, "GetSessionStats")
+	require.NoError(t, err, "GetSessionStats")
 	ad := stats.Adoption
-	require.NotNil(ad, "Adoption: want populated")
-	assert.True(ad.ClaudeOnly, "ClaudeOnly")
+	require.NotNil(t, ad, "Adoption: want populated")
+	assert.True(t, ad.ClaudeOnly, "ClaudeOnly")
 	// 2 of 4 Claude sessions have ExitPlanMode -> 0.5.
-	assert.InDelta(0.5, ad.PlanModeRate, 1e-9, "PlanModeRate")
-	assert.GreaterOrEqual(ad.PlanModeRate, 0.0,
+	assert.InDelta(t, 0.5, ad.PlanModeRate, 1e-9, "PlanModeRate")
+	assert.GreaterOrEqual(t, ad.PlanModeRate, 0.0,
 		"PlanModeRate out of [0,1]")
-	assert.LessOrEqual(ad.PlanModeRate, 1.0,
+	assert.LessOrEqual(t, ad.PlanModeRate, 1.0,
 		"PlanModeRate out of [0,1]")
 	// 3 Task calls across 4 Claude sessions -> 0.75.
-	assert.InDelta(0.75, ad.SubagentsPerSession, 1e-9,
+	assert.InDelta(t, 0.75, ad.SubagentsPerSession, 1e-9,
 		"SubagentsPerSession")
 	// {"brainstorm","writing-plans","brainstorm"} -> 2 distinct.
-	assert.Equal(2, ad.DistinctSkills, "DistinctSkills: got")
+	assert.Equal(t, 2, ad.DistinctSkills, "DistinctSkills: got")
 }
 
 // TestGetSessionStats_Adoption_NoClaude verifies that Adoption stays
@@ -2734,8 +2646,8 @@ var (
 func statsOutcomeRepo(t *testing.T) string {
 	t.Helper()
 	statsOutcomeRepoOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "agentsview-stats-outcome-*")
-		require.NoError(t, err, "create stats outcome repo dir")
+		dir := filepath.Join(testDBFixtureTempDir, "stats-outcome")
+		require.NoError(t, os.MkdirAll(dir, 0o700), "create stats outcome repo dir")
 		statsOutcomeRepoDir = dir
 		statsOutcomeRepoPath = filepath.Join(dir, "repo")
 		statsInitRepoAt(t, statsOutcomeRepoPath)
@@ -2765,9 +2677,6 @@ func statsOutcomeRepo(t *testing.T) string {
 // contract distinguishes "gh not configured" (nil) from "gh configured,
 // zero PRs" (pointer to 0).
 func TestGetSessionStats_OutcomeStats_Happy(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	skipIfNoGit(t)
 	d := testDB(t)
 	ctx := t.Context()
@@ -2788,23 +2697,23 @@ func TestGetSessionStats_OutcomeStats_Happy(t *testing.T) {
 	})
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
-	require.NoError(err, "GetSessionStats without git outcomes")
-	require.Nil(stats.OutcomeStats, "OutcomeStats")
+	require.NoError(t, err, "GetSessionStats without git outcomes")
+	require.Nil(t, stats.OutcomeStats, "OutcomeStats")
 
 	stats, err = d.GetSessionStats(ctx, StatsFilter{
 		Since: "28d", IncludeGitOutcomes: true,
 	})
-	require.NoError(err, "GetSessionStats")
+	require.NoError(t, err, "GetSessionStats")
 	out := stats.OutcomeStats
-	require.NotNil(out, "OutcomeStats: want populated")
-	assert.Equal(1, out.ReposActive, "ReposActive: got")
-	assert.Equal(3, out.Commits, "Commits: got")
-	assert.Equal(9, out.LOCAdded, "LOCAdded: got")
-	assert.Equal(0, out.LOCRemoved, "LOCRemoved: got")
+	require.NotNil(t, out, "OutcomeStats: want populated")
+	assert.Equal(t, 1, out.ReposActive, "ReposActive: got")
+	assert.Equal(t, 3, out.Commits, "Commits: got")
+	assert.Equal(t, 9, out.LOCAdded, "LOCAdded: got")
+	assert.Equal(t, 0, out.LOCRemoved, "LOCRemoved: got")
 	// Each commit touches one file: c1 a.txt, c2 a.txt, c3 b.txt -> 3.
-	assert.Equal(3, out.FilesChanged, "FilesChanged: got")
-	assert.Nil(out.PRsOpened, "PRsOpened want nil (no GHToken)")
-	assert.Nil(out.PRsMerged, "PRsMerged want nil (no GHToken)")
+	assert.Equal(t, 3, out.FilesChanged, "FilesChanged: got")
+	assert.Nil(t, out.PRsOpened, "PRsOpened want nil (no GHToken)")
+	assert.Nil(t, out.PRsMerged, "PRsMerged want nil (no GHToken)")
 }
 
 // TestOutcomeStatsClosedWriterUsesReadOnlyCache guards the writer snapshot in
@@ -2812,9 +2721,6 @@ func TestGetSessionStats_OutcomeStats_Happy(t *testing.T) {
 // outcome-stats path must use the read-only cache and return the same result.
 // The concurrent close/reopen stress case lives in session_stats_race_test.go.
 func TestOutcomeStatsClosedWriterUsesReadOnlyCache(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	skipIfNoGit(t)
 	d := testDB(t)
 	ctx := t.Context()
@@ -2824,14 +2730,14 @@ func TestOutcomeStatsClosedWriterUsesReadOnlyCache(t *testing.T) {
 		startedAt: hoursAgo(5), cwd: repo,
 	})
 
-	require.NoError(d.CloseWriter(), "close writer")
+	require.NoError(t, d.CloseWriter(), "close writer")
 	stats, err := d.GetSessionStats(ctx, StatsFilter{
 		Since: "28d", IncludeGitOutcomes: true,
 	})
-	require.NoError(err, "GetSessionStats with closed writer")
-	require.NotNil(stats.OutcomeStats, "OutcomeStats")
-	assert.Equal(1, stats.OutcomeStats.ReposActive, "ReposActive")
-	assert.Equal(3, stats.OutcomeStats.Commits, "Commits")
+	require.NoError(t, err, "GetSessionStats with closed writer")
+	require.NotNil(t, stats.OutcomeStats, "OutcomeStats")
+	assert.Equal(t, 1, stats.OutcomeStats.ReposActive, "ReposActive")
+	assert.Equal(t, 3, stats.OutcomeStats.Commits, "Commits")
 }
 
 // TestGetSessionStats_OutcomeStats_NoCwd verifies that sessions without

@@ -63,9 +63,8 @@ func runActivityReport(cfg ActivityReportConfig) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	defer closeArchiveQueryBackend(cleanup)
-
 	r, err := backend.ActivityReport(ctx, cfg)
+	closeArchiveQueryBackend(cleanup)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -127,7 +126,7 @@ func fetchHTTPActivityReport(
 		}
 		q.Date = &runtime.Date{Time: date}
 	}
-	api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return activity.Report{}, err
 	}
@@ -212,7 +211,7 @@ func fetchHTTPActivitySessionPage(
 	if cfg.SessionsReportID != "" {
 		query.IncludeReport = new(true)
 	}
-	api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return activity.Report{}, err
 	}
@@ -426,7 +425,7 @@ func resolveActivityReport(
 	report := artifacts.Report
 	report.BySession = page.Sessions
 	report.SessionsNextCursor = ""
-	report.SessionsTotal = int(page.Total)
+	report.SessionsTotal = page.Total
 	if page.HasNext {
 		payload, marshalErr := json.Marshal(newCLIActivitySessionCursor(
 			digest, page.Next, options, q, f,

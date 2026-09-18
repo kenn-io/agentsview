@@ -1177,8 +1177,9 @@ func AgentIsCopilot(t AgentType) bool {
 	switch t {
 	case AgentCopilot, AgentVSCodeCopilot, AgentVSCopilot:
 		return true
+	default:
+		return false
 	}
-	return false
 }
 
 // AgentNameIsCopilot reports whether the agent name identifies a
@@ -1580,8 +1581,7 @@ func applyUsageEventTokenTotals(
 	sess *ParsedSession,
 	events []ParsedUsageEvent,
 ) {
-	totalOutput, hasOutput, peakContext, hasContext :=
-		UsageEventTokenAggregate(events)
+	totalOutput, hasOutput, peakContext, hasContext := UsageEventTokenAggregate(events)
 	if hasOutput {
 		sess.HasTotalOutputTokens = true
 		sess.TotalOutputTokens = totalOutput

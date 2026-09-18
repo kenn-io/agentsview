@@ -155,8 +155,6 @@ func (s recallErrorSearcher) MaxRecallSearchCandidates() int {
 }
 
 func TestQueryRecallHybridWithFilterReturnsPartialAtVectorCandidateCeiling(t *testing.T) {
-	assert := assert.New(t)
-
 	te := setup(t)
 	seedRecallEntrySession(t, te)
 	seedRecallEntry(t, te, db.RecallEntry{
@@ -186,19 +184,19 @@ func TestQueryRecallHybridWithFilterReturnsPartialAtVectorCandidateCeiling(t *te
 		"limit":3
 	}`)
 
-	if !assert.Equal(http.StatusOK, w.Code) {
+	if !assert.Equal(t, http.StatusOK, w.Code) {
 		t.Logf("observed response: HTTP %d body=%s", w.Code, w.Body.String())
 		assertBodyContains(t, w,
 			"search: k value in knn query too large, provided 8000 and the limit is 4096")
-		assert.Equal([]int{2000, 4000, 8000}, searcher.limits)
+		assert.Equal(t, []int{2000, 4000, 8000}, searcher.limits)
 		return
 	}
 	r := decode[queryRecallEntriesResponse](t, w)
 	require.Len(t, r.RecallEntries, 1)
-	assert.Equal("eligible", r.RecallEntries[0].ID)
-	assert.Equal([]int{2000, 4000, 4096}, searcher.limits)
+	assert.Equal(t, "eligible", r.RecallEntries[0].ID)
+	assert.Equal(t, []int{2000, 4000, 4096}, searcher.limits)
 	for _, limit := range searcher.limits {
-		assert.LessOrEqual(limit, 4096)
+		assert.LessOrEqual(t, limit, 4096)
 	}
 }
 
@@ -261,9 +259,6 @@ func TestListRecallEntriesFiltersByProject(t *testing.T) {
 func TestListRecallExtractProgressPaginatesActionableSessionsWithoutManager(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t, func(cfg *config.Config) {
 		cfg.Recall.Extract.FailureBackoff = "1h"
 	})
@@ -273,7 +268,7 @@ func TestListRecallExtractProgressPaginatesActionableSessionsWithoutManager(
 		Model:       "distiller",
 		Segmenter:   "turns-v1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	states := []struct {
 		sessionID string
@@ -297,7 +292,7 @@ func TestListRecallExtractProgressPaginatesActionableSessionsWithoutManager(
 			UnitsTotal:    3,
 			StampedAt:     time.Now(),
 		})
-		require.NoError(err)
+		require.NoError(t, err)
 		switch state.action {
 		case "partial":
 			err = te.db.AdvanceExtractCursor(
@@ -318,46 +313,46 @@ func TestListRecallExtractProgressPaginatesActionableSessionsWithoutManager(
 				"digest-"+state.sessionID, 3,
 			)
 		}
-		require.NoError(err)
+		require.NoError(t, err)
 	}
 
 	first := te.get(t, "/api/v1/recall/extraction/progress?limit=2")
 	assertStatus(t, first, http.StatusOK)
 	firstPage := decode[listRecallExtractProgressResponse](t, first)
-	assert.Equal("generation-building", firstPage.GenerationFingerprint)
-	require.Len(firstPage.Progress, 2)
-	assert.NotEmpty(firstPage.NextCursor)
+	assert.Equal(t, "generation-building", firstPage.GenerationFingerprint)
+	require.Len(t, firstPage.Progress, 2)
+	assert.NotEmpty(t, firstPage.NextCursor)
 
 	second := te.get(t, "/api/v1/recall/extraction/progress?limit=2&cursor="+
 		url.QueryEscape(firstPage.NextCursor))
 	assertStatus(t, second, http.StatusOK)
 	secondPage := decode[listRecallExtractProgressResponse](t, second)
-	require.Len(secondPage.Progress, 1)
-	assert.Empty(secondPage.NextCursor)
+	require.Len(t, secondPage.Progress, 1)
+	assert.Empty(t, secondPage.NextCursor)
 
 	gotSessions := []string{
 		firstPage.Progress[0].SessionID,
 		firstPage.Progress[1].SessionID,
 		secondPage.Progress[0].SessionID,
 	}
-	assert.ElementsMatch([]string{
+	assert.ElementsMatch(t, []string{
 		"session-pending", "session-partial", "session-failed",
 	}, gotSessions)
 	for _, progress := range append(firstPage.Progress, secondPage.Progress...) {
-		assert.NotEqual("session-done", progress.SessionID)
-		assert.NotEmpty(progress.SessionTitle)
-		assert.NotEmpty(progress.Project)
-		assert.Equal("codex", progress.Agent)
+		assert.NotEqual(t, "session-done", progress.SessionID)
+		assert.NotEmpty(t, progress.SessionTitle)
+		assert.NotEmpty(t, progress.Project)
+		assert.Equal(t, "codex", progress.Agent)
 	}
 
 	failed := te.get(t,
 		"/api/v1/recall/extraction/progress?state=failed&limit=10")
 	assertStatus(t, failed, http.StatusOK)
 	failedPage := decode[listRecallExtractProgressResponse](t, failed)
-	require.Len(failedPage.Progress, 1)
-	assert.Equal("session-failed", failedPage.Progress[0].SessionID)
-	assert.Equal("model response was empty", failedPage.Progress[0].LastError)
-	assert.NotEmpty(failedPage.Progress[0].RetryAt)
+	require.Len(t, failedPage.Progress, 1)
+	assert.Equal(t, "session-failed", failedPage.Progress[0].SessionID)
+	assert.Equal(t, "model response was empty", failedPage.Progress[0].LastError)
+	assert.NotEmpty(t, failedPage.Progress[0].RetryAt)
 }
 
 func TestListRecallEntriesFiltersByReviewState(t *testing.T) {
@@ -388,9 +383,6 @@ func TestListRecallEntriesFiltersByReviewState(t *testing.T) {
 }
 
 func TestListRecallEntriesPaginatesWithoutRepeatingEntries(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 	seedRecallEntrySession(t, te)
 	for _, id := range []string{"page-a", "page-b", "page-c"} {
@@ -405,28 +397,25 @@ func TestListRecallEntriesPaginatesWithoutRepeatingEntries(t *testing.T) {
 	first := te.get(t, "/api/v1/recall/entries?limit=2")
 	assertStatus(t, first, http.StatusOK)
 	firstPage := decode[listRecallEntriesResponse](t, first)
-	require.Len(firstPage.RecallEntries, 2)
-	require.NotEmpty(firstPage.NextCursor)
+	require.Len(t, firstPage.RecallEntries, 2)
+	require.NotEmpty(t, firstPage.NextCursor)
 
 	second := te.get(t, "/api/v1/recall/entries?limit=2&cursor="+
 		url.QueryEscape(firstPage.NextCursor))
 	assertStatus(t, second, http.StatusOK)
 	secondPage := decode[listRecallEntriesResponse](t, second)
-	require.Len(secondPage.RecallEntries, 1)
-	assert.Empty(secondPage.NextCursor)
+	require.Len(t, secondPage.RecallEntries, 1)
+	assert.Empty(t, secondPage.NextCursor)
 
 	ids := []string{
 		firstPage.RecallEntries[0].ID,
 		firstPage.RecallEntries[1].ID,
 		secondPage.RecallEntries[0].ID,
 	}
-	assert.ElementsMatch([]string{"page-a", "page-b", "page-c"}, ids)
+	assert.ElementsMatch(t, []string{"page-a", "page-b", "page-c"}, ids)
 }
 
 func TestListRecallEntriesPaginatesStableDiversifiedRankedResults(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 	for _, sessionID := range []string{"a-shared", "b-unique", "c-unique"} {
 		te.seedSession(t, sessionID, "agentsview", 1, func(s *db.Session) {
@@ -465,10 +454,10 @@ func TestListRecallEntriesPaginatesStableDiversifiedRankedResults(t *testing.T) 
 	first := te.get(t, "/api/v1/recall/entries?q=heliotrope&limit=2")
 	assertStatus(t, first, http.StatusOK)
 	firstPage := decode[listRecallEntriesResponse](t, first)
-	require.Len(firstPage.RecallEntries, 2)
-	require.NotEmpty(firstPage.NextCursor)
-	assert.Equal(db.MaxRecallEntryLimit, firstPage.ResultCap)
-	assert.Equal([]string{"shared-a", "unique-b"}, []string{
+	require.Len(t, firstPage.RecallEntries, 2)
+	require.NotEmpty(t, firstPage.NextCursor)
+	assert.Equal(t, db.MaxRecallEntryLimit, firstPage.ResultCap)
+	assert.Equal(t, []string{"shared-a", "unique-b"}, []string{
 		firstPage.RecallEntries[0].ID,
 		firstPage.RecallEntries[1].ID,
 	})
@@ -476,27 +465,27 @@ func TestListRecallEntriesPaginatesStableDiversifiedRankedResults(t *testing.T) 
 		Text:  "heliotrope",
 		Limit: 2,
 	})
-	require.NoError(err)
-	require.Len(direct.RecallEntries, 2)
-	assert.Equal(direct.RecallEntries[0].ID, firstPage.RecallEntries[0].ID)
-	assert.Equal(direct.RecallEntries[0].Score,
-		firstPage.RecallEntries[0].Score)
-	assert.Equal(direct.RecallEntries[1].ID, firstPage.RecallEntries[1].ID)
-	assert.Equal(direct.RecallEntries[1].Score,
-		firstPage.RecallEntries[1].Score)
+	require.NoError(t, err)
+	require.Len(t, direct.RecallEntries, 2)
+	assert.Equal(t, direct.RecallEntries[0].ID, firstPage.RecallEntries[0].ID)
+	assert.InDelta(t, direct.RecallEntries[0].Score,
+		firstPage.RecallEntries[0].Score, 0)
+	assert.Equal(t, direct.RecallEntries[1].ID, firstPage.RecallEntries[1].ID)
+	assert.InDelta(t, direct.RecallEntries[1].Score,
+		firstPage.RecallEntries[1].Score, 0)
 	for _, result := range firstPage.RecallEntries {
-		assert.Positive(result.Score)
-		assert.Contains(result.MatchedTerms, "heliotrope")
+		assert.Positive(t, result.Score)
+		assert.Contains(t, result.MatchedTerms, "heliotrope")
 	}
 
 	second := te.get(t, "/api/v1/recall/entries?q=heliotrope&limit=2&cursor="+
 		url.QueryEscape(firstPage.NextCursor))
 	assertStatus(t, second, http.StatusOK)
 	secondPage := decode[listRecallEntriesResponse](t, second)
-	require.Len(secondPage.RecallEntries, 2)
-	assert.Empty(secondPage.NextCursor)
+	require.Len(t, secondPage.RecallEntries, 2)
+	assert.Empty(t, secondPage.NextCursor)
 	for _, result := range secondPage.RecallEntries {
-		assert.Positive(result.Score)
+		assert.Positive(t, result.Score)
 	}
 
 	ids := []string{
@@ -505,7 +494,7 @@ func TestListRecallEntriesPaginatesStableDiversifiedRankedResults(t *testing.T) 
 		secondPage.RecallEntries[0].ID,
 		secondPage.RecallEntries[1].ID,
 	}
-	assert.ElementsMatch([]string{"shared-a", "shared-b", "unique-b", "unique-c"}, ids)
+	assert.ElementsMatch(t, []string{"shared-a", "shared-b", "unique-b", "unique-c"}, ids)
 }
 
 func TestListRecallEntriesRejectsRankedCursorAfterCorpusMutation(t *testing.T) {
@@ -549,6 +538,8 @@ func TestListRecallEntriesRejectsRankedCursorAfterRankingFieldMutation(
 		{
 			name: "entry metadata",
 			mutate: func(t *testing.T, raw *sql.DB) {
+				t.Helper()
+
 				_, err := raw.ExecContext(t.Context(), `
 					UPDATE recall_entries
 					SET project = 'changed-project'
@@ -559,6 +550,8 @@ func TestListRecallEntriesRejectsRankedCursorAfterRankingFieldMutation(
 		{
 			name: "evidence",
 			mutate: func(t *testing.T, raw *sql.DB) {
+				t.Helper()
+
 				_, err := raw.ExecContext(t.Context(), `
 					UPDATE recall_evidence
 					SET snippet = 'A changed evidence ranking signal.'
@@ -610,8 +603,6 @@ func TestListRecallEntriesRejectsRankedCursorAfterRankingFieldMutation(
 }
 
 func TestListRecallEntriesQueryMatchesEvidenceAndReturnsScores(t *testing.T) {
-	assert := assert.New(t)
-
 	te := setup(t)
 	seedRecallEntrySession(t, te)
 	seedRecallEntry(t, te, db.RecallEntry{
@@ -632,9 +623,9 @@ func TestListRecallEntriesQueryMatchesEvidenceAndReturnsScores(t *testing.T) {
 
 	page := decode[listRecallEntriesResponse](t, w)
 	require.Len(t, page.RecallEntries, 1)
-	assert.Equal("evidence-match", page.RecallEntries[0].ID)
-	assert.Positive(page.RecallEntries[0].Score)
-	assert.Contains(page.RecallEntries[0].MatchedTerms, "heliotrope")
+	assert.Equal(t, "evidence-match", page.RecallEntries[0].ID)
+	assert.Positive(t, page.RecallEntries[0].Score)
+	assert.Contains(t, page.RecallEntries[0].MatchedTerms, "heliotrope")
 }
 
 func TestListRecallEntriesQueryMatchesMetadata(t *testing.T) {
@@ -785,8 +776,6 @@ func TestRecallExtractionStatusReportsServedSourceRunsWithoutManager(
 }
 
 func TestRecallExtractionStatusReportsManagerCoverage(t *testing.T) {
-	assert := assert.New(t)
-
 	provider := recallExtractionStatusProvider{
 		status: recallextract.Status{
 			Fingerprint: "generation-a",
@@ -823,22 +812,20 @@ func TestRecallExtractionStatusReportsManagerCoverage(t *testing.T) {
 		Stats               db.ExtractProgressStats `json:"stats"`
 		EligibleBacklog     int                     `json:"eligible_backlog"`
 	}](t, w)
-	assert.True(status.Configured)
-	assert.False(status.ManagementAvailable)
-	assert.True(status.ProgressAvailable)
-	assert.Equal("generation-a", status.Fingerprint)
+	assert.True(t, status.Configured)
+	assert.False(t, status.ManagementAvailable)
+	assert.True(t, status.ProgressAvailable)
+	assert.Equal(t, "generation-a", status.Fingerprint)
 	require.Len(t, status.Generations, 1)
-	assert.Equal(db.ExtractGenerationActive,
+	assert.Equal(t, db.ExtractGenerationActive,
 		status.Generations[0].State)
-	assert.Equal(8, status.Stats.Done)
-	assert.Equal(1, status.Stats.Failed)
-	assert.Equal(3, status.EligibleBacklog)
-	assert.NotContains(w.Body.String(), "private_request_configuration")
+	assert.Equal(t, 8, status.Stats.Done)
+	assert.Equal(t, 1, status.Stats.Failed)
+	assert.Equal(t, 3, status.EligibleBacklog)
+	assert.NotContains(t, w.Body.String(), "private_request_configuration")
 }
 
 func TestRecallExtractionLifecycleRoutesMutateAndNotify(t *testing.T) {
-	assert := assert.New(t)
-
 	provider := &recallExtractionLifecycleProvider{
 		status: recallextract.Status{Fingerprint: "generation-building"},
 	}
@@ -855,17 +842,17 @@ func TestRecallExtractionLifecycleRoutesMutateAndNotify(t *testing.T) {
 	status := decode[struct {
 		ManagementAvailable bool `json:"management_available"`
 	}](t, statusResponse)
-	assert.True(status.ManagementAvailable)
+	assert.True(t, status.ManagementAvailable)
 
 	activated := te.post(t, "/api/v1/recall/extraction/activate", `{}`)
 	assertStatus(t, activated, http.StatusNoContent)
-	assert.Equal(1, provider.activateCalls)
+	assert.Equal(t, 1, provider.activateCalls)
 
 	retired := te.post(t,
 		"/api/v1/recall/extraction/generations/generation-old/retire", `{}`)
 	assertStatus(t, retired, http.StatusNoContent)
-	assert.Equal([]string{"generation-old"}, provider.retireCalls)
-	assert.Equal(int32(2), notifyCalls.Load())
+	assert.Equal(t, []string{"generation-old"}, provider.retireCalls)
+	assert.Equal(t, int32(2), notifyCalls.Load())
 }
 
 func TestRecallExtractionLifecycleRoutesRequireManager(t *testing.T) {
@@ -1055,9 +1042,6 @@ func TestListRecallEntriesTrustedOnlyRejectsArchivedStatusBeforeReadOnlyStore(
 }
 
 func TestListRecallEntriesFiltersBySupersessionLinks(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 	seedRecallEntrySession(t, te)
 	seedRecallEntry(t, te, db.RecallEntry{
@@ -1086,7 +1070,7 @@ func TestListRecallEntriesFiltersBySupersessionLinks(t *testing.T) {
 		Agent:           "codex",
 		SourceSessionID: "recall-session",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = te.db.SupersedeRecallEntry(t.Context(), "old-b", db.RecallEntry{
 		ID:              "new-b",
 		Type:            "procedure",
@@ -1097,27 +1081,24 @@ func TestListRecallEntriesFiltersBySupersessionLinks(t *testing.T) {
 		Agent:           "codex",
 		SourceSessionID: "recall-session",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	w := te.get(t, "/api/v1/recall/entries?supersedes_entry_id=old-a")
 	assertStatus(t, w, http.StatusOK)
 
 	replacements := decode[listRecallEntriesResponse](t, w)
-	require.Len(replacements.RecallEntries, 1)
-	assert.Equal("new-a", replacements.RecallEntries[0].ID)
+	require.Len(t, replacements.RecallEntries, 1)
+	assert.Equal(t, "new-a", replacements.RecallEntries[0].ID)
 
 	w = te.get(t, "/api/v1/recall/entries?status=archived&superseded_by_entry_id=new-a")
 	assertStatus(t, w, http.StatusOK)
 
 	archived := decode[listRecallEntriesResponse](t, w)
-	require.Len(archived.RecallEntries, 1)
-	assert.Equal("old-a", archived.RecallEntries[0].ID)
+	require.Len(t, archived.RecallEntries, 1)
+	assert.Equal(t, "old-a", archived.RecallEntries[0].ID)
 }
 
 func TestListRecallEntriesWithoutQueryUsesUpdatedOrder(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 	seedRecallEntrySession(t, te)
 	seedRecallEntry(t, te, db.RecallEntry{
@@ -1139,7 +1120,7 @@ func TestListRecallEntriesWithoutQueryUsesUpdatedOrder(t *testing.T) {
 		SourceEpisodeID: "z-source",
 	})
 	raw, err := sql.Open("sqlite3", filepath.Join(te.dataDir, "test.db"))
-	require.NoError(err)
+	require.NoError(t, err)
 	t.Cleanup(func() { raw.Close() })
 	_, err = raw.ExecContext(t.Context(), `
 		UPDATE recall_entries SET updated_at = CASE id
@@ -1148,15 +1129,15 @@ func TestListRecallEntriesWithoutQueryUsesUpdatedOrder(t *testing.T) {
 			ELSE updated_at
 		END
 		WHERE id IN ('older-source-first', 'newer-source-second')`)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	w := te.get(t, "/api/v1/recall/entries?project=agentsview&agent=codex&limit=2")
 	assertStatus(t, w, http.StatusOK)
 
 	r := decode[listRecallEntriesResponse](t, w)
-	require.Len(r.RecallEntries, 2)
-	assert.Equal("newer-source-second", r.RecallEntries[0].ID)
-	assert.Equal("older-source-first", r.RecallEntries[1].ID)
+	require.Len(t, r.RecallEntries, 2)
+	assert.Equal(t, "newer-source-second", r.RecallEntries[0].ID)
+	assert.Equal(t, "older-source-first", r.RecallEntries[1].ID)
 }
 
 func TestGetRecallEntryFoundAndMissing(t *testing.T) {
@@ -1192,9 +1173,6 @@ func TestGetRecallEntryFoundAndMissing(t *testing.T) {
 }
 
 func TestQueryRecallEntriesReturnsContext(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 	seedRecallEntrySession(t, te)
 	seedRecallEntry(t, te, db.RecallEntry{
@@ -1226,30 +1204,30 @@ func TestQueryRecallEntriesReturnsContext(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	r := decode[queryRecallEntriesResponse](t, w)
-	assert.NotEmpty(r.QueryID)
-	assert.Empty(r.MissReason)
-	require.Len(r.RecallEntries, 1)
-	assert.Equal("m1", r.RecallEntries[0].ID)
-	require.NotNil(r.Summary)
-	assert.Equal(1, r.Summary.Count)
-	assert.Equal(1, r.Summary.ByType["procedure"])
-	assert.Equal(1, r.Summary.ByScope["project"])
-	assert.Equal(1, r.Summary.ByMatchReason["keyword"])
-	assert.Equal(1, r.Summary.BySourceSession["recall-session"])
-	assert.Contains(r.Context, "Check cwd before file reads")
-	assert.Contains(r.Context, "recall-session:3-7")
-	require.NotNil(r.ContextMeta)
-	assert.Equal(1, r.ContextMeta.EntryCount)
-	assert.Equal([]string{"m1"}, r.ContextMeta.IncludedIDs)
+	assert.NotEmpty(t, r.QueryID)
+	assert.Empty(t, r.MissReason)
+	require.Len(t, r.RecallEntries, 1)
+	assert.Equal(t, "m1", r.RecallEntries[0].ID)
+	require.NotNil(t, r.Summary)
+	assert.Equal(t, 1, r.Summary.Count)
+	assert.Equal(t, 1, r.Summary.ByType["procedure"])
+	assert.Equal(t, 1, r.Summary.ByScope["project"])
+	assert.Equal(t, 1, r.Summary.ByMatchReason["keyword"])
+	assert.Equal(t, 1, r.Summary.BySourceSession["recall-session"])
+	assert.Contains(t, r.Context, "Check cwd before file reads")
+	assert.Contains(t, r.Context, "recall-session:3-7")
+	require.NotNil(t, r.ContextMeta)
+	assert.Equal(t, 1, r.ContextMeta.EntryCount)
+	assert.Equal(t, []string{"m1"}, r.ContextMeta.IncludedIDs)
 	event, err := te.db.GetRecallQueryEvent(t.Context(), r.QueryID)
-	require.NoError(err)
-	require.NotNil(event)
-	assert.Equal(r.QueryID, event.QueryID)
-	assert.Equal("query", event.Surface)
-	assert.Equal(1, event.ResultCount)
-	assert.Equal(1, event.PackedCount)
-	require.Len(event.Exposures, 1)
-	assert.True(event.Exposures[0].Packed)
+	require.NoError(t, err)
+	require.NotNil(t, event)
+	assert.Equal(t, r.QueryID, event.QueryID)
+	assert.Equal(t, "query", event.Surface)
+	assert.Equal(t, 1, event.ResultCount)
+	assert.Equal(t, 1, event.PackedCount)
+	require.Len(t, event.Exposures, 1)
+	assert.True(t, event.Exposures[0].Packed)
 }
 
 func TestQueryRecallEntriesFiltersBySourceSessionID(t *testing.T) {
@@ -1392,8 +1370,6 @@ func TestQueryRecallEntriesTrustedOnlyRejectsArchivedStatus(t *testing.T) {
 }
 
 func TestQueryRecallEntriesPacksMultipleFocusedContextEntries(t *testing.T) {
-	assert := assert.New(t)
-
 	te := setup(t)
 	seedRecallEntrySession(t, te)
 	seedRecallEntry(t, te, db.RecallEntry{
@@ -1426,16 +1402,13 @@ func TestQueryRecallEntriesPacksMultipleFocusedContextEntries(t *testing.T) {
 
 	r := decode[queryRecallEntriesResponse](t, w)
 	require.NotNil(t, r.ContextMeta)
-	assert.Equal(2, r.ContextMeta.EntryCount)
-	assert.Equal([]string{"m1", "m2"}, r.ContextMeta.IncludedIDs)
-	assert.Contains(r.Context, "Incident Mobile")
-	assert.LessOrEqual(len([]byte(r.Context)), 900)
+	assert.Equal(t, 2, r.ContextMeta.EntryCount)
+	assert.Equal(t, []string{"m1", "m2"}, r.ContextMeta.IncludedIDs)
+	assert.Contains(t, r.Context, "Incident Mobile")
+	assert.LessOrEqual(t, len([]byte(r.Context)), 900)
 }
 
 func TestQueryRecallEntriesReturnsOnlyPackedContextEntries(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 	seedRecallEntrySession(t, te)
 	seedRecallEntry(t, te, db.RecallEntry{
@@ -1466,11 +1439,11 @@ func TestQueryRecallEntriesReturnsOnlyPackedContextEntries(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	r := decode[queryRecallEntriesResponse](t, w)
-	require.Len(r.RecallEntries, 2)
-	require.NotNil(r.ContextMeta)
-	assert.Equal([]string{"packed"}, r.ContextMeta.IncludedIDs)
-	require.Len(r.ContextEntries, 1)
-	assert.Equal("packed", r.ContextEntries[0].ID)
+	require.Len(t, r.RecallEntries, 2)
+	require.NotNil(t, r.ContextMeta)
+	assert.Equal(t, []string{"packed"}, r.ContextMeta.IncludedIDs)
+	require.Len(t, r.ContextEntries, 1)
+	assert.Equal(t, "packed", r.ContextEntries[0].ID)
 }
 
 func TestQueryRecallEntriesRejectsNegativeContextMaxBytes(t *testing.T) {
@@ -1545,8 +1518,6 @@ func TestImportRecallEntriesJSONL(t *testing.T) {
 }
 
 func TestImportRecallEntriesNotifiesOnlyWhenAcceptedCorpusChanges(t *testing.T) {
-	assert := assert.New(t)
-
 	var notifications atomic.Int32
 	te := setupWithServerOpts(t, []server.Option{
 		server.WithRecallCorpusMutationNotifier(func() {
@@ -1561,24 +1532,24 @@ func TestImportRecallEntriesNotifiesOnlyWhenAcceptedCorpusChanges(t *testing.T) 
 
 	w := te.post(t, "/api/v1/recall/import", input)
 	assertStatus(t, w, http.StatusOK)
-	assert.Equal(int32(1), notifications.Load())
+	assert.Equal(t, int32(1), notifications.Load())
 
 	w = te.post(t, "/api/v1/recall/import", input)
 	assertStatus(t, w, http.StatusOK)
-	assert.Equal(int32(1), notifications.Load(),
+	assert.Equal(t, int32(1), notifications.Load(),
 		"a duplicate-only import must not schedule an unchanged corpus")
 
 	w = te.post(t, "/api/v1/recall/import?dry_run=true", strings.ReplaceAll(
 		input, "m-notify", "m-dry-run",
 	))
 	assertStatus(t, w, http.StatusOK)
-	assert.Equal(int32(1), notifications.Load(),
+	assert.Equal(t, int32(1), notifications.Load(),
 		"a dry run must not schedule embedding work")
 
 	partial := strings.ReplaceAll(input, "m-notify", "m-partial") + "\n{"
 	w = te.post(t, "/api/v1/recall/import", partial)
 	assertStatus(t, w, http.StatusBadRequest)
-	assert.Equal(int32(2), notifications.Load(),
+	assert.Equal(t, int32(2), notifications.Load(),
 		"entries committed before a later parse error must schedule embedding")
 	w = te.get(t, "/api/v1/recall/entries/m-partial")
 	assertStatus(t, w, http.StatusOK)
@@ -1801,6 +1772,6 @@ func seedRecallEntry(t *testing.T, te *testEnv, m db.RecallEntry) {
 	if m.Status == "" {
 		m.Status = "accepted"
 	}
-	_, err := te.db.InsertRecallEntry(m)
+	_, err := te.db.InsertRecallEntry(t.Context(), m)
 	require.NoError(t, err, "InsertRecallEntry")
 }

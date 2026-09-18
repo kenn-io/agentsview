@@ -51,7 +51,7 @@ func TestMachineLabelsFromHTTPBackend(t *testing.T) {
 		_, err := io.WriteString(w,
 			`{"machines":["machine-key"],"machine_labels":{"machine-key":"Build Host"},"machine_aliases":{"local":"machine-key"}}`,
 		)
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
 

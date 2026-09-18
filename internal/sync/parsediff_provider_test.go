@@ -15,21 +15,18 @@ import (
 )
 
 func TestParseDiffDiscoversProviderSources(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "provider-only.jsonl")
-	require.NoError(os.WriteFile(sourcePath, []byte("{}\n"), 0o644))
+	require.NoError(t, os.WriteFile(sourcePath, []byte("{}\n"), 0o644))
 	info, err := os.Stat(sourcePath)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	provider := parseDiffProvider{
 		sourcePath: sourcePath,
 		mtime:      info.ModTime(),
 		size:       info.Size(),
 	}
-	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{
+	engine := NewDiffEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -46,19 +43,19 @@ func TestParseDiffDiscoversProviderSources(t *testing.T) {
 		Agents: []parser.AgentType{parser.AgentClaude},
 	})
 
-	require.NoError(err)
-	require.NotNil(report)
-	assert.Equal(1, report.FilesExamined)
-	assert.Equal(ParseDiffTotals{NewOnDisk: 1, Examined: 0}, report.Totals)
-	if assert.Len(report.Sessions, 1) {
-		assert.Equal(DiffNewOnDisk, report.Sessions[0].Class)
-		assert.Equal("provider-discovered", report.Sessions[0].SessionID)
-		assert.Equal(sourcePath, report.Sessions[0].FilePath)
+	require.NoError(t, err)
+	require.NotNil(t, report)
+	assert.Equal(t, 1, report.FilesExamined)
+	assert.Equal(t, ParseDiffTotals{NewOnDisk: 1, Examined: 0}, report.Totals)
+	if assert.Len(t, report.Sessions, 1) {
+		assert.Equal(t, DiffNewOnDisk, report.Sessions[0].Class)
+		assert.Equal(t, "provider-discovered", report.Sessions[0].SessionID)
+		assert.Equal(t, sourcePath, report.Sessions[0].FilePath)
 	}
 }
 
 func TestParseDiffSupportedAgentsAreDiscoverable(t *testing.T) {
-	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{})
+	engine := NewDiffEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{})
 	for _, agent := range []parser.AgentType{
 		parser.AgentGptme,
 		parser.AgentPi,
@@ -92,10 +89,7 @@ func TestParseDiffSupportedAgentsAreDiscoverable(t *testing.T) {
 // yet still admitted by the parse-diff discoverability gate, because the gate
 // keys on the provider factory, not FileBased.
 func TestParseDiffDBBackedAgentsAreDiscoverable(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
-	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{})
+	engine := NewDiffEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{})
 	for _, agent := range []parser.AgentType{
 		parser.AgentForge,
 		parser.AgentDevin,
@@ -103,10 +97,10 @@ func TestParseDiffDBBackedAgentsAreDiscoverable(t *testing.T) {
 		parser.AgentWarp,
 	} {
 		def, ok := parser.AgentByType(agent)
-		require.True(ok, "agent %s", agent)
-		assert.False(def.FileBased,
+		require.True(t, ok, "agent %s", agent)
+		assert.False(t, def.FileBased,
 			"%s is expected to be DB-backed (FileBased=false)", agent)
-		assert.True(engine.parseDiffAgentDiscoverable(def),
+		assert.True(t, engine.parseDiffAgentDiscoverable(def),
 			"DB-backed %s must be discoverable by parse-diff", agent)
 	}
 
@@ -117,21 +111,18 @@ func TestParseDiffDBBackedAgentsAreDiscoverable(t *testing.T) {
 		parser.AgentChatGPT,
 	} {
 		def, ok := parser.AgentByType(agent)
-		require.True(ok, "agent %s", agent)
-		assert.False(engine.parseDiffAgentDiscoverable(def),
+		require.True(t, ok, "agent %s", agent)
+		assert.False(t, engine.parseDiffAgentDiscoverable(def),
 			"import-only %s must not be discoverable by parse-diff", agent)
 	}
 }
 
 func TestSyncAllDiscoversProviderSources(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "provider-only-sync.jsonl")
-	require.NoError(os.WriteFile(sourcePath, []byte("{}\n"), 0o644))
+	require.NoError(t, os.WriteFile(sourcePath, []byte("{}\n"), 0o644))
 	info, err := os.Stat(sourcePath)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	provider := parseDiffProvider{
 		sourcePath: sourcePath,
@@ -139,7 +130,7 @@ func TestSyncAllDiscoversProviderSources(t *testing.T) {
 		size:       info.Size(),
 	}
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -154,12 +145,12 @@ func TestSyncAllDiscoversProviderSources(t *testing.T) {
 
 	stats := engine.SyncAll(t.Context(), nil)
 
-	assert.Equal(1, stats.TotalSessions)
-	assert.Equal(1, stats.Synced)
+	assert.Equal(t, 1, stats.TotalSessions)
+	assert.Equal(t, 1, stats.Synced)
 	session, err := database.GetSession(t.Context(), "provider-discovered")
-	require.NoError(err)
-	require.NotNil(session)
-	assert.Equal(sourcePath, database.GetSessionFilePath("provider-discovered"))
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, sourcePath, database.GetSessionFilePath(t.Context(), "provider-discovered"))
 }
 
 type parseDiffProviderFactory struct {
@@ -270,11 +261,8 @@ func (p parseDiffProvider) source() parser.SourceRef {
 }
 
 func TestParseDiffProviderSourcesThreadsS3Metadata(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	const uri = "s3://bucket/host/raw/claude/proj/session.jsonl"
-	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{
+	engine := NewDiffEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {"s3://bucket/host/raw/claude"},
 		},
@@ -288,25 +276,25 @@ func TestParseDiffProviderSourcesThreadsS3Metadata(t *testing.T) {
 	})
 
 	files, err := engine.parseDiffProviderSources(t.Context(), parser.AgentClaude)
-	require.NoError(err)
-	require.Len(files, 1)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
 
 	// The S3 discovery metadata must be threaded onto the DiscoveredFile so
 	// parse-diff ordering uses the real mtime instead of a zero value (which
 	// would treat the S3 session as oldest and skew --limit selection).
 	f := files[0]
-	assert.Equal(uri, f.Path)
-	assert.Equal("remote-box", f.Machine)
-	assert.Equal(int64(4096), f.SourceSize)
-	assert.Equal(int64(1779012030000)*1_000_000, f.SourceMtime)
-	assert.Equal("s3-fingerprint", f.SourceFingerprint)
-	assert.Equal(int64(2048), f.TranscriptSize)
-	assert.Equal(int64(1779012020000)*1_000_000, f.TranscriptMtime)
-	assert.Equal("myproj", f.Project)
+	assert.Equal(t, uri, f.Path)
+	assert.Equal(t, "remote-box", f.Machine)
+	assert.Equal(t, int64(4096), f.SourceSize)
+	assert.Equal(t, int64(1779012030000)*1_000_000, f.SourceMtime)
+	assert.Equal(t, "s3-fingerprint", f.SourceFingerprint)
+	assert.Equal(t, int64(2048), f.TranscriptSize)
+	assert.Equal(t, int64(1779012020000)*1_000_000, f.TranscriptMtime)
+	assert.Equal(t, "myproj", f.Project)
 }
 
 func TestParseDiffSourceReliableForRacedDevinVirtualPath(t *testing.T) {
-	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{})
+	engine := NewDiffEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{})
 	assert.False(
 		t,
 		engine.parseDiffSourceReliableForRaced(

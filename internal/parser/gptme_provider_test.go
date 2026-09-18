@@ -10,36 +10,30 @@ import (
 )
 
 func TestGptmeProviderCapabilities(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	factory, ok := ProviderFactoryByType(AgentGptme)
-	require.True(ok)
-	require.NotNil(factory)
+	require.True(t, ok)
+	require.NotNil(t, factory)
 
 	caps := factory.Capabilities()
-	assert.Equal(CapabilitySupported, caps.Source.DiscoverSources)
-	assert.Equal(CapabilitySupported, caps.Source.WatchSources)
-	assert.Equal(CapabilitySupported, caps.Source.ClassifyChangedPath)
-	assert.Equal(CapabilitySupported, caps.Source.FindSource)
-	assert.Equal(CapabilitySupported, caps.Source.CompositeFingerprint)
-	assert.Equal(CapabilityNotApplicable, caps.Source.MultiSessionSource)
-	assert.Equal(CapabilitySupported, caps.Content.FirstMessage)
-	assert.Equal(CapabilitySupported, caps.Content.Model)
-	assert.Equal(CapabilitySupported, caps.Content.PerMessageTokenUsage)
+	assert.Equal(t, CapabilitySupported, caps.Source.DiscoverSources)
+	assert.Equal(t, CapabilitySupported, caps.Source.WatchSources)
+	assert.Equal(t, CapabilitySupported, caps.Source.ClassifyChangedPath)
+	assert.Equal(t, CapabilitySupported, caps.Source.FindSource)
+	assert.Equal(t, CapabilitySupported, caps.Source.CompositeFingerprint)
+	assert.Equal(t, CapabilityNotApplicable, caps.Source.MultiSessionSource)
+	assert.Equal(t, CapabilitySupported, caps.Content.FirstMessage)
+	assert.Equal(t, CapabilitySupported, caps.Content.Model)
+	assert.Equal(t, CapabilitySupported, caps.Content.PerMessageTokenUsage)
 
 	provider, ok := NewProvider(AgentGptme, ProviderConfig{
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
-	require.True(ok)
-	require.NotNil(provider)
+	require.True(t, ok)
+	require.NotNil(t, provider)
 }
 
 func TestGptmeProviderSourceMethods(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionID := "2026-06-13-write-hello-world"
 	sourcePath := filepath.Join(root, sessionID, "conversation.jsonl")
@@ -52,42 +46,40 @@ func TestGptmeProviderSourceMethods(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(AgentGptme, discovered[0].Provider)
-	assert.Equal(sourcePath, discovered[0].Key)
-	assert.Equal(sourcePath, discovered[0].FingerprintKey)
-	assert.Equal("write-hello-world", discovered[0].ProjectHint)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, AgentGptme, discovered[0].Provider)
+	assert.Equal(t, sourcePath, discovered[0].Key)
+	assert.Equal(t, sourcePath, discovered[0].FingerprintKey)
+	assert.Equal(t, "write-hello-world", discovered[0].ProjectHint)
 
 	changed, err := provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "write", WatchRoot: root},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(discovered[0].Key, changed[0].Key)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, discovered[0].Key, changed[0].Key)
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: sessionID,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(discovered[0].Key, found.Key)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, discovered[0].Key, found.Key)
 
 	fingerprint, err := provider.Fingerprint(t.Context(), found)
-	require.NoError(err)
-	assert.Equal(sourcePath, fingerprint.Key)
-	assert.NotZero(fingerprint.Size)
-	assert.NotZero(fingerprint.MTimeNS)
-	assert.NotEmpty(fingerprint.Hash)
+	require.NoError(t, err)
+	assert.Equal(t, sourcePath, fingerprint.Key)
+	assert.NotZero(t, fingerprint.Size)
+	assert.NotZero(t, fingerprint.MTimeNS)
+	assert.NotEmpty(t, fingerprint.Hash)
 }
 
 func TestGptmeProviderDiscoversSymlinkSessionDirectories(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	targetRoot := t.TempDir()
 	sessionID := "2026-06-13-write-hello-world"
@@ -106,18 +98,15 @@ func TestGptmeProviderDiscoversSymlinkSessionDirectories(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 	assert.Equal(t, filepath.Join(linkDir, "conversation.jsonl"), discovered[0].DisplayPath)
 }
 
 func TestGptmeProviderClassifiesDeletedConversationPath(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionID := "2026-06-13-write-hello-world"
 	sourcePath := filepath.Join(root, sessionID, "conversation.jsonl")
@@ -127,8 +116,8 @@ func TestGptmeProviderClassifiesDeletedConversationPath(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
-	require.NoError(os.Remove(sourcePath))
+	require.True(t, ok)
+	require.NoError(t, os.Remove(sourcePath))
 
 	changed, err := provider.SourcesForChangedPath(
 		t.Context(),
@@ -138,16 +127,14 @@ func TestGptmeProviderClassifiesDeletedConversationPath(t *testing.T) {
 			WatchRoot: root,
 		},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(sourcePath, changed[0].Key)
-	assert.Equal(sourcePath, changed[0].DisplayPath)
-	assert.Equal("write-hello-world", changed[0].ProjectHint)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, sourcePath, changed[0].Key)
+	assert.Equal(t, sourcePath, changed[0].DisplayPath)
+	assert.Equal(t, "write-hello-world", changed[0].ProjectHint)
 }
 
 func TestGptmeProviderFindSourceUsesPersistedFallbacks(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionID := "2026-06-13-write-hello-world"
 	sourcePath := filepath.Join(root, sessionID, "conversation.jsonl")
@@ -157,7 +144,7 @@ func TestGptmeProviderFindSourceUsesPersistedFallbacks(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	for _, req := range []FindSourceRequest{
 		{FingerprintKey: sourcePath},
@@ -165,16 +152,13 @@ func TestGptmeProviderFindSourceUsesPersistedFallbacks(t *testing.T) {
 		{FullSessionID: "host~gptme:" + sessionID},
 	} {
 		found, ok, err := provider.FindSource(t.Context(), req)
-		require.NoError(err)
-		require.Truef(ok, "request %#v", req)
+		require.NoError(t, err)
+		require.Truef(t, ok, "request %#v", req)
 		assert.Equal(t, sourcePath, found.DisplayPath)
 	}
 }
 
 func TestGptmeProviderParse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionID := "2026-06-13-write-hello-world"
 	sourcePath := filepath.Join(root, sessionID, "conversation.jsonl")
@@ -184,48 +168,45 @@ func TestGptmeProviderParse(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: sourcePath,
 	})
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 	fingerprint, err := provider.Fingerprint(t.Context(), source)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      source,
 		Fingerprint: fingerprint,
 		Machine:     "devbox",
 	})
-	require.NoError(err)
-	require.True(outcome.ResultSetComplete)
-	assert.False(outcome.ForceReplace)
-	assert.Empty(outcome.SourceErrors)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.True(t, outcome.ResultSetComplete)
+	assert.False(t, outcome.ForceReplace)
+	assert.Empty(t, outcome.SourceErrors)
+	require.Len(t, outcome.Results, 1)
 
 	result := outcome.Results[0]
-	assert.Equal(DataVersionCurrent, result.DataVersion)
-	assert.Empty(result.RetryReason)
-	assert.Equal("gptme:"+sessionID, result.Result.Session.ID)
-	assert.Equal("write-hello-world", result.Result.Session.Project)
-	assert.Equal("devbox", result.Result.Session.Machine)
-	assert.Equal(fingerprint.Hash, result.Result.Session.File.Hash)
-	require.Len(result.Result.Messages, 2)
-	assert.Equal(RoleUser, result.Result.Messages[0].Role)
-	assert.Equal(RoleAssistant, result.Result.Messages[1].Role)
+	assert.Equal(t, DataVersionCurrent, result.DataVersion)
+	assert.Empty(t, result.RetryReason)
+	assert.Equal(t, "gptme:"+sessionID, result.Result.Session.ID)
+	assert.Equal(t, "write-hello-world", result.Result.Session.Project)
+	assert.Equal(t, "devbox", result.Result.Session.Machine)
+	assert.Equal(t, fingerprint.Hash, result.Result.Session.File.Hash)
+	require.Len(t, result.Result.Messages, 2)
+	assert.Equal(t, RoleUser, result.Result.Messages[0].Role)
+	assert.Equal(t, RoleAssistant, result.Result.Messages[1].Role)
 }
 
 func TestGptmeProviderParseMissingSourceIsWholeSourceError(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	provider, ok := NewProvider(AgentGptme, ProviderConfig{
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: SourceRef{
@@ -236,9 +217,9 @@ func TestGptmeProviderParseMissingSourceIsWholeSourceError(t *testing.T) {
 		},
 		Machine: "devbox",
 	})
-	require.Error(err)
-	assert.Empty(outcome)
-	assert.NotErrorIs(err, ErrUnsupportedProviderFeature)
+	require.Error(t, err)
+	assert.Empty(t, outcome)
+	assert.NotErrorIs(t, err, ErrUnsupportedProviderFeature)
 }
 
 func gptmeProviderFixture() string {

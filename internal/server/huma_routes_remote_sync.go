@@ -21,8 +21,6 @@ func (s *Server) registerRemoteSyncRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/remote-sync")
 	configureRouteGroup(group, "RemoteSync")
 	s.get(group, "/targets", "Resolve remote sync targets", s.humaRemoteSyncTargets)
-	s.handleHTTP(s.api.OpenAPI().Paths["/api/v1/remote-sync/archive"].Post, s.remoteSyncArchiveHTTP)
-	s.handleHTTP(s.api.OpenAPI().Paths["/api/v1/remote-sync/manifest"].Post, s.remoteSyncManifestHTTP)
 }
 
 type remoteSyncTargetsInput struct {
@@ -106,7 +104,7 @@ func (s *Server) remoteSyncManifestHTTP(w http.ResponseWriter, r *http.Request) 
 			http.StatusNotImplemented)
 		return
 	}
-	manifest, err := remotesync.BuildManifest(manifestTargets)
+	manifest, err := remotesync.BuildManifest(r.Context(), manifestTargets)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -172,7 +170,7 @@ func (s *Server) remoteSyncArchiveHTTP(w http.ResponseWriter, r *http.Request) {
 		out = gz
 	}
 	if deltaMode {
-		err = remotesync.WriteArchiveFiles(out, allowed, files)
+		err = remotesync.WriteArchiveFiles(r.Context(), out, allowed, files)
 	} else {
 		err = remotesync.WriteArchive(r.Context(), out, archiveTargets)
 	}

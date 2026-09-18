@@ -190,8 +190,6 @@ func TestAggregateLog_EmptyRepoReturnsZero(t *testing.T) {
 }
 
 func TestAggregateLog_UsesGlobalGitConfig(t *testing.T) {
-	require := require.New(t)
-
 	skipIfNoGit(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -200,10 +198,10 @@ func TestAggregateLog_UsesGlobalGitConfig(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
 
 	attrsPath := filepath.Join(home, "attributes")
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		attrsPath, []byte("*.txt binary\n"), 0o644,
 	), "write global attributes")
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		globalConfig,
 		[]byte("[core]\n\tattributesfile = "+filepath.ToSlash(attrsPath)+"\n"),
 		0o644,
@@ -218,7 +216,7 @@ func TestAggregateLog_UsesGlobalGitConfig(t *testing.T) {
 		repo, "test@example.com",
 		"1970-01-01T00:00:00Z", "2099-01-01T00:00:00Z",
 	)
-	require.NoError(err, "AggregateLog")
+	require.NoError(t, err, "AggregateLog")
 	assert.Equal(t, LogResult{
 		Commits:      1,
 		LOCAdded:     0,
@@ -275,8 +273,6 @@ func TestAuthorEmail_FallsBackToGlobal(t *testing.T) {
 }
 
 func TestAuthorEmail_UsesIncludeIfGitdir(t *testing.T) {
-	require := require.New(t)
-
 	skipIfNoGit(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -288,14 +284,14 @@ func TestAuthorEmail_UsesIncludeIfGitdir(t *testing.T) {
 	gitRun(t, repo, nil, "init", "-q", "-b", "main")
 
 	includePath := filepath.Join(home, "repo.gitconfig")
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		includePath,
 		[]byte("[user]\n\temail = includeif@example.com\n"),
 		0o644,
 	), "write include config")
 	gitdir, err := filepath.EvalSymlinks(filepath.Join(repo, ".git"))
-	require.NoError(err, "resolve repo gitdir")
-	require.NoError(os.WriteFile(
+	require.NoError(t, err, "resolve repo gitdir")
+	require.NoError(t, os.WriteFile(
 		globalConfig,
 		[]byte(`[includeIf "gitdir:`+filepath.ToSlash(gitdir)+`"]
 	path = `+filepath.ToSlash(includePath)+"\n"),

@@ -23,8 +23,6 @@ import (
 )
 
 func TestMergeSyncStatsIncludesAdditiveRebuildFields(t *testing.T) {
-	assert := assert.New(t)
-
 	dst := SyncStats{
 		OrphanedCopied: 2,
 		Tombstoned:     1,
@@ -40,49 +38,43 @@ func TestMergeSyncStatsIncludesAdditiveRebuildFields(t *testing.T) {
 
 	mergeSyncStats(&dst, src)
 
-	assert.Equal(5, dst.OrphanedCopied)
-	assert.Equal(3, dst.Tombstoned,
+	assert.Equal(t, 5, dst.OrphanedCopied)
+	assert.Equal(t, 3, dst.Tombstoned,
 		"contributor and watch-batch tombstones must survive aggregation")
-	assert.Equal([]RebuildPhaseStats{
+	assert.Equal(t, []RebuildPhaseStats{
 		{Contributor: "local", BatchedWrites: 1},
 		{Contributor: "remote", BatchedWrites: 2},
 	}, dst.RebuildPhases)
-	assert.Equal(1, dst.Deferred)
-	assert.Equal([]string{"remote.jsonl"}, dst.deferredRetryPaths)
+	assert.Equal(t, 1, dst.Deferred)
+	assert.Equal(t, []string{"remote.jsonl"}, dst.deferredRetryPaths)
 }
 
 func TestResyncAllLegacyOmitsContributorDiagnostics(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
-	engine := NewEngine(database, EngineConfig{
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
 		Machine:   "local",
 	})
 	t.Cleanup(engine.Close)
 	path := filepath.Join(root, "project", "legacy.jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
 		AddClaudeUser("2026-01-01T00:00:00Z", "legacy phase fixture").String()), 0o644))
 
 	stats := engine.ResyncAll(t.Context(), nil)
 
-	require.False(stats.Aborted)
-	assert.Nil(stats.RebuildPhases)
-	assert.Nil(engine.LastSyncStats().RebuildPhases)
+	require.False(t, stats.Aborted)
+	assert.Nil(t, stats.RebuildPhases)
+	assert.Nil(t, engine.LastSyncStats().RebuildPhases)
 	payload, err := json.Marshal(stats)
-	require.NoError(err)
-	assert.NotContains(string(payload), "rebuild_phases")
+	require.NoError(t, err)
+	assert.NotContains(t, string(payload), "rebuild_phases")
 }
 
 func TestResyncContributorsRunInOrderWithCumulativeProgress(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	localRoot := t.TempDir()
 	rootA := t.TempDir()
 	rootB := t.TempDir()
@@ -97,14 +89,14 @@ func TestResyncContributorsRunInOrderWithCumulativeProgress(t *testing.T) {
 		{rootB, "b", "contributor-b", "contributor B progress"},
 	} {
 		path := filepath.Join(fixture.root, fixture.project, fixture.id+".jsonl")
-		require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
-		require.NoError(os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
 			AddClaudeUser("2026-01-01T00:00:00Z", fixture.content).String()), 0o644))
 	}
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
-	engine := NewEngine(database, EngineConfig{
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {localRoot}},
 		Machine:   "local",
 	})
@@ -159,60 +151,57 @@ func TestResyncContributorsRunInOrderWithCumulativeProgress(t *testing.T) {
 				},
 			},
 		}, rebuildOperations{
-			rebuildFTS: func(database *db.DB) error {
+			rebuildFTS: func(ctx context.Context, database *db.DB) error {
 				ftsCalls++
-				return database.RebuildFTS()
+				return database.RebuildFTS(t.Context())
 			},
 		},
 	)
-	require.NoError(err)
-	require.False(stats.Aborted, "resync aborted: %+v", stats)
-	assert.Equal([]string{"A", "B"}, order)
-	assert.Equal(3, stats.Synced)
-	assert.Equal([]string{"local", "A", "B"}, []string{
+	require.NoError(t, err)
+	require.False(t, stats.Aborted, "resync aborted: %+v", stats)
+	assert.Equal(t, []string{"A", "B"}, order)
+	assert.Equal(t, 3, stats.Synced)
+	assert.Equal(t, []string{"local", "A", "B"}, []string{
 		stats.RebuildPhases[0].Contributor,
 		stats.RebuildPhases[1].Contributor,
 		stats.RebuildPhases[2].Contributor,
 	})
-	assert.Equal(1, ftsCalls, "FTS rebuilt once instead of per contributor")
-	assert.Equal(Progress{
+	assert.Equal(t, 1, ftsCalls, "FTS rebuilt once instead of per contributor")
+	assert.Equal(t, Progress{
 		Phase: PhaseDone, Detail: "A", Resync: true,
 		SessionsTotal: 2, SessionsDone: 2, MessagesIndexed: 2,
 	}, progressByContributor["A"])
-	assert.Equal(Progress{
+	assert.Equal(t, Progress{
 		Phase: PhaseDone, Detail: "B", Resync: true,
 		SessionsTotal: 3, SessionsDone: 3, MessagesIndexed: 3,
 	}, progressByContributor["B"])
 	for _, contributor := range []string{"A", "B"} {
 		events := finalizingByContributor[contributor]
-		require.NotEmpty(events)
+		require.NotEmpty(t, events)
 		for _, event := range events {
-			assert.Zero(event.SessionsTotal)
-			assert.Zero(event.SessionsDone)
-			assert.Zero(event.MessagesIndexed)
+			assert.Zero(t, event.SessionsTotal)
+			assert.Zero(t, event.SessionsDone)
+			assert.Zero(t, event.MessagesIndexed)
 		}
 	}
 }
 
 func TestResyncAbortsWhenContributorLosesHistoricalSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	localRoot := t.TempDir()
 	remoteRoot := t.TempDir()
 	writeSession := func(root, project, name, content string) string {
 		path := filepath.Join(root, project, name+".jsonl")
-		require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
-		require.NoError(os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
 			AddClaudeUser("2026-01-01T00:00:00Z", content).String()), 0o644))
 		return path
 	}
 	writeSession(localRoot, "local", "local", "local source")
 	remotePath := writeSession(remoteRoot, "remote", "remote", "remote source")
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
-	engine := NewEngine(database, EngineConfig{
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {localRoot}},
 		Machine:   "local",
 	})
@@ -226,34 +215,31 @@ func TestResyncAbortsWhenContributorLosesHistoricalSource(t *testing.T) {
 	}}}
 
 	initial, err := engine.ResyncAllWithOptions(t.Context(), nil, options)
-	require.NoError(err)
-	require.False(initial.Aborted)
-	require.NoError(os.Remove(remotePath))
+	require.NoError(t, err)
+	require.False(t, initial.Aborted)
+	require.NoError(t, os.Remove(remotePath))
 
 	stats, err := engine.ResyncAllWithOptions(t.Context(), nil, options)
 
-	require.NoError(err)
-	assert.True(stats.Aborted,
+	require.NoError(t, err)
+	assert.True(t, stats.Aborted,
 		"a healthy local pass must not mask an empty historical contributor")
 	remote, err := database.GetSession(t.Context(), "remote~remote")
-	require.NoError(err)
-	assert.NotNil(remote, "aborted rebuild must preserve the active archive")
+	require.NoError(t, err)
+	assert.NotNil(t, remote, "aborted rebuild must preserve the active archive")
 }
 
 func TestResyncPreservesAllOfflineRemoteHistoryAsOrphans(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	localRoot := t.TempDir()
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	missingPath := filepath.Join(t.TempDir(), "offline-session.jsonl")
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "offline~session", Project: "archive", Machine: "offline",
 		Agent: "claude", FilePath: &missingPath, MessageCount: 1,
 	}))
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {localRoot}},
 		Machine:   "collector",
 	})
@@ -265,20 +251,17 @@ func TestResyncPreservesAllOfflineRemoteHistoryAsOrphans(t *testing.T) {
 		},
 	)
 
-	require.NoError(err)
-	assert.False(stats.Aborted, "offline contributor history is not local safety loss")
-	assert.Equal(1, stats.OrphanedCopied)
+	require.NoError(t, err)
+	assert.False(t, stats.Aborted, "offline contributor history is not local safety loss")
+	assert.Equal(t, 1, stats.OrphanedCopied)
 	preserved, err := database.GetSession(t.Context(), "offline~session")
-	require.NoError(err)
-	assert.NotNil(preserved, "offline remote history must survive as an orphan")
+	require.NoError(t, err)
+	assert.NotNil(t, preserved, "offline remote history must survive as an orphan")
 }
 
 func TestResyncAbortsWhenLabeledLocalSourceDisappearsAlongsideHealthyContributor(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	localRoot := t.TempDir()
 	remoteRoot := t.TempDir()
 	localPath := filepath.Join(localRoot, "local", "local.jsonl")
@@ -287,14 +270,14 @@ func TestResyncAbortsWhenLabeledLocalSourceDisappearsAlongsideHealthyContributor
 		localPath:  "labeled local source",
 		remotePath: "healthy contributor source",
 	} {
-		require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
-		require.NoError(os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
 			AddClaudeUser("2026-01-01T00:00:00Z", content).String()), 0o644))
 	}
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
-	engine := NewEngine(database, EngineConfig{
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {localRoot},
 		},
@@ -315,42 +298,39 @@ func TestResyncAbortsWhenLabeledLocalSourceDisappearsAlongsideHealthyContributor
 	}}}
 
 	initial, err := engine.ResyncAllWithOptions(t.Context(), nil, options)
-	require.NoError(err)
-	require.False(initial.Aborted, "initial rebuild aborted: %+v", initial)
+	require.NoError(t, err)
+	require.False(t, initial.Aborted, "initial rebuild aborted: %+v", initial)
 	local, err := database.GetSession(t.Context(), "local")
-	require.NoError(err)
-	require.NotNil(local)
-	require.Equal("archive-host", local.Machine)
+	require.NoError(t, err)
+	require.NotNil(t, local)
+	require.Equal(t, "archive-host", local.Machine)
 	engine.sourceMachines[parser.AgentClaude][localRoot] = "renamed-archive-host"
-	require.NoError(os.Remove(localPath))
+	require.NoError(t, os.Remove(localPath))
 
 	stats, err := engine.ResyncAllWithOptions(t.Context(), nil, options)
 
-	require.NoError(err)
-	assert.True(stats.Aborted,
+	require.NoError(t, err)
+	assert.True(t, stats.Aborted,
 		"a healthy contributor must not mask a relabeled local source")
 	local, err = database.GetSession(t.Context(), "local")
-	require.NoError(err)
-	assert.NotNil(local, "aborted rebuild must preserve labeled local history")
+	require.NoError(t, err)
+	assert.NotNil(t, local, "aborted rebuild must preserve labeled local history")
 	remote, err := database.GetSession(t.Context(), "remote-host~remote")
-	require.NoError(err)
-	assert.NotNil(remote, "aborted rebuild must preserve contributor history")
+	require.NoError(t, err)
+	assert.NotNil(t, remote, "aborted rebuild must preserve contributor history")
 }
 
 func TestResyncDoesNotTreatSameNamedContributorAsLocalHistory(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	localRoot := t.TempDir()
 	remoteRoot := t.TempDir()
 	remotePath := filepath.Join(remoteRoot, "project", "remote.jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(remotePath), 0o755))
-	require.NoError(os.WriteFile(remotePath, []byte(testjsonl.NewSessionBuilder().
+	require.NoError(t, os.MkdirAll(filepath.Dir(remotePath), 0o755))
+	require.NoError(t, os.WriteFile(remotePath, []byte(testjsonl.NewSessionBuilder().
 		AddClaudeUser("2026-01-01T00:00:00Z", "same-name remote source").String()), 0o644))
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
-	engine := NewEngine(database, EngineConfig{
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {localRoot}},
 		Machine:   "collector-host",
 	})
@@ -364,37 +344,34 @@ func TestResyncDoesNotTreatSameNamedContributorAsLocalHistory(t *testing.T) {
 	}}}
 
 	initial, err := engine.ResyncAllWithOptions(t.Context(), nil, options)
-	require.NoError(err)
-	require.False(initial.Aborted)
+	require.NoError(t, err)
+	require.False(t, initial.Aborted)
 
 	stats, err := engine.ResyncAllWithOptions(t.Context(), nil, options)
 
-	require.NoError(err)
-	assert.False(stats.Aborted,
+	require.NoError(t, err)
+	assert.False(t, stats.Aborted,
 		"remote-prefixed history must not make an empty local source look incomplete")
 	remote, err := database.GetSession(t.Context(), "collector-host~remote")
-	require.NoError(err)
-	assert.NotNil(remote)
+	require.NoError(t, err)
+	assert.NotNil(t, remote)
 }
 
 func TestResyncContributorPostSwapReopenFailureReturnsCoordinatorError(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	emitter := &fakeEmitter{}
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
 		Machine:   "local",
 		Emitter:   emitter,
 	})
 	t.Cleanup(engine.Close)
 	path := filepath.Join(root, "project", "session.jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
 		AddClaudeUser("2026-01-01T00:00:00Z", "post swap reopen fixture").String()), 0o644))
 
 	sentinel := errors.New("reopen sentinel")
@@ -404,43 +381,40 @@ func TestResyncContributorPostSwapReopenFailureReturnsCoordinatorError(t *testin
 			reopen:     func(*db.DB) error { return sentinel },
 		},
 	)
-	require.ErrorIs(err, sentinel)
-	assert.True(stats.Aborted)
-	assert.Contains(stats.Warnings,
+	require.ErrorIs(t, err, sentinel)
+	assert.True(t, stats.Aborted)
+	assert.Contains(t, stats.Warnings,
 		"resync swap completed but reopening active database failed: reopen sentinel")
-	assert.Empty(emitter.got(), "failed reopen published a successful sync")
-	assert.True(engine.LastSyncStats().Aborted)
+	assert.Empty(t, emitter.got(), "failed reopen published a successful sync")
+	assert.True(t, engine.LastSyncStats().Aborted)
 
 	// The rename already completed and the barrier recovery performed a full
 	// reopen, so the rebuilt file must serve reads and writes without a
 	// manual Reopen — a writer-only recovery would leave every read on a
 	// closed pool until restart.
-	assert.False(database.WriterClosed(),
+	assert.False(t, database.WriterClosed(),
 		"barrier recovery must restore the writer")
 	session, getErr := database.GetSession(t.Context(), "session")
-	require.NoError(getErr)
-	require.NotNil(session)
+	require.NoError(t, getErr)
+	require.NotNil(t, session)
 }
 
 // TestResyncContributorPostSwapReopenRecoversOnRetry pins the retry: a
 // transient reopen failure after the rename must not fail the resync — the
 // swap retries the reopen and completes, recording the retry as a warning.
 func TestResyncContributorPostSwapReopenRecoversOnRetry(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
-	engine := NewEngine(database, EngineConfig{
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
 		Machine:   "local",
 	})
 	t.Cleanup(engine.Close)
 	path := filepath.Join(root, "project", "session.jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
 		AddClaudeUser("2026-01-01T00:00:00Z", "reopen retry fixture").String()), 0o644))
 
 	var reopenCalls int
@@ -457,59 +431,56 @@ func TestResyncContributorPostSwapReopenRecoversOnRetry(t *testing.T) {
 		},
 	)
 
-	require.NoError(err)
-	assert.False(stats.Aborted)
-	assert.Equal(2, reopenCalls)
-	assert.Contains(stats.Warnings,
+	require.NoError(t, err)
+	assert.False(t, stats.Aborted)
+	assert.Equal(t, 2, reopenCalls)
+	assert.Contains(t, stats.Warnings,
 		"resync reopen required a retry: transient reopen failure")
-	assert.False(database.WriterClosed())
+	assert.False(t, database.WriterClosed())
 	session, getErr := database.GetSession(t.Context(), "session")
-	require.NoError(getErr)
-	require.NotNil(session)
+	require.NoError(t, getErr)
+	require.NotNil(t, session)
 }
 
 func TestResyncContributorFTSFailureAbortsAndCleansTempDB(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
-	engine := NewEngine(database, EngineConfig{
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
 		Machine:   "local",
 	})
 	t.Cleanup(engine.Close)
 	oldPath := filepath.Join(root, "old", "old.jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(oldPath), 0o755))
-	require.NoError(os.WriteFile(oldPath, []byte(testjsonl.NewSessionBuilder().
+	require.NoError(t, os.MkdirAll(filepath.Dir(oldPath), 0o755))
+	require.NoError(t, os.WriteFile(oldPath, []byte(testjsonl.NewSessionBuilder().
 		AddClaudeUser("2026-01-01T00:00:00Z", "search survives failure").String()), 0o644))
-	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
-	require.NoError(os.Remove(oldPath))
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, os.Remove(oldPath))
 	newPath := filepath.Join(root, "new", "new.jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(newPath), 0o755))
-	require.NoError(os.WriteFile(newPath, []byte(testjsonl.NewSessionBuilder().
+	require.NoError(t, os.MkdirAll(filepath.Dir(newPath), 0o755))
+	require.NoError(t, os.WriteFile(newPath, []byte(testjsonl.NewSessionBuilder().
 		AddClaudeUser("2026-01-01T00:00:01Z", "partial new data").String()), 0o644))
 
 	sentinel := errors.New("fts sentinel")
 	engine.syncMu.Lock()
 	stats, err := engine.resyncAllWithOptionsLocked(
 		t.Context(), nil, RebuildOptions{}, rebuildOperations{
-			rebuildFTS: func(*db.DB) error { return sentinel },
+			rebuildFTS: func(context.Context, *db.DB) error { return sentinel },
 		},
 	)
 	engine.syncMu.Unlock()
-	require.ErrorIs(err, sentinel)
-	assert.True(stats.Aborted)
+	require.ErrorIs(t, err, sentinel)
+	assert.True(t, stats.Aborted)
 	page, searchErr := database.Search(t.Context(), db.SearchFilter{
 		Query: "search survives failure", Limit: 5,
 	})
-	require.NoError(searchErr)
-	require.Len(page.Results, 1)
-	assert.NoFileExists(database.Path() + resyncTempSuffix)
-	assert.NoFileExists(database.Path() + resyncTempSuffix + "-wal")
-	assert.NoFileExists(database.Path() + resyncTempSuffix + "-shm")
+	require.NoError(t, searchErr)
+	require.Len(t, page.Results, 1)
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix)
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix+"-wal")
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix+"-shm")
 }
 
 type blockingRebuildProvider struct {
@@ -584,24 +555,21 @@ func (f trackingRebuildFactory) NewProvider(parser.ProviderConfig) parser.Provid
 
 func TestResyncContributorCancellationPreservesArchiveAndCleansTempDB(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		root := t.TempDir()
-		database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-		require.NoError(err)
-		t.Cleanup(func() { require.NoError(database.Close()) })
-		engine := NewEngine(database, EngineConfig{
+		database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, database.Close()) })
+		engine := NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
 			Machine:   "local",
 		})
 		t.Cleanup(engine.Close)
 		oldPath := filepath.Join(root, "old", "old.jsonl")
-		require.NoError(os.MkdirAll(filepath.Dir(oldPath), 0o755))
-		require.NoError(os.WriteFile(oldPath, []byte(testjsonl.NewSessionBuilder().
+		require.NoError(t, os.MkdirAll(filepath.Dir(oldPath), 0o755))
+		require.NoError(t, os.WriteFile(oldPath, []byte(testjsonl.NewSessionBuilder().
 			AddClaudeUser("2026-01-01T00:00:00Z", "archive before cancel").String()), 0o644))
-		require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
-		require.NoError(os.Remove(oldPath))
+		require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+		require.NoError(t, os.Remove(oldPath))
 
 		provider := &blockingRebuildProvider{
 			Def: parser.AgentDef{Type: parser.AgentCowork},
@@ -672,29 +640,29 @@ func TestResyncContributorCancellationPreservesArchiveAndCleansTempDB(t *testing
 		select {
 		case <-provider.started:
 		default:
-			require.FailNow("contributor parse did not reach controlled boundary")
+			require.FailNow(t, "contributor parse did not reach controlled boundary")
 		}
 		cancel()
 		synctest.Wait()
 		select {
 		case got := <-result:
-			require.ErrorIs(got.err, context.Canceled)
-			assert.True(got.stats.Aborted)
-			assert.Zero(firstHookCalls, "AfterSync ran on incomplete contributor data")
-			assert.Zero(secondProvider.discoverCalls, "later contributor started after cancellation")
-			assert.Zero(secondHookCalls, "later contributor hook ran after cancellation")
+			require.ErrorIs(t, got.err, context.Canceled)
+			assert.True(t, got.stats.Aborted)
+			assert.Zero(t, firstHookCalls, "AfterSync ran on incomplete contributor data")
+			assert.Zero(t, secondProvider.discoverCalls, "later contributor started after cancellation")
+			assert.Zero(t, secondHookCalls, "later contributor hook ran after cancellation")
 		default:
-			require.FailNow("cancelled contributor rebuild did not return")
+			require.FailNow(t, "cancelled contributor rebuild did not return")
 		}
 
 		page, searchErr := database.Search(t.Context(), db.SearchFilter{
 			Query: "archive before cancel", Limit: 5,
 		})
-		require.NoError(searchErr)
-		require.Len(page.Results, 1)
-		assert.NoFileExists(database.Path() + resyncTempSuffix)
-		assert.NoFileExists(database.Path() + resyncTempSuffix + "-wal")
-		assert.NoFileExists(database.Path() + resyncTempSuffix + "-shm")
+		require.NoError(t, searchErr)
+		require.Len(t, page.Results, 1)
+		assert.NoFileExists(t, database.Path()+resyncTempSuffix)
+		assert.NoFileExists(t, database.Path()+resyncTempSuffix+"-wal")
+		assert.NoFileExists(t, database.Path()+resyncTempSuffix+"-shm")
 	})
 }
 
@@ -740,12 +708,9 @@ func (f incompleteContributorFactory) NewProvider(
 }
 
 func TestSyncThenRunWithRebuildRejectsIncompleteContributor(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(root, "deferred.jsonl")
-	require.NoError(os.WriteFile(path, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
 	source := parser.SourceRef{
 		Provider: parser.AgentCodex, Key: path, DisplayPath: path,
 		FingerprintKey: path,
@@ -759,7 +724,7 @@ func TestSyncThenRunWithRebuildRejectsIncompleteContributor(t *testing.T) {
 			DiscoverSources: parser.CapabilitySupported,
 		}},
 	}
-	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{Machine: "local"})
 	t.Cleanup(engine.Close)
 
 	var afterFailureCalls, afterSyncCalls, workCalls int
@@ -786,7 +751,7 @@ func TestSyncThenRunWithRebuildRejectsIncompleteContributor(t *testing.T) {
 				},
 				AfterFailure: func(_ *Engine, active *db.DB) error {
 					afterFailureCalls++
-					assert.Same(engine.db, active)
+					assert.Same(t, engine.db, active)
 					return nil
 				},
 			}}}, nil, nil
@@ -798,23 +763,20 @@ func TestSyncThenRunWithRebuildRejectsIncompleteContributor(t *testing.T) {
 		},
 	)
 
-	require.NoError(err)
-	assert.True(stats.Aborted)
-	assert.Equal(1, stats.Deferred)
-	assert.Equal(1, afterFailureCalls)
-	assert.Zero(afterSyncCalls,
+	require.NoError(t, err)
+	assert.True(t, stats.Aborted)
+	assert.Equal(t, 1, stats.Deferred)
+	assert.Equal(t, 1, afterFailureCalls)
+	assert.Zero(t, afterSyncCalls,
 		"incomplete contributor data must not run AfterSync")
-	assert.Zero(workCalls,
+	assert.Zero(t, workCalls,
 		"an incomplete rebuild must not run downstream work")
 }
 
 func TestResyncAllRejectsDeferredLocalReplacement(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(root, "deferred.jsonl")
-	require.NoError(os.WriteFile(path, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
 	source := parser.SourceRef{
 		Provider: parser.AgentCodex, Key: path, DisplayPath: path,
 		FingerprintKey: path,
@@ -828,12 +790,12 @@ func TestResyncAllRejectsDeferredLocalReplacement(t *testing.T) {
 	}
 	database := openTestDB(t)
 	missingPath := filepath.Join(t.TempDir(), "missing.jsonl")
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "deferred", Project: "complete archive",
 		Machine: "local", Agent: string(parser.AgentCodex),
 		FilePath: &missingPath, MessageCount: 1,
 	}))
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
 		Machine:   "local",
 		ProviderFactories: []parser.ProviderFactory{
@@ -847,35 +809,32 @@ func TestResyncAllRejectsDeferredLocalReplacement(t *testing.T) {
 
 	stats := engine.ResyncAll(t.Context(), nil)
 
-	assert.True(stats.Aborted)
-	assert.Equal(1, stats.Deferred)
-	assert.NoFileExists(database.Path() + resyncTempSuffix)
+	assert.True(t, stats.Aborted)
+	assert.Equal(t, 1, stats.Deferred)
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix)
 	kept, err := database.GetSession(t.Context(), "deferred")
-	require.NoError(err)
-	require.NotNil(kept)
-	assert.Equal("complete archive", kept.Project)
+	require.NoError(t, err)
+	require.NotNil(t, kept)
+	assert.Equal(t, "complete archive", kept.Project)
 }
 
 func TestResyncLocalCancellationPreventsContributors(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		root := t.TempDir()
-		database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-		require.NoError(err)
-		t.Cleanup(func() { require.NoError(database.Close()) })
+		database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, database.Close()) })
 		oldPath := filepath.Join(root, "old", "old.jsonl")
-		require.NoError(os.MkdirAll(filepath.Dir(oldPath), 0o755))
-		require.NoError(os.WriteFile(oldPath, []byte(testjsonl.NewSessionBuilder().
+		require.NoError(t, os.MkdirAll(filepath.Dir(oldPath), 0o755))
+		require.NoError(t, os.WriteFile(oldPath, []byte(testjsonl.NewSessionBuilder().
 			AddClaudeUser("2026-01-01T00:00:00Z", "archive before local cancel").String()), 0o644))
-		seedEngine := NewEngine(database, EngineConfig{
+		seedEngine := NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
 			Machine:   "local",
 		})
-		require.Equal(1, seedEngine.SyncAll(t.Context(), nil).Synced)
+		require.Equal(t, 1, seedEngine.SyncAll(t.Context(), nil).Synced)
 		seedEngine.Close()
-		require.NoError(os.Remove(oldPath))
+		require.NoError(t, os.Remove(oldPath))
 
 		blocking := &blockingRebuildProvider{
 			Def: parser.AgentDef{Type: parser.AgentCowork},
@@ -890,7 +849,7 @@ func TestResyncLocalCancellationPreventsContributors(t *testing.T) {
 				DiscoverSources: parser.CapabilitySupported,
 			}},
 		}
-		engine := NewEngine(database, EngineConfig{
+		engine := NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{parser.AgentCowork: {root}},
 			Machine:   "local",
 			ProviderFactories: []parser.ProviderFactory{
@@ -931,26 +890,26 @@ func TestResyncLocalCancellationPreventsContributors(t *testing.T) {
 		select {
 		case <-blocking.started:
 		default:
-			require.FailNow("local parse did not reach controlled boundary")
+			require.FailNow(t, "local parse did not reach controlled boundary")
 		}
 		cancel()
 		synctest.Wait()
 		select {
 		case got := <-result:
-			require.ErrorIs(got.err, context.Canceled)
-			assert.True(got.stats.Aborted)
-			assert.Zero(later.discoverCalls)
+			require.ErrorIs(t, got.err, context.Canceled)
+			assert.True(t, got.stats.Aborted)
+			assert.Zero(t, later.discoverCalls)
 		default:
-			require.FailNow("cancelled local rebuild did not return")
+			require.FailNow(t, "cancelled local rebuild did not return")
 		}
 		page, searchErr := database.Search(t.Context(), db.SearchFilter{
 			Query: "archive before local cancel", Limit: 5,
 		})
-		require.NoError(searchErr)
-		require.Len(page.Results, 1)
-		assert.NoFileExists(database.Path() + resyncTempSuffix)
-		assert.NoFileExists(database.Path() + resyncTempSuffix + "-wal")
-		assert.NoFileExists(database.Path() + resyncTempSuffix + "-shm")
+		require.NoError(t, searchErr)
+		require.Len(t, page.Results, 1)
+		assert.NoFileExists(t, database.Path()+resyncTempSuffix)
+		assert.NoFileExists(t, database.Path()+resyncTempSuffix+"-wal")
+		assert.NoFileExists(t, database.Path()+resyncTempSuffix+"-shm")
 	})
 }
 
@@ -982,12 +941,10 @@ func (p *staticUsageRebuildProvider) Parse(
 }
 
 func TestResyncContributorForceParseReachesProvider(t *testing.T) {
-	require := require.New(t)
-
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
-	engine := NewEngine(database, EngineConfig{})
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(t.Context(), database, EngineConfig{})
 	t.Cleanup(engine.Close)
 	provider := newStaticUsageRebuildProvider(
 		"forced-contributor", "forced-contributor.jsonl", 1, 1,
@@ -1012,8 +969,8 @@ func TestResyncContributorForceParseReachesProvider(t *testing.T) {
 		}}},
 	)
 
-	require.NoError(err)
-	require.False(stats.Aborted, "rebuild aborted: %+v", stats)
+	require.NoError(t, err)
+	require.False(t, stats.Aborted, "rebuild aborted: %+v", stats)
 	assert.Equal(t, []bool{true}, provider.forceParseRequests)
 }
 
@@ -1062,24 +1019,21 @@ func newStaticUsageRebuildProvider(id, path string, input, output int) *staticUs
 }
 
 func TestResyncContributorBatchFailureAbortsAndCleansTempDB(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
-	engine := NewEngine(database, EngineConfig{
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
 		Machine:   "local",
 	})
 	t.Cleanup(engine.Close)
 	oldPath := filepath.Join(root, "old", "old.jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(oldPath), 0o755))
-	require.NoError(os.WriteFile(oldPath, []byte(testjsonl.NewSessionBuilder().
+	require.NoError(t, os.MkdirAll(filepath.Dir(oldPath), 0o755))
+	require.NoError(t, os.WriteFile(oldPath, []byte(testjsonl.NewSessionBuilder().
 		AddClaudeUser("2026-01-01T00:00:00Z", "archive before batch failure").String()), 0o644))
-	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
-	require.NoError(os.Remove(oldPath))
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, os.Remove(oldPath))
 
 	bad := newStaticUsageRebuildProvider("batch-rejected", "bad-source", 1, 1)
 	bad.result.UsageEvents = nil
@@ -1102,17 +1056,17 @@ func TestResyncContributorBatchFailureAbortsAndCleansTempDB(t *testing.T) {
 			},
 		}},
 	})
-	require.NoError(err)
-	assert.True(stats.Aborted)
-	assert.Equal(1, stats.Failed)
+	require.NoError(t, err)
+	assert.True(t, stats.Aborted)
+	assert.Equal(t, 1, stats.Failed)
 	page, searchErr := database.Search(t.Context(), db.SearchFilter{
 		Query: "archive before batch failure", Limit: 5,
 	})
-	require.NoError(searchErr)
-	require.Len(page.Results, 1)
-	assert.NoFileExists(database.Path() + resyncTempSuffix)
-	assert.NoFileExists(database.Path() + resyncTempSuffix + "-wal")
-	assert.NoFileExists(database.Path() + resyncTempSuffix + "-shm")
+	require.NoError(t, searchErr)
+	require.Len(t, page.Results, 1)
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix)
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix+"-wal")
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix+"-shm")
 }
 
 type malformedRebuildProvider struct{ parser.ProviderBase }
@@ -1155,24 +1109,21 @@ func (f malformedRebuildFactory) NewProvider(parser.ProviderConfig) parser.Provi
 }
 
 func TestResyncContributorParserFailuresAbortAndCleanTempDB(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
-	engine := NewEngine(database, EngineConfig{
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
 		Machine:   "local",
 	})
 	t.Cleanup(engine.Close)
 	oldPath := filepath.Join(root, "old", "old.jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(oldPath), 0o755))
-	require.NoError(os.WriteFile(oldPath, []byte(testjsonl.NewSessionBuilder().
+	require.NoError(t, os.MkdirAll(filepath.Dir(oldPath), 0o755))
+	require.NoError(t, os.WriteFile(oldPath, []byte(testjsonl.NewSessionBuilder().
 		AddClaudeUser("2026-01-01T00:00:00Z", "archive before parser failures").String()), 0o644))
-	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
-	require.NoError(os.Remove(oldPath))
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, os.Remove(oldPath))
 	provider := &malformedRebuildProvider{
 		Def: parser.AgentDef{Type: parser.AgentCowork, FileBased: true},
 		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
@@ -1196,18 +1147,18 @@ func TestResyncContributorParserFailuresAbortAndCleanTempDB(t *testing.T) {
 			},
 		}},
 	})
-	require.NoError(err)
-	assert.True(stats.Aborted)
-	assert.Equal(3, stats.Failed)
-	assert.Equal(3, stats.TotalSessions)
+	require.NoError(t, err)
+	assert.True(t, stats.Aborted)
+	assert.Equal(t, 3, stats.Failed)
+	assert.Equal(t, 3, stats.TotalSessions)
 	page, searchErr := database.Search(t.Context(), db.SearchFilter{
 		Query: "archive before parser failures", Limit: 5,
 	})
-	require.NoError(searchErr)
-	require.Len(page.Results, 1)
-	assert.NoFileExists(database.Path() + resyncTempSuffix)
-	assert.NoFileExists(database.Path() + resyncTempSuffix + "-wal")
-	assert.NoFileExists(database.Path() + resyncTempSuffix + "-shm")
+	require.NoError(t, searchErr)
+	require.Len(t, page.Results, 1)
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix)
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix+"-wal")
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix+"-shm")
 }
 
 // seedRebuildStaleForkFixture writes a replay-only Claude transcript and stores
@@ -1217,6 +1168,7 @@ func seedRebuildStaleForkFixture(
 	t *testing.T, root string, database *db.DB,
 ) string {
 	t.Helper()
+
 	pureReplay := strings.Join([]string{
 		`{"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-01-01T10:00:00Z","sessionId":"fork-abort","sessionKind":"bg","message":{"content":"first question"}}`,
 		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T10:00:05Z","sessionId":"fork-abort","sessionKind":"bg","message":{"id":"msg_01","content":[{"type":"text","text":"first answer"}]}}`,
@@ -1226,7 +1178,7 @@ func seedRebuildStaleForkFixture(
 	require.NoError(t, os.WriteFile(path, []byte(pureReplay), 0o644))
 	parentID := "fork-abort"
 	staleID := parentID + "-11111111-2222-4333-8444-555555555555"
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:               staleID,
 		Project:          "project",
 		Machine:          "local",
@@ -1235,7 +1187,7 @@ func seedRebuildStaleForkFixture(
 		RelationshipType: "fork",
 		FilePath:         &path,
 	}))
-	require.NoError(t, database.SetSessionDataVersion(staleID, 0))
+	require.NoError(t, database.SetSessionDataVersion(t.Context(), staleID, 0))
 	require.NoError(t, database.BaselineActiveSessionSourceOwnerships(
 		t.Context(), []db.SessionSourceOwnership{{
 			ID: staleID, Machine: "local", Agent: "claude", FilePath: path,
@@ -1245,15 +1197,12 @@ func seedRebuildStaleForkFixture(
 }
 
 func TestResyncBuildFailureDoesNotReportDiscardedTombstones(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	emitter := &fakeEmitter{}
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
 		Machine:   "local",
 		Emitter:   emitter,
@@ -1264,34 +1213,31 @@ func TestResyncBuildFailureDoesNotReportDiscardedTombstones(t *testing.T) {
 	sentinel := errors.New("fts sentinel")
 	stats, err := engine.resyncAllWithOptionsAndOperations(
 		t.Context(), nil, RebuildOptions{}, rebuildOperations{
-			rebuildFTS: func(*db.DB) error { return sentinel },
+			rebuildFTS: func(context.Context, *db.DB) error { return sentinel },
 		},
 	)
-	require.ErrorIs(err, sentinel)
-	require.True(stats.Aborted)
-	assert.Zero(stats.Tombstoned,
+	require.ErrorIs(t, err, sentinel)
+	require.True(t, stats.Aborted)
+	assert.Zero(t, stats.Tombstoned,
 		"tombstones in a discarded replacement must not be reported")
-	assert.Zero(engine.LastSyncStats().Tombstoned,
+	assert.Zero(t, engine.LastSyncStats().Tombstoned,
 		"recorded failure stats must not carry discarded tombstones")
-	assert.Empty(emitter.got(),
+	assert.Empty(t, emitter.got(),
 		"a discarded replacement must not publish a sync event")
 	stale, err := database.GetSession(t.Context(), staleID)
-	require.NoError(err)
-	assert.NotNil(stale, "the original archive keeps the stale fork active")
+	require.NoError(t, err)
+	assert.NotNil(t, stale, "the original archive keeps the stale fork active")
 }
 
 func TestResyncPreInstallSwapFailureDoesNotReportDiscardedTombstones(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	emitter := &fakeEmitter{}
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
 		Machine:   "local",
 		Emitter:   emitter,
@@ -1301,29 +1247,31 @@ func TestResyncPreInstallSwapFailureDoesNotReportDiscardedTombstones(
 
 	restore := db.SetCloseDrainTimeoutForTest(100 * time.Millisecond)
 	defer restore()
-	pinned, err := database.Reader().Query("SELECT 1")
-	require.NoError(err)
+	pinned, err := database.Reader().Query(t.Context(), "SELECT 1")
+	require.NoError(t, err)
 	pinnedOpen := true
 	defer func() {
 		if pinnedOpen {
-			require.NoError(pinned.Close())
+			require.NoError(t, pinned.Err())
+			require.NoError(t, pinned.Close())
 		}
 	}()
 
 	stats := engine.ResyncAll(t.Context(), nil)
-	require.True(stats.Aborted,
+	require.True(t, stats.Aborted,
 		"a failed close before the swap must abort the resync")
-	require.NoError(pinned.Close())
+	require.NoError(t, pinned.Err())
+	require.NoError(t, pinned.Close())
 	pinnedOpen = false
-	assert.Zero(stats.Tombstoned,
+	assert.Zero(t, stats.Tombstoned,
 		"tombstones in a discarded replacement must not be reported")
-	assert.Zero(engine.LastSyncStats().Tombstoned,
+	assert.Zero(t, engine.LastSyncStats().Tombstoned,
 		"recorded failure stats must not carry discarded tombstones")
-	assert.Empty(emitter.got(),
+	assert.Empty(t, emitter.got(),
 		"a discarded replacement must not publish a sync event")
 	stale, err := database.GetSession(t.Context(), staleID)
-	require.NoError(err)
-	assert.NotNil(stale, "the original archive keeps the stale fork active")
+	require.NoError(t, err)
+	assert.NotNil(t, stale, "the original archive keeps the stale fork active")
 }
 
 func countArchiveUsageIndexes(t *testing.T, path string) int {
@@ -1344,76 +1292,70 @@ func countArchiveUsageIndexes(t *testing.T, path string) int {
 }
 
 func TestResyncDropsAndRebuildsUsageIndexes(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
-	engine := NewEngine(database, EngineConfig{
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
 		Machine:   "local",
 	})
 	t.Cleanup(engine.Close)
 	path := filepath.Join(root, "proj", "session.jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
 		AddClaudeUser("2026-01-01T00:00:00Z", "usage index resync").String()), 0o644))
 
 	rebuildCalls := 0
 	duringRebuild := -1
 	stats, err := engine.resyncAllWithOptionsAndOperations(
 		t.Context(), nil, RebuildOptions{}, rebuildOperations{
-			rebuildUsageIndexes: func(newDB *db.DB) error {
+			rebuildUsageIndexes: func(ctx context.Context, newDB *db.DB) error {
 				rebuildCalls++
 				duringRebuild = countArchiveUsageIndexes(t, newDB.Path())
-				return newDB.RebuildBulkImportIndexes()
+				return newDB.RebuildBulkImportIndexes(t.Context())
 			},
 		},
 	)
-	require.NoError(err)
-	require.False(stats.Aborted, "resync aborted: %+v", stats)
-	assert.Equal(1, rebuildCalls, "usage indexes rebuilt once")
-	assert.Equal(0, duringRebuild,
+	require.NoError(t, err)
+	require.False(t, stats.Aborted, "resync aborted: %+v", stats)
+	assert.Equal(t, 1, rebuildCalls, "usage indexes rebuilt once")
+	assert.Equal(t, 0, duringRebuild,
 		"usage indexes must stay dropped during the bulk load")
-	assert.Equal(3, countArchiveUsageIndexes(t, database.Path()),
+	assert.Equal(t, 3, countArchiveUsageIndexes(t, database.Path()),
 		"swapped archive must carry rebuilt usage indexes")
 }
 
 func TestResyncUsageIndexRebuildFailureAbortsSwap(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
-	engine := NewEngine(database, EngineConfig{
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
 		Machine:   "local",
 	})
 	t.Cleanup(engine.Close)
 	oldPath := filepath.Join(root, "old", "old.jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(oldPath), 0o755))
-	require.NoError(os.WriteFile(oldPath, []byte(testjsonl.NewSessionBuilder().
+	require.NoError(t, os.MkdirAll(filepath.Dir(oldPath), 0o755))
+	require.NoError(t, os.WriteFile(oldPath, []byte(testjsonl.NewSessionBuilder().
 		AddClaudeUser("2026-01-01T00:00:00Z", "archive survives usage failure").String()), 0o644))
-	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 
 	sentinel := errors.New("usage index sentinel")
 	stats, err := engine.resyncAllWithOptionsAndOperations(
 		t.Context(), nil, RebuildOptions{}, rebuildOperations{
-			rebuildUsageIndexes: func(*db.DB) error { return sentinel },
+			rebuildUsageIndexes: func(context.Context, *db.DB) error { return sentinel },
 		},
 	)
-	require.ErrorIs(err, sentinel)
-	assert.True(stats.Aborted)
+	require.ErrorIs(t, err, sentinel)
+	assert.True(t, stats.Aborted)
 	page, listErr := database.ListSessions(t.Context(), db.SessionFilter{})
-	require.NoError(listErr)
-	require.Len(page.Sessions, 1, "original archive must stay intact")
-	assert.Equal(3, countArchiveUsageIndexes(t, database.Path()),
+	require.NoError(t, listErr)
+	require.Len(t, page.Sessions, 1, "original archive must stay intact")
+	assert.Equal(t, 3, countArchiveUsageIndexes(t, database.Path()),
 		"original archive must keep its usage indexes")
-	assert.NoFileExists(database.Path() + resyncTempSuffix)
-	assert.NoFileExists(database.Path() + resyncTempSuffix + "-wal")
-	assert.NoFileExists(database.Path() + resyncTempSuffix + "-shm")
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix)
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix+"-wal")
+	assert.NoFileExists(t, database.Path()+resyncTempSuffix+"-shm")
 }

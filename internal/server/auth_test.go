@@ -46,7 +46,7 @@ func TestRemoteSyncAuthRejectsMissingTokenWhenGlobalAuthDisabled(t *testing.T) {
 	}, nil, nil)
 
 	handler := srv.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.FailNow(t, "handler should not run")
+		assert.Fail(t, "handler should not run")
 	}))
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/remote-sync/targets", nil)

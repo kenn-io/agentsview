@@ -13,8 +13,6 @@ import (
 )
 
 func TestGzipMiddlewareCompressesAPIResponse(t *testing.T) {
-	require := require.New(t)
-
 	body := strings.Repeat(`{"sessions":[{"id":"s"}]}`, 80)
 	handler := gzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -29,21 +27,19 @@ func TestGzipMiddlewareCompressesAPIResponse(t *testing.T) {
 
 	resp := w.Result()
 	defer resp.Body.Close()
-	require.Equal(http.StatusCreated, resp.StatusCode)
-	require.Equal("gzip", resp.Header.Get("Content-Encoding"))
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
 	assert.Contains(t, resp.Header.Values("Vary"), "Accept-Encoding")
 
 	gr, err := gzip.NewReader(resp.Body)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer gr.Close()
 	got, err := io.ReadAll(gr)
-	require.NoError(err)
-	require.Equal(body, string(got))
+	require.NoError(t, err)
+	require.Equal(t, body, string(got))
 }
 
 func TestGzipMiddlewareCompressesMultiWriteAPIResponse(t *testing.T) {
-	require := require.New(t)
-
 	first := strings.Repeat(`{"sessions":[{"id":"s"}]}`, 80)
 	second := strings.Repeat(`{"sessions":[{"id":"t"}]}`, 80)
 	handler := gzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -59,14 +55,14 @@ func TestGzipMiddlewareCompressesMultiWriteAPIResponse(t *testing.T) {
 
 	resp := w.Result()
 	defer resp.Body.Close()
-	require.Equal("gzip", resp.Header.Get("Content-Encoding"))
+	require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
 
 	gr, err := gzip.NewReader(resp.Body)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer gr.Close()
 	got, err := io.ReadAll(gr)
-	require.NoError(err)
-	require.Equal(first+second, string(got))
+	require.NoError(t, err)
+	require.Equal(t, first+second, string(got))
 }
 
 func TestGzipMiddlewareSkipsEventStreams(t *testing.T) {
@@ -111,8 +107,6 @@ func TestGzipMiddlewareKeepsFlushedEventStreamPlain(t *testing.T) {
 }
 
 func TestGzipMiddlewareLeavesSmallAPIResponsePlain(t *testing.T) {
-	require := require.New(t)
-
 	handler := gzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte("ok"))
@@ -125,9 +119,9 @@ func TestGzipMiddlewareLeavesSmallAPIResponsePlain(t *testing.T) {
 
 	resp := w.Result()
 	defer resp.Body.Close()
-	require.Equal(http.StatusAccepted, resp.StatusCode)
-	require.Empty(resp.Header.Get("Content-Encoding"))
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+	require.Empty(t, resp.Header.Get("Content-Encoding"))
 	got, err := io.ReadAll(resp.Body)
-	require.NoError(err)
-	require.Equal("ok", string(got))
+	require.NoError(t, err)
+	require.Equal(t, "ok", string(got))
 }

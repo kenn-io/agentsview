@@ -108,6 +108,7 @@ func auditAutomatedFullPG(
 			"querying PG automated backfill candidates: %w", err,
 		)
 	}
+	defer rows.Close()
 	setIDs, clearIDs, count, err := scanFullAutomationCandidatesPG(
 		rows, classifier,
 	)
@@ -174,6 +175,7 @@ func auditAutomatedMatchingHashPG(
 			"querying bounded PG automated audit candidates: %w", err,
 		)
 	}
+	defer rows.Close()
 
 	var unresolved []string
 	for rows.Next() {
@@ -250,24 +252,30 @@ func auditAutomatedMatchingHashPG(
 		for i, id := range batch {
 			placeholders[i] = pb.add(id)
 		}
-		fullRows, err := pg.QueryContext(
-			ctx,
-			fullAutomationCandidatesPG+
-				" WHERE s.id IN ("+strings.Join(placeholders, ",")+")",
-			pb.args...,
-		)
-		if err != nil {
-			return nil, nil, fmt.Errorf(
-				"querying unresolved PG automated audit candidates: %w", err,
+		batchSet, batchClear, count, err := func() ([]string, []string, int, error) {
+			fullRows, err := pg.QueryContext(
+				ctx,
+				fullAutomationCandidatesPG+
+					" WHERE s.id IN ("+strings.Join(placeholders, ",")+")",
+				pb.args...,
 			)
-		}
-		batchSet, batchClear, count, scanErr :=
-			scanFullAutomationCandidatesPG(fullRows, classifier)
-		if closeErr := fullRows.Close(); scanErr == nil && closeErr != nil {
-			scanErr = closeErr
-		}
-		if scanErr != nil {
-			return nil, nil, scanErr
+			if err != nil {
+				return nil, nil, 0, fmt.Errorf(
+					"querying unresolved PG automated audit candidates: %w", err,
+				)
+			}
+			defer fullRows.Close()
+			batchSet, batchClear, count, scanErr := scanFullAutomationCandidatesPG(fullRows, classifier)
+			if closeErr := fullRows.Close(); scanErr == nil && closeErr != nil {
+				scanErr = closeErr
+			}
+			if scanErr != nil {
+				return nil, nil, 0, scanErr
+			}
+			return batchSet, batchClear, count, nil
+		}()
+		if err != nil {
+			return nil, nil, err
 		}
 		progress.RowsFullText += count
 		setIDs = append(setIDs, batchSet...)

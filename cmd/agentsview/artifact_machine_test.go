@@ -11,24 +11,22 @@ import (
 )
 
 func TestOpenDBConfiguresArtifactLocalMachineOwnership(t *testing.T) {
-	require := require.New(t)
-
 	cfg := config.Config{
 		DBPath:         filepath.Join(t.TempDir(), "sessions.db"),
 		InstallationID: "workstation.example",
 	}
-	database, err := openDB(cfg)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
-	require.NoError(database.UpsertSession(db.Session{
+	database, err := openDB(t.Context(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "hostname-local", Project: "project",
 		Machine: cfg.InstallationID, Agent: "claude",
 	}))
-	_, err = database.EnsureArtifactOrigin("desktop-a1b2c3")
-	require.NoError(err)
+	_, err = database.EnsureArtifactOrigin(t.Context(), "desktop-a1b2c3")
+	require.NoError(t, err)
 
 	pending, err := database.PendingArtifactExports(t.Context(), 10)
-	require.NoError(err)
-	require.Len(pending, 1)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
 	assert.Equal(t, "hostname-local", pending[0].SessionID)
 }

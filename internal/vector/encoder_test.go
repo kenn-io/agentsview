@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -80,16 +81,13 @@ func TestEmbeddingURLsPreserveEndpointComponents(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			gotPrimary, err := openAIEmbeddingsURL(tt.endpoint)
-			require.NoError(err)
-			assert.Equal(tt.wantPrimary, gotPrimary)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantPrimary, gotPrimary)
 
 			gotNative, err := ollamaEmbedURL(tt.endpoint)
-			require.NoError(err)
-			assert.Equal(tt.wantNative, gotNative)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantNative, gotNative)
 		})
 	}
 }
@@ -133,9 +131,6 @@ func TestOllamaModelNamesMatchProcessDisplayNames(t *testing.T) {
 }
 
 func TestEncoderHappyPath(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	var gotPath string
 	var gotAuth string
 	var gotReq embeddingsRequest
@@ -144,8 +139,12 @@ func TestEncoderHappyPath(t *testing.T) {
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
 		body, err := io.ReadAll(r.Body)
-		require.NoError(err)
-		require.NoError(json.Unmarshal(body, &gotReq))
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.NoError(t, json.Unmarshal(body, &gotReq)) {
+			return
+		}
 
 		// Return data out of order to verify reordering by index.
 		writeJSON(t, w, http.StatusOK, embeddingsResponse{
@@ -167,18 +166,18 @@ func TestEncoderHappyPath(t *testing.T) {
 	})
 
 	out, err := enc(t.Context(), []string{"hello", "world"})
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.Equal("/v1/embeddings", gotPath)
-	assert.Equal("Bearer secret-key", gotAuth)
-	assert.Equal("test-model", gotReq.Model)
-	assert.Equal([]string{"hello", "world"}, gotReq.Input)
-	assert.Equal("base64", gotReq.EncodingFormat,
+	assert.Equal(t, "/v1/embeddings", gotPath)
+	assert.Equal(t, "Bearer secret-key", gotAuth)
+	assert.Equal(t, "test-model", gotReq.Model)
+	assert.Equal(t, []string{"hello", "world"}, gotReq.Input)
+	assert.Equal(t, "base64", gotReq.EncodingFormat,
 		"requests ask for the compact base64 wire format")
 
-	require.Len(out, 2)
-	assert.Equal([]float32{1, 2, 3}, out[0])
-	assert.Equal([]float32{4, 5, 6}, out[1])
+	require.Len(t, out, 2)
+	assert.Equal(t, []float32{1, 2, 3}, out[0])
+	assert.Equal(t, []float32{4, 5, 6}, out[1])
 }
 
 // base64Embedding encodes floats the way encoding_format "base64" responses
@@ -195,9 +194,6 @@ func base64Embedding(floats []float32) string {
 // encoding_format "base64" round-trips to the same float vectors, including
 // reordering by index.
 func TestEncoderDecodesBase64Embeddings(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, http.StatusOK, map[string]any{
 			"data": []map[string]any{
@@ -216,10 +212,10 @@ func TestEncoderDecodesBase64Embeddings(t *testing.T) {
 	})
 
 	out, err := enc(t.Context(), []string{"hello", "world"})
-	require.NoError(err)
-	require.Len(out, 2)
-	assert.Equal([]float32{1, 2, 3}, out[0])
-	assert.Equal([]float32{4, 5, 6}, out[1])
+	require.NoError(t, err)
+	require.Len(t, out, 2)
+	assert.Equal(t, []float32{1, 2, 3}, out[0])
+	assert.Equal(t, []float32{4, 5, 6}, out[1])
 }
 
 func TestEncoderRejectsInvalidBase64Embeddings(t *testing.T) {
@@ -235,8 +231,6 @@ func TestEncoderRejectsInvalidBase64Embeddings(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				writeJSON(t, w, http.StatusOK, map[string]any{
 					"data": []map[string]any{{
@@ -252,11 +246,11 @@ func TestEncoderRejectsInvalidBase64Embeddings(t *testing.T) {
 			})
 			out, err := enc(t.Context(), []string{"hello"})
 
-			assert.Nil(out, "an invalid batch must expose no partial vectors")
+			assert.Nil(t, out, "an invalid batch must expose no partial vectors")
 			var invalidErr *InvalidEmbeddingError
 			require.ErrorAs(t, err, &invalidErr)
-			assert.Equal(0, invalidErr.Index)
-			assert.Contains(err.Error(), tt.reason)
+			assert.Equal(t, 0, invalidErr.Index)
+			assert.Contains(t, err.Error(), tt.reason)
 		})
 	}
 }
@@ -274,7 +268,7 @@ func TestEncoderRejectsNullEmbeddingElements(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				_, err := io.WriteString(w, `{"data":[{"index":0,"embedding":`+tt.embedding+`}]}`)
-				require.NoError(t, err)
+				assert.NoError(t, err)
 			}))
 			defer srv.Close()
 
@@ -321,9 +315,6 @@ func TestEncoderRetriesInvalidEmbeddingResponse(t *testing.T) {
 }
 
 func TestEncoderOllamaFallbackReloadsMetalBeforeCPU(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	var nativeRequests []testOllamaEmbedRequest
 	var unloadChecks int
 	runnerLoaded := false
@@ -335,7 +326,9 @@ func TestEncoderOllamaFallbackReloadsMetalBeforeCPU(t *testing.T) {
 			}})
 		case "/api/embed":
 			var request testOllamaEmbedRequest
-			require.NoError(json.UnmarshalRead(r.Body, &request))
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+				return
+			}
 			nativeRequests = append(nativeRequests, request)
 			switch len(nativeRequests) {
 			case 1:
@@ -367,7 +360,8 @@ func TestEncoderOllamaFallbackReloadsMetalBeforeCPU(t *testing.T) {
 			runnerLoaded = false
 			writeJSON(t, w, http.StatusOK, map[string]any{"models": []any{}})
 		default:
-			require.FailNow("unexpected request path", r.URL.Path)
+			assert.Fail(t, "unexpected request path", r.URL.Path)
+			return
 		}
 	}))
 	defer srv.Close()
@@ -378,20 +372,17 @@ func TestEncoderOllamaFallbackReloadsMetalBeforeCPU(t *testing.T) {
 	})
 	out, err := enc(t.Context(), []string{"alpha"})
 
-	require.NoError(err)
-	assert.Equal([][]float32{{4, 5, 6}}, out)
-	require.Len(nativeRequests, 2)
-	assert.Nil(nativeRequests[0].Options, "the unload request must stay on Metal")
-	assert.Equal("0s", nativeRequests[0].KeepAlive)
-	assert.Nil(nativeRequests[1].Options, "the fresh retry must stay on Metal")
-	assert.Empty(nativeRequests[1].KeepAlive, "the fresh runner should remain loaded")
-	assert.Equal(2, unloadChecks)
+	require.NoError(t, err)
+	assert.Equal(t, [][]float32{{4, 5, 6}}, out)
+	require.Len(t, nativeRequests, 2)
+	assert.Nil(t, nativeRequests[0].Options, "the unload request must stay on Metal")
+	assert.Equal(t, "0s", nativeRequests[0].KeepAlive)
+	assert.Nil(t, nativeRequests[1].Options, "the fresh retry must stay on Metal")
+	assert.Empty(t, nativeRequests[1].KeepAlive, "the fresh runner should remain loaded")
+	assert.Equal(t, 2, unloadChecks)
 }
 
 func TestEncoderOllamaCPUFallbackReplacesOnlyInvalidVectors(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	var metalCalls, nativeCalls atomic.Int32
 	var gotNative []testOllamaEmbedRequest
 
@@ -407,9 +398,13 @@ func TestEncoderOllamaCPUFallbackReplacesOnlyInvalidVectors(t *testing.T) {
 			}})
 		case "/proxy/api/embed":
 			call := nativeCalls.Add(1)
-			require.Equal("Bearer secret", r.Header.Get("Authorization"))
+			if !assert.Equal(t, "Bearer secret", r.Header.Get("Authorization")) {
+				return
+			}
 			var request testOllamaEmbedRequest
-			require.NoError(json.UnmarshalRead(r.Body, &request))
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+				return
+			}
 			gotNative = append(gotNative, request)
 			if call < 3 {
 				writeJSON(t, w, http.StatusOK, map[string]any{
@@ -422,10 +417,13 @@ func TestEncoderOllamaCPUFallbackReplacesOnlyInvalidVectors(t *testing.T) {
 				"embeddings": [][]float32{{4, 5, 6}, {7, 8, 9}},
 			})
 		case "/proxy/api/ps":
-			require.Equal("Bearer secret", r.Header.Get("Authorization"))
+			if !assert.Equal(t, "Bearer secret", r.Header.Get("Authorization")) {
+				return
+			}
 			writeJSON(t, w, http.StatusOK, map[string]any{"models": []any{}})
 		default:
-			require.FailNow("unexpected request path", r.URL.Path)
+			assert.Fail(t, "unexpected request path", r.URL.Path)
+			return
 		}
 	}))
 	defer srv.Close()
@@ -438,30 +436,27 @@ func TestEncoderOllamaCPUFallbackReplacesOnlyInvalidVectors(t *testing.T) {
 		OllamaCPUFallback: true,
 	})
 	out, err := enc(t.Context(), []string{"alpha", "beta", "gamma"})
-	require.NoError(err)
-	assert.Equal([][]float32{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}}, out)
-	assert.Equal(int32(2), metalCalls.Load(), "normal retries run first")
-	require.Len(gotNative, 3)
+	require.NoError(t, err)
+	assert.Equal(t, [][]float32{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}}, out)
+	assert.Equal(t, int32(2), metalCalls.Load(), "normal retries run first")
+	require.Len(t, gotNative, 3)
 	for _, request := range gotNative {
-		assert.Equal("test-model", request.Model)
-		assert.Equal([]string{"pre:beta:suf", "pre:gamma:suf"}, request.Input)
-		require.NotNil(request.Truncate, "truncate must be present explicitly")
-		assert.False(*request.Truncate)
-		require.NotNil(request.Dimensions)
-		assert.Equal(3, *request.Dimensions)
+		assert.Equal(t, "test-model", request.Model)
+		assert.Equal(t, []string{"pre:beta:suf", "pre:gamma:suf"}, request.Input)
+		require.NotNil(t, request.Truncate, "truncate must be present explicitly")
+		assert.False(t, *request.Truncate)
+		require.NotNil(t, request.Dimensions)
+		assert.Equal(t, 3, *request.Dimensions)
 	}
-	assert.Nil(gotNative[0].Options, "the unload request must stay on Metal")
-	assert.Equal("0s", gotNative[0].KeepAlive)
-	assert.Nil(gotNative[1].Options, "the fresh retry must stay on Metal")
-	assert.Empty(gotNative[1].KeepAlive)
-	assert.EqualValues(0, gotNative[2].Options["num_gpu"])
-	assert.Equal("0s", gotNative[2].KeepAlive)
+	assert.Nil(t, gotNative[0].Options, "the unload request must stay on Metal")
+	assert.Equal(t, "0s", gotNative[0].KeepAlive)
+	assert.Nil(t, gotNative[1].Options, "the fresh retry must stay on Metal")
+	assert.Empty(t, gotNative[1].KeepAlive)
+	assert.EqualValues(t, 0, gotNative[2].Options["num_gpu"])
+	assert.Equal(t, "0s", gotNative[2].KeepAlive)
 }
 
 func TestEncoderOllamaCPUFallbackOmitsDimensionsWhenNotRequested(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	var gotNative []testOllamaEmbedRequest
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -472,7 +467,9 @@ func TestEncoderOllamaCPUFallbackOmitsDimensionsWhenNotRequested(t *testing.T) {
 			}})
 		case "/api/embed":
 			var request testOllamaEmbedRequest
-			require.NoError(json.UnmarshalRead(r.Body, &request))
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+				return
+			}
 			gotNative = append(gotNative, request)
 			if len(gotNative) < 3 {
 				writeJSON(t, w, http.StatusOK, map[string]any{
@@ -487,7 +484,8 @@ func TestEncoderOllamaCPUFallbackOmitsDimensionsWhenNotRequested(t *testing.T) {
 		case "/api/ps":
 			writeJSON(t, w, http.StatusOK, map[string]any{"models": []any{}})
 		default:
-			require.FailNow("unexpected request path", r.URL.Path)
+			assert.Fail(t, "unexpected request path", r.URL.Path)
+			return
 		}
 	}))
 	defer srv.Close()
@@ -497,22 +495,20 @@ func TestEncoderOllamaCPUFallbackOmitsDimensionsWhenNotRequested(t *testing.T) {
 		Timeout: time.Second, MaxRetries: 1, OllamaCPUFallback: true,
 	})
 	out, err := enc(t.Context(), []string{"alpha"})
-	require.NoError(err)
-	assert.Equal([][]float32{{1, 2, 3}}, out)
-	require.Len(gotNative, 3)
+	require.NoError(t, err)
+	assert.Equal(t, [][]float32{{1, 2, 3}}, out)
+	require.Len(t, gotNative, 3)
 	for _, request := range gotNative {
-		require.NotNil(request.Truncate, "truncate must be present explicitly")
-		assert.False(*request.Truncate)
-		assert.Nil(request.Dimensions, "dimensions must be omitted unless requested")
+		require.NotNil(t, request.Truncate, "truncate must be present explicitly")
+		assert.False(t, *request.Truncate)
+		assert.Nil(t, request.Dimensions, "dimensions must be omitted unless requested")
 	}
 }
 
 func TestEncoderOllamaCPUFallbackPreservesQueryOnBothRoutes(t *testing.T) {
-	assert := assert.New(t)
-
 	var primaryCalls, nativeCalls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal("local", r.URL.Query().Get("tenant"))
+		assert.Equal(t, "local", r.URL.Query().Get("tenant"))
 		switch r.URL.Path {
 		case "/proxy/v1/embeddings":
 			primaryCalls.Add(1)
@@ -546,15 +542,12 @@ func TestEncoderOllamaCPUFallbackPreservesQueryOnBothRoutes(t *testing.T) {
 	out, err := enc(t.Context(), []string{"alpha"})
 
 	require.NoError(t, err)
-	assert.Equal([][]float32{{1, 2, 3}}, out)
-	assert.Equal(int32(1), primaryCalls.Load())
-	assert.Equal(int32(3), nativeCalls.Load())
+	assert.Equal(t, [][]float32{{1, 2, 3}}, out)
+	assert.Equal(t, int32(1), primaryCalls.Load())
+	assert.Equal(t, int32(3), nativeCalls.Load())
 }
 
 func TestEncoderOllamaCPUFallbackQuiescesSharedEndpointTraffic(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	var primaryCalls, nativeCalls atomic.Int32
 	cpuStarted := make(chan struct{})
 	releaseCPU := make(chan struct{})
@@ -589,7 +582,8 @@ func TestEncoderOllamaCPUFallbackQuiescesSharedEndpointTraffic(t *testing.T) {
 		case "/api/ps":
 			writeJSON(t, w, http.StatusOK, map[string]any{"models": []any{}})
 		default:
-			require.FailNow("unexpected request path", r.URL.Path)
+			assert.Fail(t, "unexpected request path", r.URL.Path)
+			return
 		}
 	}))
 	defer srv.Close()
@@ -620,23 +614,21 @@ func TestEncoderOllamaCPUFallbackQuiescesSharedEndpointTraffic(t *testing.T) {
 	}
 
 	close(releaseCPU)
-	require.NoError(<-firstDone)
+	require.NoError(t, <-firstDone)
 	if !primaryEscapedGate {
 		select {
 		case <-secondPrimaryStarted:
 		case <-time.After(time.Second):
-			t.Fatal("primary request did not resume after the CPU fallback completed")
+			require.FailNow(t, "primary request did not resume after the CPU fallback completed")
 		}
 	}
-	require.NoError(<-secondDone)
-	assert.False(primaryEscapedGate,
+	require.NoError(t, <-secondDone)
+	assert.False(t, primaryEscapedGate,
 		"primary request reached Ollama while the CPU fallback held the endpoint")
-	assert.Equal(int32(2), primaryCalls.Load())
+	assert.Equal(t, int32(2), primaryCalls.Load())
 }
 
 func TestEncoderOllamaGatePrimaryWaitHonorsCancellation(t *testing.T) {
-	require := require.New(t)
-
 	var primaryCalls, nativeCalls atomic.Int32
 	cpuStarted := make(chan struct{})
 	releaseCPU := make(chan struct{})
@@ -663,7 +655,8 @@ func TestEncoderOllamaGatePrimaryWaitHonorsCancellation(t *testing.T) {
 		case "/api/ps":
 			writeJSON(t, w, http.StatusOK, map[string]any{"models": []any{}})
 		default:
-			require.FailNow("unexpected request path", r.URL.Path)
+			assert.Fail(t, "unexpected request path", r.URL.Path)
+			return
 		}
 	}))
 	defer srv.Close()
@@ -691,22 +684,20 @@ func TestEncoderOllamaGatePrimaryWaitHonorsCancellation(t *testing.T) {
 
 	select {
 	case err := <-secondDone:
-		require.ErrorIs(err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(time.Second):
 		close(releaseCPU)
-		require.NoError(<-firstDone)
+		require.NoError(t, <-firstDone)
 		<-secondDone
-		t.Fatal("canceled primary request remained blocked behind CPU fallback")
+		require.FailNow(t, "canceled primary request remained blocked behind CPU fallback")
 	}
 
 	close(releaseCPU)
-	require.NoError(<-firstDone)
+	require.NoError(t, <-firstDone)
 	assert.Equal(t, int32(1), primaryCalls.Load())
 }
 
 func TestEncoderOllamaGateFallbackWaitHonorsCancellation(t *testing.T) {
-	require := require.New(t)
-
 	blockerStarted := make(chan struct{})
 	releaseBlocker := make(chan struct{})
 	invalidSent := make(chan struct{})
@@ -716,8 +707,12 @@ func TestEncoderOllamaGateFallbackWaitHonorsCancellation(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1/embeddings":
 			var req embeddingsRequest
-			require.NoError(json.UnmarshalRead(r.Body, &req))
-			require.Len(req.Input, 1)
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+				return
+			}
+			if !assert.Len(t, req.Input, 1) {
+				return
+			}
 			if req.Input[0] == "blocker" {
 				close(blockerStarted)
 				<-releaseBlocker
@@ -736,7 +731,8 @@ func TestEncoderOllamaGateFallbackWaitHonorsCancellation(t *testing.T) {
 				"embeddings": [][]float32{{4, 5, 6}},
 			})
 		default:
-			require.FailNow("unexpected request path", r.URL.Path)
+			assert.Fail(t, "unexpected request path", r.URL.Path)
+			return
 		}
 	}))
 	defer srv.Close()
@@ -765,16 +761,16 @@ func TestEncoderOllamaGateFallbackWaitHonorsCancellation(t *testing.T) {
 
 	select {
 	case err := <-repairDone:
-		require.ErrorIs(err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(time.Second):
 		close(releaseBlocker)
-		require.NoError(<-blockerDone)
+		require.NoError(t, <-blockerDone)
 		<-repairDone
-		t.Fatal("canceled CPU fallback remained blocked behind a primary request")
+		require.FailNow(t, "canceled CPU fallback remained blocked behind a primary request")
 	}
 
 	close(releaseBlocker)
-	require.NoError(<-blockerDone)
+	require.NoError(t, <-blockerDone)
 	assert.Equal(t, int32(0), cpuCalls.Load())
 }
 
@@ -792,7 +788,8 @@ func TestEncoderOllamaCPUFallbackDisabledLeavesInvalidResponseFailed(t *testing.
 				"embeddings": [][]float32{{1, 2, 3}},
 			})
 		default:
-			require.FailNow(t, "unexpected request path", r.URL.Path)
+			assert.Fail(t, "unexpected request path", r.URL.Path)
+			return
 		}
 	}))
 	defer srv.Close()
@@ -823,7 +820,8 @@ func TestEncoderOllamaCPUFallbackDoesNotMaskDimensionMismatch(t *testing.T) {
 				"embeddings": [][]float32{{1, 2, 3}},
 			})
 		default:
-			require.FailNow(t, "unexpected request path", r.URL.Path)
+			assert.Fail(t, "unexpected request path", r.URL.Path)
+			return
 		}
 	}))
 	defer srv.Close()
@@ -891,7 +889,8 @@ func TestEncoderOllamaCPUFallbackRejectsIneligiblePrimaryFailures(t *testing.T) 
 					cpuCalls.Add(1)
 					http.Error(w, "unexpected CPU fallback", http.StatusInternalServerError)
 				default:
-					require.FailNow(t, "unexpected request path", r.URL.Path)
+					assert.Fail(t, "unexpected request path", r.URL.Path)
+					return
 				}
 			}))
 			defer srv.Close()
@@ -987,9 +986,6 @@ func TestEncoderOllamaCPUFallbackFailureLeavesBatchFailed(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			var cpuCalls atomic.Int32
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
@@ -997,7 +993,9 @@ func TestEncoderOllamaCPUFallbackFailureLeavesBatchFailed(t *testing.T) {
 					writeJSON(t, w, http.StatusOK, map[string]any{"data": tt.primary})
 				case "/api/embed":
 					var request testOllamaEmbedRequest
-					require.NoError(json.UnmarshalRead(r.Body, &request))
+					if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+						return
+					}
 					if request.Options == nil {
 						writeJSON(t, w, http.StatusOK, map[string]any{
 							"embeddings": [][]float32{{0, 0, 0}},
@@ -1009,7 +1007,8 @@ func TestEncoderOllamaCPUFallbackFailureLeavesBatchFailed(t *testing.T) {
 				case "/api/ps":
 					writeJSON(t, w, http.StatusOK, map[string]any{"models": []any{}})
 				default:
-					require.FailNow("unexpected request path", r.URL.Path)
+					assert.Fail(t, "unexpected request path", r.URL.Path)
+					return
 				}
 			}))
 			defer srv.Close()
@@ -1020,14 +1019,14 @@ func TestEncoderOllamaCPUFallbackFailureLeavesBatchFailed(t *testing.T) {
 			})
 			out, err := enc(t.Context(), tt.texts)
 
-			assert.Nil(out, "a failed fallback must expose no partial vectors")
-			require.Error(err)
-			assert.Contains(err.Error(), "Ollama CPU fallback")
-			assert.Contains(err.Error(), tt.wantErr)
+			assert.Nil(t, out, "a failed fallback must expose no partial vectors")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "Ollama CPU fallback")
+			assert.Contains(t, err.Error(), tt.wantErr)
 			var invalidErr *InvalidEmbeddingError
-			require.ErrorAs(err, &invalidErr,
+			require.ErrorAs(t, err, &invalidErr,
 				"the original Metal invalid-vector error must remain available")
-			assert.Equal(int32(1), cpuCalls.Load(), "CPU is attempted exactly once")
+			assert.Equal(t, int32(1), cpuCalls.Load(), "CPU is attempted exactly once")
 		})
 	}
 }
@@ -1061,15 +1060,16 @@ func TestEncoderBase64WrongByteCountFailsDimensionCheck(t *testing.T) {
 // is redone without the field immediately, and later calls never ask for
 // base64 again.
 func TestEncoderFallsBackToFloatsWhenBase64Rejected(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	var base64Requests, floatRequests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		require.NoError(err)
+		if !assert.NoError(t, err) {
+			return
+		}
 		var req embeddingsRequest
-		require.NoError(json.Unmarshal(body, &req))
+		if !assert.NoError(t, json.Unmarshal(body, &req)) {
+			return
+		}
 
 		if req.EncodingFormat != "" {
 			base64Requests.Add(1)
@@ -1093,31 +1093,32 @@ func TestEncoderFallsBackToFloatsWhenBase64Rejected(t *testing.T) {
 	})
 
 	out, err := enc(t.Context(), []string{"hello"})
-	require.NoError(err)
-	require.Len(out, 1)
-	assert.Equal([]float32{1, 2, 3}, out[0])
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, []float32{1, 2, 3}, out[0])
 
 	_, err = enc(t.Context(), []string{"again"})
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.Equal(int32(1), base64Requests.Load(),
+	assert.Equal(t, int32(1), base64Requests.Load(),
 		"the rejection downgrades the encoder for its lifetime")
-	assert.Equal(int32(2), floatRequests.Load())
+	assert.Equal(t, int32(2), floatRequests.Load())
 }
 
 // TestEncoderInputAffixesApplied asserts configured affixes surround every
 // input in the request body without mutating the caller's text slice, while
 // returned vectors still map back to the original texts by index.
 func TestEncoderInputAffixesApplied(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	var gotReq embeddingsRequest
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		require.NoError(err)
-		require.NoError(json.Unmarshal(body, &gotReq))
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.NoError(t, json.Unmarshal(body, &gotReq)) {
+			return
+		}
 		writeJSON(t, w, http.StatusOK, embeddingsResponse{
 			Data: []embeddingDatum{
 				{Index: 0, Embedding: []float32{1, 2, 3}},
@@ -1139,17 +1140,17 @@ func TestEncoderInputAffixesApplied(t *testing.T) {
 
 	texts := []string{"hello", "world"}
 	out, err := enc(t.Context(), texts)
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.Equal([]string{
+	assert.Equal(t, []string{
 		"title: none | text: hello<|endoftext|>",
 		"title: none | text: world<|endoftext|>",
 	}, gotReq.Input)
-	assert.Equal([]string{"hello", "world"}, texts,
+	assert.Equal(t, []string{"hello", "world"}, texts,
 		"applying affixes must not mutate caller input")
-	require.Len(out, 2)
-	assert.Equal([]float32{1, 2, 3}, out[0])
-	assert.Equal([]float32{4, 5, 6}, out[1])
+	require.Len(t, out, 2)
+	assert.Equal(t, []float32{1, 2, 3}, out[0])
+	assert.Equal(t, []float32{4, 5, 6}, out[1])
 }
 
 func TestEncoderAnonymousNoAuthHeader(t *testing.T) {
@@ -1180,8 +1181,6 @@ func TestEncoderAnonymousNoAuthHeader(t *testing.T) {
 }
 
 func TestEncoderDimensionMismatch(t *testing.T) {
-	assert := assert.New(t)
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, http.StatusOK, embeddingsResponse{
 			Data: []embeddingDatum{{Index: 0, Embedding: []float32{1, 2}}},
@@ -1199,9 +1198,9 @@ func TestEncoderDimensionMismatch(t *testing.T) {
 
 	_, err := enc(t.Context(), []string{"hello"})
 	require.Error(t, err)
-	assert.Contains(err.Error(), "got")
-	assert.Contains(err.Error(), "want")
-	assert.Contains(err.Error(), "[vector.embeddings] dimension")
+	assert.Contains(t, err.Error(), "got")
+	assert.Contains(t, err.Error(), "want")
+	assert.Contains(t, err.Error(), "[vector.embeddings] dimension")
 }
 
 // TestEncoderRequestDimensionsSentWhenConfigured asserts an encoder with
@@ -1209,15 +1208,16 @@ func TestEncoderDimensionMismatch(t *testing.T) {
 // OpenAI-compatible "dimensions" request field and accepts the reduced
 // vectors an honoring server returns.
 func TestEncoderRequestDimensionsSentWhenConfigured(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	var gotBody map[string]any
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		require.NoError(err)
-		require.NoError(json.Unmarshal(body, &gotBody))
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.NoError(t, json.Unmarshal(body, &gotBody)) {
+			return
+		}
 		writeJSON(t, w, http.StatusOK, embeddingsResponse{
 			Data: []embeddingDatum{{Index: 0, Embedding: []float32{1, 2}}},
 		})
@@ -1234,12 +1234,12 @@ func TestEncoderRequestDimensionsSentWhenConfigured(t *testing.T) {
 	})
 
 	out, err := enc(t.Context(), []string{"hello"})
-	require.NoError(err)
-	require.Len(out, 1)
-	assert.Equal([]float32{1, 2}, out[0])
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, []float32{1, 2}, out[0])
 
-	require.Contains(gotBody, "dimensions")
-	assert.EqualValues(2, gotBody["dimensions"],
+	require.Contains(t, gotBody, "dimensions")
+	assert.EqualValues(t, 2, gotBody["dimensions"],
 		"the configured dimension is the requested output length")
 }
 
@@ -1252,8 +1252,12 @@ func TestEncoderOmitsDimensionsFieldByDefault(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &gotBody))
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.NoError(t, json.Unmarshal(body, &gotBody)) {
+			return
+		}
 		writeJSON(t, w, http.StatusOK, embeddingsResponse{
 			Data: []embeddingDatum{{Index: 0, Embedding: []float32{1, 2, 3}}},
 		})
@@ -1279,9 +1283,6 @@ func TestEncoderOmitsDimensionsFieldByDefault(t *testing.T) {
 // that names the request_dimensions setting and still carries the
 // HTTPStatusError for the build loop's permanence classification.
 func TestEncoderDimensionsRejectionFailsFastWithActionableError(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
@@ -1301,16 +1302,16 @@ func TestEncoderDimensionsRejectionFailsFastWithActionableError(t *testing.T) {
 	})
 
 	_, err := enc(t.Context(), []string{"hello"})
-	require.Error(err)
-	assert.Contains(err.Error(), "request_dimensions",
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "request_dimensions",
 		"the error names the setting to change")
-	assert.Contains(err.Error(), "native output length")
-	assert.Equal(int32(1), requests.Load(), "a 4xx rejection is not retried")
+	assert.Contains(t, err.Error(), "native output length")
+	assert.Equal(t, int32(1), requests.Load(), "a 4xx rejection is not retried")
 
 	var statusErr *HTTPStatusError
-	require.ErrorAs(err, &statusErr)
-	assert.Equal(http.StatusBadRequest, statusErr.Status)
-	assert.False(statusErr.Permanent(),
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadRequest, statusErr.Status)
+	assert.False(t, statusErr.Permanent(),
 		"a config-level rejection must abort the build, not skip-stamp documents")
 }
 
@@ -1345,8 +1346,6 @@ func TestEncoderNoDimensionsHintWhenFieldNotRequested(t *testing.T) {
 // being truncated client-side or the generic mismatch message leaving the
 // user to guess.
 func TestEncoderDimensionMismatchWhenEndpointIgnoresRequestedDimensions(t *testing.T) {
-	assert := assert.New(t)
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, http.StatusOK, embeddingsResponse{
 			Data: []embeddingDatum{{Index: 0, Embedding: []float32{1, 2, 3, 4}}},
@@ -1365,10 +1364,10 @@ func TestEncoderDimensionMismatchWhenEndpointIgnoresRequestedDimensions(t *testi
 
 	out, err := enc(t.Context(), []string{"hello"})
 	require.Error(t, err)
-	assert.Nil(out, "wrong-length vectors are never truncated client-side")
-	assert.Contains(err.Error(), "got 4, want 2")
-	assert.Contains(err.Error(), "ignored the requested dimensions field")
-	assert.Contains(err.Error(), "request_dimensions")
+	assert.Nil(t, out, "wrong-length vectors are never truncated client-side")
+	assert.Contains(t, err.Error(), "got 4, want 2")
+	assert.Contains(t, err.Error(), "ignored the requested dimensions field")
+	assert.Contains(t, err.Error(), "request_dimensions")
 }
 
 // TestEncoderBase64FallbackKeepsRequestedDimensions asserts the
@@ -1376,15 +1375,16 @@ func TestEncoderDimensionMismatchWhenEndpointIgnoresRequestedDimensions(t *testi
 // dimensions field intact, so the transport fallback cannot silently change
 // the requested output length.
 func TestEncoderBase64FallbackKeepsRequestedDimensions(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	var bodies []map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		require.NoError(err)
+		if !assert.NoError(t, err) {
+			return
+		}
 		var decoded map[string]any
-		require.NoError(json.Unmarshal(body, &decoded))
+		if !assert.NoError(t, json.Unmarshal(body, &decoded)) {
+			return
+		}
 		bodies = append(bodies, decoded)
 
 		if _, ok := decoded["encoding_format"]; ok {
@@ -1408,13 +1408,13 @@ func TestEncoderBase64FallbackKeepsRequestedDimensions(t *testing.T) {
 	})
 
 	out, err := enc(t.Context(), []string{"hello"})
-	require.NoError(err)
-	require.Len(out, 1)
-	assert.Equal([]float32{1, 2}, out[0])
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, []float32{1, 2}, out[0])
 
-	require.Len(bodies, 2, "base64 attempt plus the float retry")
+	require.Len(t, bodies, 2, "base64 attempt plus the float retry")
 	for i, b := range bodies {
-		assert.EqualValues(2, b["dimensions"],
+		assert.EqualValues(t, 2, b["dimensions"],
 			"request %d carries the requested dimensions", i)
 	}
 }
@@ -1584,11 +1584,16 @@ func TestEncoder400FailsWithoutRetry(t *testing.T) {
 
 func TestEncoderContextCancellationAbortsBackoffPromptly(t *testing.T) {
 	var attempts atomic.Int32
+	firstResponse := make(chan struct{})
+	var signalOnce sync.Once
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts.Add(1)
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = w.Write([]byte("rate limited"))
+		signalOnce.Do(func() { close(firstResponse) })
 	}))
 	defer srv.Close()
 
@@ -1600,9 +1605,8 @@ func TestEncoderContextCancellationAbortsBackoffPromptly(t *testing.T) {
 		MaxRetries: 10,
 	})
 
-	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		<-firstResponse
 		cancel()
 	}()
 
@@ -1619,9 +1623,6 @@ func TestEncoderContextCancellationAbortsBackoffPromptly(t *testing.T) {
 // so callers (kit's WithFillEncodeError handler) can distinguish a permanent
 // rejection from a transient one instead of string-matching the message.
 func TestEncoder400ReturnsPermanentHTTPStatusError(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte("token window overflow"))
@@ -1634,11 +1635,11 @@ func TestEncoder400ReturnsPermanentHTTPStatusError(t *testing.T) {
 	})
 
 	_, err := enc(t.Context(), []string{"hello"})
-	require.Error(err)
+	require.Error(t, err)
 	var statusErr *HTTPStatusError
-	require.ErrorAs(err, &statusErr)
-	assert.Equal(http.StatusBadRequest, statusErr.Status)
-	assert.True(statusErr.Permanent(), "a 400 is a permanent rejection")
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadRequest, statusErr.Status)
+	assert.True(t, statusErr.Permanent(), "a 400 is a permanent rejection")
 }
 
 // TestEncoder429ReturnsNonPermanentHTTPStatusError guards the except-429
@@ -1647,9 +1648,6 @@ func TestEncoder400ReturnsPermanentHTTPStatusError(t *testing.T) {
 // swallow a document that would have succeeded once the rate limit
 // cleared.
 func TestEncoder429ReturnsNonPermanentHTTPStatusError(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = w.Write([]byte("rate limited"))
@@ -1662,11 +1660,11 @@ func TestEncoder429ReturnsNonPermanentHTTPStatusError(t *testing.T) {
 	})
 
 	_, err := enc(t.Context(), []string{"hello"})
-	require.Error(err)
+	require.Error(t, err)
 	var statusErr *HTTPStatusError
-	require.ErrorAs(err, &statusErr)
-	assert.Equal(http.StatusTooManyRequests, statusErr.Status)
-	assert.False(statusErr.Permanent(), "429 is transient rate-limiting, not a content rejection")
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusTooManyRequests, statusErr.Status)
+	assert.False(t, statusErr.Permanent(), "429 is transient rate-limiting, not a content rejection")
 }
 
 // TestHTTPStatusErrorPermanentClassification pins the skip-vs-abort
@@ -1720,7 +1718,7 @@ func TestEncoderDecodeErrorIsRetried(t *testing.T) {
 			_, _ = w.Write([]byte("{not valid json"))
 			return
 		}
-		require.NoError(t, json.MarshalWrite(w, embeddingsResponse{
+		assert.NoError(t, json.MarshalWrite(w, embeddingsResponse{
 			Data: []embeddingDatum{{Index: 0, Embedding: []float32{1, 2, 3}}},
 		}))
 	}))

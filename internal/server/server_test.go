@@ -89,6 +89,8 @@ func setup(
 	t *testing.T,
 	opts ...setupOption,
 ) *testEnv {
+	t.Helper()
+
 	return setupWithServerOpts(t, nil, opts...)
 }
 
@@ -97,6 +99,8 @@ func setupWithServerOpts(
 	srvOpts []server.Option,
 	opts ...setupOption,
 ) *testEnv {
+	t.Helper()
+
 	return setupWithServerOptsAndDBTemplate(t, srvOpts, nil, opts...)
 }
 
@@ -105,6 +109,8 @@ func setupWithDBTemplate(
 	dbFiles map[string][]byte,
 	opts ...setupOption,
 ) *testEnv {
+	t.Helper()
+
 	return setupWithServerOptsAndDBTemplate(t, nil, dbFiles, opts...)
 }
 
@@ -135,10 +141,10 @@ func setupWithServerOptsAndDBTemplate(
 	claudeDir := filepath.Join(cfg.DataDir, "claude")
 	codexDir := filepath.Join(cfg.DataDir, "codex")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		t.Fatalf("creating claude dir: %v", err)
+		require.FailNowf(t, "test failed", "creating claude dir: %v", err)
 	}
 	if err := os.MkdirAll(codexDir, 0o755); err != nil {
-		t.Fatalf("creating codex dir: %v", err)
+		require.FailNowf(t, "test failed", "creating codex dir: %v", err)
 	}
 	// Disable coalescing in tests so emits fan out deterministically.
 	broadcaster := server.NewBroadcaster(0)
@@ -150,7 +156,7 @@ func setupWithServerOptsAndDBTemplate(
 		Machine: "test",
 		Emitter: broadcaster,
 	}
-	engine := sync.NewEngine(database, engineCfg)
+	engine := sync.NewEngine(t.Context(), database, engineCfg)
 
 	// Prepend so caller-provided srvOpts can still override.
 	srvOpts = append([]server.Option{server.WithBroadcaster(broadcaster)}, srvOpts...)
@@ -173,6 +179,7 @@ func writeDBTemplateFiles(
 	files map[string][]byte,
 ) {
 	t.Helper()
+
 	require.Contains(t, files, "", "db template is missing main file")
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
 	for _, suffix := range []string{"", "-wal", "-shm"} {
@@ -300,7 +307,7 @@ func setupHostOnly(t *testing.T, opts ...setupOption) *testEnv {
 
 func tempDirWithRetryCleanup(t *testing.T) string {
 	t.Helper()
-	return dbtest.MkdirTempWithCleanup(t, "agentsview-server-test-*")
+	return dbtest.MkdirTempWithCleanup(t)
 }
 
 func (te *testEnv) writeProjectFile(
@@ -324,21 +331,26 @@ func (te *testEnv) writeSessionFile(
 }
 
 func waitForPort(port int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	dialer := &net.Dialer{Timeout: 50 * time.Millisecond}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	var lastDialErr error
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout(
-			"tcp", addr, 50*time.Millisecond,
-		)
-		if err == nil {
-			conn.Close()
-			return nil
+	for {
+		select {
+		case <-ticker.C:
+			conn, err := dialer.DialContext(context.Background(), "tcp", addr)
+			if err == nil {
+				_ = conn.Close()
+				return nil
+			}
+			lastDialErr = err
+		case <-timer.C:
+			return fmt.Errorf("server not ready: last dial error: %w", lastDialErr)
 		}
-		lastDialErr = err
-		time.Sleep(10 * time.Millisecond)
 	}
-	return fmt.Errorf("server not ready: last dial error: %v", lastDialErr)
 }
 
 // firstNonLoopbackIP returns a host IP assigned to a non-loopback
@@ -398,6 +410,7 @@ func hostLiteral(host string) string {
 // base URL. The server is shut down when the test finishes.
 func (te *testEnv) listenAndServe(t *testing.T) string {
 	t.Helper()
+
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	port := ln.Addr().(*net.TCPAddr).Port
@@ -414,32 +427,32 @@ func (te *testEnv) listenAndServe(t *testing.T) string {
 	if err := waitForPort(port, 2*time.Second); err != nil {
 		select {
 		case <-done:
-			t.Fatalf("server failed to start: %v", serveErr)
+			require.FailNowf(t, "test failed", "server failed to start: %v", serveErr)
 		default:
 		}
-		t.Fatalf("server not ready after 2s: %v", err)
+		require.FailNowf(t, "test failed", "server not ready after 2s: %v", err)
 	}
 
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(
-			t.Context(), 5*time.Second,
+			context.WithoutCancel(t.Context()), 5*time.Second,
 		)
 		defer cancel()
 		if err := te.srv.Shutdown(ctx); err != nil &&
-			err != http.ErrServerClosed {
-			t.Errorf("server shutdown error: %v", err)
+			!errors.Is(err, http.ErrServerClosed) {
+			assert.Failf(t, "test failed", "server shutdown error: %v", err)
 		}
 		select {
 		case <-done:
 			if serveErr != nil &&
-				serveErr != http.ErrServerClosed {
-				t.Errorf(
+				!errors.Is(serveErr, http.ErrServerClosed) {
+				assert.Failf(t, "test failed",
 					"server exited with error: %v",
 					serveErr,
 				)
 			}
 		case <-time.After(5 * time.Second):
-			t.Error("timed out waiting for server goroutine")
+			assert.Fail(t, "timed out waiting for server goroutine")
 		}
 	})
 
@@ -447,8 +460,6 @@ func (te *testEnv) listenAndServe(t *testing.T) string {
 }
 
 func TestListenAndServeUsesAvailablePortOutsideFixedRange(t *testing.T) {
-	require := require.New(t)
-
 	listeners := make([]net.Listener, 0, 100)
 	for port := 40000; port < 40100; port++ {
 		addr := fmt.Sprintf("127.0.0.1:%d", port)
@@ -458,35 +469,37 @@ func TestListenAndServeUsesAvailablePortOutsideFixedRange(t *testing.T) {
 			continue
 		}
 
-		conn, dialErr := net.DialTimeout(
-			"tcp", addr, 50*time.Millisecond,
+		conn, dialErr := (&net.Dialer{Timeout: 50 * time.Millisecond}).DialContext(
+			t.Context(), "tcp", addr,
 		)
 		if dialErr != nil {
 			for _, ln := range listeners {
-				require.NoError(ln.Close())
+				require.NoError(t, ln.Close())
 			}
 			t.Skipf("port %d is neither bindable nor reachable: %v", port, err)
 		}
-		require.NoError(conn.Close())
+		require.NoError(t, conn.Close())
 	}
 	t.Cleanup(func() {
 		for _, ln := range listeners {
-			require.NoError(ln.Close())
+			require.NoError(t, ln.Close())
 		}
 	})
 
 	te := setup(t)
 	baseURL := te.listenAndServe(t)
 	parsedBaseURL, err := url.Parse(baseURL)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, portText, err := net.SplitHostPort(parsedBaseURL.Host)
-	require.NoError(err)
+	require.NoError(t, err)
 	port, err := strconv.Atoi(portText)
-	require.NoError(err)
-	require.False(port >= 40000 && port < 40100)
+	require.NoError(t, err)
+	require.False(t, port >= 40000 && port < 40100)
 
-	resp, err := http.Get(baseURL + "/api/v1/version")
-	require.NoError(err)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, baseURL+"/api/v1/version", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -514,10 +527,10 @@ func (te *testEnv) seedMessages(
 ) {
 	t.Helper()
 	msgs := buildTestMessages(sessionID, count, mods...)
-	if err := te.db.ReplaceSessionMessages(
+	if err := te.db.ReplaceSessionMessages(t.Context(),
 		sessionID, msgs,
 	); err != nil {
-		t.Fatalf("seeding messages: %v", err)
+		require.FailNowf(t, "test failed", "seeding messages: %v", err)
 	}
 }
 
@@ -548,7 +561,7 @@ func buildTestMessages(
 // requireFTS skips the test when the database lacks FTS5 support.
 func (te *testEnv) requireFTS(t *testing.T) {
 	t.Helper()
-	if !te.db.HasFTS() {
+	if !te.db.HasFTS(t.Context()) {
 		t.Skip("skipping search test: no FTS support")
 	}
 }
@@ -571,16 +584,13 @@ func (te *testEnv) get(
 }
 
 func TestOpenAPIEndpointDocumentsExistingAPIRoutes(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
 
-	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	contentType := w.Header().Get("Content-Type")
-	assert.True(strings.Contains(contentType, "application/json") ||
+	assert.True(t, strings.Contains(contentType, "application/json") ||
 		strings.Contains(contentType, "application/openapi+json"),
 		"Content-Type = %q", contentType)
 
@@ -592,22 +602,22 @@ func TestOpenAPIEndpointDocumentsExistingAPIRoutes(t *testing.T) {
 		} `json:"info"`
 		Paths map[string]map[string]any `json:"paths"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
-	require.Equal("3.1.0", spec.OpenAPI)
-	assert.Equal("AgentsView API", spec.Info.Title)
-	assert.NotEmpty(spec.Info.Version)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	require.Equal(t, "3.1.0", spec.OpenAPI)
+	assert.Equal(t, "AgentsView API", spec.Info.Title)
+	assert.NotEmpty(t, spec.Info.Version)
 
-	require.Contains(spec.Paths, "/api/v1/sessions")
-	assert.Contains(spec.Paths["/api/v1/sessions"], "get")
-	require.Contains(spec.Paths, "/api/v1/sessions/{id}")
-	assert.Contains(spec.Paths["/api/v1/sessions/{id}"], "get")
-	assert.Contains(spec.Paths["/api/v1/sessions/{id}"], "delete")
-	require.Contains(spec.Paths, "/api/v1/sessions/{id}/messages")
-	assert.Contains(spec.Paths["/api/v1/sessions/{id}/messages"], "get")
-	require.Contains(spec.Paths, "/api/v1/settings")
-	assert.Contains(spec.Paths["/api/v1/settings"], "put")
-	require.Contains(spec.Paths, "/api/v1/session-stats")
-	assert.Contains(spec.Paths["/api/v1/session-stats"], "get")
+	require.Contains(t, spec.Paths, "/api/v1/sessions")
+	assert.Contains(t, spec.Paths["/api/v1/sessions"], "get")
+	require.Contains(t, spec.Paths, "/api/v1/sessions/{id}")
+	assert.Contains(t, spec.Paths["/api/v1/sessions/{id}"], "get")
+	assert.Contains(t, spec.Paths["/api/v1/sessions/{id}"], "delete")
+	require.Contains(t, spec.Paths, "/api/v1/sessions/{id}/messages")
+	assert.Contains(t, spec.Paths["/api/v1/sessions/{id}/messages"], "get")
+	require.Contains(t, spec.Paths, "/api/v1/settings")
+	assert.Contains(t, spec.Paths["/api/v1/settings"], "put")
+	require.Contains(t, spec.Paths, "/api/v1/session-stats")
+	assert.Contains(t, spec.Paths["/api/v1/session-stats"], "get")
 }
 
 func TestTypedRoutesRejectDuplicateJSONMembers(t *testing.T) {
@@ -619,12 +629,10 @@ func TestTypedRoutesRejectDuplicateJSONMembers(t *testing.T) {
 }
 
 func TestOpenAPIEndpointDocumentsTokenUsageAsArbitraryJSON(t *testing.T) {
-	require := require.New(t)
-
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
-	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	var spec struct {
 		Components struct {
@@ -633,24 +641,21 @@ func TestOpenAPIEndpointDocumentsTokenUsageAsArbitraryJSON(t *testing.T) {
 			} `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
 
 	messageSchema, ok := spec.Components.Schemas["DbMessage"]
-	require.True(ok, "spec missing DbMessage schema")
+	require.True(t, ok, "spec missing DbMessage schema")
 	tokenUsage, ok := messageSchema.Properties["token_usage"]
-	require.True(ok, "DbMessage schema missing token_usage")
+	require.True(t, ok, "DbMessage schema missing token_usage")
 	assert.JSONEq(t, `{}`, string(tokenUsage))
 }
 
 func TestOpenAPIEndpointKeepsUsageSummaryContract(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
 
-	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	type openAPISchema struct {
 		Ref        string                   `json:"$ref"`
 		Items      *openAPISchema           `json:"items"`
@@ -670,44 +675,41 @@ func TestOpenAPIEndpointKeepsUsageSummaryContract(t *testing.T) {
 			Schemas map[string]openAPISchema `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
 
 	op := spec.Paths["/api/v1/usage/summary"]["get"]
 	response := op.Responses["200"]
 	jsonContent, ok := response.Content["application/json"]
-	require.True(ok, "usage summary 200 response missing application/json")
-	assert.Equal("#/components/schemas/UsageSummaryResponse",
+	require.True(t, ok, "usage summary 200 response missing application/json")
+	assert.Equal(t, "#/components/schemas/UsageSummaryResponse",
 		jsonContent.Schema.Ref)
 
 	schema, ok := spec.Components.Schemas["UsageSummaryResponse"]
-	require.True(ok, "UsageSummaryResponse schema missing")
-	assert.Contains(schema.Properties, "comparison")
-	require.Contains(schema.Properties, "projectTotals")
-	require.NotNil(schema.Properties["projectTotals"].Items)
-	assert.Equal("#/components/schemas/ProjectTotal",
+	require.True(t, ok, "UsageSummaryResponse schema missing")
+	assert.Contains(t, schema.Properties, "comparison")
+	require.Contains(t, schema.Properties, "projectTotals")
+	require.NotNil(t, schema.Properties["projectTotals"].Items)
+	assert.Equal(t, "#/components/schemas/ProjectTotal",
 		schema.Properties["projectTotals"].Items.Ref)
-	require.Contains(schema.Properties, "modelTotals")
-	require.NotNil(schema.Properties["modelTotals"].Items)
-	assert.Equal("#/components/schemas/ModelTotal",
+	require.Contains(t, schema.Properties, "modelTotals")
+	require.NotNil(t, schema.Properties["modelTotals"].Items)
+	assert.Equal(t, "#/components/schemas/ModelTotal",
 		schema.Properties["modelTotals"].Items.Ref)
-	require.Contains(schema.Properties, "agentTotals")
-	require.NotNil(schema.Properties["agentTotals"].Items)
-	assert.Equal("#/components/schemas/AgentTotal",
+	require.Contains(t, schema.Properties, "agentTotals")
+	require.NotNil(t, schema.Properties["agentTotals"].Items)
+	assert.Equal(t, "#/components/schemas/AgentTotal",
 		schema.Properties["agentTotals"].Items.Ref)
-	require.Contains(schema.Properties, "cacheStats")
-	assert.Equal("#/components/schemas/CacheStats",
+	require.Contains(t, schema.Properties, "cacheStats")
+	assert.Equal(t, "#/components/schemas/CacheStats",
 		schema.Properties["cacheStats"].Ref)
 }
 
 func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
 
-	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	type openAPISchema struct {
 		Ref        string                   `json:"$ref"`
 		Enum       []any                    `json:"enum"`
@@ -733,17 +735,17 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 			Schemas map[string]openAPISchema `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
 	resolveSchema := func(schema openAPISchema) openAPISchema {
 		if schema.Ref == "" {
 			return schema
 		}
 		const prefix = "#/components/schemas/"
-		require.True(strings.HasPrefix(schema.Ref, prefix),
+		require.True(t, strings.HasPrefix(schema.Ref, prefix),
 			"unsupported schema ref %q", schema.Ref)
 		name := strings.TrimPrefix(schema.Ref, prefix)
 		resolved, ok := spec.Components.Schemas[name]
-		require.True(ok, "schema ref %q missing target", schema.Ref)
+		require.True(t, ok, "schema ref %q missing target", schema.Ref)
 		return resolved
 	}
 
@@ -797,9 +799,9 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 		},
 	} {
 		pathItem, ok := spec.Paths[tt.path]
-		require.True(ok, "spec missing path %s", tt.path)
+		require.True(t, ok, "spec missing path %s", tt.path)
 		op, ok := pathItem[tt.method]
-		require.True(ok, "spec missing operation %s %s", tt.method, tt.path)
+		require.True(t, ok, "spec missing operation %s %s", tt.method, tt.path)
 
 		var got []any
 		for _, param := range op.Parameters {
@@ -808,9 +810,9 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 				break
 			}
 		}
-		require.NotNil(got,
+		require.NotNil(t, got,
 			"%s %s missing query parameter %q", tt.method, tt.path, tt.name)
-		assert.Equal(tt.want, got)
+		assert.Equal(t, tt.want, got)
 	}
 
 	for _, tt := range []struct {
@@ -835,32 +837,32 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 		},
 	} {
 		pathItem, ok := spec.Paths[tt.path]
-		require.True(ok, "spec missing path %s", tt.path)
+		require.True(t, ok, "spec missing path %s", tt.path)
 		op, ok := pathItem[tt.method]
-		require.True(ok, "spec missing operation %s %s", tt.method, tt.path)
-		require.NotNil(op.RequestBody,
+		require.True(t, ok, "spec missing operation %s %s", tt.method, tt.path)
+		require.NotNil(t, op.RequestBody,
 			"%s %s missing requestBody", tt.method, tt.path)
 		jsonContent, ok := op.RequestBody.Content["application/json"]
-		require.True(ok,
+		require.True(t, ok,
 			"%s %s missing application/json body", tt.method, tt.path)
 		schema := resolveSchema(jsonContent.Schema)
-		require.Contains(schema.Properties, tt.property)
+		require.Contains(t, schema.Properties, tt.property)
 	}
 
 	pathItem, ok := spec.Paths["/api/v1/config/terminal"]
-	require.True(ok, "spec missing path /api/v1/config/terminal")
+	require.True(t, ok, "spec missing path /api/v1/config/terminal")
 	op, ok := pathItem["post"]
-	require.True(ok, "spec missing operation post /api/v1/config/terminal")
-	require.NotNil(op.RequestBody,
+	require.True(t, ok, "spec missing operation post /api/v1/config/terminal")
+	require.NotNil(t, op.RequestBody,
 		"post /api/v1/config/terminal missing requestBody")
 	jsonContent, ok := op.RequestBody.Content["application/json"]
-	require.True(ok,
+	require.True(t, ok,
 		"post /api/v1/config/terminal missing application/json body")
 	schema := resolveSchema(jsonContent.Schema)
 	mode, ok := schema.Properties["mode"]
-	require.True(ok, "post /api/v1/config/terminal missing mode property")
+	require.True(t, ok, "post /api/v1/config/terminal missing mode property")
 	mode = resolveSchema(mode)
-	assert.Equal([]any{"auto", "custom", "clipboard"}, mode.Enum)
+	assert.Equal(t, []any{"auto", "custom", "clipboard"}, mode.Enum)
 }
 
 func TestSearchContentSemanticGETRequiresIntentHeader(t *testing.T) {
@@ -939,13 +941,10 @@ func TestSearchContentSemanticQueryEncodeFailureReturns503(t *testing.T) {
 // TypeScript client's session_ids typed as Array<string> rather than
 // loosening to any[] | null.
 func TestOpenAPIEndpointDocumentsBatchDeleteSessionIDsAsNonNullableArray(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
-	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	var spec struct {
 		Components struct {
@@ -957,26 +956,23 @@ func TestOpenAPIEndpointDocumentsBatchDeleteSessionIDsAsNonNullableArray(t *test
 			} `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
 
 	schema, ok := spec.Components.Schemas["BatchDeleteInputBody"]
-	require.True(ok, "spec missing BatchDeleteInputBody schema")
-	assert.Contains(schema.Required, "session_ids")
+	require.True(t, ok, "spec missing BatchDeleteInputBody schema")
+	assert.Contains(t, schema.Required, "session_ids")
 
 	prop, ok := schema.Properties["session_ids"]
-	require.True(ok, "session_ids property missing from BatchDeleteInputBody schema")
-	assert.JSONEq(`"array"`, string(prop.Type),
+	require.True(t, ok, "session_ids property missing from BatchDeleteInputBody schema")
+	assert.JSONEq(t, `"array"`, string(prop.Type),
 		`session_ids must be a non-nullable array, not the nullable ["array","null"] union`)
 }
 
 func TestOpenAPIEndpointDocumentsOptionalProjectIdentity(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
-	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	var spec struct {
 		Components struct {
@@ -988,25 +984,22 @@ func TestOpenAPIEndpointDocumentsOptionalProjectIdentity(t *testing.T) {
 			} `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
 
 	schema, ok := spec.Components.Schemas["ExportProjectMapEntry"]
-	require.True(ok, "spec missing ExportProjectMapEntry schema")
-	assert.NotContains(schema.Required, "identity")
+	require.True(t, ok, "spec missing ExportProjectMapEntry schema")
+	assert.NotContains(t, schema.Required, "identity")
 	identity, ok := schema.Properties["identity"]
-	require.True(ok, "identity property missing from ExportProjectMapEntry")
-	assert.Equal("#/components/schemas/ExportProjectIdentity", identity.Ref)
+	require.True(t, ok, "identity property missing from ExportProjectMapEntry")
+	assert.Equal(t, "#/components/schemas/ExportProjectIdentity", identity.Ref)
 }
 
 func TestOpenAPIEndpointDocumentsQualitySignalResponses(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
 
-	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	type openAPISchema struct {
 		Ref        string                   `json:"$ref"`
 		Type       any                      `json:"type"`
@@ -1018,26 +1011,26 @@ func TestOpenAPIEndpointDocumentsQualitySignalResponses(t *testing.T) {
 			Schemas map[string]openAPISchema `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
 
 	for _, schemaName := range []string{"DbSession", "ServiceSessionDetail"} {
 		schema, ok := spec.Components.Schemas[schemaName]
-		require.True(ok, "schema %s missing", schemaName)
-		require.Contains(schema.Properties, "quality_signals",
+		require.True(t, ok, "schema %s missing", schemaName)
+		require.Contains(t, schema.Properties, "quality_signals",
 			"schema %s should expose runtime quality_signals", schemaName)
-		assert.Equal("#/components/schemas/DbQualitySignals",
+		assert.Equal(t, "#/components/schemas/DbQualitySignals",
 			schema.Properties["quality_signals"].Ref,
 			"schema %s quality_signals ref", schemaName)
 	}
 
 	response, ok := spec.Components.Schemas["DbSignalSessionsResponse"]
-	require.True(ok, "schema DbSignalSessionsResponse missing")
+	require.True(t, ok, "schema DbSignalSessionsResponse missing")
 	sessions, ok := response.Properties["sessions"]
-	require.True(ok, "DbSignalSessionsResponse.sessions missing")
-	assert.Equal("array", sessions.Type,
+	require.True(t, ok, "DbSignalSessionsResponse.sessions missing")
+	assert.Equal(t, "array", sessions.Type,
 		"sessions should be a non-null array so the generated client keeps item type")
-	require.NotNil(sessions.Items, "sessions.items missing")
-	assert.Equal("#/components/schemas/DbSignalSessionExample",
+	require.NotNil(t, sessions.Items, "sessions.items missing")
+	assert.Equal(t, "#/components/schemas/DbSignalSessionExample",
 		sessions.Items.Ref,
 		"sessions item schema")
 }
@@ -1048,14 +1041,11 @@ func TestOpenAPIEndpointDocumentsQualitySignalResponses(t *testing.T) {
 // it. It is a detail-only derive-on-read field with no persisted column, so it
 // must appear on ServiceSessionDetail but not on the plain DbSession schema.
 func TestOpenAPIEndpointDocumentsDecodeConfidence(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
 
-	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	type openAPISchema struct {
 		Type       any                      `json:"type"`
 		Properties map[string]openAPISchema `json:"properties"`
@@ -1065,31 +1055,29 @@ func TestOpenAPIEndpointDocumentsDecodeConfidence(t *testing.T) {
 			Schemas map[string]openAPISchema `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
 
 	detail, ok := spec.Components.Schemas["ServiceSessionDetail"]
-	require.True(ok, "schema ServiceSessionDetail missing")
+	require.True(t, ok, "schema ServiceSessionDetail missing")
 	prop, ok := detail.Properties["decode_confidence"]
-	require.True(ok,
+	require.True(t, ok,
 		"ServiceSessionDetail should document the derived decode_confidence field")
-	assert.Equal("string", prop.Type,
+	assert.Equal(t, "string", prop.Type,
 		"decode_confidence should be typed as a string")
 
 	dbSession, ok := spec.Components.Schemas["DbSession"]
-	require.True(ok, "schema DbSession missing")
+	require.True(t, ok, "schema DbSession missing")
 	_, present := dbSession.Properties["decode_confidence"]
-	assert.False(present,
+	assert.False(t, present,
 		"decode_confidence is detail-only and must not leak into DbSession")
 }
 
 func TestOpenAPIEndpointDocumentsImportResponseContentTypes(t *testing.T) {
-	require := require.New(t)
-
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
 
-	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	type openAPIResponse struct {
 		Content map[string]struct{} `json:"content"`
 	}
@@ -1099,20 +1087,20 @@ func TestOpenAPIEndpointDocumentsImportResponseContentTypes(t *testing.T) {
 	var spec struct {
 		Paths map[string]map[string]openAPIOperation `json:"paths"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
 
 	for _, path := range []string{
 		"/api/v1/import/claude-ai",
 		"/api/v1/import/chatgpt",
 	} {
 		pathItem, ok := spec.Paths[path]
-		require.True(ok, "spec missing path %s", path)
+		require.True(t, ok, "spec missing path %s", path)
 		op, ok := pathItem["post"]
-		require.True(ok, "spec missing operation post %s", path)
+		require.True(t, ok, "spec missing operation post %s", path)
 		response, ok := op.Responses["200"]
-		require.True(ok, "post %s missing 200 response", path)
-		require.Contains(response.Content, "text/event-stream")
-		require.Contains(response.Content, "application/json")
+		require.True(t, ok, "post %s missing 200 response", path)
+		require.Contains(t, response.Content, "text/event-stream")
+		require.Contains(t, response.Content, "application/json")
 	}
 }
 
@@ -1171,7 +1159,7 @@ func withBearer(token string) requestOpt {
 func (te *testEnv) rawRequest(
 	method, path string, opts ...requestOpt,
 ) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, path, nil)
+	req := httptest.NewRequestWithContext(context.Background(), method, path, nil)
 	for _, opt := range opts {
 		opt(req)
 	}
@@ -1185,7 +1173,7 @@ func (te *testEnv) rawRequest(
 func (te *testEnv) wrappedRequest(
 	method, path string, opts ...requestOpt,
 ) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, path, nil)
+	req := httptest.NewRequestWithContext(context.Background(), method, path, nil)
 	for _, opt := range opts {
 		opt(req)
 	}
@@ -1199,17 +1187,18 @@ func (te *testEnv) upload(
 	t *testing.T, filename, content, query string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
+
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	fw, err := mw.CreateFormFile("file", filename)
 	if err != nil {
-		t.Fatalf("creating form file: %v", err)
+		require.FailNowf(t, "test failed", "creating form file: %v", err)
 	}
 	if _, err := fw.Write([]byte(content)); err != nil {
-		t.Fatalf("writing form file: %v", err)
+		require.FailNowf(t, "test failed", "writing form file: %v", err)
 	}
 	if err := mw.Close(); err != nil {
-		t.Fatalf("closing multipart writer: %v", err)
+		require.FailNowf(t, "test failed", "closing multipart writer: %v", err)
 	}
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
@@ -1244,7 +1233,7 @@ func decode[T any](
 	if err := json.Unmarshal(
 		w.Body.Bytes(), &result,
 	); err != nil {
-		t.Fatalf("decoding JSON: %v\nbody: %s",
+		require.FailNowf(t, "test failed", "decoding JSON: %v\nbody: %s",
 			err, w.Body.String())
 	}
 	return result
@@ -1275,7 +1264,7 @@ func assertStatus(
 ) {
 	t.Helper()
 	if w.Code != code {
-		t.Fatalf("expected status %d, got %d: %s",
+		require.FailNowf(t, "test failed", "expected status %d, got %d: %s",
 			code, w.Code, w.Body.String())
 	}
 }
@@ -1285,7 +1274,7 @@ func assertBodyContains(
 ) {
 	t.Helper()
 	if !strings.Contains(w.Body.String(), substr) {
-		t.Errorf("body %q does not contain %q",
+		assert.Failf(t, "test failed", "body %q does not contain %q",
 			w.Body.String(), substr)
 	}
 }
@@ -1299,7 +1288,7 @@ func assertErrorResponse(
 	t.Helper()
 	resp := decode[map[string]string](t, w)
 	if got := resp["error"]; got != wantMsg {
-		t.Errorf("error = %q, want %q", got, wantMsg)
+		assert.Failf(t, "test failed", "error = %q, want %q", got, wantMsg)
 	}
 }
 
@@ -1314,7 +1303,7 @@ func assertTimeoutRace(
 	code := w.Code
 	ct := w.Header().Get("Content-Type")
 	if ct != "application/json" {
-		t.Errorf(
+		assert.Failf(t, "test failed",
 			"Content-Type = %q, want application/json", ct,
 		)
 	}
@@ -1324,7 +1313,7 @@ func assertTimeoutRace(
 	case http.StatusGatewayTimeout:
 		assertBodyContains(t, w, "gateway timeout")
 	default:
-		t.Fatalf(
+		require.FailNowf(t, "test failed",
 			"expected 503 or 504, got %d: %s",
 			code, w.Body.String(),
 		)
@@ -1409,7 +1398,7 @@ func (te *testEnv) waitForSSEEvent(t *testing.T, w *flushRecorder, expectedEvent
 		case <-time.After(remaining):
 		}
 	}
-	t.Fatalf("timed out waiting for event: %s, got: %s", expectedEvent, w.BodyString())
+	require.FailNowf(t, "test failed", "timed out waiting for event: %s, got: %s", expectedEvent, w.BodyString())
 }
 
 func hasSSEEvent(w *flushRecorder, expectedEvent string) bool {
@@ -1447,7 +1436,7 @@ func (te *testEnv) emitUntilSSEEvent(
 		case <-time.After(remaining):
 		}
 	}
-	t.Fatalf("timed out waiting for event: %s, got: %s", expectedEvent, w.BodyString())
+	require.FailNowf(t, "test failed", "timed out waiting for event: %s, got: %s", expectedEvent, w.BodyString())
 }
 
 // --- Typed response structs for JSON decoding ---
@@ -1519,17 +1508,17 @@ func TestListSessions_Empty(t *testing.T) {
 	if err := json.Unmarshal(
 		w.Body.Bytes(), &raw,
 	); err != nil {
-		t.Fatalf("unmarshaling raw response: %v", err)
+		require.FailNowf(t, "test failed", "unmarshaling raw response: %v", err)
 	}
 	if got := strings.TrimSpace(string(raw.Sessions)); got != "[]" {
-		t.Fatalf(
+		require.FailNowf(t, "test failed",
 			"expected sessions to be [], got: %s", got,
 		)
 	}
 
 	resp := decode[sessionListResponse](t, w)
 	if len(resp.Sessions) != 0 {
-		t.Fatalf("expected 0 sessions, got %d",
+		require.FailNowf(t, "test failed", "expected 0 sessions, got %d",
 			len(resp.Sessions))
 	}
 }
@@ -1545,15 +1534,12 @@ func TestListSessions_WithData(t *testing.T) {
 
 	resp := decode[sessionListResponse](t, w)
 	if len(resp.Sessions) != 3 {
-		t.Fatalf("expected 3 sessions, got %d",
+		require.FailNowf(t, "test failed", "expected 3 sessions, got %d",
 			len(resp.Sessions))
 	}
 }
 
 func TestListSessions_IncludesSourcePathOnlyWhenRequested(t *testing.T) {
-	assert := assert.New(t)
-	parentRequire := require.New(t)
-
 	te := setup(t)
 	sourcePath := filepath.Join(t.TempDir(), "session.jsonl")
 	te.seedSession(t, "s1", "my-app", 5, func(s *db.Session) {
@@ -1573,13 +1559,13 @@ func TestListSessions_IncludesSourcePathOnlyWhenRequested(t *testing.T) {
 	}
 
 	withoutSource := decodeSession(t, "/api/v1/sessions")
-	assert.NotContains(withoutSource, "file_path")
+	assert.NotContains(t, withoutSource, "file_path")
 
 	withSource := decodeSession(t, "/api/v1/sessions?include_source=true")
-	parentRequire.Contains(withSource, "file_path")
+	require.Contains(t, withSource, "file_path")
 	var gotPath string
-	parentRequire.NoError(json.Unmarshal(withSource["file_path"], &gotPath))
-	assert.Equal(sourcePath, gotPath)
+	require.NoError(t, json.Unmarshal(withSource["file_path"], &gotPath))
+	assert.Equal(t, sourcePath, gotPath)
 }
 
 func TestListSessions_ProjectFilter(t *testing.T) {
@@ -1592,7 +1578,7 @@ func TestListSessions_ProjectFilter(t *testing.T) {
 
 	resp := decode[sessionListResponse](t, w)
 	if len(resp.Sessions) != 1 {
-		t.Fatalf("expected 1 session, got %d",
+		require.FailNowf(t, "test failed", "expected 1 session, got %d",
 			len(resp.Sessions))
 	}
 }
@@ -1610,11 +1596,11 @@ func TestListSessions_ExcludeProjectFilter(t *testing.T) {
 
 	resp := decode[sessionListResponse](t, w)
 	if len(resp.Sessions) != 1 {
-		t.Fatalf("expected 1 session, got %d",
+		require.FailNowf(t, "test failed", "expected 1 session, got %d",
 			len(resp.Sessions))
 	}
 	if resp.Sessions[0].ID != "s1" {
-		t.Errorf("expected session s1, got %s",
+		assert.Failf(t, "test failed", "expected session s1, got %s",
 			resp.Sessions[0].ID)
 	}
 }
@@ -1636,11 +1622,11 @@ func TestListSessions_ExcludeOneShotDefault(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	resp := decode[sessionListResponse](t, w)
 	if len(resp.Sessions) != 1 {
-		t.Fatalf("default: expected 1 session, got %d",
+		require.FailNowf(t, "test failed", "default: expected 1 session, got %d",
 			len(resp.Sessions))
 	}
 	if resp.Sessions[0].ID != "s2" {
-		t.Errorf("default: expected s2, got %s",
+		assert.Failf(t, "test failed", "default: expected s2, got %s",
 			resp.Sessions[0].ID)
 	}
 
@@ -1651,7 +1637,7 @@ func TestListSessions_ExcludeOneShotDefault(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	resp = decode[sessionListResponse](t, w)
 	if len(resp.Sessions) != 3 {
-		t.Fatalf("include: expected 3 sessions, got %d",
+		require.FailNowf(t, "test failed", "include: expected 3 sessions, got %d",
 			len(resp.Sessions))
 	}
 }
@@ -1681,13 +1667,13 @@ func TestSidebarIndexReturnsSkinnyRows(t *testing.T) {
 	rows := sidebarIndexRowsByID(resp.Sessions)
 
 	if got := rows["named"].DisplayName; got == nil || *got != sessionName {
-		t.Fatalf("display_name = %v, want %q", got, sessionName)
+		require.FailNowf(t, "test failed", "display_name = %v, want %q", got, sessionName)
 	}
 	if !rows["teammate"].IsTeammate {
-		t.Fatal("teammate is_teammate = false, want true")
+		require.FailNow(t, "teammate is_teammate = false, want true")
 	}
 	if _, ok := rows["review"]; ok {
-		t.Fatal("automated review row returned without include_automated=true")
+		require.FailNow(t, "automated review row returned without include_automated=true")
 	}
 
 	w = te.get(t, "/api/v1/sessions/sidebar-index?include_automated=true")
@@ -1695,13 +1681,11 @@ func TestSidebarIndexReturnsSkinnyRows(t *testing.T) {
 	resp = decode[db.SidebarSessionIndex](t, w)
 	rows = sidebarIndexRowsByID(resp.Sessions)
 	if _, ok := rows["review"]; !ok {
-		t.Fatal("automated review row missing with include_automated=true")
+		require.FailNow(t, "automated review row missing with include_automated=true")
 	}
 }
 
 func TestSidebarIndexPaginatesRootCompleteTrees(t *testing.T) {
-	assert := assert.New(t)
-
 	te := setup(t)
 
 	rootNewEnd := "2024-01-04T00:00:00Z"
@@ -1735,11 +1719,11 @@ func TestSidebarIndexPaginatesRootCompleteTrees(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	first := decode[sidebarPage](t, w)
 	firstIDs := sidebarIndexRowIDs(first.Sessions)
-	assert.Equal(2, first.Total)
-	assert.NotEmpty(first.NextCursor)
-	assert.ElementsMatch([]string{"root-new", "child-new"}, firstIDs)
-	assert.NotContains(firstIDs, "root-old")
-	assert.NotContains(firstIDs, "child-old")
+	assert.Equal(t, 2, first.Total)
+	assert.NotEmpty(t, first.NextCursor)
+	assert.ElementsMatch(t, []string{"root-new", "child-new"}, firstIDs)
+	assert.NotContains(t, firstIDs, "root-old")
+	assert.NotContains(t, firstIDs, "child-old")
 
 	w = te.get(t,
 		"/api/v1/sessions/sidebar-index?limit=1&cursor="+
@@ -1748,14 +1732,12 @@ func TestSidebarIndexPaginatesRootCompleteTrees(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	second := decode[sidebarPage](t, w)
 	secondIDs := sidebarIndexRowIDs(second.Sessions)
-	assert.Equal(2, second.Total)
-	assert.Empty(second.NextCursor)
-	assert.ElementsMatch([]string{"root-old", "child-old"}, secondIDs)
+	assert.Equal(t, 2, second.Total)
+	assert.Empty(t, second.NextCursor)
+	assert.ElementsMatch(t, []string{"root-old", "child-old"}, secondIDs)
 }
 
 func TestSidebarIndexPaginationTreatsContinuationsAsDescendants(t *testing.T) {
-	assert := assert.New(t)
-
 	te := setup(t)
 
 	rootEnd := "2024-01-01T00:00:00Z"
@@ -1777,9 +1759,9 @@ func TestSidebarIndexPaginationTreatsContinuationsAsDescendants(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	first := decode[db.SidebarSessionIndex](t, w)
 	firstIDs := sidebarIndexRowIDs(first.Sessions)
-	assert.Equal(2, first.Total)
-	assert.NotEmpty(first.NextCursor)
-	assert.ElementsMatch([]string{"root", "continuation"}, firstIDs)
+	assert.Equal(t, 2, first.Total)
+	assert.NotEmpty(t, first.NextCursor)
+	assert.ElementsMatch(t, []string{"root", "continuation"}, firstIDs)
 
 	w = te.get(t,
 		"/api/v1/sessions/sidebar-index?limit=1&cursor="+
@@ -1788,15 +1770,13 @@ func TestSidebarIndexPaginationTreatsContinuationsAsDescendants(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	second := decode[db.SidebarSessionIndex](t, w)
 	secondIDs := sidebarIndexRowIDs(second.Sessions)
-	assert.Equal(2, second.Total)
-	assert.Empty(second.NextCursor)
-	assert.Equal([]string{"other"}, secondIDs)
-	assert.NotContains(secondIDs, "continuation")
+	assert.Equal(t, 2, second.Total)
+	assert.Empty(t, second.NextCursor)
+	assert.Equal(t, []string{"other"}, secondIDs)
+	assert.NotContains(t, secondIDs, "continuation")
 }
 
 func TestSidebarIndexPaginatesByDescendantFreshness(t *testing.T) {
-	assert := assert.New(t)
-
 	te := setup(t)
 
 	rootEnd := "2024-01-01T00:00:00Z"
@@ -1818,9 +1798,9 @@ func TestSidebarIndexPaginatesByDescendantFreshness(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	first := decode[db.SidebarSessionIndex](t, w)
 	firstIDs := sidebarIndexRowIDs(first.Sessions)
-	assert.Equal(2, first.Total)
-	assert.NotEmpty(first.NextCursor)
-	assert.ElementsMatch([]string{"root", "child"}, firstIDs)
+	assert.Equal(t, 2, first.Total)
+	assert.NotEmpty(t, first.NextCursor)
+	assert.ElementsMatch(t, []string{"root", "child"}, firstIDs)
 
 	w = te.get(t,
 		"/api/v1/sessions/sidebar-index?limit=1&cursor="+
@@ -1829,9 +1809,9 @@ func TestSidebarIndexPaginatesByDescendantFreshness(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	second := decode[db.SidebarSessionIndex](t, w)
 	secondIDs := sidebarIndexRowIDs(second.Sessions)
-	assert.Equal(2, second.Total)
-	assert.Empty(second.NextCursor)
-	assert.Equal([]string{"other"}, secondIDs)
+	assert.Equal(t, 2, second.Total)
+	assert.Empty(t, second.NextCursor)
+	assert.Equal(t, []string{"other"}, secondIDs)
 }
 
 func TestSidebarIndexValidatesParams(t *testing.T) {
@@ -1856,8 +1836,6 @@ func TestSidebarIndexValidatesParams(t *testing.T) {
 }
 
 func TestSessionDateFilterUsesRequestedTimezoneAndDefaultsToUTC(t *testing.T) {
-	assert := assert.New(t)
-
 	te := setup(t)
 	te.seedSession(t, "utc-only", "my-app", 2, func(s *db.Session) {
 		s.UserMessageCount = 2
@@ -1877,7 +1855,7 @@ func TestSessionDateFilterUsesRequestedTimezoneAndDefaultsToUTC(t *testing.T) {
 	for i, session := range list.Sessions {
 		listIDs[i] = session.ID
 	}
-	assert.ElementsMatch([]string{"utc-only", "new-york-day"},
+	assert.ElementsMatch(t, []string{"utc-only", "new-york-day"},
 		listIDs)
 
 	w = te.get(t,
@@ -1885,13 +1863,13 @@ func TestSessionDateFilterUsesRequestedTimezoneAndDefaultsToUTC(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	list = decode[sessionListResponse](t, w)
 	require.Len(t, list.Sessions, 1)
-	assert.Equal("new-york-day", list.Sessions[0].ID)
+	assert.Equal(t, "new-york-day", list.Sessions[0].ID)
 
 	w = te.get(t,
 		"/api/v1/sessions/sidebar-index?date=2024-06-16&timezone=America%2FNew_York")
 	assertStatus(t, w, http.StatusOK)
 	index := decode[db.SidebarSessionIndex](t, w)
-	assert.Equal([]string{"new-york-day"},
+	assert.Equal(t, []string{"new-york-day"},
 		sidebarIndexRowIDs(index.Sessions))
 
 	w = te.get(t, "/api/v1/sessions?timezone=Fake%2FZone")
@@ -1933,7 +1911,7 @@ func TestGetSession_Found(t *testing.T) {
 
 	resp := decode[db.Session](t, w)
 	if resp.ID != "s1" {
-		t.Fatalf("expected id=s1, got %v", resp.ID)
+		require.FailNowf(t, "test failed", "expected id=s1, got %v", resp.ID)
 	}
 }
 
@@ -1970,7 +1948,7 @@ func TestGetSession_HealthBreakdownIncludesMidTaskCompactions(
 	te.seedSession(t, "mt-1", "demo", 12)
 	score := 82
 	grade := "B"
-	if err := te.db.UpdateSessionSignals("mt-1", db.SessionSignalUpdate{
+	if err := te.db.UpdateSessionSignals(t.Context(), "mt-1", db.SessionSignalUpdate{
 		Outcome:                "completed",
 		OutcomeConfidence:      "medium",
 		EndedWithRole:          "assistant",
@@ -1981,7 +1959,7 @@ func TestGetSession_HealthBreakdownIncludesMidTaskCompactions(
 		HealthScore:            &score,
 		HealthGrade:            &grade,
 	}); err != nil {
-		t.Fatalf("UpdateSessionSignals: %v", err)
+		require.FailNowf(t, "test failed", "UpdateSessionSignals: %v", err)
 	}
 
 	w := te.get(t, "/api/v1/sessions/mt-1")
@@ -1992,21 +1970,21 @@ func TestGetSession_HealthBreakdownIncludesMidTaskCompactions(
 		HealthPenalties  map[string]int `json:"health_penalties"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decoding response: %v", err)
+		require.FailNowf(t, "test failed", "decoding response: %v", err)
 	}
 
 	got, ok := resp.HealthPenalties["mid_task_compactions"]
 	if !ok {
-		t.Fatalf("mid_task_compactions missing from penalties: %+v",
+		require.FailNowf(t, "test failed", "mid_task_compactions missing from penalties: %+v",
 			resp.HealthPenalties)
 	}
 	// 2 mid-task compactions * 8 = 16 (cap is 18).
 	if got != 16 {
-		t.Errorf("mid_task_compactions penalty = %d, want 16", got)
+		assert.Failf(t, "test failed", "mid_task_compactions penalty = %d, want 16", got)
 	}
 
 	if !slices.Contains(resp.HealthScoreBasis, "context_pressure") {
-		t.Errorf("basis missing context_pressure: %v",
+		assert.Failf(t, "test failed", "basis missing context_pressure: %v",
 			resp.HealthScoreBasis)
 	}
 }
@@ -2032,17 +2010,17 @@ func TestGetChildSessions_Found(t *testing.T) {
 
 	var children []db.Session
 	if err := json.Unmarshal(w.Body.Bytes(), &children); err != nil {
-		t.Fatalf("decoding JSON: %v", err)
+		require.FailNowf(t, "test failed", "decoding JSON: %v", err)
 	}
 	if len(children) != 2 {
-		t.Fatalf("expected 2 children, got %d", len(children))
+		require.FailNowf(t, "test failed", "expected 2 children, got %d", len(children))
 	}
 	if children[0].ID != "child-a" {
-		t.Errorf("children[0].ID = %q, want %q",
+		assert.Failf(t, "test failed", "children[0].ID = %q, want %q",
 			children[0].ID, "child-a")
 	}
 	if children[1].ID != "child-b" {
-		t.Errorf("children[1].ID = %q, want %q",
+		assert.Failf(t, "test failed", "children[1].ID = %q, want %q",
 			children[1].ID, "child-b")
 	}
 }
@@ -2056,10 +2034,10 @@ func TestGetChildSessions_Empty(t *testing.T) {
 
 	var children []db.Session
 	if err := json.Unmarshal(w.Body.Bytes(), &children); err != nil {
-		t.Fatalf("decoding JSON: %v", err)
+		require.FailNowf(t, "test failed", "decoding JSON: %v", err)
 	}
 	if len(children) != 0 {
-		t.Fatalf("expected 0 children, got %d", len(children))
+		require.FailNowf(t, "test failed", "expected 0 children, got %d", len(children))
 	}
 }
 
@@ -2073,13 +2051,13 @@ func TestGetMessages_AscDefault(t *testing.T) {
 
 	resp := decode[messageListResponse](t, w)
 	if len(resp.Messages) != 10 {
-		t.Fatalf("expected 10 messages, got %d",
+		require.FailNowf(t, "test failed", "expected 10 messages, got %d",
 			len(resp.Messages))
 	}
 	first := resp.Messages[0]
 	last := resp.Messages[9]
 	if first.Ordinal > last.Ordinal {
-		t.Fatal("expected ascending ordinal order")
+		require.FailNow(t, "expected ascending ordinal order")
 	}
 }
 
@@ -2095,13 +2073,13 @@ func TestGetMessages_DescDefault(t *testing.T) {
 
 	resp := decode[messageListResponse](t, w)
 	if len(resp.Messages) != 10 {
-		t.Fatalf("expected 10 messages, got %d",
+		require.FailNowf(t, "test failed", "expected 10 messages, got %d",
 			len(resp.Messages))
 	}
 	first := resp.Messages[0]
 	last := resp.Messages[len(resp.Messages)-1]
 	if first.Ordinal < last.Ordinal {
-		t.Fatal("expected descending ordinal order")
+		require.FailNow(t, "expected descending ordinal order")
 	}
 }
 
@@ -2117,11 +2095,11 @@ func TestGetMessages_DescWithFrom(t *testing.T) {
 
 	resp := decode[messageListResponse](t, w)
 	if len(resp.Messages) != 5 {
-		t.Fatalf("expected 5 messages, got %d",
+		require.FailNowf(t, "test failed", "expected 5 messages, got %d",
 			len(resp.Messages))
 	}
 	if resp.Messages[0].Ordinal != 10 {
-		t.Fatalf("expected first ordinal=10, got %d",
+		require.FailNowf(t, "test failed", "expected first ordinal=10, got %d",
 			resp.Messages[0].Ordinal)
 	}
 }
@@ -2156,11 +2134,11 @@ func TestGetMessages_Pagination(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	resp := decode[messageListResponse](t, w)
 	if len(resp.Messages) != 5 {
-		t.Fatalf("expected 5 messages, got %d",
+		require.FailNowf(t, "test failed", "expected 5 messages, got %d",
 			len(resp.Messages))
 	}
 	if resp.Messages[4].Ordinal != 4 {
-		t.Fatalf("expected last ordinal=4, got %d",
+		require.FailNowf(t, "test failed", "expected last ordinal=4, got %d",
 			resp.Messages[4].Ordinal)
 	}
 
@@ -2171,11 +2149,11 @@ func TestGetMessages_Pagination(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	resp = decode[messageListResponse](t, w)
 	if len(resp.Messages) != 5 {
-		t.Fatalf("expected 5 messages, got %d",
+		require.FailNowf(t, "test failed", "expected 5 messages, got %d",
 			len(resp.Messages))
 	}
 	if resp.Messages[0].Ordinal != 5 {
-		t.Fatalf("expected first ordinal=5, got %d",
+		require.FailNowf(t, "test failed", "expected first ordinal=5, got %d",
 			resp.Messages[0].Ordinal)
 	}
 }
@@ -2257,10 +2235,10 @@ func TestSearch_WithResults(t *testing.T) {
 
 	resp := decode[searchResponse](t, w)
 	if resp.Query != "login" {
-		t.Fatalf("expected query=login, got %v", resp.Query)
+		require.FailNowf(t, "test failed", "expected query=login, got %v", resp.Query)
 	}
 	if resp.Count < 1 {
-		t.Fatal("expected at least 1 search result")
+		require.FailNow(t, "expected at least 1 search result")
 	}
 }
 
@@ -2297,7 +2275,7 @@ func TestSearch_Limits(t *testing.T) {
 			}},
 		})
 	}
-	result, err := te.db.WriteSessionBatchAtomic(writes)
+	result, err := te.db.WriteSessionBatchAtomic(t.Context(), writes)
 	require.NoError(t, err)
 	require.Equal(t, totalSessions, result.WrittenSessions)
 	require.Equal(t, totalSessions, result.WrittenMessages)
@@ -2326,7 +2304,7 @@ func TestSearch_Limits(t *testing.T) {
 
 			resp := decode[searchResponse](t, w)
 			if resp.Count != tt.wantCount {
-				t.Errorf("limit=%q: got %d results, want %d",
+				assert.Failf(t, "test failed", "limit=%q: got %d results, want %d",
 					tt.queryVal, resp.Count, tt.wantCount)
 			}
 		})
@@ -2350,7 +2328,7 @@ func TestSearch_CanceledContext(t *testing.T) {
 	// A canceled request should just return without writing a response
 	// (implicit 200 with empty body in httptest, but importantly NO content).
 	if w.Body.Len() > 0 {
-		t.Errorf("expected empty body for canceled context, got: %s",
+		assert.Failf(t, "test failed", "expected empty body for canceled context, got: %s",
 			w.Body.String())
 	}
 }
@@ -2383,10 +2361,10 @@ func TestSearch_ZeroResults(t *testing.T) {
 
 	resp := decode[searchResponse](t, w)
 	if resp.Results == nil {
-		t.Fatal("results must be [] not null")
+		require.FailNow(t, "results must be [] not null")
 	}
 	if resp.Count != 0 {
-		t.Fatalf("expected count=0, got %d", resp.Count)
+		require.FailNowf(t, "test failed", "expected count=0, got %d", resp.Count)
 	}
 }
 
@@ -2418,7 +2396,7 @@ func TestSearch_Deduplication(t *testing.T) {
 
 	resp := decode[searchResponse](t, w)
 	if resp.Count != 2 {
-		t.Errorf("got count=%d, want 2 (one result per session)", resp.Count)
+		assert.Failf(t, "test failed", "got count=%d, want 2 (one result per session)", resp.Count)
 	}
 	// Verify no duplicate session_ids in the response.
 	seen := make(map[string]int)
@@ -2427,7 +2405,7 @@ func TestSearch_Deduplication(t *testing.T) {
 	}
 	for sid, count := range seen {
 		if count > 1 {
-			t.Errorf("session_id %q appears %d times in results, want 1", sid, count)
+			assert.Failf(t, "test failed", "session_id %q appears %d times in results, want 1", sid, count)
 		}
 	}
 }
@@ -2436,12 +2414,12 @@ func TestSearch_NotAvailable(t *testing.T) {
 	te := setup(t)
 	// Simulate missing FTS by dropping the virtual table.
 	// HasFTS() will return false because the query against messages_fts will fail.
-	err := te.db.Update(func(tx *sql.Tx) error {
+	err := te.db.Update(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), "DROP TABLE IF EXISTS messages_fts")
 		return err
 	})
 	if err != nil {
-		t.Fatalf("dropping messages_fts: %v", err)
+		require.FailNowf(t, "test failed", "dropping messages_fts: %v", err)
 	}
 
 	w := te.get(t, "/api/v1/search?q=foo")
@@ -2459,11 +2437,11 @@ func TestGetStats(t *testing.T) {
 
 	resp := decode[db.Stats](t, w)
 	if resp.SessionCount != 1 {
-		t.Fatalf("expected 1 session, got %d",
+		require.FailNowf(t, "test failed", "expected 1 session, got %d",
 			resp.SessionCount)
 	}
 	if resp.MessageCount != 5 {
-		t.Fatalf("expected 5 messages, got %d",
+		require.FailNowf(t, "test failed", "expected 5 messages, got %d",
 			resp.MessageCount)
 	}
 }
@@ -2484,11 +2462,11 @@ func TestGetStats_ExcludeOneShotDefault(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	resp := decode[db.Stats](t, w)
 	if resp.SessionCount != 1 {
-		t.Errorf("default: session_count = %d, want 1",
+		assert.Failf(t, "test failed", "default: session_count = %d, want 1",
 			resp.SessionCount)
 	}
 	if resp.MessageCount != 10 {
-		t.Errorf("default: message_count = %d, want 10",
+		assert.Failf(t, "test failed", "default: message_count = %d, want 10",
 			resp.MessageCount)
 	}
 
@@ -2497,18 +2475,16 @@ func TestGetStats_ExcludeOneShotDefault(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	resp = decode[db.Stats](t, w)
 	if resp.SessionCount != 2 {
-		t.Errorf("include: session_count = %d, want 2",
+		assert.Failf(t, "test failed", "include: session_count = %d, want 2",
 			resp.SessionCount)
 	}
 	if resp.MessageCount != 15 {
-		t.Errorf("include: message_count = %d, want 15",
+		assert.Failf(t, "test failed", "include: message_count = %d, want 15",
 			resp.MessageCount)
 	}
 }
 
 func TestSessionStats_DefaultVisibilityMatchesListDefaults(t *testing.T) {
-	assert := assert.New(t)
-
 	te := setup(t)
 	startedAt := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
 	endedAt := time.Now().UTC().Add(-90 * time.Minute).Format(time.RFC3339)
@@ -2536,26 +2512,26 @@ func TestSessionStats_DefaultVisibilityMatchesListDefaults(t *testing.T) {
 	w := te.get(t, "/api/v1/session-stats")
 	assertStatus(t, w, http.StatusOK)
 	resp := decode[db.SessionStats](t, w)
-	assert.Equal(1, resp.Totals.SessionsAll, "default sessions_all")
-	assert.Equal(10, resp.Totals.MessagesTotal, "default messages_total")
+	assert.Equal(t, 1, resp.Totals.SessionsAll, "default sessions_all")
+	assert.Equal(t, 10, resp.Totals.MessagesTotal, "default messages_total")
 
 	w = te.get(t, "/api/v1/session-stats?include_one_shot=true")
 	assertStatus(t, w, http.StatusOK)
 	resp = decode[db.SessionStats](t, w)
-	assert.Equal(2, resp.Totals.SessionsAll, "include_one_shot sessions_all")
-	assert.Equal(15, resp.Totals.MessagesTotal, "include_one_shot messages_total")
+	assert.Equal(t, 2, resp.Totals.SessionsAll, "include_one_shot sessions_all")
+	assert.Equal(t, 15, resp.Totals.MessagesTotal, "include_one_shot messages_total")
 
 	w = te.get(t, "/api/v1/session-stats?include_automated=true")
 	assertStatus(t, w, http.StatusOK)
 	resp = decode[db.SessionStats](t, w)
-	assert.Equal(2, resp.Totals.SessionsAll, "include_automated sessions_all")
-	assert.Equal(16, resp.Totals.MessagesTotal, "include_automated messages_total")
+	assert.Equal(t, 2, resp.Totals.SessionsAll, "include_automated sessions_all")
+	assert.Equal(t, 16, resp.Totals.MessagesTotal, "include_automated messages_total")
 
 	w = te.get(t, "/api/v1/session-stats?include_one_shot=true&include_automated=true")
 	assertStatus(t, w, http.StatusOK)
 	resp = decode[db.SessionStats](t, w)
-	assert.Equal(3, resp.Totals.SessionsAll, "include_all sessions_all")
-	assert.Equal(21, resp.Totals.MessagesTotal, "include_all messages_total")
+	assert.Equal(t, 3, resp.Totals.SessionsAll, "include_all sessions_all")
+	assert.Equal(t, 21, resp.Totals.MessagesTotal, "include_all messages_total")
 }
 
 func TestListMachines_ExcludeOneShotDefault(t *testing.T) {
@@ -2578,11 +2554,11 @@ func TestListMachines_ExcludeOneShotDefault(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	resp := decode[machineListResponse](t, w)
 	if len(resp.Machines) != 1 {
-		t.Fatalf("default: expected 1 machine, got %d",
+		require.FailNowf(t, "test failed", "default: expected 1 machine, got %d",
 			len(resp.Machines))
 	}
 	if resp.Machines[0] != "desktop" {
-		t.Errorf("default: expected desktop, got %s",
+		assert.Failf(t, "test failed", "default: expected desktop, got %s",
 			resp.Machines[0])
 	}
 
@@ -2591,7 +2567,7 @@ func TestListMachines_ExcludeOneShotDefault(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	resp = decode[machineListResponse](t, w)
 	if len(resp.Machines) != 2 {
-		t.Fatalf("include: expected 2 machines, got %d",
+		require.FailNowf(t, "test failed", "include: expected 2 machines, got %d",
 			len(resp.Machines))
 	}
 
@@ -2600,7 +2576,7 @@ func TestListMachines_ExcludeOneShotDefault(t *testing.T) {
 
 	projects := decode[projectListResponse](t, w)
 	if len(projects.Projects) != 2 {
-		t.Fatalf("expected 2 projects, got %d",
+		require.FailNowf(t, "test failed", "expected 2 projects, got %d",
 			len(projects.Projects))
 	}
 }
@@ -2617,7 +2593,7 @@ func TestSyncStatus(t *testing.T) {
 
 	resp := decode[syncStatusResponse](t, w)
 	if resp.LastSync == "" {
-		t.Fatal("expected last_sync field")
+		require.FailNow(t, "expected last_sync field")
 	}
 }
 
@@ -2650,7 +2626,7 @@ func TestSyncStatusIncludesCurrentProgress(t *testing.T) {
 	select {
 	case <-progressSeen:
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for sync progress")
+		require.FailNow(t, "timed out waiting for sync progress")
 	}
 
 	w := te.get(t, "/api/v1/sync/status")
@@ -2675,7 +2651,7 @@ func TestCORSHeaders(t *testing.T) {
 
 	cors := w.Header().Get("Access-Control-Allow-Origin")
 	if cors != "http://127.0.0.1:0" {
-		t.Fatalf("expected CORS origin http://127.0.0.1:0, got %q", cors)
+		require.FailNowf(t, "test failed", "expected CORS origin http://127.0.0.1:0, got %q", cors)
 	}
 }
 
@@ -2689,7 +2665,7 @@ func TestCORSRejectsUnknownOrigin(t *testing.T) {
 
 	cors := w.Header().Get("Access-Control-Allow-Origin")
 	if cors != "" {
-		t.Fatalf("expected no CORS header for foreign origin, got %q", cors)
+		require.FailNowf(t, "test failed", "expected no CORS header for foreign origin, got %q", cors)
 	}
 }
 
@@ -2710,7 +2686,7 @@ func TestCORSAllowsMutatingFromKnownOrigin(t *testing.T) {
 		withOrigin("http://127.0.0.1:0"))
 	// Sync returns 200 or 202, not 403.
 	if w.Code == http.StatusForbidden {
-		t.Fatal("legitimate origin should not be blocked")
+		require.FailNow(t, "legitimate origin should not be blocked")
 	}
 }
 
@@ -2765,8 +2741,6 @@ func TestDuckDBPushLocalNoSyncDaemonWritesConfiguredPath(t *testing.T) {
 // event stream ending in a done event carrying the push result, instead of a
 // single JSON body after a silent wait.
 func TestDuckDBPushStreamsSSEDoneEvent(t *testing.T) {
-	assert := assert.New(t)
-
 	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
 		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
 	}
@@ -2795,9 +2769,9 @@ func TestDuckDBPushStreamsSSEDoneEvent(t *testing.T) {
 	te.handler.ServeHTTP(w, req)
 
 	assertStatus(t, w, http.StatusOK)
-	assert.Contains(w.Header().Get("Content-Type"), "text/event-stream")
-	assert.Contains(w.Body.String(), "event: done")
-	assert.FileExists(target)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
+	assert.Contains(t, w.Body.String(), "event: done")
+	assert.FileExists(t, target)
 }
 
 func TestCORSPreflightRejectsBadOrigin(t *testing.T) {
@@ -2856,7 +2830,7 @@ func TestHostHeaderAllowsLegitimate(t *testing.T) {
 		w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 			withHost(host), withRemoteAddr("127.0.0.1:1234"))
 		if w.Code == http.StatusForbidden {
-			t.Errorf("host %s should be allowed, got 403", host)
+			assert.Failf(t, "test failed", "host %s should be allowed, got 403", host)
 		}
 	}
 }
@@ -2923,7 +2897,7 @@ func TestCORSAllowsLocalhost(t *testing.T) {
 
 	cors := w.Header().Get("Access-Control-Allow-Origin")
 	if cors != "http://localhost:0" {
-		t.Fatalf("expected CORS origin http://localhost:0, got %q", cors)
+		require.FailNowf(t, "test failed", "expected CORS origin http://localhost:0, got %q", cors)
 	}
 }
 
@@ -2973,7 +2947,7 @@ func TestCORSBindAllPort80AllowsPortlessLoopbackOrigins(t *testing.T) {
 
 				cors := w.Header().Get("Access-Control-Allow-Origin")
 				if cors != origin {
-					t.Fatalf(
+					require.FailNowf(t, "test failed",
 						"origin %s: expected CORS %s, got %q",
 						origin, origin, cors,
 					)
@@ -3000,7 +2974,7 @@ func TestCORSBindAllPort80AllowsPortlessLANOrigin(t *testing.T) {
 
 			cors := w.Header().Get("Access-Control-Allow-Origin")
 			if cors != origin {
-				t.Fatalf("expected CORS origin %s, got %q", origin, cors)
+				require.FailNowf(t, "test failed", "expected CORS origin %s, got %q", origin, cors)
 			}
 		})
 	}
@@ -3078,7 +3052,7 @@ func TestCORSBindAllInterfaces(t *testing.T) {
 
 				cors := w.Header().Get("Access-Control-Allow-Origin")
 				if cors != origin {
-					t.Errorf("origin %s: expected CORS %s, got %q", origin, origin, cors)
+					assert.Failf(t, "test failed", "origin %s: expected CORS %s, got %q", origin, origin, cors)
 				}
 			}
 		})
@@ -3101,7 +3075,7 @@ func TestCORSBindAllAllowsLANIPOrigin(t *testing.T) {
 
 			cors := w.Header().Get("Access-Control-Allow-Origin")
 			if cors != origin {
-				t.Fatalf("expected CORS origin %s, got %q", origin, cors)
+				require.FailNowf(t, "test failed", "expected CORS origin %s, got %q", origin, cors)
 			}
 		})
 	}
@@ -3194,7 +3168,7 @@ func TestCORSVaryAlwaysSet(t *testing.T) {
 
 	vary := w.Header().Get("Vary")
 	if vary != "Origin" {
-		t.Fatalf("expected Vary: Origin, got %q", vary)
+		require.FailNowf(t, "test failed", "expected Vary: Origin, got %q", vary)
 	}
 }
 
@@ -3221,7 +3195,7 @@ func TestCORSAllowMethods(t *testing.T) {
 		http.MethodPatch, http.MethodDelete, http.MethodOptions,
 	} {
 		if !strings.Contains(methods, want) {
-			t.Errorf(
+			assert.Failf(t, "test failed",
 				"Allow-Methods %q missing %s",
 				methods, want,
 			)
@@ -3245,7 +3219,7 @@ func TestAuthErrorIncludesCORSHeaders(t *testing.T) {
 
 	cors := w.Header().Get("Access-Control-Allow-Origin")
 	if cors != "http://192.168.1.50:8080" {
-		t.Fatalf(
+		require.FailNowf(t, "test failed",
 			"expected CORS Allow-Origin on auth error, got %q",
 			cors,
 		)
@@ -3267,7 +3241,7 @@ func TestAuthErrorNoCORSWithoutOrigin(t *testing.T) {
 
 	cors := w.Header().Get("Access-Control-Allow-Origin")
 	if cors != "" {
-		t.Fatalf(
+		require.FailNowf(t, "test failed",
 			"expected no CORS header without Origin, got %q",
 			cors,
 		)
@@ -3290,7 +3264,7 @@ func TestNoAuthWhenRemoteDisabled(t *testing.T) {
 
 	if w.Code == http.StatusForbidden ||
 		w.Code == http.StatusUnauthorized {
-		t.Fatalf(
+		require.FailNowf(t, "test failed",
 			"expected no auth gate when remote disabled, got %d",
 			w.Code,
 		)
@@ -3308,7 +3282,7 @@ func TestAuthRequiredButNoToken(t *testing.T) {
 		withHost("127.0.0.1:0"))
 
 	if w.Code != http.StatusInternalServerError {
-		t.Fatalf(
+		require.FailNowf(t, "test failed",
 			"expected 500 when auth required but no token, got %d",
 			w.Code,
 		)
@@ -3330,16 +3304,13 @@ func TestAuthRequiredProtectsPing(t *testing.T) {
 }
 
 func TestPingReportsStalledSyncWithoutLosingDaemonIdentity(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := tempDirWithRetryCleanup(t)
 	cfg := config.Config{
 		Host: "127.0.0.1", Port: 0, DataDir: dir,
 		DBPath: filepath.Join(dir, "test.db"), WriteTimeout: 30 * time.Second,
 	}
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		Machine: "test", ProgressStallAfter: time.Nanosecond,
 	})
 	t.Cleanup(engine.Close)
@@ -3360,9 +3331,9 @@ func TestPingReportsStalledSyncWithoutLosingDaemonIdentity(t *testing.T) {
 	}
 
 	healthy := decode[pingResponse](t, te.get(t, "/api/ping"))
-	assert.True(healthy.OK)
-	assert.True(healthy.Healthy)
-	assert.Nil(healthy.Sync)
+	assert.True(t, healthy.OK)
+	assert.True(t, healthy.Healthy)
+	assert.Nil(t, healthy.Sync)
 
 	progressSeen := make(chan struct{})
 	release := make(chan struct{})
@@ -3380,33 +3351,33 @@ func TestPingReportsStalledSyncWithoutLosingDaemonIdentity(t *testing.T) {
 	select {
 	case <-progressSeen:
 	case <-time.After(time.Second):
-		require.FailNow("sync did not publish progress")
+		require.FailNow(t, "sync did not publish progress")
 	}
-	require.Eventually(func() bool {
+	require.Eventually(t, func() bool {
 		progress, active := engine.CurrentProgress()
 		return active && progress.Stalled
 	}, time.Second, time.Millisecond,
 		"sync progress did not age into the stalled state")
 
 	stalled := decode[pingResponse](t, te.get(t, "/api/ping"))
-	assert.True(stalled.OK,
+	assert.True(t, stalled.OK,
 		"ping must keep proving the running daemon's identity")
-	assert.False(stalled.Healthy)
-	require.NotNil(stalled.Sync)
-	assert.Equal(sync.PhaseDiscovering, stalled.Sync.Phase)
-	assert.True(stalled.Sync.Stalled)
-	assert.NotEmpty(stalled.Sync.StartedAt)
-	assert.NotEmpty(stalled.Sync.UpdatedAt)
+	assert.False(t, stalled.Healthy)
+	require.NotNil(t, stalled.Sync)
+	assert.Equal(t, sync.PhaseDiscovering, stalled.Sync.Phase)
+	assert.True(t, stalled.Sync.Stalled)
+	assert.NotEmpty(t, stalled.Sync.StartedAt)
+	assert.NotEmpty(t, stalled.Sync.UpdatedAt)
 
 	releaseOnce.Do(func() { close(release) })
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		require.FailNow("sync did not finish after progress callback returned")
+		require.FailNow(t, "sync did not finish after progress callback returned")
 	}
 	finished := decode[pingResponse](t, te.get(t, "/api/ping"))
-	assert.True(finished.Healthy)
-	assert.Nil(finished.Sync)
+	assert.True(t, finished.Healthy)
+	assert.Nil(t, finished.Sync)
 }
 
 func TestGetGithubConfig(t *testing.T) {
@@ -3419,7 +3390,7 @@ func TestGetGithubConfig(t *testing.T) {
 
 	resp := decode[githubConfigResponse](t, w)
 	if resp.Configured {
-		t.Fatal("expected configured=false")
+		require.FailNow(t, "expected configured=false")
 	}
 }
 
@@ -3433,11 +3404,11 @@ func TestExportSession(t *testing.T) {
 
 	ct := w.Header().Get("Content-Type")
 	if !strings.Contains(ct, "text/html") {
-		t.Fatalf("expected text/html content type, got %q", ct)
+		require.FailNowf(t, "test failed", "expected text/html content type, got %q", ct)
 	}
 	cd := w.Header().Get("Content-Disposition")
 	if !strings.Contains(cd, "attachment") {
-		t.Fatalf("expected attachment disposition, got %q", cd)
+		require.FailNowf(t, "test failed", "expected attachment disposition, got %q", cd)
 	}
 	assertBodyContains(t, w, "my-app")
 }
@@ -3459,11 +3430,11 @@ func TestMarkdownSessionExport(t *testing.T) {
 
 	ct := w.Header().Get("Content-Type")
 	if !strings.Contains(ct, "text/markdown") {
-		t.Fatalf("expected text/markdown content type, got %q", ct)
+		require.FailNowf(t, "test failed", "expected text/markdown content type, got %q", ct)
 	}
 	cd := w.Header().Get("Content-Disposition")
 	if !strings.Contains(cd, "inline") {
-		t.Fatalf("expected inline disposition, got %q", cd)
+		require.FailNowf(t, "test failed", "expected inline disposition, got %q", cd)
 	}
 	assertBodyContains(t, w, "# Session: my-app")
 }
@@ -3534,7 +3505,7 @@ func TestMarkdownSessionExport_DefaultOmitsChildSessions(t *testing.T) {
 	w := te.get(t, "/api/v1/sessions/parent/md")
 	assertStatus(t, w, http.StatusOK)
 	if strings.Contains(w.Body.String(), `<subagent_session id="child-a"`) {
-		t.Fatalf("expected default markdown export to omit child session, got:\n%s", w.Body.String())
+		require.FailNowf(t, "test failed", "expected default markdown export to omit child session, got:\n%s", w.Body.String())
 	}
 }
 
@@ -3636,9 +3607,6 @@ func TestGetSettings_UsesGitHubCLIAuthTokenFallback(t *testing.T) {
 }
 
 func TestSettingsChartPaletteRoundTrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 	putSettings := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
@@ -3655,32 +3623,29 @@ func TestSettingsChartPaletteRoundTrip(t *testing.T) {
 	var initial struct {
 		ChartPalette config.ChartPalette `json:"chart_palette"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &initial))
-	assert.Equal(config.ChartPaletteAgentsview, initial.ChartPalette)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &initial))
+	assert.Equal(t, config.ChartPaletteAgentsview, initial.ChartPalette)
 
 	w = putSettings(`{"chart_palette":"matplotlib"}`)
 	assertStatus(t, w, http.StatusOK)
 	var updated struct {
 		ChartPalette config.ChartPalette `json:"chart_palette"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &updated))
-	assert.Equal(config.ChartPaletteMatplotlib, updated.ChartPalette)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+	assert.Equal(t, config.ChartPaletteMatplotlib, updated.ChartPalette)
 
 	var persisted struct {
 		ChartPalette config.ChartPalette `toml:"chart_palette"`
 	}
 	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
-	require.NoError(err)
-	assert.Equal(config.ChartPaletteMatplotlib, persisted.ChartPalette)
+	require.NoError(t, err)
+	assert.Equal(t, config.ChartPaletteMatplotlib, persisted.ChartPalette)
 }
 
 func TestOpenAPISettingsZoomLevels(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 	w := te.get(t, "/api/openapi.json")
-	require.Equal(http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, w.Code)
 
 	var spec struct {
 		Components struct {
@@ -3689,25 +3654,22 @@ func TestOpenAPISettingsZoomLevels(t *testing.T) {
 			} `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
 	for _, name := range []string{"SettingsResponse", "SettingsUpdateRequest"} {
 		var zoom struct {
 			Type string `json:"type"`
 			Enum []int  `json:"enum"`
 		}
-		require.NoError(json.Unmarshal(spec.Components.Schemas[name].Properties["zoom_level"], &zoom), name)
-		assert.Equal("integer", zoom.Type, name)
-		assert.Equal([]int{67, 75, 80, 90, 100, 110, 120, 125, 130, 150, 175, 200}, zoom.Enum, name)
+		require.NoError(t, json.Unmarshal(spec.Components.Schemas[name].Properties["zoom_level"], &zoom), name)
+		assert.Equal(t, "integer", zoom.Type, name)
+		assert.Equal(t, []int{67, 75, 80, 90, 100, 110, 120, 125, 130, 150, 175, 200}, zoom.Enum, name)
 	}
 }
 
 func TestSettingsZoomLevelRoundTrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	configured := config.ZoomLevel120
 	te := setup(t, func(cfg *config.Config) { cfg.ZoomLevel = &configured })
-	require.NoError(os.WriteFile(filepath.Join(te.dataDir, "config.toml"), []byte(
+	require.NoError(t, os.WriteFile(filepath.Join(te.dataDir, "config.toml"), []byte(
 		"github_token = \"keep\"\n[proxy]\nmode = \"caddy\"\n"), 0o600))
 	putSettings := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings", strings.NewReader(body))
@@ -3720,16 +3682,16 @@ func TestSettingsZoomLevelRoundTrip(t *testing.T) {
 
 	w := te.get(t, "/api/v1/settings")
 	assertStatus(t, w, http.StatusOK)
-	assert.Contains(w.Body.String(), `"zoom_level":120`)
+	assert.Contains(t, w.Body.String(), `"zoom_level":120`)
 
 	w = putSettings(`{"zoom_level":120}`)
 	assertStatus(t, w, http.StatusOK)
 	var updated struct {
 		ZoomLevel *config.ZoomLevel `json:"zoom_level"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &updated))
-	require.NotNil(updated.ZoomLevel)
-	assert.Equal(config.ZoomLevel120, *updated.ZoomLevel)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+	require.NotNil(t, updated.ZoomLevel)
+	assert.Equal(t, config.ZoomLevel120, *updated.ZoomLevel)
 
 	var persisted struct {
 		ZoomLevel   *config.ZoomLevel  `toml:"zoom_level"`
@@ -3737,20 +3699,20 @@ func TestSettingsZoomLevelRoundTrip(t *testing.T) {
 		Proxy       config.ProxyConfig `toml:"proxy"`
 	}
 	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
-	require.NoError(err)
-	require.NotNil(persisted.ZoomLevel)
-	assert.Equal(config.ZoomLevel120, *persisted.ZoomLevel)
-	assert.Equal("keep", persisted.GithubToken)
-	assert.Equal("caddy", persisted.Proxy.Mode)
+	require.NoError(t, err)
+	require.NotNil(t, persisted.ZoomLevel)
+	assert.Equal(t, config.ZoomLevel120, *persisted.ZoomLevel)
+	assert.Equal(t, "keep", persisted.GithubToken)
+	assert.Equal(t, "caddy", persisted.Proxy.Mode)
 
 	before, err := os.ReadFile(filepath.Join(te.dataDir, "config.toml"))
-	require.NoError(err)
+	require.NoError(t, err)
 	w = putSettings(`{"zoom_level":101}`)
 	assertStatus(t, w, http.StatusBadRequest)
 	assertBodyContains(t, w, "zoom_level")
 	after, err := os.ReadFile(filepath.Join(te.dataDir, "config.toml"))
-	require.NoError(err)
-	assert.Equal(before, after)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
 }
 
 func TestSettingsRejectInvalidChartPaletteWithoutChangingSelection(t *testing.T) {
@@ -3785,9 +3747,6 @@ func TestSettingsRejectInvalidChartPaletteWithoutChangingSelection(t *testing.T)
 }
 
 func TestSettingsToolResultImagesRoundTrip(t *testing.T) {
-	assert := assert.New(t)
-	parentRequire := require.New(t)
-
 	te := setup(t)
 	// Point the loader at the same data dir the handler writes, so the
 	// assertions below exercise config.LoadMinimal rather than re-parsing the
@@ -3814,40 +3773,40 @@ func TestSettingsToolResultImagesRoundTrip(t *testing.T) {
 	var initial struct {
 		ToolResultImages string `json:"tool_result_images"`
 	}
-	parentRequire.NoError(json.Unmarshal(w.Body.Bytes(), &initial))
-	assert.Equal("keep", initial.ToolResultImages)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &initial))
+	assert.Equal(t, "keep", initial.ToolResultImages)
 
 	w = putSettings(`{"tool_result_images":"drop"}`)
 	assertStatus(t, w, http.StatusOK)
-	assert.Equal(config.ToolResultImagesDrop, loadedPolicy(t))
+	assert.Equal(t, config.ToolResultImagesDrop, loadedPolicy(t))
 	w = putSettings(`{"tool_result_images":"offload"}`)
 	assertStatus(t, w, http.StatusOK)
 	var updated struct {
 		ToolResultImages string `json:"tool_result_images"`
 	}
-	parentRequire.NoError(json.Unmarshal(w.Body.Bytes(), &updated))
-	assert.Equal("offload", updated.ToolResultImages)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
+	assert.Equal(t, "offload", updated.ToolResultImages)
 
 	var persisted struct {
 		ToolResultImages string `toml:"tool_result_images"`
 	}
 	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
-	parentRequire.NoError(err)
-	assert.Equal("offload", persisted.ToolResultImages)
-	assert.Equal(config.ToolResultImagesOffload, loadedPolicy(t))
+	require.NoError(t, err)
+	assert.Equal(t, "offload", persisted.ToolResultImages)
+	assert.Equal(t, config.ToolResultImagesOffload, loadedPolicy(t))
 
 	w = putSettings(`{"tool_result_images":"keep"}`)
 	assertStatus(t, w, http.StatusOK)
 	var restored struct {
 		ToolResultImages string `json:"tool_result_images"`
 	}
-	parentRequire.NoError(json.Unmarshal(w.Body.Bytes(), &restored))
-	assert.Equal("keep", restored.ToolResultImages)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &restored))
+	assert.Equal(t, "keep", restored.ToolResultImages)
 
 	_, err = toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
-	parentRequire.NoError(err)
-	assert.Equal("keep", persisted.ToolResultImages)
-	assert.Equal(config.ToolResultImagesKeep, loadedPolicy(t))
+	require.NoError(t, err)
+	assert.Equal(t, "keep", persisted.ToolResultImages)
+	assert.Equal(t, config.ToolResultImagesKeep, loadedPolicy(t))
 }
 
 func TestSettingsRejectsOutOfEnumToolResultImages(t *testing.T) {
@@ -3943,9 +3902,6 @@ func TestSettingsZoomLevelReadOnlyBackend(t *testing.T) {
 }
 
 func TestSettingsDisabledProvidersRoundTrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	geminiDir := filepath.Join(t.TempDir(), "gemini")
 	te := setup(t, func(cfg *config.Config) {
 		cfg.AgentDirs = map[parser.AgentType][]string{
@@ -3974,36 +3930,36 @@ func TestSettingsDisabledProvidersRoundTrip(t *testing.T) {
 		SessionProviders []sessionProvider  `json:"session_providers"`
 		DisabledAgents   []parser.AgentType `json:"disabled_agents"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal([]parser.AgentType{parser.AgentClaude, parser.AgentGemini},
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, []parser.AgentType{parser.AgentClaude, parser.AgentGemini},
 		got.DisabledAgents,
 	)
-	require.NotEmpty(got.SessionProviders)
-	assert.Equal(parser.AgentClaude, got.SessionProviders[0].ID)
-	assert.Equal("Claude Code", got.SessionProviders[0].DisplayName)
-	assert.Equal([]string{"/sessions/claude"}, got.SessionProviders[0].Dirs)
-	assert.False(got.SessionProviders[0].PostAnswerToolWork)
+	require.NotEmpty(t, got.SessionProviders)
+	assert.Equal(t, parser.AgentClaude, got.SessionProviders[0].ID)
+	assert.Equal(t, "Claude Code", got.SessionProviders[0].DisplayName)
+	assert.Equal(t, []string{"/sessions/claude"}, got.SessionProviders[0].Dirs)
+	assert.False(t, got.SessionProviders[0].PostAnswerToolWork)
 	codexIndex := slices.IndexFunc(got.SessionProviders,
 		func(provider sessionProvider) bool {
 			return provider.ID == parser.AgentCodex
 		})
-	require.NotEqual(-1, codexIndex)
-	assert.True(got.SessionProviders[codexIndex].PostAnswerToolWork)
+	require.NotEqual(t, -1, codexIndex)
+	assert.True(t, got.SessionProviders[codexIndex].PostAnswerToolWork)
 	geminiIndex := slices.IndexFunc(got.SessionProviders,
 		func(provider sessionProvider) bool {
 			return provider.ID == parser.AgentGemini
 		})
-	require.NotEqual(-1, geminiIndex)
+	require.NotEqual(t, -1, geminiIndex)
 	gemini := got.SessionProviders[geminiIndex]
-	assert.Equal("Gemini", gemini.DisplayName)
-	assert.Equal([]string{geminiDir}, gemini.Dirs)
+	assert.Equal(t, "Gemini", gemini.DisplayName)
+	assert.Equal(t, []string{geminiDir}, gemini.Dirs)
 
 	var persisted struct {
 		DisabledAgents []parser.AgentType `toml:"disabled_agents"`
 	}
 	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
-	require.NoError(err)
-	assert.Equal(got.DisabledAgents, persisted.DisabledAgents)
+	require.NoError(t, err)
+	assert.Equal(t, got.DisabledAgents, persisted.DisabledAgents)
 }
 
 func TestSettingsDisabledProvidersDefaultToEmptyArray(t *testing.T) {
@@ -4190,7 +4146,7 @@ func TestExportSession_HTMLContent(t *testing.T) {
 		"Agent Session",
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf(
+			assert.Failf(t, "test failed",
 				"expected to contain %q, got:\n%s",
 				want, body,
 			)
@@ -4199,7 +4155,6 @@ func TestExportSession_HTMLContent(t *testing.T) {
 }
 
 func TestUploadSessionVariants(t *testing.T) {
-
 	te := setup(t)
 
 	t.Run("stores token metadata", func(t *testing.T) {
@@ -4220,7 +4175,7 @@ func TestUploadSessionVariants(t *testing.T) {
 			},
 		})
 		if err != nil {
-			t.Fatalf("marshal assistant fixture: %v", err)
+			require.FailNowf(t, "test failed", "marshal assistant fixture: %v", err)
 		}
 
 		content := testjsonl.NewSessionBuilder().
@@ -4234,69 +4189,66 @@ func TestUploadSessionVariants(t *testing.T) {
 
 		resp := decode[uploadResponse](t, w)
 		if resp.SessionID != "upload-test" {
-			t.Errorf("session_id = %v", resp.SessionID)
+			assert.Failf(t, "test failed", "session_id = %v", resp.SessionID)
 		}
 		if resp.Project != "myproj" {
-			t.Errorf("project = %v", resp.Project)
+			assert.Failf(t, "test failed", "project = %v", resp.Project)
 		}
 		if resp.Machine != "remote" {
-			t.Errorf("machine = %v", resp.Machine)
+			assert.Failf(t, "test failed", "machine = %v", resp.Machine)
 		}
 		if resp.Messages != 2 {
-			t.Errorf("messages = %v", resp.Messages)
+			assert.Failf(t, "test failed", "messages = %v", resp.Messages)
 		}
 
 		sess, err := te.db.GetSession(t.Context(), "upload-test")
 		if err != nil {
-			t.Fatalf("GetSession: %v", err)
+			require.FailNowf(t, "test failed", "GetSession: %v", err)
 		}
 		if sess == nil {
-			t.Fatal("session not found in DB")
+			require.FailNow(t, "session not found in DB")
 			return
 		}
 		if sess.Project != "myproj" {
-			t.Errorf("stored project = %q", sess.Project)
+			assert.Failf(t, "test failed", "stored project = %q", sess.Project)
 		}
 		if !sess.HasTotalOutputTokens {
-			t.Error("stored HasTotalOutputTokens = false, want true")
+			assert.Fail(t, "stored HasTotalOutputTokens = false, want true")
 		}
 		if !sess.HasPeakContextTokens {
-			t.Error("stored HasPeakContextTokens = false, want true")
+			assert.Fail(t, "stored HasPeakContextTokens = false, want true")
 		}
 		if sess.TotalOutputTokens != 200 {
-			t.Errorf("stored TotalOutputTokens = %d, want 200",
+			assert.Failf(t, "test failed", "stored TotalOutputTokens = %d, want 200",
 				sess.TotalOutputTokens)
 		}
 		if sess.PeakContextTokens != 500 {
-			t.Errorf("stored PeakContextTokens = %d, want 500",
+			assert.Failf(t, "test failed", "stored PeakContextTokens = %d, want 500",
 				sess.PeakContextTokens)
 		}
 
 		msgs, err := te.db.GetMessages(t.Context(), "upload-test", 0, 10, true)
 		if err != nil {
-			t.Fatalf("GetMessages: %v", err)
+			require.FailNowf(t, "test failed", "GetMessages: %v", err)
 		}
 		if len(msgs) != 2 {
-			t.Fatalf("message count = %d, want 2", len(msgs))
+			require.FailNowf(t, "test failed", "message count = %d, want 2", len(msgs))
 		}
 		if !msgs[1].HasContextTokens {
-			t.Error("assistant HasContextTokens = false, want true")
+			assert.Fail(t, "assistant HasContextTokens = false, want true")
 		}
 		if !msgs[1].HasOutputTokens {
-			t.Error("assistant HasOutputTokens = false, want true")
+			assert.Fail(t, "assistant HasOutputTokens = false, want true")
 		}
 		if msgs[1].OutputTokens != 200 {
-			t.Errorf("assistant OutputTokens = %d, want 200", msgs[1].OutputTokens)
+			assert.Failf(t, "test failed", "assistant OutputTokens = %d, want 200", msgs[1].OutputTokens)
 		}
 		if msgs[1].ContextTokens != 500 {
-			t.Errorf("assistant ContextTokens = %d, want 500", msgs[1].ContextTokens)
+			assert.Failf(t, "test failed", "assistant ContextTokens = %d, want 500", msgs[1].ContextTokens)
 		}
 	})
 
 	t.Run("sanitizes parsed rows", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		rawInput := db.MaxPlausibleTokens + 200
 		rawOutput := db.MaxPlausibleTokens + 100
 		longModel := strings.Repeat("m", 160)
@@ -4314,7 +4266,7 @@ func TestUploadSessionVariants(t *testing.T) {
 				},
 			},
 		})
-		require.NoError(err)
+		require.NoError(t, err)
 
 		content := testjsonl.NewSessionBuilder().
 			AddClaudeUser(tsEarly, "Hello \x1b[31mupload\x07").
@@ -4328,19 +4280,19 @@ func TestUploadSessionVariants(t *testing.T) {
 		msgs, err := te.db.GetMessages(
 			t.Context(), "upload-sanitize", 0, 10, true,
 		)
-		require.NoError(err)
-		require.Len(msgs, 2)
-		assert.Equal("Hello [31mupload", msgs[0].Content)
-		assert.Equal(len("Hello [31mupload"), msgs[0].ContentLength)
-		assert.Len(msgs[1].Model, 128)
-		assert.Equal(db.MaxPlausibleTokens, msgs[1].ContextTokens)
-		assert.Equal(db.MaxPlausibleTokens, msgs[1].OutputTokens)
+		require.NoError(t, err)
+		require.Len(t, msgs, 2)
+		assert.Equal(t, "Hello [31mupload", msgs[0].Content)
+		assert.Equal(t, len("Hello [31mupload"), msgs[0].ContentLength)
+		assert.Len(t, msgs[1].Model, 128)
+		assert.Equal(t, db.MaxPlausibleTokens, msgs[1].ContextTokens)
+		assert.Equal(t, db.MaxPlausibleTokens, msgs[1].OutputTokens)
 
 		sess, err := te.db.GetSession(t.Context(), "upload-sanitize")
-		require.NoError(err)
-		require.NotNil(sess)
-		assert.Equal(db.MaxPlausibleTokens, sess.TotalOutputTokens)
-		assert.Equal(db.MaxPlausibleTokens, sess.PeakContextTokens)
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		assert.Equal(t, db.MaxPlausibleTokens, sess.TotalOutputTokens)
+		assert.Equal(t, db.MaxPlausibleTokens, sess.PeakContextTokens)
 	})
 
 	t.Run("infers relationship type", func(t *testing.T) {
@@ -4362,14 +4314,14 @@ func TestUploadSessionVariants(t *testing.T) {
 			t.Context(), "agent-task42",
 		)
 		if err != nil {
-			t.Fatalf("GetSession: %v", err)
+			require.FailNowf(t, "test failed", "GetSession: %v", err)
 		}
 		if sess == nil {
-			t.Fatal("session not found in DB")
+			require.FailNow(t, "session not found in DB")
 			return
 		}
 		if sess.RelationshipType != "subagent" {
-			t.Errorf(
+			assert.Failf(t, "test failed",
 				"RelationshipType = %q, want %q",
 				sess.RelationshipType, "subagent",
 			)
@@ -4425,7 +4377,6 @@ func TestUploadSession_Errors(t *testing.T) {
 }
 
 func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
-
 	tests := []struct {
 		name  string
 		setup func(t *testing.T, te *testEnv, id string)
@@ -4434,20 +4385,20 @@ func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
 			name: "excluded",
 			setup: func(t *testing.T, te *testEnv, id string) {
 				t.Helper()
-				require.NoError(t, te.db.UpsertSession(db.Session{
+				require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{
 					ID: id, Project: "myproj", Machine: "remote", Agent: "claude",
 				}), "seed session")
-				require.NoError(t, te.db.DeleteSession(id), "DeleteSession")
+				require.NoError(t, te.db.DeleteSession(t.Context(), id), "DeleteSession")
 			},
 		},
 		{
 			name: "trashed",
 			setup: func(t *testing.T, te *testEnv, id string) {
 				t.Helper()
-				require.NoError(t, te.db.UpsertSession(db.Session{
+				require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{
 					ID: id, Project: "myproj", Machine: "remote", Agent: "claude",
 				}), "seed session")
-				require.NoError(t, te.db.SoftDeleteSession(id), "SoftDeleteSession")
+				require.NoError(t, te.db.SoftDeleteSession(t.Context(), id), "SoftDeleteSession")
 			},
 		},
 	}
@@ -4469,7 +4420,7 @@ func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
 				te.dataDir, "uploads", "myproj", id+".jsonl",
 			)
 			if _, err := os.Stat(destPath); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("rejected upload file exists at %s: %v", destPath, err)
+				require.FailNowf(t, "test failed", "rejected upload file exists at %s: %v", destPath, err)
 			}
 		})
 	}
@@ -4517,17 +4468,16 @@ func TestUploadSession_RejectsShorterReplacementWithoutConsent(t *testing.T) {
 }
 
 func TestUploadSession_MultiSessionConflictDoesNotPartiallyWrite(t *testing.T) {
-
 	te := setup(t)
 
 	const filename = "upload-multi-conflict.jsonl"
 	const mainID = "upload-multi-conflict"
 	const forkID = "upload-multi-conflict-i"
 
-	require.NoError(t, te.db.UpsertSession(db.Session{
+	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{
 		ID: forkID, Project: "myproj", Machine: "remote", Agent: "claude",
 	}), "seed fork session")
-	require.NoError(t, te.db.DeleteSession(forkID), "DeleteSession")
+	require.NoError(t, te.db.DeleteSession(t.Context(), forkID), "DeleteSession")
 
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUserWithUUID(tsEarly, "q1", "a", "").
@@ -4551,17 +4501,15 @@ func TestUploadSession_MultiSessionConflictDoesNotPartiallyWrite(t *testing.T) {
 	main, err := te.db.GetSessionFull(t.Context(), mainID)
 	require.NoError(t, err, "GetSessionFull main")
 	if main != nil {
-		t.Fatalf("main session was partially written: %+v", main)
+		require.FailNowf(t, "test failed", "main session was partially written: %+v", main)
 	}
 	destPath := filepath.Join(te.dataDir, "uploads", "myproj", filename)
 	if _, err := os.Stat(destPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("rejected upload file exists at %s: %v", destPath, err)
+		require.FailNowf(t, "test failed", "rejected upload file exists at %s: %v", destPath, err)
 	}
 }
 
 func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
-	require := require.New(t)
-
 	te := setup(t)
 
 	initial := testjsonl.NewSessionBuilder().
@@ -4573,11 +4521,11 @@ func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	msgs, err := te.db.GetAllMessages(t.Context(), "upload-pinned")
-	require.NoError(err, "GetAllMessages")
-	require.Len(msgs, 2, "initial messages")
+	require.NoError(t, err, "GetAllMessages")
+	require.Len(t, msgs, 2, "initial messages")
 	note := "keep this"
-	_, err = te.db.PinMessage("upload-pinned", msgs[0].ID, &note)
-	require.NoError(err, "PinMessage")
+	_, err = te.db.PinMessage(t.Context(), "upload-pinned", msgs[0].ID, &note)
+	require.NoError(t, err, "PinMessage")
 
 	// The pinned message is unchanged; only the reply was edited, so
 	// the pin re-attaches to its message through the identity rules.
@@ -4592,13 +4540,13 @@ func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
 	pins, err := te.db.ListPinnedMessages(
 		t.Context(), "upload-pinned", "",
 	)
-	require.NoError(err, "ListPinnedMessages")
-	require.Len(pins, 1, "pins after re-upload")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1, "pins after re-upload")
 	if pins[0].Ordinal != 0 {
-		t.Fatalf("pin ordinal = %d, want 0", pins[0].Ordinal)
+		require.FailNowf(t, "test failed", "pin ordinal = %d, want 0", pins[0].Ordinal)
 	}
 	if pins[0].Note == nil || *pins[0].Note != note {
-		t.Fatalf("pin note = %v, want %q", pins[0].Note, note)
+		require.FailNowf(t, "test failed", "pin note = %v, want %q", pins[0].Note, note)
 	}
 }
 
@@ -4608,8 +4556,6 @@ func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
 // dropped rather than guessed onto the edited row. Both stores apply
 // the same rule, keeping SQLite and PostgreSQL consistent.
 func TestUploadSession_ReuploadDropsPinOnEditedMessage(t *testing.T) {
-	require := require.New(t)
-
 	te := setup(t)
 
 	initial := testjsonl.NewSessionBuilder().
@@ -4623,10 +4569,10 @@ func TestUploadSession_ReuploadDropsPinOnEditedMessage(t *testing.T) {
 	msgs, err := te.db.GetAllMessages(
 		t.Context(), "upload-pin-edited",
 	)
-	require.NoError(err, "GetAllMessages")
-	require.Len(msgs, 2, "initial messages")
-	_, err = te.db.PinMessage("upload-pin-edited", msgs[0].ID, nil)
-	require.NoError(err, "PinMessage")
+	require.NoError(t, err, "GetAllMessages")
+	require.Len(t, msgs, 2, "initial messages")
+	_, err = te.db.PinMessage(t.Context(), "upload-pin-edited", msgs[0].ID, nil)
+	require.NoError(t, err, "PinMessage")
 
 	updated := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsEarly, "edited upload").
@@ -4639,31 +4585,28 @@ func TestUploadSession_ReuploadDropsPinOnEditedMessage(t *testing.T) {
 	pins, err := te.db.ListPinnedMessages(
 		t.Context(), "upload-pin-edited", "",
 	)
-	require.NoError(err, "ListPinnedMessages")
+	require.NoError(t, err, "ListPinnedMessages")
 	assert.Empty(t, pins,
 		"editing the pinned message drops the pin")
 }
 
 func TestUploadSession_ReuploadDoesNotMoveLegacyPinToIDEEnvelope(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 	const sessionID = "upload-pinned-envelope"
 	const mixedPrompt = "<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file> Explain this file."
 
-	require.NoError(te.db.UpsertSession(db.Session{
+	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{
 		ID: sessionID, Project: "myproj", Machine: "remote", Agent: "claude",
 	}), "seed legacy uploaded session")
-	require.NoError(te.db.ReplaceSessionMessages(sessionID, []db.Message{{
+	require.NoError(t, te.db.ReplaceSessionMessages(t.Context(), sessionID, []db.Message{{
 		SessionID: sessionID, Ordinal: 0, Role: "user",
 		Content: mixedPrompt, ContentLength: len(mixedPrompt),
 	}}), "seed legacy mixed prompt")
 	msgs, err := te.db.GetAllMessages(t.Context(), sessionID)
-	require.NoError(err, "GetAllMessages before re-upload")
-	require.Len(msgs, 1, "legacy messages")
-	_, err = te.db.PinMessage(sessionID, msgs[0].ID, nil)
-	require.NoError(err, "PinMessage")
+	require.NoError(t, err, "GetAllMessages before re-upload")
+	require.Len(t, msgs, 1, "legacy messages")
+	_, err = te.db.PinMessage(t.Context(), sessionID, msgs[0].ID, nil)
+	require.NoError(t, err, "PinMessage")
 
 	updated := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsEarly, mixedPrompt).
@@ -4673,29 +4616,26 @@ func TestUploadSession_ReuploadDoesNotMoveLegacyPinToIDEEnvelope(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	pins, err := te.db.ListPinnedMessages(t.Context(), sessionID, "")
-	require.NoError(err, "ListPinnedMessages")
-	assert.Empty(pins,
+	require.NoError(t, err, "ListPinnedMessages")
+	assert.Empty(t, pins,
 		"legacy pin must not move from the prompt to hidden IDE metadata")
 
 	msgs, err = te.db.GetAllMessages(t.Context(), sessionID)
-	require.NoError(err, "GetAllMessages after re-upload")
-	require.Len(msgs, 2, "split messages")
-	assert.True(msgs[0].IsSystem, "IDE envelope must remain hidden")
-	assert.Equal("Explain this file.", msgs[1].Content)
+	require.NoError(t, err, "GetAllMessages after re-upload")
+	require.Len(t, msgs, 2, "split messages")
+	assert.True(t, msgs[0].IsSystem, "IDE envelope must remain hidden")
+	assert.Equal(t, "Explain this file.", msgs[1].Content)
 }
 
 func TestUploadSession_ReuploadFollowsLegacyPinAcrossIDEEnvelopeSplit(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 	const sessionID = "upload-pinned-after-envelope"
 	const mixedPrompt = "<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file> Explain this file."
 
-	require.NoError(te.db.UpsertSession(db.Session{
+	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{
 		ID: sessionID, Project: "myproj", Machine: "remote", Agent: "claude",
 	}), "seed legacy uploaded session")
-	require.NoError(te.db.ReplaceSessionMessages(sessionID, []db.Message{
+	require.NoError(t, te.db.ReplaceSessionMessages(t.Context(), sessionID, []db.Message{
 		{
 			SessionID: sessionID, Ordinal: 0, Role: "user",
 			Content: mixedPrompt, ContentLength: len(mixedPrompt),
@@ -4706,10 +4646,10 @@ func TestUploadSession_ReuploadFollowsLegacyPinAcrossIDEEnvelopeSplit(t *testing
 		},
 	}), "seed legacy messages")
 	msgs, err := te.db.GetAllMessages(t.Context(), sessionID)
-	require.NoError(err, "GetAllMessages before re-upload")
-	require.Len(msgs, 2, "legacy messages")
-	_, err = te.db.PinMessage(sessionID, msgs[1].ID, nil)
-	require.NoError(err, "PinMessage")
+	require.NoError(t, err, "GetAllMessages before re-upload")
+	require.Len(t, msgs, 2, "legacy messages")
+	_, err = te.db.PinMessage(t.Context(), sessionID, msgs[1].ID, nil)
+	require.NoError(t, err, "PinMessage")
 
 	updated := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsEarly, mixedPrompt).
@@ -4724,17 +4664,17 @@ func TestUploadSession_ReuploadFollowsLegacyPinAcrossIDEEnvelopeSplit(t *testing
 	// pin follows "Legacy reply" to its shifted ordinal instead of
 	// re-attaching to the visible prompt at the saved ordinal.
 	pins, err := te.db.ListPinnedMessages(t.Context(), sessionID, "")
-	require.NoError(err, "ListPinnedMessages")
-	require.Len(pins, 1, "legacy pin must survive the envelope split")
-	assert.Equal(2, pins[0].Ordinal,
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1, "legacy pin must survive the envelope split")
+	assert.Equal(t, 2, pins[0].Ordinal,
 		"pin follows its message, not the saved ordinal")
 
 	msgs, err = te.db.GetAllMessages(t.Context(), sessionID)
-	require.NoError(err, "GetAllMessages after re-upload")
-	require.Len(msgs, 3, "split messages")
-	assert.True(msgs[0].IsSystem, "IDE envelope must remain hidden")
-	assert.Equal("Explain this file.", msgs[1].Content)
-	assert.Equal("Legacy reply", msgs[2].Content)
+	require.NoError(t, err, "GetAllMessages after re-upload")
+	require.Len(t, msgs, 3, "split messages")
+	assert.True(t, msgs[0].IsSystem, "IDE envelope must remain hidden")
+	assert.Equal(t, "Explain this file.", msgs[1].Content)
+	assert.Equal(t, "Legacy reply", msgs[2].Content)
 }
 
 func TestUploadSession_EmptyFile(t *testing.T) {
@@ -4746,7 +4686,7 @@ func TestUploadSession_EmptyFile(t *testing.T) {
 
 	resp := decode[uploadResponse](t, w)
 	if resp.Messages != 0 {
-		t.Errorf("messages = %v, want 0", resp.Messages)
+		assert.Failf(t, "test failed", "messages = %v, want 0", resp.Messages)
 	}
 }
 
@@ -4774,7 +4714,7 @@ func TestTriggerSync_NonStreaming(t *testing.T) {
 
 	resp := decode[syncResultResponse](t, rec)
 	if resp.TotalSessions != 1 {
-		t.Fatalf("expected 1 total_session, got %d", resp.TotalSessions)
+		require.FailNowf(t, "test failed", "expected 1 total_session, got %d", resp.TotalSessions)
 	}
 }
 
@@ -4782,13 +4722,28 @@ func TestTriggerSync_NonStreaming(t *testing.T) {
 // http.Flusher, enabling SSE streaming tests.
 type flushRecorder struct {
 	*httptest.ResponseRecorder
-	mu stdlibsync.Mutex
+	mu     stdlibsync.Mutex
+	writes chan struct{}
 }
 
 func (f *flushRecorder) Write(b []byte) (int, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.ResponseRecorder.Write(b)
+	n, err := f.ResponseRecorder.Write(b)
+	f.mu.Unlock()
+	select {
+	case f.writes <- struct{}{}:
+	default:
+	}
+	return n, err
+}
+
+func (f *flushRecorder) WaitForWrite(t *testing.T) {
+	t.Helper()
+	select {
+	case <-f.writes:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "timed out waiting for response write")
+	}
 }
 
 func (f *flushRecorder) Flush() {
@@ -4802,13 +4757,16 @@ func (f *flushRecorder) BodyString() string {
 }
 
 func newFlushRecorder() *flushRecorder {
-	return &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+	return &flushRecorder{
+		ResponseRecorder: httptest.NewRecorder(),
+		writes:           make(chan struct{}, 32),
+	}
 }
 
 // postSSE issues a POST to path through the wrapped handler and returns
 // the flushRecorder after the handler finishes writing the SSE stream.
 func (te *testEnv) postSSE(path string) *flushRecorder {
-	req := httptest.NewRequest(http.MethodPost, path, nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, nil)
 	w := newFlushRecorder()
 	te.handler.ServeHTTP(w, req)
 	return w
@@ -4853,7 +4811,7 @@ func TestWatchSession_Events(t *testing.T) {
 	content := b.String()
 	sessionPath := te.writeSessionFile(t, "watch-proj", "watch-sess.jsonl", b)
 
-	engine := sync.NewEngine(te.db, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), te.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {te.claudeDir},
 			parser.AgentCodex:  {filepath.Join(te.dataDir, "codex")},
@@ -4878,7 +4836,7 @@ func TestWatchSession_Events(t *testing.T) {
 		close(done)
 	}()
 
-	time.Sleep(2 * watchPoll)
+	w.WaitForWrite(t)
 
 	updated := content + testjsonl.NewSessionBuilder().
 		AddClaudeAssistant(tsZeroS5, "response").
@@ -4886,7 +4844,7 @@ func TestWatchSession_Events(t *testing.T) {
 	if err := os.WriteFile(
 		sessionPath, []byte(updated), 0o644,
 	); err != nil {
-		t.Fatalf("writing updated session file: %v", err)
+		require.FailNowf(t, "test failed", "writing updated session file: %v", err)
 	}
 
 	// Sync the file to update the DB — in production the
@@ -4905,13 +4863,22 @@ func TestWatchSession_FileDisappearAndResolve(t *testing.T) {
 	))
 
 	te := setup(t)
+	missing := make(chan struct{}, 1)
 
 	b := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "initial")
 	content := b.String()
 	sessionPath := te.writeSessionFile(t, "vanish-proj", "vanish-sess.jsonl", b)
+	t.Cleanup(sessionwatch.SetSourceMissingObserverForTest(func(sessionID string) {
+		if sessionID == "vanish-sess" {
+			if _, err := os.Stat(sessionPath); !errors.Is(err, os.ErrNotExist) {
+				return
+			}
+			missing <- struct{}{}
+		}
+	}))
 
-	engine := sync.NewEngine(te.db, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), te.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {te.claudeDir},
 			parser.AgentCodex:  {filepath.Join(te.dataDir, "codex")},
@@ -4936,17 +4903,20 @@ func TestWatchSession_FileDisappearAndResolve(t *testing.T) {
 		close(done)
 	}()
 
-	// Let the monitor start and record the initial mtime.
-	time.Sleep(2 * watchPoll)
+	// Wait until the monitor has opened the SSE stream before removing the file.
+	w.WaitForWrite(t)
 
 	// Delete the source file to simulate disappearance.
 	if err := os.Remove(sessionPath); err != nil {
-		t.Fatalf("removing session file: %v", err)
+		require.FailNowf(t, "test failed", "removing session file: %v", err)
 	}
 
-	// Wait for at least one poll tick to notice the missing
-	// file and clear the cached path.
-	time.Sleep(2 * watchPoll)
+	// Wait until the watcher records the missing source before recreating it.
+	select {
+	case <-missing:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "timed out waiting for source disappearance")
+	}
 
 	// Recreate the file with updated content at a NEW location
 	// so we verify that FindSourceFile re-scans and the
@@ -4985,10 +4955,10 @@ func TestTriggerSync_SSEEvents(t *testing.T) {
 		}
 	}
 	if !hasDone {
-		t.Error("expected done event")
+		assert.Fail(t, "expected done event")
 	}
 	if !hasProgress {
-		t.Error("expected progress event")
+		assert.Fail(t, "expected progress event")
 	}
 }
 
@@ -5003,29 +4973,26 @@ func TestResyncEndpoint(t *testing.T) {
 	// Initial sync — session gets processed normally.
 	syncStats := te.syncSSE(t)
 	if syncStats.Synced != 1 {
-		t.Fatalf("initial sync: synced = %d, want 1",
+		require.FailNowf(t, "test failed", "initial sync: synced = %d, want 1",
 			syncStats.Synced)
 	}
 
 	// Second normal sync — file is unchanged so it's skipped.
 	sync2Stats := te.syncSSE(t)
 	if sync2Stats.Synced != 0 {
-		t.Fatalf("second sync: synced = %d, want 0 (skipped)",
+		require.FailNowf(t, "test failed", "second sync: synced = %d, want 0 (skipped)",
 			sync2Stats.Synced)
 	}
 
 	// Resync — should re-process the same unchanged file.
 	resyncStats := te.resyncSSE(t)
 	if resyncStats.Synced != 1 {
-		t.Fatalf("resync: synced = %d, want 1 (reprocessed)",
+		require.FailNowf(t, "test failed", "resync: synced = %d, want 1 (reprocessed)",
 			resyncStats.Synced)
 	}
 }
 
 func TestResyncEndpointFallsBackToIncrementalWhenResyncAborts(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 
 	sessionPath := te.writeSessionFile(t, "resync-proj", "resync.jsonl",
@@ -5034,16 +5001,16 @@ func TestResyncEndpointFallsBackToIncrementalWhenResyncAborts(t *testing.T) {
 	)
 
 	syncStats := te.syncSSE(t)
-	require.Equal(1, syncStats.Synced, "initial sync")
+	require.Equal(t, 1, syncStats.Synced, "initial sync")
 
-	require.NoError(os.Remove(sessionPath), "remove session file")
+	require.NoError(t, os.Remove(sessionPath), "remove session file")
 	resyncStats := te.resyncSSE(t)
-	assert.False(resyncStats.Aborted,
+	assert.False(t, resyncStats.Aborted,
 		"route should return the incremental fallback result")
-	assert.Empty(resyncStats.Warnings,
+	assert.Empty(t, resyncStats.Warnings,
 		"aborted resync warnings should not be the final response")
-	assert.Equal(0, resyncStats.Synced)
-	assert.Equal(0, resyncStats.Failed)
+	assert.Equal(t, 0, resyncStats.Synced)
+	assert.Equal(t, 0, resyncStats.Failed)
 }
 
 // TestResyncPreservesDataThroughSwap verifies the full resync
@@ -5069,7 +5036,7 @@ func TestResyncPreservesDataThroughSwap(t *testing.T) {
 	// Initial sync.
 	syncStats := te.syncSSE(t)
 	if syncStats.Synced != 2 {
-		t.Fatalf(
+		require.FailNowf(t, "test failed",
 			"initial sync: synced = %d, want 2",
 			syncStats.Synced,
 		)
@@ -5082,7 +5049,7 @@ func TestResyncPreservesDataThroughSwap(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	before := decode[sessionListResponse](t, w)
 	if before.Total != 2 {
-		t.Fatalf(
+		require.FailNowf(t, "test failed",
 			"before resync: total = %d, want 2",
 			before.Total,
 		)
@@ -5091,7 +5058,7 @@ func TestResyncPreservesDataThroughSwap(t *testing.T) {
 	// Resync — rebuilds the database from scratch and swaps.
 	resyncStats := te.resyncSSE(t)
 	if resyncStats.Synced != 2 {
-		t.Fatalf(
+		require.FailNowf(t, "test failed",
 			"resync: synced = %d, want 2",
 			resyncStats.Synced,
 		)
@@ -5104,7 +5071,7 @@ func TestResyncPreservesDataThroughSwap(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	after := decode[sessionListResponse](t, w)
 	if after.Total != 2 {
-		t.Fatalf(
+		require.FailNowf(t, "test failed",
 			"after resync: total = %d, want 2",
 			after.Total,
 		)
@@ -5118,7 +5085,7 @@ func TestResyncPreservesDataThroughSwap(t *testing.T) {
 		assertStatus(t, msgW, http.StatusOK)
 		msgs := decode[messageListResponse](t, msgW)
 		if msgs.Count < 2 {
-			t.Errorf(
+			assert.Failf(t, "test failed",
 				"session %s: messages = %d, want >= 2",
 				s.ID, msgs.Count,
 			)
@@ -5132,7 +5099,7 @@ func TestResyncPreservesDataThroughSwap(t *testing.T) {
 	assertStatus(t, projW, http.StatusOK)
 	projects := decode[projectListResponse](t, projW)
 	if len(projects.Projects) != 2 {
-		t.Errorf(
+		assert.Failf(t, "test failed",
 			"projects = %d, want 2",
 			len(projects.Projects),
 		)
@@ -5200,7 +5167,7 @@ func TestResyncConcurrentReads(t *testing.T) {
 	// Trigger resync while readers are active.
 	resyncStats := te.resyncSSE(t)
 	if resyncStats.Synced != 1 {
-		t.Errorf(
+		assert.Failf(t, "test failed",
 			"resync: synced = %d, want 1",
 			resyncStats.Synced,
 		)
@@ -5218,7 +5185,7 @@ func TestResyncConcurrentReads(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	resp := decode[sessionListResponse](t, w)
 	if resp.Total != 1 {
-		t.Errorf("post-resync sessions = %d, want 1", resp.Total)
+		assert.Failf(t, "test failed", "post-resync sessions = %d, want 1", resp.Total)
 	}
 }
 
@@ -5233,12 +5200,12 @@ func parseSSEDoneStats(
 		if e.Event == "done" {
 			var stats syncResultResponse
 			if err := json.Unmarshal([]byte(e.Data), &stats); err != nil {
-				t.Fatalf("parsing done data: %v", err)
+				require.FailNowf(t, "test failed", "parsing done data: %v", err)
 			}
 			return stats
 		}
 	}
-	t.Fatal("no done event in SSE stream")
+	require.FailNow(t, "no done event in SSE stream")
 	return syncResultResponse{}
 }
 
@@ -5261,7 +5228,7 @@ func TestListSessions_Limits(t *testing.T) {
 			},
 		})
 	}
-	result, err := te.db.WriteSessionBatchAtomic(writes)
+	result, err := te.db.WriteSessionBatchAtomic(t.Context(), writes)
 	require.NoError(t, err)
 	require.Equal(t, totalSessions, result.WrittenSessions)
 
@@ -5288,7 +5255,7 @@ func TestListSessions_Limits(t *testing.T) {
 
 			resp := decode[sessionListResponse](t, w)
 			if len(resp.Sessions) != tt.wantCount {
-				t.Errorf("limit=%q: got %d sessions, want %d",
+				assert.Failf(t, "test failed", "limit=%q: got %d sessions, want %d",
 					tt.limitVal, len(resp.Sessions), tt.wantCount)
 			}
 		})
@@ -5323,7 +5290,7 @@ func TestGetMessages_Limits(t *testing.T) {
 
 			resp := decode[messageListResponse](t, w)
 			if len(resp.Messages) != tt.wantCount {
-				t.Errorf("limit=%q: got %d messages, want %d",
+				assert.Failf(t, "test failed", "limit=%q: got %d messages, want %d",
 					tt.limitVal, len(resp.Messages), tt.wantCount)
 			}
 		})
@@ -5371,13 +5338,13 @@ func TestGetVersion(t *testing.T) {
 
 	resp := decode[server.VersionInfo](t, w)
 	if resp.Version != "v1.2.3" {
-		t.Errorf("version = %q, want v1.2.3", resp.Version)
+		assert.Failf(t, "test failed", "version = %q, want v1.2.3", resp.Version)
 	}
 	if resp.Commit != "abc1234" {
-		t.Errorf("commit = %q, want abc1234", resp.Commit)
+		assert.Failf(t, "test failed", "commit = %q, want abc1234", resp.Commit)
 	}
 	if resp.BuildDate != "2025-01-15T00:00:00Z" {
-		t.Errorf(
+		assert.Failf(t, "test failed",
 			"build_date = %q, want 2025-01-15T00:00:00Z",
 			resp.BuildDate,
 		)
@@ -5395,7 +5362,7 @@ func TestGetVersion_Default(t *testing.T) {
 
 	resp := decode[server.VersionInfo](t, w)
 	if resp.Version != "" {
-		t.Errorf("version = %q, want empty", resp.Version)
+		assert.Failf(t, "test failed", "version = %q, want empty", resp.Version)
 	}
 	assert.Equal(t, server.APIVersion, resp.APIVersion)
 	assert.Equal(t, db.CurrentDataVersion(), resp.DataVersion)
@@ -5405,16 +5372,16 @@ func TestFindAvailablePortSkipsOccupied(t *testing.T) {
 	// Bind a port on 127.0.0.1 so FindAvailablePort must skip it.
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("listen: %v", err)
+		require.FailNowf(t, "test failed", "listen: %v", err)
 	}
 	defer ln.Close()
 
 	occupied := ln.Addr().(*net.TCPAddr).Port
 
-	got, err := server.FindAvailablePort("127.0.0.1", occupied)
+	got, err := server.FindAvailablePort(t.Context(), "127.0.0.1", occupied)
 	require.NoError(t, err)
 	if got == occupied {
-		t.Errorf(
+		assert.Failf(t, "test failed",
 			"FindAvailablePort returned occupied port %d", occupied,
 		)
 	}
@@ -5430,7 +5397,7 @@ func TestFindAvailablePortWildcardSkipsIPv4OccupiedPort(t *testing.T) {
 
 	occupied := ln.Addr().(*net.TCPAddr).Port
 
-	got, err := server.FindAvailablePort("0.0.0.0", occupied)
+	got, err := server.FindAvailablePort(t.Context(), "0.0.0.0", occupied)
 	require.NoError(t, err)
 	assert.NotEqual(t, occupied, got,
 		"wildcard port selection must skip an IPv4-occupied port")
@@ -5445,17 +5412,17 @@ func TestFindAvailablePortWildcardSkipsIPv6OccupiedPort(t *testing.T) {
 
 	occupied := ln.Addr().(*net.TCPAddr).Port
 
-	got, err := server.FindAvailablePort("0.0.0.0", occupied)
+	got, err := server.FindAvailablePort(t.Context(), "0.0.0.0", occupied)
 	require.NoError(t, err)
 	assert.NotEqual(t, occupied, got,
 		"wildcard port selection must skip an IPv6-occupied port")
 }
 
 func TestFindAvailablePortZeroReturnsAssignedPort(t *testing.T) {
-	got, err := server.FindAvailablePort("127.0.0.1", 0)
+	got, err := server.FindAvailablePort(t.Context(), "127.0.0.1", 0)
 	require.NoError(t, err)
 	if got == 0 {
-		t.Fatal("FindAvailablePort returned literal port 0")
+		require.FailNow(t, "FindAvailablePort returned literal port 0")
 	}
 }
 
@@ -5466,7 +5433,7 @@ func TestFindAvailablePortDoesNotReturnExhaustedCandidate(t *testing.T) {
 	}
 	defer ln.Close()
 
-	_, err = server.FindAvailablePort("127.0.0.1", 65535)
+	_, err = server.FindAvailablePort(t.Context(), "127.0.0.1", 65535)
 	require.Error(t, err,
 		"an exhausted search must report that no candidate is available")
 }
@@ -5520,10 +5487,10 @@ func TestEvents_ReturnsServiceUnavailableInPGMode(t *testing.T) {
 	te.handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("got status %d, want 503", w.Code)
+		require.FailNowf(t, "test failed", "got status %d, want 503", w.Code)
 	}
 	if got := w.Header().Get("Retry-After"); got != "300" {
-		t.Errorf("got Retry-After %q, want 300", got)
+		assert.Failf(t, "test failed", "got Retry-After %q, want 300", got)
 	}
 }
 
@@ -5585,7 +5552,7 @@ func TestEvents_AuthMissingTokenReturns401(t *testing.T) {
 	te.handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("got status %d, want 401", w.Code)
+		require.FailNowf(t, "test failed", "got status %d, want 401", w.Code)
 	}
 }
 
@@ -5598,7 +5565,7 @@ func TestEvents_AuthInvalidTokenReturns401(t *testing.T) {
 	te.handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("got status %d, want 401", w.Code)
+		require.FailNowf(t, "test failed", "got status %d, want 401", w.Code)
 	}
 }
 
@@ -5622,22 +5589,17 @@ func TestSessionWatch_AuthViaQueryTokenSucceeds(t *testing.T) {
 		close(done)
 	}()
 
-	// The handler opens an SSE stream and starts emitting
-	// heartbeats even for unknown sessions; a quick wait
-	// confirms we got past auth (anything non-401 counts).
-	time.Sleep(100 * time.Millisecond)
+	// The first response write proves the authenticated SSE handler started.
+	w.WaitForWrite(t)
 	cancel()
 	<-done
 
 	if w.Code == http.StatusUnauthorized {
-		t.Fatalf("query-token auth failed on /watch: status %d", w.Code)
+		require.FailNowf(t, "test failed", "query-token auth failed on /watch: status %d", w.Code)
 	}
 }
 
 func TestHandleToolCalls_Basic(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 	te.seedSession(t, "tc-1", "my-app", 2)
 	te.seedMessages(t, "tc-1", 2, func(i int, m *db.Message) {
@@ -5668,15 +5630,15 @@ func TestHandleToolCalls_Basic(t *testing.T) {
 		ToolCalls []service.ToolCall `json:"tool_calls"`
 		Count     int                `json:"count"`
 	}
-	require.NoError(json.UnmarshalRead(w.Body, &body))
-	require.Equal(2, body.Count)
-	require.Len(body.ToolCalls, 2)
-	assert.Equal("Read", body.ToolCalls[0].ToolName)
-	assert.Equal("toolu_1", body.ToolCalls[0].ToolUseID)
-	assert.JSONEq(`{"file_path":"/tmp/x"}`, body.ToolCalls[0].InputJSON)
-	assert.Equal("Bash", body.ToolCalls[1].ToolName)
-	assert.NotEmpty(body.ToolCalls[0].Timestamp)
-	assert.Equal(1, body.ToolCalls[0].Ordinal)
+	require.NoError(t, json.UnmarshalRead(w.Body, &body))
+	require.Equal(t, 2, body.Count)
+	require.Len(t, body.ToolCalls, 2)
+	assert.Equal(t, "Read", body.ToolCalls[0].ToolName)
+	assert.Equal(t, "toolu_1", body.ToolCalls[0].ToolUseID)
+	assert.Equal(t, `{"file_path":"/tmp/x"}`, body.ToolCalls[0].InputJSON)
+	assert.Equal(t, "Bash", body.ToolCalls[1].ToolName)
+	assert.NotEmpty(t, body.ToolCalls[0].Timestamp)
+	assert.Equal(t, 1, body.ToolCalls[0].Ordinal)
 }
 
 func TestHandleSyncSession_MissingFields(t *testing.T) {
@@ -5711,11 +5673,8 @@ func TestHandleSyncSession_InvalidJSON(t *testing.T) {
 }
 
 func TestSettingsAgentHomesPersistAndRoundTrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
-	require.NoError(os.WriteFile(filepath.Join(te.dataDir, "config.toml"),
+	require.NoError(t, os.WriteFile(filepath.Join(te.dataDir, "config.toml"),
 		[]byte("[agents.pi]\ndirs = [\"/sessions/pi\"]\n"), 0o600))
 	put := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
@@ -5734,7 +5693,7 @@ func TestSettingsAgentHomesPersistAndRoundTrip(t *testing.T) {
 		var got struct {
 			SessionProviders []sessionProvider `json:"session_providers"`
 		}
-		require.NoError(json.Unmarshal(w.Body.Bytes(), &got))
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 		byID := make(map[parser.AgentType]sessionProvider, len(got.SessionProviders))
 		for _, provider := range got.SessionProviders {
 			byID[provider.ID] = provider
@@ -5745,23 +5704,23 @@ func TestSettingsAgentHomesPersistAndRoundTrip(t *testing.T) {
 	w := put(`{"agent_homes":{"codex":["~/.codex-work","/srv/codex"],"pi":["~/.pi-work/agent","~/.pi-personal/agent"]}}`)
 	assertStatus(t, w, http.StatusOK)
 	providers := decode(w)
-	assert.True(providers[parser.AgentCodex].HomesSupported)
-	assert.Equal([]string{"~/.codex-work", "/srv/codex"},
+	assert.True(t, providers[parser.AgentCodex].HomesSupported)
+	assert.Equal(t, []string{"~/.codex-work", "/srv/codex"},
 		providers[parser.AgentCodex].Homes)
-	assert.True(providers[parser.AgentPi].HomesSupported)
-	assert.Equal([]string{"~/.pi-work/agent", "~/.pi-personal/agent"}, providers[parser.AgentPi].Homes)
-	assert.True(providers[parser.AgentClaude].HomesSupported)
-	assert.Equal([]string{}, providers[parser.AgentClaude].Homes)
-	assert.False(providers[parser.AgentGemini].HomesSupported)
+	assert.True(t, providers[parser.AgentPi].HomesSupported)
+	assert.Equal(t, []string{"~/.pi-work/agent", "~/.pi-personal/agent"}, providers[parser.AgentPi].Homes)
+	assert.True(t, providers[parser.AgentClaude].HomesSupported)
+	assert.Equal(t, []string{}, providers[parser.AgentClaude].Homes)
+	assert.False(t, providers[parser.AgentGemini].HomesSupported)
 
 	var persisted struct {
 		Agents map[string]config.AgentDirectoryConfig `toml:"agents"`
 	}
 	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
-	require.NoError(err)
-	assert.Equal([]string{"~/.codex-work", "/srv/codex"}, persisted.Agents["codex"].Homes)
-	assert.Equal([]string{"~/.pi-work/agent", "~/.pi-personal/agent"}, persisted.Agents["pi"].Homes)
-	assert.Equal([]string{"/sessions/pi"}, persisted.Agents["pi"].Dirs)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"~/.codex-work", "/srv/codex"}, persisted.Agents["codex"].Homes)
+	assert.Equal(t, []string{"~/.pi-work/agent", "~/.pi-personal/agent"}, persisted.Agents["pi"].Homes)
+	assert.Equal(t, []string{"/sessions/pi"}, persisted.Agents["pi"].Dirs)
 
 	w = put(`{"agent_homes":{"gemini":["/x"]}}`)
 	assertStatus(t, w, http.StatusBadRequest)
@@ -5769,30 +5728,27 @@ func TestSettingsAgentHomesPersistAndRoundTrip(t *testing.T) {
 
 	w = put(`{"agent_homes":{"codex":[],"pi":[]}}`)
 	assertStatus(t, w, http.StatusOK)
-	assert.Equal([]string{}, decode(w)[parser.AgentCodex].Homes)
+	assert.Equal(t, []string{}, decode(w)[parser.AgentCodex].Homes)
 	raw, err := os.ReadFile(filepath.Join(te.dataDir, "config.toml"))
-	require.NoError(err)
+	require.NoError(t, err)
 	persisted.Agents = nil
 	_, err = toml.Decode(string(raw), &persisted)
-	require.NoError(err)
-	assert.Empty(persisted.Agents["codex"].Homes)
-	assert.Empty(persisted.Agents["pi"].Homes)
-	assert.Equal([]string{"/sessions/pi"}, persisted.Agents["pi"].Dirs)
+	require.NoError(t, err)
+	assert.Empty(t, persisted.Agents["codex"].Homes)
+	assert.Empty(t, persisted.Agents["pi"].Homes)
+	assert.Equal(t, []string{"/sessions/pi"}, persisted.Agents["pi"].Dirs)
 }
 
 func TestMarkdownSessionExportPreservesOffloadedImages(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 	te.db.SetToolResultImages(config.ToolResultImagesOffload)
 	te.db.SetAssetsDir(t.TempDir())
 	te.seedSession(t, "image-export", "project", 1)
-	require.NoError(te.db.InsertMessages([]db.Message{{SessionID: "image-export", Role: "assistant", Content: "image result", ToolCalls: []db.ToolCall{{ToolUseID: "call", ToolName: "Read", Category: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`}}}}))
+	require.NoError(t, te.db.InsertMessages(t.Context(), []db.Message{{SessionID: "image-export", Role: "assistant", Content: "image result", ToolCalls: []db.ToolCall{{ToolUseID: "call", ToolName: "Read", Category: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`}}}}))
 	w := te.get(t, "/api/v1/sessions/image-export/md")
-	require.Equal(http.StatusOK, w.Code)
-	assert.Contains(w.Body.String(), "image_ref")
-	assert.Contains(w.Body.String(), "asset://")
-	assert.Contains(w.Body.String(), "agentsview_image")
-	assert.NotContains(w.Body.String(), "base64,AAEC")
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "image_ref")
+	assert.Contains(t, w.Body.String(), "asset://")
+	assert.Contains(t, w.Body.String(), "agentsview_image")
+	assert.NotContains(t, w.Body.String(), "base64,AAEC")
 }

@@ -52,8 +52,9 @@ func main() {
 	flag.BoolVar(&o.Keep, "keep-data", false, "Keep the synthetic archive and sources for inspection")
 	flag.Parse()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-	if err := execute(ctx, o); err != nil {
+	err := execute(ctx, o)
+	cancel()
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -87,7 +88,7 @@ func execute(ctx context.Context, o options) error {
 		defer os.RemoveAll(data)
 	}
 	if o.GenerateOnly {
-		sources, roots, err := corpus(data, o)
+		sources, roots, err := corpus(ctx, data, o)
 		if err != nil {
 			return err
 		}

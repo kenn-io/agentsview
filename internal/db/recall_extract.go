@@ -642,7 +642,7 @@ func (db *DB) UpsertExtractProgress(
 	if unitsTotal == 0 {
 		initialState = ExtractProgressDone
 	}
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return zero, fmt.Errorf(
 			"begin extract progress upsert for session %s: %w",
@@ -1384,7 +1384,7 @@ func (db *DB) InsertExtractedRecallEntries(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin extracted entries insert: %w", err)
 	}
@@ -1419,7 +1419,7 @@ func insertExtractedRecallEntriesTx(
 				"checking extracted entry %s: %w", entry.ID, err,
 			)
 		}
-		if err := insertRecallEntryTx(tx, entry); err != nil {
+		if err := insertRecallEntryTx(ctx, tx, entry); err != nil {
 			return 0, err
 		}
 		inserted++
@@ -1472,7 +1472,7 @@ func (db *DB) CommitExtractedUnit(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin extracted unit commit: %w", err)
 	}
@@ -1671,10 +1671,8 @@ func bindExtractedEvidenceTx(
 				bound[key] = metadata
 			}
 			entry.Evidence[j].ContentDigest = metadata.ContentDigest
-			entry.Evidence[j].MessageStartSourceUUID =
-				metadata.MessageStartSourceUUID
-			entry.Evidence[j].MessageEndSourceUUID =
-				metadata.MessageEndSourceUUID
+			entry.Evidence[j].MessageStartSourceUUID = metadata.MessageStartSourceUUID
+			entry.Evidence[j].MessageEndSourceUUID = metadata.MessageEndSourceUUID
 		}
 		entries[i] = entry
 	}
@@ -1722,7 +1720,7 @@ func (db *DB) ReconcileIneligibleExtractSessions(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return 0, 0, fmt.Errorf("begin extract reconcile: %w", err)
 	}
@@ -1786,7 +1784,7 @@ func (db *DB) DiscardExtractedSessionOutput(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin extract discard: %w", err)
 	}
@@ -1897,6 +1895,7 @@ func rebindExtractedSessionEvidenceTx(
 		return 0, fmt.Errorf(
 			"reading evidence for session %s: %w", sessionID, err)
 	}
+	defer rows.Close()
 	type evidenceRow struct {
 		id         int64
 		entryID    string
@@ -2028,7 +2027,7 @@ func (db *DB) RefreshExtractedSessionCoverage(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return zero, fmt.Errorf("begin coverage refresh: %w", err)
 	}

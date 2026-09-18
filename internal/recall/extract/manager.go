@@ -290,8 +290,8 @@ func (m *Manager) runPassLocked(
 			// pass) own it. Aborting would drop the pass's remaining
 			// candidates. An explicit run keeps the error — the caller
 			// named the session and must hear why it was refused.
-			var ineligible *ineligibleSessionError
-			if opts.SessionID == "" && errors.As(err, &ineligible) {
+			_, hasIneligible := errors.AsType[*ineligibleSessionError](err)
+			if opts.SessionID == "" && hasIneligible {
 				continue
 			}
 			return result, err
@@ -567,7 +567,8 @@ func (m *Manager) extractSession(
 	}
 	if session == nil {
 		return outcome, &ineligibleSessionError{
-			err: fmt.Errorf("session %s not found", sessionID)}
+			err: fmt.Errorf("session %s not found", sessionID),
+		}
 	}
 	if err := extractableSession(sessionID, session); err != nil {
 		return outcome, &ineligibleSessionError{err: err}
@@ -663,7 +664,7 @@ func (m *Manager) extractSession(
 		// eligible for activation. A row already carrying this digest
 		// needs no upsert at all; a missing or digest-changed row is
 		// created or reset to pending, which a crash leaves retryable.
-		cursor := 0
+		var cursor int
 		if found && previous.ContentDigest == digest {
 			cursor = previous.UnitCursor
 		} else {
@@ -937,7 +938,7 @@ func (m *Manager) recheckExtraction(
 		return false, false, err
 	}
 	if recheck == nil || extractableSession(sessionID, recheck) != nil {
-		return false, false, nil
+		return false, false, nil //nolint:nilerr // An ineligible session is a normal extraction outcome; read errors propagate above.
 	}
 	findings, err := m.cfg.DB.SessionSecretFindings(ctx, sessionID)
 	if err != nil {

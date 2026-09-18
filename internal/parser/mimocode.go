@@ -1,8 +1,9 @@
 package parser
 
-import "context"
-
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 // MiMoCode uses OpenCode's storage format, but stores sessions under
 // storage/session_diff and is exposed as a distinct agent with the

@@ -1,9 +1,8 @@
 package remotesync
 
-import "context"
-
 import (
 	"archive/tar"
+	"context"
 	"fmt"
 	"io"
 	"io/fs"
@@ -34,7 +33,7 @@ func WriteArchive(ctx context.Context, w io.Writer, targets TargetSet) error {
 				return nil
 			}
 			writtenSnapshots[stateDB] = struct{}{}
-			return writeSQLiteStateDBSnapshot(tw, stateDB)
+			return writeSQLiteStateDBSnapshot(ctx, tw, stateDB)
 		}
 		if optional {
 			return writeOptionalArchiveFile(tw, path)
@@ -85,8 +84,8 @@ func WriteArchive(ctx context.Context, w io.Writer, targets TargetSet) error {
 	return nil
 }
 
-func writeSQLiteStateDBSnapshot(tw *tar.Writer, stateDB string) error {
-	_, modTime, exists := sqliteSnapshotIdentity(stateDB)
+func writeSQLiteStateDBSnapshot(ctx context.Context, tw *tar.Writer, stateDB string) error {
+	_, modTime, exists := sqliteSnapshotIdentity(ctx, stateDB)
 	if !exists {
 		return nil
 	}
@@ -103,7 +102,7 @@ func writeSQLiteStateDBSnapshot(tw *tar.Writer, stateDB string) error {
 		// had failed first, so the next manifest evicts the mirror's
 		// stale copy. A still-usable source means the failure was local
 		// (temp dir, destination write) and must propagate.
-		if _, _, stillUsable := sqliteSnapshotIdentity(stateDB); !stillUsable {
+		if _, _, stillUsable := sqliteSnapshotIdentity(ctx, stateDB); !stillUsable {
 			return nil
 		}
 		return fmt.Errorf("snapshot sqlite database %q: %w", stateDB, err)
@@ -372,7 +371,7 @@ func writeArchiveHeader(
 // validated relative component, so a client-supplied string can never
 // escape the resolved targets, even if a future caller forgets to
 // validate.
-func WriteArchiveFiles(w io.Writer, allowed TargetSet, files []string) error {
+func WriteArchiveFiles(ctx context.Context, w io.Writer, allowed TargetSet, files []string) error {
 	tw := tar.NewWriter(w)
 	forbidden := newForbiddenRootMatcher(allowed.ForbiddenRoots)
 	allowedRoots := allowed.DeltaAllowedRoots()
@@ -388,7 +387,7 @@ func WriteArchiveFiles(w io.Writer, allowed TargetSet, files []string) error {
 			if _, allowed := snapshotDBs[stateDB]; allowed {
 				if _, written := writtenSnapshots[stateDB]; !written {
 					writtenSnapshots[stateDB] = struct{}{}
-					if err := writeSQLiteStateDBSnapshot(tw, stateDB); err != nil {
+					if err := writeSQLiteStateDBSnapshot(ctx, tw, stateDB); err != nil {
 						return err
 					}
 				}

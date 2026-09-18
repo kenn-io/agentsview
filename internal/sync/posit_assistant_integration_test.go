@@ -24,9 +24,6 @@ func writeSyncPositAssistantFile(t *testing.T, path, content string) {
 // provider fingerprint — both its mtime (the incremental cutoff signal) and
 // its content hash (the skip gate).
 func TestSyncPositAssistantSidecarAppendResyncsWithoutWatchEvents(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	convID := "11111111-1111-4111-8111-111111111111"
 	convDir := filepath.Join(root, "ws1", convID)
@@ -50,7 +47,7 @@ func TestSyncPositAssistantSidecarAppendResyncsWithoutWatchEvents(t *testing.T) 
 			`{"id":1,"message":{"role":"assistant","content":[{"type":"text","text":"Looking."}],"providerOptions":{"providerMetadata":{"positai":{"timestamp":1735689601000,"modelId":"claude-sonnet-4-6","providerId":"anthropic","usage":{"inputTokens":10,"outputTokens":5,"cacheReadTokens":0,"cacheWriteTokens":100}}}}}}`+"\n")
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentPositAssistant: {root},
 		},
@@ -61,8 +58,8 @@ func TestSyncPositAssistantSidecarAppendResyncsWithoutWatchEvents(t *testing.T) 
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
 	sessionID := "posit-assistant:" + convID
 	usage, err := database.GetUsageEvents(t.Context(), sessionID)
-	require.NoError(err)
-	require.Empty(usage, "no sidecar yet, no usage events")
+	require.NoError(t, err)
+	require.Empty(t, usage, "no sidecar yet, no usage events")
 
 	// Sidecar-only change: no other file is touched, so the session resyncs
 	// only if the sidecar participates in the provider fingerprint.
@@ -72,10 +69,10 @@ func TestSyncPositAssistantSidecarAppendResyncsWithoutWatchEvents(t *testing.T) 
 
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
 	usage, err = database.GetUsageEvents(t.Context(), sessionID)
-	require.NoError(err)
-	require.Len(usage, 1,
+	require.NoError(t, err)
+	require.Len(t, usage, 1,
 		"a sidecar-only append must resync the session without a watch event")
-	assert.Equal("posit-assistant-keepalive", usage[0].Source)
-	assert.Equal(24639, usage[0].CacheReadInputTokens)
-	assert.Equal(2, usage[0].InputTokens)
+	assert.Equal(t, "posit-assistant-keepalive", usage[0].Source)
+	assert.Equal(t, 24639, usage[0].CacheReadInputTokens)
+	assert.Equal(t, 2, usage[0].InputTokens)
 }

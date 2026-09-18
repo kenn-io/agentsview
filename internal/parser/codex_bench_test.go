@@ -209,6 +209,7 @@ func writeCodexBenchmarkTranscript(
 
 func appendCodexBenchmarkTail(b *testing.B, path, tail string) {
 	b.Helper()
+
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(b, err)
 	_, err = f.WriteString(tail)
@@ -225,6 +226,7 @@ func requireCodexBenchmarkOutcome(
 	tailBytes int64,
 ) {
 	b.Helper()
+
 	require.NoError(b, err)
 	require.Equal(b, IncrementalApplied, status)
 	require.Len(b, outcome.Messages, 2)

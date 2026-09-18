@@ -382,8 +382,8 @@ func isPermanentEncodeError(err error) bool {
 	if errors.Is(err, kitvec.ErrEmptyEmbeddingInput) {
 		return true
 	}
-	var statusErr *HTTPStatusError
-	return errors.As(err, &statusErr) && statusErr != nil && statusErr.Permanent()
+	statusErr, hasStatusErr := errors.AsType[*HTTPStatusError](err)
+	return hasStatusErr && statusErr != nil && statusErr.Permanent()
 }
 
 // noWatermarkYet reports whether Refresh has never advanced the stored

@@ -16,15 +16,12 @@ import (
 )
 
 func TestSyncAllAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionsRoot := filepath.Join(root, "sessions")
-	require.NoError(os.MkdirAll(sessionsRoot, 0o755))
+	require.NoError(t, os.MkdirAll(sessionsRoot, 0o755))
 	writeHermesSyncStateDB(t, root)
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {sessionsRoot},
 		},
@@ -36,24 +33,22 @@ func TestSyncAllAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {
 
 	stats := engine.SyncAll(t.Context(), nil)
 
-	require.Equal(1, stats.Synced)
+	require.Equal(t, 1, stats.Synced)
 	sess, err := database.GetSessionFull(t.Context(), "hermes:child")
-	require.NoError(err)
-	require.NotNil(sess)
-	assert.Equal("archivebox", sess.Machine)
-	require.NotNil(sess.FilePath)
-	assert.Equal(filepath.Join(root, "state.db"), *sess.FilePath)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "archivebox", sess.Machine)
+	require.NotNil(t, sess.FilePath)
+	assert.Equal(t, filepath.Join(root, "state.db"), *sess.FilePath)
 }
 
 func TestSyncPathsAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionsRoot := filepath.Join(root, "sessions")
-	require.NoError(os.MkdirAll(sessionsRoot, 0o755))
+	require.NoError(t, os.MkdirAll(sessionsRoot, 0o755))
 	stateDB := writeHermesSyncStateDB(t, root)
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {sessionsRoot},
 		},
@@ -66,22 +61,20 @@ func TestSyncPathsAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {
 	engine.SyncPathsContext(t.Context(), []string{stateDB})
 
 	sess, err := database.GetSessionFull(t.Context(), "hermes:child")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 	assert.Equal(t, "archivebox", sess.Machine)
 }
 
 func TestSyncSingleSessionAttributesHermesSiblingStateDBFromSessionsRoot(
 	t *testing.T,
 ) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionsRoot := filepath.Join(root, "sessions")
-	require.NoError(os.MkdirAll(sessionsRoot, 0o755))
+	require.NoError(t, os.MkdirAll(sessionsRoot, 0o755))
 	writeHermesSyncStateDB(t, root)
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {sessionsRoot},
 		},
@@ -91,14 +84,14 @@ func TestSyncSingleSessionAttributesHermesSiblingStateDBFromSessionsRoot(
 		Machine: "localbox",
 	})
 
-	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
-	require.NoError(engine.SyncSingleSessionContext(
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, engine.SyncSingleSessionContext(
 		t.Context(), "hermes:child",
 	))
 
 	sess, err := database.GetSessionFull(t.Context(), "hermes:child")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 	assert.Equal(t, "archivebox", sess.Machine)
 }
 
@@ -110,7 +103,7 @@ func TestSyncPathsHermesStateDBEventRefreshesArchive(t *testing.T) {
 	root := t.TempDir()
 	stateDB := writeHermesSyncStateDB(t, root)
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {filepath.Join(root, "sessions")},
 		},
@@ -135,7 +128,7 @@ func TestSyncPathsHermesArchiveTranscriptEventRefreshesArchive(t *testing.T) {
 	root := t.TempDir()
 	stateDB := writeHermesSyncStateDB(t, root)
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {filepath.Join(root, "sessions")},
 		},

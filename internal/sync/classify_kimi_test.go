@@ -97,18 +97,16 @@ func TestEngineClassifyKimiPaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			files := requireClassifyPaths(t, eng, []string{tt.path})
 			if !tt.want {
-				assert.Empty(files)
+				assert.Empty(t, files)
 				return
 			}
 			require.Len(t, files, 1)
 			got := files[0]
-			assert.Equal(parser.AgentKimi, got.Agent)
-			assert.Equal(tt.project, got.Project)
-			assert.Equal(tt.path, got.Path)
+			assert.Equal(t, parser.AgentKimi, got.Agent)
+			assert.Equal(t, tt.project, got.Project)
+			assert.Equal(t, tt.path, got.Path)
 		})
 	}
 }

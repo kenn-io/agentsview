@@ -266,12 +266,12 @@ const contentProjectMaxWidth = 32
 // truncation (non-TTY output keeps full values). The display-cell
 // counterpart of truncName for the search table, where full-width runes
 // must not break column alignment.
-func truncCell(s string, max int) string {
+func truncCell(s string, maximum int) string {
 	s = collapseWhitespace(s)
-	if max <= 0 || runewidth.StringWidth(s) <= max {
+	if maximum <= 0 || runewidth.StringWidth(s) <= maximum {
 		return s
 	}
-	return runewidth.Truncate(s, max, "…")
+	return runewidth.Truncate(s, maximum, "…")
 }
 
 // contentSnippetMinWidth keeps the snippet readable on narrow terminals;

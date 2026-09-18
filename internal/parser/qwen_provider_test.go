@@ -11,9 +11,6 @@ import (
 )
 
 func TestQwenProviderSourceMethods(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "-Users-alice-code-sample-project")
 	sourcePath := filepath.Join(projectDir, "chats", "session-123.jsonl")
@@ -28,55 +25,52 @@ func TestQwenProviderSourceMethods(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 2)
-	assert.Equal([]string{nonIDPath, sourcePath}, sourceDisplayPaths(discovered))
-	assert.Equal([]string{"sample_project", "sample_project"}, sourceProjects(discovered))
+	require.NoError(t, err)
+	require.Len(t, discovered, 2)
+	assert.Equal(t, []string{nonIDPath, sourcePath}, sourceDisplayPaths(discovered))
+	assert.Equal(t, []string{"sample_project", "sample_project"}, sourceProjects(discovered))
 
 	plan, err := provider.WatchPlan(t.Context())
-	require.NoError(err)
-	require.Len(plan.Roots, 1)
-	assert.Equal(root, plan.Roots[0].Path)
-	assert.True(plan.Roots[0].Recursive)
-	assert.Equal([]string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Equal(t, root, plan.Roots[0].Path)
+	assert.True(t, plan.Roots[0].Recursive)
+	assert.Equal(t, []string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~qwen:session-123",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(sourcePath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, found.DisplayPath)
 
 	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "2025.01.01",
 	})
-	require.NoError(err)
-	assert.False(ok)
+	require.NoError(t, err)
+	assert.False(t, ok)
 
 	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: nonIDPath,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(nonIDPath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, nonIDPath, found.DisplayPath)
 
-	require.NoError(os.Remove(sourcePath))
+	require.NoError(t, os.Remove(sourcePath))
 	changed, err := provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(sourcePath, changed[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 }
 
 func TestQwenProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	targetDir := t.TempDir()
 	sourcePath := filepath.Join(root, "-Users-alice-code-sample-project", "chats", "session-123.jsonl")
@@ -90,25 +84,22 @@ func TestQwenProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(sourcePath, discovered[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~qwen:session-123",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(sourcePath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, found.DisplayPath)
 }
 
 func TestQwenProviderParse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "-Users-alice-code-sample-project", "chats", "session-123.jsonl")
 	writeSourceFile(t, sourcePath, qwenProviderFixture("session-123"))
@@ -117,51 +108,49 @@ func TestQwenProviderParse(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: SourceFingerprint{Key: sourcePath, Hash: "abc123"},
 	})
-	require.NoError(err)
-	require.True(outcome.ResultSetComplete)
-	require.Len(outcome.Results, 1)
-	assert.Equal(DataVersionCurrent, outcome.Results[0].DataVersion)
-	assert.Equal("qwen:session-123", outcome.Results[0].Result.Session.ID)
-	assert.Equal("sample_project", outcome.Results[0].Result.Session.Project)
-	assert.Equal("devbox", outcome.Results[0].Result.Session.Machine)
-	assert.Equal("abc123", outcome.Results[0].Result.Session.File.Hash)
-	assert.Len(outcome.Results[0].Result.Messages, 2)
+	require.NoError(t, err)
+	require.True(t, outcome.ResultSetComplete)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, DataVersionCurrent, outcome.Results[0].DataVersion)
+	assert.Equal(t, "qwen:session-123", outcome.Results[0].Result.Session.ID)
+	assert.Equal(t, "sample_project", outcome.Results[0].Result.Session.Project)
+	assert.Equal(t, "devbox", outcome.Results[0].Result.Session.Machine)
+	assert.Equal(t, "abc123", outcome.Results[0].Result.Session.File.Hash)
+	assert.Len(t, outcome.Results[0].Result.Messages, 2)
 }
 
 func TestQwenProviderFingerprintIncludesContentHash(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "-Users-alice-code-sample-project", "chats", "session-123.jsonl")
 	writeSourceFile(t, sourcePath, qwenProviderFixture("session-123"))
 
 	provider, ok := NewProvider(AgentQwen, ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 
 	fp, err := provider.Fingerprint(t.Context(), sources[0])
-	require.NoError(err)
+	require.NoError(t, err)
 	// The legacy processQwen path persisted a full-file content hash; the
 	// migrated provider must too, or a resync clears the stored file_hash.
-	require.NotEmpty(fp.Hash)
+	require.NotEmpty(t, fp.Hash)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fp,
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, fp.Hash, outcome.Results[0].Result.Session.File.Hash)
 }
 
@@ -172,9 +161,6 @@ func TestQwenProviderFingerprintIncludesContentHash(t *testing.T) {
 // recover the project as ProjectHint, so a reparse keeps the canonical
 // qwen:<stem> ID instead of failing with "provider source not found".
 func TestQwenProviderFindSourceResolvesStoredPathOutsideRoots(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	storedRoot := t.TempDir()
 	sourcePath := filepath.Join(
 		storedRoot, "-Users-alice-code-sample-project", "chats", "session-123.jsonl",
@@ -187,31 +173,31 @@ func TestQwenProviderFindSourceResolvesStoredPathOutsideRoots(t *testing.T) {
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: sourcePath,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(sourcePath, found.DisplayPath)
-	assert.Equal("sample_project", found.ProjectHint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, found.DisplayPath)
+	assert.Equal(t, "sample_project", found.ProjectHint)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  found,
 		Machine: "devbox",
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
-	assert.Equal("qwen:session-123", outcome.Results[0].Result.Session.ID)
-	assert.Equal("sample_project", outcome.Results[0].Result.Session.Project)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "qwen:session-123", outcome.Results[0].Result.Session.ID)
+	assert.Equal(t, "sample_project", outcome.Results[0].Result.Session.Project)
 
 	// A stored path that is not a valid Qwen source shape stays unresolved.
 	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: filepath.Join(storedRoot, "loose.jsonl"),
 	})
-	require.NoError(err)
-	assert.False(ok)
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
 func qwenProviderFixture(sessionID string) string {

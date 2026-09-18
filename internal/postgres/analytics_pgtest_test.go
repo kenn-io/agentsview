@@ -11,8 +11,6 @@ import (
 )
 
 func TestBuildAnalyticsWhere_ModelFilter(t *testing.T) {
-	assert := assert.New(t)
-
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhereWithDate(
 		db.AnalyticsFilter{
@@ -26,18 +24,16 @@ func TestBuildAnalyticsWhere_ModelFilter(t *testing.T) {
 		"s.id",
 	)
 
-	assert.Contains(where,
+	assert.Contains(t, where,
 		"EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id",
 	)
-	assert.Contains(where, "m.model IN (")
-	assert.Len(pb.args, 4, "date range plus two model args")
-	assert.Equal("gpt-4o", pb.args[2])
-	assert.Equal("claude-3-5-sonnet", pb.args[3])
+	assert.Contains(t, where, "m.model IN (")
+	assert.Len(t, pb.args, 4, "date range plus two model args")
+	assert.Equal(t, "gpt-4o", pb.args[2])
+	assert.Equal(t, "claude-3-5-sonnet", pb.args[3])
 }
 
 func TestBuildAnalyticsWhere_ModelFilterTrimsEmptyValues(t *testing.T) {
-	assert := assert.New(t)
-
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhereWithDate(
 		db.AnalyticsFilter{
@@ -51,18 +47,16 @@ func TestBuildAnalyticsWhere_ModelFilterTrimsEmptyValues(t *testing.T) {
 		"id",
 	)
 
-	assert.Contains(where, "m.model = ")
-	assert.NotContains(where, "m.model IN (")
-	assert.Equal("gpt-4o", pb.args[2])
-	assert.Equal(1,
+	assert.Contains(t, where, "m.model = ")
+	assert.NotContains(t, where, "m.model IN (")
+	assert.Equal(t, "gpt-4o", pb.args[2])
+	assert.Equal(t, 1,
 		strings.Count(where, "m.model = "),
 		"expected a single model predicate",
 	)
 }
 
 func TestRankTopSessions_DurationSort(t *testing.T) {
-	assert := assert.New(t)
-
 	sessions := []db.TopSession{
 		{ID: "a", ActiveDurationMin: 10.0},
 		{ID: "b", ActiveDurationMin: 30.0},
@@ -70,14 +64,12 @@ func TestRankTopSessions_DurationSort(t *testing.T) {
 	}
 	got := rankTopSessions(sessions, true)
 	require.Len(t, got, 3)
-	assert.Equal("b", got[0].ID)
-	assert.Equal("c", got[1].ID)
-	assert.Equal("a", got[2].ID)
+	assert.Equal(t, "b", got[0].ID)
+	assert.Equal(t, "c", got[1].ID)
+	assert.Equal(t, "a", got[2].ID)
 }
 
 func TestRankTopSessions_DurationTieBreaker(t *testing.T) {
-	assert := assert.New(t)
-
 	sessions := []db.TopSession{
 		{ID: "z", ActiveDurationMin: 5.0},
 		{ID: "a", ActiveDurationMin: 5.0},
@@ -85,23 +77,21 @@ func TestRankTopSessions_DurationTieBreaker(t *testing.T) {
 	}
 	got := rankTopSessions(sessions, true)
 	require.Len(t, got, 3)
-	assert.Equal("a", got[0].ID)
-	assert.Equal("m", got[1].ID)
-	assert.Equal("z", got[2].ID)
+	assert.Equal(t, "a", got[0].ID)
+	assert.Equal(t, "m", got[1].ID)
+	assert.Equal(t, "z", got[2].ID)
 }
 
 func TestRankTopSessions_NearTiePrecision(t *testing.T) {
-	assert := assert.New(t)
-
 	sessions := []db.TopSession{
 		{ID: "a", ActiveDurationMin: 10.04},
 		{ID: "b", ActiveDurationMin: 10.06},
 	}
 	got := rankTopSessions(sessions, true)
 	require.Len(t, got, 2)
-	assert.Equal("b", got[0].ID, "10.06 > 10.04")
-	assert.Equal(10.1, got[0].ActiveDurationMin)
-	assert.Equal(10.0, got[1].ActiveDurationMin)
+	assert.Equal(t, "b", got[0].ID, "10.06 > 10.04")
+	assert.InDelta(t, 10.1, got[0].ActiveDurationMin, 1e-9)
+	assert.InDelta(t, 10.0, got[1].ActiveDurationMin, 1e-9)
 }
 
 func TestRankTopSessions_TruncatesTo10(t *testing.T) {
@@ -114,26 +104,22 @@ func TestRankTopSessions_TruncatesTo10(t *testing.T) {
 	}
 	got := rankTopSessions(sessions, true)
 	require.Len(t, got, 10)
-	assert.Equal(t, 14.0, got[0].ActiveDurationMin)
+	assert.InDelta(t, 14.0, got[0].ActiveDurationMin, 1e-9)
 }
 
 func TestRankTopSessions_UsesActiveDurationForSort(t *testing.T) {
-	assert := assert.New(t)
-
 	sessions := []db.TopSession{
 		{ID: "wall", DurationMin: 120.0, ActiveDurationMin: 1.0},
 		{ID: "active", DurationMin: 10.0, ActiveDurationMin: 15.0},
 	}
 	got := rankTopSessions(sessions, true)
 	require.Len(t, got, 2)
-	assert.Equal("active", got[0].ID)
-	assert.Equal(15.0, got[0].ActiveDurationMin)
-	assert.Equal(120.0, got[1].DurationMin)
+	assert.Equal(t, "active", got[0].ID)
+	assert.InDelta(t, 15.0, got[0].ActiveDurationMin, 1e-9)
+	assert.InDelta(t, 120.0, got[1].DurationMin, 1e-9)
 }
 
 func TestRankTopSessions_NoSortForMessages(t *testing.T) {
-	assert := assert.New(t)
-
 	sessions := []db.TopSession{
 		{ID: "c", MessageCount: 10},
 		{ID: "a", MessageCount: 30},
@@ -141,9 +127,9 @@ func TestRankTopSessions_NoSortForMessages(t *testing.T) {
 	}
 	got := rankTopSessions(sessions, false)
 	require.Len(t, got, 3)
-	assert.Equal("c", got[0].ID)
-	assert.Equal("a", got[1].ID)
-	assert.Equal("b", got[2].ID)
+	assert.Equal(t, "c", got[0].ID)
+	assert.Equal(t, "a", got[1].ID)
+	assert.Equal(t, "b", got[2].ID)
 }
 
 func TestRankTopSessions_NilInput(t *testing.T) {
@@ -159,6 +145,6 @@ func TestRankTopSessions_RoundsForDisplay(t *testing.T) {
 	}
 	got := rankTopSessions(sessions, true)
 	require.Len(t, got, 2)
-	assert.Equal(t, 12.4, got[0].ActiveDurationMin)
-	assert.Equal(t, 12.3, got[1].ActiveDurationMin)
+	assert.InDelta(t, 12.4, got[0].ActiveDurationMin, 1e-9)
+	assert.InDelta(t, 12.3, got[1].ActiveDurationMin, 1e-9)
 }

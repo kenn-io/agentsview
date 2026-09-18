@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -81,7 +83,7 @@ func writeBenchClaudeArchive(
 	b.Helper()
 	proj := filepath.Join(dir, "bench-project")
 	if err := os.MkdirAll(proj, 0o755); err != nil {
-		b.Fatalf("MkdirAll: %v", err)
+		require.FailNowf(b, "test failed", "MkdirAll: %v", err)
 	}
 	for s := range sessions {
 		builder := testjsonl.NewSessionBuilder()
@@ -102,7 +104,7 @@ func writeBenchClaudeArchive(
 		if err := os.WriteFile(
 			path, []byte(builder.String()), 0o644,
 		); err != nil {
-			b.Fatalf("WriteFile %s: %v", path, err)
+			require.FailNowf(b, "test failed", "WriteFile %s: %v", path, err)
 		}
 	}
 }
@@ -119,7 +121,7 @@ func writeBenchClaudeUsageArchive(
 	b.Helper()
 	proj := filepath.Join(dir, "bench-project")
 	if err := os.MkdirAll(proj, 0o755); err != nil {
-		b.Fatalf("MkdirAll: %v", err)
+		require.FailNowf(b, "test failed", "MkdirAll: %v", err)
 	}
 	for s := range sessions {
 		builder := testjsonl.NewSessionBuilder()
@@ -146,7 +148,7 @@ func writeBenchClaudeUsageArchive(
 		if err := os.WriteFile(
 			path, []byte(builder.String()), 0o644,
 		); err != nil {
-			b.Fatalf("WriteFile %s: %v", path, err)
+			require.FailNowf(b, "test failed", "WriteFile %s: %v", path, err)
 		}
 	}
 }
@@ -156,11 +158,11 @@ func writeBenchClaudeUsageArchive(
 // pending debounced signal recompute drains first.
 func openBenchEngine(b *testing.B, dir string) (*Engine, *db.DB) {
 	b.Helper()
-	database, err := db.Open(filepath.Join(b.TempDir(), "bench.db"))
+	database, err := db.Open(b.Context(), filepath.Join(b.TempDir(), "bench.db"))
 	if err != nil {
-		b.Fatalf("open bench db: %v", err)
+		require.FailNowf(b, "test failed", "open bench db: %v", err)
 	}
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(b.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {dir},
 		},
@@ -169,7 +171,7 @@ func openBenchEngine(b *testing.B, dir string) (*Engine, *db.DB) {
 	b.Cleanup(func() {
 		engine.Close()
 		if err := database.Close(); err != nil {
-			b.Errorf("close bench db: %v", err)
+			assert.Failf(b, "test failed", "close bench db: %v", err)
 		}
 	})
 	return engine, database
@@ -195,7 +197,7 @@ func BenchmarkSyncAllWarmNoop(b *testing.B) {
 
 	first := engine.SyncAll(ctx, nil)
 	if first.Synced != sessions {
-		b.Fatalf(
+		require.FailNowf(b, "test failed",
 			"initial sync stored %d of %d sessions (failed=%d)",
 			first.Synced, sessions, first.Failed,
 		)
@@ -206,12 +208,12 @@ func BenchmarkSyncAllWarmNoop(b *testing.B) {
 	for range b.N {
 		stats := engine.SyncAll(ctx, nil)
 		if stats.Synced != 0 {
-			b.Fatalf(
+			require.FailNowf(b, "test failed",
 				"warm no-op sync re-synced %d sessions", stats.Synced,
 			)
 		}
 		if writes := engine.PhaseStats().BatchedWrites.Load(); writes != 0 {
-			b.Fatalf(
+			require.FailNowf(b, "test failed",
 				"warm no-op sync bulk-wrote %d sessions", writes,
 			)
 		}
@@ -243,6 +245,8 @@ func BenchmarkSyncPathsIncrementalAppendUsage(b *testing.B) {
 }
 
 func benchSyncPathsIncrementalAppend(b *testing.B, withUsage bool) {
+	b.Helper()
+
 	routeBenchLogs(b)
 	dir := b.TempDir()
 	writeArchive := writeBenchClaudeArchive
@@ -255,7 +259,7 @@ func benchSyncPathsIncrementalAppend(b *testing.B, withUsage bool) {
 
 	first := engine.SyncAll(ctx, nil)
 	if first.Synced != 1 {
-		b.Fatalf(
+		require.FailNowf(b, "test failed",
 			"initial sync stored %d sessions (failed=%d)",
 			first.Synced, first.Failed,
 		)
@@ -264,7 +268,7 @@ func benchSyncPathsIncrementalAppend(b *testing.B, withUsage bool) {
 	path := filepath.Join(dir, "bench-project", "bench-0000.jsonl")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		b.Fatalf("OpenFile: %v", err)
+		require.FailNowf(b, "test failed", "OpenFile: %v", err)
 	}
 	defer f.Close()
 
@@ -278,7 +282,7 @@ func benchSyncPathsIncrementalAppend(b *testing.B, withUsage bool) {
 		"2026-06-20T11:00:00Z", "warm-up append",
 	).String()
 	if _, err := f.WriteString(warmup); err != nil {
-		b.Fatalf("warm-up append: %v", err)
+		require.FailNowf(b, "test failed", "warm-up append: %v", err)
 	}
 	engine.SyncPaths([]string{path})
 
@@ -321,7 +325,7 @@ func benchSyncPathsIncrementalAppend(b *testing.B, withUsage bool) {
 	b.ResetTimer()
 	for i := range b.N {
 		if _, err := f.WriteString(lines[i]); err != nil {
-			b.Fatalf("append: %v", err)
+			require.FailNowf(b, "test failed", "append: %v", err)
 		}
 		engine.SyncPaths([]string{path})
 	}
@@ -329,11 +333,11 @@ func benchSyncPathsIncrementalAppend(b *testing.B, withUsage bool) {
 
 	msgs, err := database.GetAllMessages(ctx, "bench-0000")
 	if err != nil {
-		b.Fatalf("GetAllMessages: %v", err)
+		require.FailNowf(b, "test failed", "GetAllMessages: %v", err)
 	}
 	want := benchLargeSessionLines + 1 + b.N // +1 for the warm-up append
 	if len(msgs) < want {
-		b.Fatalf(
+		require.FailNowf(b, "test failed",
 			"appends were not absorbed: stored %d messages, want >= %d",
 			len(msgs), want,
 		)
@@ -351,6 +355,7 @@ func benchColdArchive(
 	verify func(*Engine, SyncStats, int),
 ) {
 	b.Helper()
+
 	routeBenchLogs(b)
 	defaultSessions, defaultMessages := defaultBenchSyncSessions,
 		defaultBenchSyncMessages
@@ -375,11 +380,11 @@ func benchColdArchive(
 	for i := range b.N {
 		b.StopTimer()
 		dbPath := filepath.Join(dbDir, fmt.Sprintf("cold-%d.db", i))
-		database, err := db.Open(dbPath)
+		database, err := db.Open(b.Context(), dbPath)
 		if err != nil {
-			b.Fatalf("open bench db: %v", err)
+			require.FailNowf(b, "test failed", "open bench db: %v", err)
 		}
-		engine := NewEngine(database, EngineConfig{
+		engine := NewEngine(b.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentClaude: {dir},
 			},
@@ -393,18 +398,18 @@ func benchColdArchive(
 		verify(engine, stats, sessions)
 		engine.Close()
 		if err := database.Close(); err != nil {
-			b.Fatalf("close bench db: %v", err)
+			require.FailNowf(b, "test failed", "close bench db: %v", err)
 		}
 		// Drop this iteration's DB (and WAL/SHM sidecars) so disk
 		// usage stays O(1) instead of retaining b.N populated
 		// databases until the function returns.
 		stale, err := filepath.Glob(dbPath + "*")
 		if err != nil {
-			b.Fatalf("glob %s: %v", dbPath, err)
+			require.FailNowf(b, "test failed", "glob %s: %v", dbPath, err)
 		}
 		for _, p := range stale {
 			if err := os.Remove(p); err != nil {
-				b.Fatalf("remove %s: %v", p, err)
+				require.FailNowf(b, "test failed", "remove %s: %v", p, err)
 			}
 		}
 		b.StartTimer()
@@ -426,6 +431,8 @@ func BenchmarkSyncAllColdArchiveUsage(b *testing.B) {
 }
 
 func benchSyncAllColdArchive(b *testing.B, withUsage bool) {
+	b.Helper()
+
 	ctx := b.Context()
 	benchColdArchive(b, withUsage,
 		func(engine *Engine) SyncStats {
@@ -433,7 +440,7 @@ func benchSyncAllColdArchive(b *testing.B, withUsage bool) {
 		},
 		func(_ *Engine, stats SyncStats, sessions int) {
 			if stats.Synced != sessions {
-				b.Fatalf(
+				require.FailNowf(b, "test failed",
 					"cold sync stored %d of %d sessions (failed=%d)",
 					stats.Synced, sessions, stats.Failed,
 				)
@@ -460,6 +467,8 @@ func BenchmarkResyncBulkIngestUsage(b *testing.B) {
 }
 
 func benchResyncBulkIngest(b *testing.B, withUsage bool) {
+	b.Helper()
+
 	ctx := b.Context()
 	benchColdArchive(b, withUsage,
 		func(engine *Engine) SyncStats {
@@ -471,14 +480,14 @@ func benchResyncBulkIngest(b *testing.B, withUsage bool) {
 		},
 		func(engine *Engine, stats SyncStats, sessions int) {
 			if stats.Synced != sessions {
-				b.Fatalf(
+				require.FailNowf(b, "test failed",
 					"bulk ingest stored %d of %d sessions (failed=%d)",
 					stats.Synced, sessions, stats.Failed,
 				)
 			}
 			writes := engine.PhaseStats().BatchedWrites.Load()
 			if writes != int64(sessions) {
-				b.Fatalf(
+				require.FailNowf(b, "test failed",
 					"bulk ingest wrote %d of %d sessions via the batch pipeline",
 					writes, sessions,
 				)
@@ -501,6 +510,8 @@ func BenchmarkResyncBulkContributorIngestUsage(b *testing.B) {
 }
 
 func benchResyncBulkContributorIngest(b *testing.B, withUsage bool) {
+	b.Helper()
+
 	ctx := b.Context()
 	benchColdArchive(b, withUsage,
 		func(engine *Engine) SyncStats {
@@ -520,23 +531,23 @@ func benchResyncBulkContributorIngest(b *testing.B, withUsage bool) {
 				}},
 			})
 			if err != nil {
-				b.Fatalf("contributor rebuild: %v", err)
+				require.FailNowf(b, "test failed", "contributor rebuild: %v", err)
 			}
 			return stats
 		},
 		func(_ *Engine, stats SyncStats, sessions int) {
 			if stats.Synced != sessions {
-				b.Fatalf(
+				require.FailNowf(b, "test failed",
 					"contributor ingest stored %d of %d sessions (failed=%d)",
 					stats.Synced, sessions, stats.Failed,
 				)
 			}
 			if len(stats.RebuildPhases) != 2 {
-				b.Fatalf("contributor ingest recorded %d rebuild phases", len(stats.RebuildPhases))
+				require.FailNowf(b, "test failed", "contributor ingest recorded %d rebuild phases", len(stats.RebuildPhases))
 			}
 			writes := stats.RebuildPhases[1].BatchedWrites
 			if writes != int64(sessions) {
-				b.Fatalf(
+				require.FailNowf(b, "test failed",
 					"contributor ingest wrote %d of %d sessions via the batch pipeline",
 					writes, sessions,
 				)

@@ -120,7 +120,7 @@ func newIssue1476WatchEngine(
 		agentDirs[agent] = []string{root}
 		modes[agent] = parser.ProviderMigrationProviderAuthoritative
 	}
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: agentDirs, Machine: "local", ProviderFactories: factories,
 		ProviderMigrationModes: modes,
 	})
@@ -166,14 +166,11 @@ func issue1476WatchCapabilities() parser.Capabilities {
 }
 
 func TestSyncWatchBatchThenRunDeferredPathExecutesPlannedRoot(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(root, "deferred.jsonl")
-	require.NoError(os.WriteFile(path, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
 	rootPath := filepath.Join(root, "root-session.jsonl")
-	require.NoError(os.WriteFile(rootPath, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(rootPath, []byte("{}\n"), 0o600))
 	var discoverCalls atomic.Int32
 	rootSource := parser.SourceRef{
 		Provider: parser.AgentCodex, Key: rootPath, DisplayPath: rootPath, FingerprintKey: rootPath,
@@ -199,30 +196,27 @@ func TestSyncWatchBatchThenRunDeferredPathExecutesPlannedRoot(t *testing.T) {
 		workCalled = true
 		return nil
 	})
-	require.Error(err)
-	assert.False(workCalled,
+	require.Error(t, err)
+	assert.False(t, workCalled,
 		"deferred processing must not run post-sync acknowledgement work")
-	assert.Positive(discoverCalls.Load(),
+	assert.Positive(t, discoverCalls.Load(),
 		"producer-marked defer-only paths must allow one planned root phase")
 	var retry interface{ WatchRetryBatch() WatchBatch }
-	require.ErrorAs(err, &retry)
-	assert.Equal([]string{path}, retry.WatchRetryBatch().Paths)
-	assert.Empty(retry.WatchRetryBatch().ReconcileRoots,
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, []string{path}, retry.WatchRetryBatch().Paths)
+	assert.Empty(t, retry.WatchRetryBatch().ReconcileRoots,
 		"a successful root must not be retried solely because the path is deferred")
 	stored, dbErr := engine.db.GetSession(t.Context(), "root-session")
-	require.NoError(dbErr)
-	require.NotNil(stored, "root reconciliation must discover, parse, and write the root session")
+	require.NoError(t, dbErr)
+	require.NotNil(t, stored, "root reconciliation must discover, parse, and write the root session")
 }
 
 func TestSyncWatchBatchThenRunComposesDeferredPathAndRootFailure(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(root, "deferred.jsonl")
 	rootPath := filepath.Join(root, "root-session.jsonl")
-	require.NoError(os.WriteFile(path, []byte("{}\n"), 0o600))
-	require.NoError(os.WriteFile(rootPath, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(rootPath, []byte("{}\n"), 0o600))
 	rootSource := parser.SourceRef{
 		Provider: parser.AgentCodex, Key: rootPath, DisplayPath: rootPath, FingerprintKey: rootPath,
 	}
@@ -243,22 +237,19 @@ func TestSyncWatchBatchThenRunComposesDeferredPathAndRootFailure(t *testing.T) {
 	_, err := engine.SyncWatchBatchThenRun(t.Context(), WatchBatch{
 		Paths: []string{path}, ReconcileRoots: []string{root}, LostEvents: true,
 	}, nil, nil)
-	require.Error(err)
-	assert.ErrorIs(err, rootCause)
+	require.Error(t, err)
+	require.ErrorIs(t, err, rootCause)
 	var retry interface{ WatchRetryBatch() WatchBatch }
-	require.ErrorAs(err, &retry)
-	assert.Equal(WatchBatch{
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, WatchBatch{
 		Paths: []string{path}, ReconcileRoots: []string{root}, LostEvents: true,
 	}, retry.WatchRetryBatch())
 }
 
 func TestSyncWatchBatchThenRunMixedDeferredErrorsSuppressRoots(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(root, "deferred.jsonl")
-	require.NoError(os.WriteFile(path, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
 	const deferredAgent parser.AgentType = parser.AgentCodex
 	const classificationAgent parser.AgentType = "issue1476-classification-mixed"
 	var discoverCalls atomic.Int32
@@ -279,24 +270,21 @@ func TestSyncWatchBatchThenRunMixedDeferredErrorsSuppressRoots(t *testing.T) {
 	_, err := engine.SyncWatchBatchThenRun(t.Context(), WatchBatch{
 		Paths: []string{path}, ReconcileRoots: []string{root},
 	}, nil, nil)
-	require.Error(err)
-	assert.ErrorIs(err, classificationCause)
+	require.Error(t, err)
+	require.ErrorIs(t, err, classificationCause)
 	var deferOnly interface{ ReconciliationRetryDeferOnly() bool }
-	require.ErrorAs(err, &deferOnly)
-	assert.False(deferOnly.ReconciliationRetryDeferOnly())
-	assert.Zero(discoverCalls.Load(), "mixed path errors must suppress roots")
+	require.ErrorAs(t, err, &deferOnly)
+	assert.False(t, deferOnly.ReconciliationRetryDeferOnly())
+	assert.Zero(t, discoverCalls.Load(), "mixed path errors must suppress roots")
 	var retry interface{ WatchRetryBatch() WatchBatch }
-	require.ErrorAs(err, &retry)
-	assert.Equal(WatchBatch{Paths: []string{path}, ReconcileRoots: []string{root}}, retry.WatchRetryBatch())
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, WatchBatch{Paths: []string{path}, ReconcileRoots: []string{root}}, retry.WatchRetryBatch())
 }
 
 func TestSyncWatchBatchThenRunDeferredCancellationSuppressesRoots(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(root, "deferred.jsonl")
-	require.NoError(os.WriteFile(path, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
 	var discoverCalls atomic.Int32
 	provider := &issue1476WatchProvider{
 		Def: parser.AgentDef{Type: parser.AgentCodex, FileBased: true}, Caps: issue1476WatchCapabilities(),
@@ -315,24 +303,21 @@ func TestSyncWatchBatchThenRunDeferredCancellationSuppressesRoots(t *testing.T) 
 	_, err := engine.SyncWatchBatchThenRun(t.Context(), WatchBatch{
 		Paths: []string{path}, ReconcileRoots: []string{root},
 	}, nil, nil)
-	require.Error(err)
-	assert.ErrorIs(err, context.Canceled)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
 	var deferOnly interface{ ReconciliationRetryDeferOnly() bool }
-	require.ErrorAs(err, &deferOnly)
-	assert.False(deferOnly.ReconciliationRetryDeferOnly())
-	assert.Zero(discoverCalls.Load(), "deferred cancellation must suppress roots")
+	require.ErrorAs(t, err, &deferOnly)
+	assert.False(t, deferOnly.ReconciliationRetryDeferOnly())
+	assert.Zero(t, discoverCalls.Load(), "deferred cancellation must suppress roots")
 	var retry interface{ WatchRetryBatch() WatchBatch }
-	require.ErrorAs(err, &retry)
-	assert.Equal(WatchBatch{Paths: []string{path}, ReconcileRoots: []string{root}}, retry.WatchRetryBatch())
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, WatchBatch{Paths: []string{path}, ReconcileRoots: []string{root}}, retry.WatchRetryBatch())
 }
 
 func TestSyncWatchBatchThenRunDeferredHardFailureSuppressesRoots(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(root, "deferred.jsonl")
-	require.NoError(os.WriteFile(path, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
 	var discoverCalls atomic.Int32
 	outcome := issue1476DeferredOutcome(path, parser.AgentCodex)
 	outcome.SourceErrors = []parser.SourceError{{
@@ -351,14 +336,14 @@ func TestSyncWatchBatchThenRunDeferredHardFailureSuppressesRoots(t *testing.T) {
 	_, err := engine.SyncWatchBatchThenRun(t.Context(), WatchBatch{
 		Paths: []string{path}, ReconcileRoots: []string{root},
 	}, nil, nil)
-	require.Error(err)
+	require.Error(t, err)
 	var deferOnly interface{ ReconciliationRetryDeferOnly() bool }
-	require.ErrorAs(err, &deferOnly)
-	assert.False(deferOnly.ReconciliationRetryDeferOnly())
-	assert.Zero(discoverCalls.Load(), "deferred plus hard failure must suppress roots")
+	require.ErrorAs(t, err, &deferOnly)
+	assert.False(t, deferOnly.ReconciliationRetryDeferOnly())
+	assert.Zero(t, discoverCalls.Load(), "deferred plus hard failure must suppress roots")
 	var retry interface{ WatchRetryBatch() WatchBatch }
-	require.ErrorAs(err, &retry)
-	assert.Equal(WatchBatch{Paths: []string{path}, ReconcileRoots: []string{root}}, retry.WatchRetryBatch())
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, WatchBatch{Paths: []string{path}, ReconcileRoots: []string{root}}, retry.WatchRetryBatch())
 }
 
 func TestIssue1476SourceProofWithheldCoversDeferredAndHardFailures(t *testing.T) {
@@ -379,23 +364,21 @@ func TestIssue1476SourceProofWithheldCoversDeferredAndHardFailures(t *testing.T)
 			assert.True(t, tc.job.sourceProofWithheld(tc.hard))
 		})
 	}
-	assert.False(t, (processResult{}).sourceProofWithheld(false))
+	assert.False(t, (&processResult{}).sourceProofWithheld(false))
 	t.Log("proof gate: hard failure, deferred count, retry session IDs, and legacy retry all withhold")
 }
 
 func TestIssue1476DeferredRetryPathsRemainBounded(t *testing.T) {
-	assert := assert.New(t)
-
 	stats := SyncStats{}
 	for i := range reconciliationRetryPathLimit + 1 {
 		stats.recordDeferred(strings.Repeat("x", 16) + strconv.Itoa(i))
 	}
-	assert.True(stats.deferredRetryOverflow)
-	assert.Empty(stats.deferredRetryPaths)
+	assert.True(t, stats.deferredRetryOverflow)
+	assert.Empty(t, stats.deferredRetryPaths)
 	byteBound := SyncStats{}
 	byteBound.recordDeferred(strings.Repeat("y", reconciliationRetryPathByteLimit+1))
-	assert.True(byteBound.deferredRetryOverflow)
-	assert.Empty(byteBound.deferredRetryPaths)
+	assert.True(t, byteBound.deferredRetryOverflow)
+	assert.Empty(t, byteBound.deferredRetryPaths)
 	t.Logf("bounded retry scope: %d paths exceed the exact-path bound and fall back to roots", stats.Deferred)
 }
 
@@ -412,8 +395,6 @@ func TestIssue1476OverflowRetryBatchReachesWatcherBackoff(t *testing.T) {
 		{name: "bytes", sourceCount: 1, pathLength: reconciliationRetryPathByteLimit + 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			database := openTestDB(t)
 			root := t.TempDir()
 			const agent parser.AgentType = parser.AgentCodex
@@ -444,7 +425,7 @@ func TestIssue1476OverflowRetryBatchReachesWatcherBackoff(t *testing.T) {
 				}},
 				sources: sources, parseOutcomes: outcomes,
 			}
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
 				ProviderFactories: []parser.ProviderFactory{manyStreamingFactory{provider}},
 				ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
@@ -484,22 +465,19 @@ func TestIssue1476OverflowRetryBatchReachesWatcherBackoff(t *testing.T) {
 			firstStarted := <-startedAt
 			secondStarted := <-startedAt
 
-			assert.Equal([]string{root}, first.ReconcileRoots)
-			assert.False(first.FullSync)
-			assert.Equal([]string{root}, second.ReconcileRoots,
+			assert.Equal(t, []string{root}, first.ReconcileRoots)
+			assert.False(t, first.FullSync)
+			assert.Equal(t, []string{root}, second.ReconcileRoots,
 				"overflow must propagate the affected root into the watcher retry")
-			assert.False(second.FullSync)
-			assert.True(stats.deferredRetryOverflow)
-			assert.GreaterOrEqual(secondStarted.Sub(firstStarted), retryFloor,
+			assert.False(t, second.FullSync)
+			assert.True(t, stats.deferredRetryOverflow)
+			assert.GreaterOrEqual(t, secondStarted.Sub(firstStarted), retryFloor,
 				"affected-root retry must use watcher backoff")
 		})
 	}
 }
 
 func TestIssue1476ChangedPathRetryBatchRetainsDeferredPath(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	const agent parser.AgentType = parser.AgentCodex
 	_, engine, _, _, path := newChangedPathOutcomeEngine(
 		t, agent, func(path string) parser.ParseOutcome {
@@ -523,13 +501,13 @@ func TestIssue1476ChangedPathRetryBatchRetainsDeferredPath(t *testing.T) {
 		t.Context(), WatchBatch{Paths: []string{path}}, nil, nil,
 	)
 	var retry interface{ WatchRetryBatch() WatchBatch }
-	require.ErrorAs(err, &retry)
+	require.ErrorAs(t, err, &retry)
 	var deferOnly interface{ ReconciliationRetryDeferOnly() bool }
-	require.ErrorAs(err, &deferOnly)
-	assert.True(deferOnly.ReconciliationRetryDeferOnly())
-	assert.Equal([]string{path}, retry.WatchRetryBatch().Paths)
-	assert.Empty(retry.WatchRetryBatch().ReconcileRoots)
-	assert.Equal(1, engine.LastSyncStats().Deferred)
+	require.ErrorAs(t, err, &deferOnly)
+	assert.True(t, deferOnly.ReconciliationRetryDeferOnly())
+	assert.Equal(t, []string{path}, retry.WatchRetryBatch().Paths)
+	assert.Empty(t, retry.WatchRetryBatch().ReconcileRoots)
+	assert.Equal(t, 1, engine.LastSyncStats().Deferred)
 }
 
 func TestIssue1476WatchBatchKeepsExactDeferredPath(t *testing.T) {

@@ -13,9 +13,18 @@ func TestAssignBucketDurationEdges(t *testing.T) {
 		v    float64
 		want int
 	}{
-		{0, 0}, {0.5, 0}, {1, 1}, {4.999, 1}, {5, 2},
-		{19.999, 2}, {20, 3}, {59.999, 3}, {60, 4},
-		{120, 5}, {120.1, 5}, {9999, 5},
+		{0, 0},
+		{0.5, 0},
+		{1, 1},
+		{4.999, 1},
+		{5, 2},
+		{19.999, 2},
+		{20, 3},
+		{59.999, 3},
+		{60, 4},
+		{120, 5},
+		{120.1, 5},
+		{9999, 5},
 	}
 	for _, c := range cases {
 		got := assignBucket(durationMinutesEdges, c.v)
@@ -28,12 +37,20 @@ func TestAssignBucketUserMessagesAll(t *testing.T) {
 		v    float64
 		want int // index into userMessagesEdgesAll (7 edges → 6 buckets)
 	}{
-		{0, 0}, {1, 0}, {1.9, 0}, // scope_all bucket [0,2)
-		{2, 1}, {5, 1}, {5.9, 1}, // [2,6)
-		{6, 2}, {15.9, 2}, // [6,16)
-		{16, 3}, {30.9, 3},
-		{31, 4}, {50.9, 4},
-		{51, 5}, {10000, 5},
+		{0, 0},
+		{1, 0},
+		{1.9, 0}, // scope_all bucket [0,2)
+		{2, 1},
+		{5, 1},
+		{5.9, 1}, // [2,6)
+		{6, 2},
+		{15.9, 2}, // [6,16)
+		{16, 3},
+		{30.9, 3},
+		{31, 4},
+		{50.9, 4},
+		{51, 5},
+		{10000, 5},
 	}
 	for _, c := range cases {
 		got := assignBucket(userMessagesEdgesAll, c.v)

@@ -100,6 +100,7 @@ func TestSkillsInstall_StatesAndForce(t *testing.T) {
 		{
 			name: "current",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, freshClaudeSkill(t).Content)
 			},
 			wantMsgNoForce: "up to date",
@@ -107,6 +108,7 @@ func TestSkillsInstall_StatesAndForce(t *testing.T) {
 		{
 			name: "stale",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, staleClaudeContent())
 			},
 			wantMsgNoForce: "updated",
@@ -114,6 +116,7 @@ func TestSkillsInstall_StatesAndForce(t *testing.T) {
 		{
 			name: "modified",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, modifiedClaudeContent(t))
 			},
 			wantMsgNoForce: refusalMsg,
@@ -122,6 +125,7 @@ func TestSkillsInstall_StatesAndForce(t *testing.T) {
 		{
 			name: "foreign",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, foreignClaudeContent)
 			},
 			wantMsgNoForce: refusalMsg,
@@ -132,9 +136,6 @@ func TestSkillsInstall_StatesAndForce(t *testing.T) {
 	for _, tt := range tests {
 		for _, force := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/force=%v", tt.name, force), func(t *testing.T) {
-				assert := assert.New(t)
-				require := require.New(t)
-
 				home := t.TempDir()
 				setTestHome(t, home)
 				path := claudeSkillPath(home)
@@ -151,13 +152,13 @@ func TestSkillsInstall_StatesAndForce(t *testing.T) {
 				}
 				out, err := executeCommand(newRootCommand(), args...)
 
-				assert.Contains(out, path)
+				assert.Contains(t, out, path)
 
 				refused := tt.wantMsgForced != "" && !force
 				if refused {
-					assert.Contains(out, tt.wantMsgNoForce)
-					require.Error(err, "expected a refusal error")
-					assert.Equal(seedContent, readFileString(t, path),
+					assert.Contains(t, out, tt.wantMsgNoForce)
+					require.Error(t, err, "expected a refusal error")
+					assert.Equal(t, seedContent, readFileString(t, path),
 						"refused install must not touch the file")
 					return
 				}
@@ -166,10 +167,10 @@ func TestSkillsInstall_StatesAndForce(t *testing.T) {
 				if force && tt.wantMsgForced != "" {
 					wantMsg = tt.wantMsgForced
 				}
-				assert.Contains(out, wantMsg)
+				assert.Contains(t, out, wantMsg)
 
-				require.NoError(err, "output: %s", out)
-				assert.Equal(freshClaudeSkill(t).Content, readFileString(t, path))
+				require.NoError(t, err, "output: %s", out)
+				assert.Equal(t, freshClaudeSkill(t).Content, readFileString(t, path))
 			})
 		}
 	}
@@ -184,18 +185,16 @@ func readFileString(t *testing.T, path string) string {
 }
 
 func TestSkillsInstall_DefaultHarnessesInstallBoth(t *testing.T) {
-	assert := assert.New(t)
-
 	home := t.TempDir()
 	setTestHome(t, home)
 
 	out, err := executeCommand(newRootCommand(), "skills", "install")
 	require.NoError(t, err, "output: %s", out)
 
-	assert.Contains(out, claudeSkillPath(home))
-	assert.Contains(out, agentsSkillPath(home))
-	assert.FileExists(claudeSkillPath(home))
-	assert.FileExists(agentsSkillPath(home))
+	assert.Contains(t, out, claudeSkillPath(home))
+	assert.Contains(t, out, agentsSkillPath(home))
+	assert.FileExists(t, claudeSkillPath(home))
+	assert.FileExists(t, agentsSkillPath(home))
 }
 
 func TestSkillsInstall_UnknownHarnessErrors(t *testing.T) {
@@ -208,8 +207,6 @@ func TestSkillsInstall_UnknownHarnessErrors(t *testing.T) {
 }
 
 func TestSkillsInstall_RefusalStillInstallsOtherTargets(t *testing.T) {
-	assert := assert.New(t)
-
 	home := t.TempDir()
 	setTestHome(t, home)
 	writeSkillFile(t, claudeSkillPath(home), foreignClaudeContent)
@@ -217,31 +214,28 @@ func TestSkillsInstall_RefusalStillInstallsOtherTargets(t *testing.T) {
 	out, err := executeCommand(newRootCommand(), "skills", "install")
 	require.Error(t, err, "one refused target must still fail the command")
 
-	assert.Contains(out, "was modified (or not generated); use --force to overwrite")
-	assert.Contains(out, "installed "+agentsSkillPath(home))
-	assert.FileExists(agentsSkillPath(home))
-	assert.Equal(foreignClaudeContent, readFileString(t, claudeSkillPath(home)),
+	assert.Contains(t, out, "was modified (or not generated); use --force to overwrite")
+	assert.Contains(t, out, "installed "+agentsSkillPath(home))
+	assert.FileExists(t, agentsSkillPath(home))
+	assert.Equal(t, foreignClaudeContent, readFileString(t, claudeSkillPath(home)),
 		"the refused claude target must be untouched")
 }
 
 func TestSkillsInstall_FilePermissions(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	home := t.TempDir()
 	setTestHome(t, home)
 
 	_, err := executeCommand(newRootCommand(), "skills", "install", "--harness", "claude")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	info, err := os.Stat(claudeSkillPath(home))
-	require.NoError(err)
+	require.NoError(t, err)
 	// The process umask may strip group/other bits from the 0644 requested by
 	// os.WriteFile, so only assert the file is a regular, non-executable file
 	// readable/writable by its owner rather than the exact resulting mode.
-	assert.True(info.Mode().IsRegular())
-	assert.Zero(info.Mode().Perm()&0o111, "installed skill file must not be executable")
-	assert.Equal(os.FileMode(0o600), info.Mode().Perm()&0o600,
+	assert.True(t, info.Mode().IsRegular())
+	assert.Zero(t, info.Mode().Perm()&0o111, "installed skill file must not be executable")
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm()&0o600,
 		"owner must be able to read and write the installed skill file")
 }
 
@@ -255,6 +249,7 @@ func TestSkillsList_ReportsEachState(t *testing.T) {
 		{
 			name: "current",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, freshClaudeSkill(t).Content)
 			},
 			want: "current",
@@ -262,6 +257,7 @@ func TestSkillsList_ReportsEachState(t *testing.T) {
 		{
 			name: "stale",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, staleClaudeContent())
 			},
 			want: "stale",
@@ -269,6 +265,7 @@ func TestSkillsList_ReportsEachState(t *testing.T) {
 		{
 			name: "modified",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, modifiedClaudeContent(t))
 			},
 			want: "modified",
@@ -276,6 +273,7 @@ func TestSkillsList_ReportsEachState(t *testing.T) {
 		{
 			name: "foreign",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, foreignClaudeContent)
 			},
 			want: "foreign",
@@ -284,9 +282,6 @@ func TestSkillsList_ReportsEachState(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			home := t.TempDir()
 			setTestHome(t, home)
 			path := claudeSkillPath(home)
@@ -295,10 +290,10 @@ func TestSkillsList_ReportsEachState(t *testing.T) {
 			}
 
 			out, err := executeCommand(newRootCommand(), "skills", "list", "--format", "json")
-			require.NoError(err, "output: %s", out)
+			require.NoError(t, err, "output: %s", out)
 
 			var rows []skillListRow
-			require.NoError(json.Unmarshal([]byte(out), &rows), "output: %s", out)
+			require.NoError(t, json.Unmarshal([]byte(out), &rows), "output: %s", out)
 
 			var claudeRow *skillListRow
 			for i := range rows {
@@ -306,31 +301,29 @@ func TestSkillsList_ReportsEachState(t *testing.T) {
 					claudeRow = &rows[i]
 				}
 			}
-			require.NotNil(claudeRow, "no claude row in %+v", rows)
-			assert.Equal(tt.want, claudeRow.State)
-			assert.Equal("user", claudeRow.Level)
-			assert.Equal(path, claudeRow.Path)
+			require.NotNil(t, claudeRow, "no claude row in %+v", rows)
+			assert.Equal(t, tt.want, claudeRow.State)
+			assert.Equal(t, "user", claudeRow.Level)
+			assert.Equal(t, path, claudeRow.Path)
 		})
 	}
 }
 
 func TestSkillsList_HumanTableHasHeaderAndColumns(t *testing.T) {
-	assert := assert.New(t)
-
 	home := t.TempDir()
 	setTestHome(t, home)
 
 	out, err := executeCommand(newRootCommand(), "skills", "list")
 	require.NoError(t, err, "output: %s", out)
 
-	assert.Contains(out, "HARNESS")
-	assert.Contains(out, "LEVEL")
-	assert.Contains(out, "STATE")
-	assert.Contains(out, "PATH")
-	assert.Contains(out, "claude")
-	assert.Contains(out, "agents")
-	assert.Contains(out, "missing")
-	assert.Contains(out, claudeSkillPath(home))
+	assert.Contains(t, out, "HARNESS")
+	assert.Contains(t, out, "LEVEL")
+	assert.Contains(t, out, "STATE")
+	assert.Contains(t, out, "PATH")
+	assert.Contains(t, out, "claude")
+	assert.Contains(t, out, "agents")
+	assert.Contains(t, out, "missing")
+	assert.Contains(t, out, claudeSkillPath(home))
 }
 
 // initTestGitRepo runs `git init` in a fresh temp directory. No commit is
@@ -348,31 +341,25 @@ func initTestGitRepo(t *testing.T) string {
 }
 
 func TestSkillsInstall_ProjectFlagUsesGitRoot(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	home := t.TempDir()
 	setTestHome(t, home)
 
 	repo := initTestGitRepo(t)
 	nested := filepath.Join(repo, "a", "b")
-	require.NoError(os.MkdirAll(nested, 0o755))
+	require.NoError(t, os.MkdirAll(nested, 0o755))
 	t.Chdir(nested)
 
 	out, err := executeCommand(newRootCommand(), "skills", "install", "--harness", "claude", "--project")
-	require.NoError(err, "output: %s", out)
+	require.NoError(t, err, "output: %s", out)
 
 	wantPath := claudeSkillPath(repo)
-	assert.Contains(out, wantPath)
-	assert.FileExists(wantPath)
+	assert.Contains(t, out, wantPath)
+	assert.FileExists(t, wantPath)
 	// Must not have installed under the user home directory instead.
-	assert.NoFileExists(claudeSkillPath(home))
+	assert.NoFileExists(t, claudeSkillPath(home))
 }
 
 func TestSkillsList_ProjectFlagReportsProjectLevel(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	home := t.TempDir()
 	setTestHome(t, home)
 
@@ -380,21 +367,18 @@ func TestSkillsList_ProjectFlagReportsProjectLevel(t *testing.T) {
 	t.Chdir(repo)
 
 	out, err := executeCommand(newRootCommand(), "skills", "list", "--project", "--format", "json")
-	require.NoError(err, "output: %s", out)
+	require.NoError(t, err, "output: %s", out)
 
 	var rows []skillListRow
-	require.NoError(json.Unmarshal([]byte(out), &rows), "output: %s", out)
-	require.NotEmpty(rows)
+	require.NoError(t, json.Unmarshal([]byte(out), &rows), "output: %s", out)
+	require.NotEmpty(t, rows)
 	for _, r := range rows {
-		assert.Equal("project", r.Level)
-		assert.True(strings.HasPrefix(r.Path, repo), "path %q must be under repo root %q", r.Path, repo)
+		assert.Equal(t, "project", r.Level)
+		assert.True(t, strings.HasPrefix(r.Path, repo), "path %q must be under repo root %q", r.Path, repo)
 	}
 }
 
 func TestSkillsInstall_BakesServerFlags(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	home := t.TempDir()
 	setTestHome(t, home)
 
@@ -402,38 +386,35 @@ func TestSkillsInstall_BakesServerFlags(t *testing.T) {
 		"skills", "install", "--harness", "claude",
 		"--server", "https://example.invalid",
 		"--server-token-file", "token")
-	require.NoError(err, "output: %s", out)
+	require.NoError(t, err, "output: %s", out)
 
 	body := readFileString(t, claudeSkillPath(home))
-	assert.Contains(body, "--server https://example.invalid")
-	assert.Contains(body, "--server-token-file token")
-	assert.Equal(skills.Remote{
+	assert.Contains(t, body, "--server https://example.invalid")
+	assert.Contains(t, body, "--server-token-file token")
+	assert.Equal(t, skills.Remote{
 		Server: "https://example.invalid", TokenFile: "token",
 	}, skills.ParseRemote(body))
 
 	listOut, err := executeCommand(newRootCommand(),
 		"skills", "list", "--format", "json")
-	require.NoError(err, "output: %s", listOut)
-	assert.Contains(listOut, "\"state\":\"current\"")
+	require.NoError(t, err, "output: %s", listOut)
+	assert.Contains(t, listOut, "\"state\":\"current\"")
 }
 
 func TestSkillsInstall_ReinstallWithoutFlagsKeepsBakedServer(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	home := t.TempDir()
 	setTestHome(t, home)
 
 	_, err := executeCommand(newRootCommand(),
 		"skills", "install", "--harness", "claude",
 		"--server", "https://example.invalid")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	out, err := executeCommand(newRootCommand(),
 		"skills", "install", "--harness", "claude")
-	require.NoError(err, "output: %s", out)
-	assert.Contains(out, "up to date")
-	assert.Contains(readFileString(t, claudeSkillPath(home)),
+	require.NoError(t, err, "output: %s", out)
+	assert.Contains(t, out, "up to date")
+	assert.Contains(t, readFileString(t, claudeSkillPath(home)),
 		"--server https://example.invalid")
 }
 
@@ -465,9 +446,6 @@ func TestSkillsInstall_EnvBakesServer(t *testing.T) {
 // previously baked remote instead of falling through to the file or the
 // environment.
 func TestSkillsInstall_ExplicitEmptyServerUnbakes(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	home := t.TempDir()
 	setTestHome(t, home)
 	t.Setenv("AGENTSVIEW_SKILLS_SERVER", "https://env.invalid")
@@ -475,48 +453,45 @@ func TestSkillsInstall_ExplicitEmptyServerUnbakes(t *testing.T) {
 	_, err := executeCommand(newRootCommand(),
 		"skills", "install", "--harness", "claude",
 		"--server", "https://example.invalid")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	out, err := executeCommand(newRootCommand(),
 		"skills", "install", "--harness", "claude", "--server", "")
-	require.NoError(err, "output: %s", out)
+	require.NoError(t, err, "output: %s", out)
 
 	body := readFileString(t, claudeSkillPath(home))
-	assert.NotContains(body, "--server https://example.invalid")
-	assert.NotContains(body, "--server https://env.invalid")
-	assert.True(skills.ParseRemote(body).Empty())
+	assert.NotContains(t, body, "--server https://example.invalid")
+	assert.NotContains(t, body, "--server https://env.invalid")
+	assert.True(t, skills.ParseRemote(body).Empty())
 }
 
 // TestSkillsList_EnvDoesNotOverrideBakedRemote pins that an exported
 // AGENTSVIEW_SKILLS_SERVER cannot make an already-installed file look stale.
 // The baked remote is recorded intent; the environment is ambient.
 func TestSkillsList_EnvDoesNotOverrideBakedRemote(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	home := t.TempDir()
 	setTestHome(t, home)
 
 	_, err := executeCommand(newRootCommand(),
 		"skills", "install", "--harness", "claude")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	t.Setenv("AGENTSVIEW_SKILLS_SERVER", "https://env.invalid")
 	out, err := executeCommand(newRootCommand(),
 		"skills", "list", "--format", "json")
-	require.NoError(err, "output: %s", out)
+	require.NoError(t, err, "output: %s", out)
 
 	var rows []skillListRow
-	require.NoError(json.Unmarshal([]byte(out), &rows), "output: %s", out)
-	require.NotEmpty(rows)
+	require.NoError(t, json.Unmarshal([]byte(out), &rows), "output: %s", out)
+	require.NotEmpty(t, rows)
 	for _, r := range rows {
 		if r.Harness == string(skills.HarnessClaude) {
-			assert.Equal("current", r.State,
+			assert.Equal(t, "current", r.State,
 				"an ambient env var must not mark an installed skill stale")
 		}
 	}
 
-	assert.NotContains(readFileString(t, claudeSkillPath(home)),
+	assert.NotContains(t, readFileString(t, claudeSkillPath(home)),
 		"--server https://env.invalid")
 }
 
@@ -540,21 +515,18 @@ func TestSkillsInstall_QuotesServerValuesWithSpaces(t *testing.T) {
 }
 
 func TestSkillsInstall_ProjectFlagOutsideRepoFallsBackToCWD(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	home := t.TempDir()
 	setTestHome(t, home)
 
 	outsideRepo := t.TempDir()
 	resolvedOutside, err := filepath.EvalSymlinks(outsideRepo)
-	require.NoError(err)
+	require.NoError(t, err)
 	t.Chdir(resolvedOutside)
 
 	out, err := executeCommand(newRootCommand(), "skills", "install", "--harness", "claude", "--project")
-	require.NoError(err, "output: %s", out)
+	require.NoError(t, err, "output: %s", out)
 
 	wantPath := claudeSkillPath(resolvedOutside)
-	assert.Contains(out, wantPath)
-	assert.FileExists(wantPath)
+	assert.Contains(t, out, wantPath)
+	assert.FileExists(t, wantPath)
 }

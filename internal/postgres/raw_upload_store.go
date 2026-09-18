@@ -497,6 +497,7 @@ func (s *RawUploadStore) cleanupExpiredAndOrphaned(
 	if err != nil {
 		return fmt.Errorf("expiring abandoned raw uploads: %w", err)
 	}
+	defer rows.Close()
 	expiredIDs := make([]string, 0, rawUploadCleanupBatch)
 	for rows.Next() {
 		var uploadID string
@@ -525,6 +526,7 @@ func (s *RawUploadStore) cleanupExpiredAndOrphaned(
 	if err != nil {
 		return fmt.Errorf("deleting terminal raw uploads: %w", err)
 	}
+	defer rows.Close()
 	terminalIDs := make([]string, 0, rawUploadCleanupBatch)
 	for rows.Next() {
 		var uploadID string
@@ -731,12 +733,8 @@ const (
 	rawUploadStateExpired  = "expired"
 )
 
-type rawUploadRow interface {
-	Scan(...any) error
-}
-
 func scanRawUploadSession(
-	row rawUploadRow,
+	row pgInsightRowScanner,
 	withCreated bool,
 ) (rawsync.UploadSession, string, bool, error) {
 	var session rawsync.UploadSession

@@ -10,8 +10,6 @@ import (
 )
 
 func TestReasoningEffortNativeConversionAndDiff(t *testing.T) {
-	assert := assert.New(t)
-
 	rows := toDBMessages(pendingWrite{
 		sess: parser.ParsedSession{ID: "sync-session"},
 		msgs: []parser.ParsedMessage{
@@ -30,14 +28,14 @@ func TestReasoningEffortNativeConversionAndDiff(t *testing.T) {
 		},
 	}, nil)
 	require.Len(t, rows, 2)
-	assert.Equal("high", rows[0].ReasoningEffort)
-	assert.Empty(rows[1].ReasoningEffort)
+	assert.Equal(t, "high", rows[0].ReasoningEffort)
+	assert.Empty(t, rows[1].ReasoningEffort)
 
 	changed := rows[0]
 	changed.ReasoningEffort = "medium"
-	assert.NotEqual(messageTokenFingerprintTwin(rows),
+	assert.NotEqual(t, messageTokenFingerprintTwin(rows),
 		messageTokenFingerprintTwin([]db.Message{changed, rows[1]}),
 	)
-	assert.Equal(`reasoning_effort "high" -> "medium"`,
+	assert.Equal(t, `reasoning_effort "high" -> "medium"`,
 		messageMetadataDiff(rows[0], changed))
 }

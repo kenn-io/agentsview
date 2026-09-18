@@ -29,7 +29,7 @@ func TestRealDBUsagePayload(t *testing.T) {
 	}
 	reader, err := sql.Open(sqliteUsageDriverName, makeDSN(path, true))
 	if err != nil {
-		t.Fatalf("open reader: %v", err)
+		require.NoError(t, err, "open reader")
 	}
 	reader.SetMaxOpenConns(4)
 	defer reader.Close()
@@ -44,7 +44,7 @@ func TestRealDBUsagePayload(t *testing.T) {
 	f := UsageFilter{From: "2000-01-01", To: "2035-01-01", Timezone: tz, Breakdowns: true}
 	r, err := d.GetDailyUsage(ctx, f)
 	if err != nil {
-		t.Fatalf("GetDailyUsage: %v", err)
+		require.NoError(t, err, "GetDailyUsage")
 	}
 	var proj, agent, model int
 	for _, day := range r.Daily {
@@ -61,7 +61,7 @@ func TestRealDBUsagePayload(t *testing.T) {
 
 	ix, err := d.GetSidebarSessionIndex(ctx, SessionFilter{})
 	if err != nil {
-		t.Fatalf("sidebar: %v", err)
+		require.NoError(t, err, "sidebar")
 	}
 	start = time.Now()
 	sb, _ := json.Marshal(ix)
@@ -69,7 +69,7 @@ func TestRealDBUsagePayload(t *testing.T) {
 		len(ix.Sessions), float64(len(sb))/1e6, round(time.Since(start)))
 	if out := os.Getenv("DUMP_SIDEBAR"); out != "" {
 		if err := dumpSidebarJSON(out, path, sb); err != nil {
-			t.Fatalf("dump sidebar: %v", err)
+			require.NoError(t, err, "dump sidebar")
 		}
 		t.Logf("wrote sidebar JSON to %s", out)
 	}
@@ -91,7 +91,7 @@ func TestRealDBUsagePerf(t *testing.T) {
 	// No Open(), so no migrations / drops touch the archive.
 	reader, err := sql.Open(sqliteUsageDriverName, makeDSN(path, true))
 	if err != nil {
-		t.Fatalf("open reader: %v", err)
+		require.NoError(t, err, "open reader")
 	}
 	reader.SetMaxOpenConns(4) // matches production reader pool
 	defer reader.Close()
@@ -182,7 +182,7 @@ func TestRealDBUsagePerf(t *testing.T) {
 			res, err := p.fn()
 			d := time.Since(start)
 			if err != nil {
-				t.Fatalf("%s: %v", p.name, err)
+				require.NoErrorf(t, err, "%s", p.name)
 			}
 			if run == 0 {
 				cold, info = d, res
@@ -274,45 +274,43 @@ func TestRealDBUsageRollupOracle(t *testing.T) {
 	ctx := t.Context()
 	for _, test := range filters {
 		t.Run(test.name, func(t *testing.T) {
-			require := require.New(t)
-
 			discoveryStart := time.Now()
 			snapshot, captureErr := database.captureUsageQuery(
 				ctx, test.filter, usageQueryKindToken)
-			require.NoError(captureErr, "candidate discovery")
+			require.NoError(t, captureErr, "candidate discovery")
 			discoveryElapsed := time.Since(discoveryStart)
 
 			legacyStart := time.Now()
 			legacy, legacyErr := database.getDailyUsageLegacy(ctx, test.filter)
-			require.NoError(legacyErr, "legacy usage")
+			require.NoError(t, legacyErr, "legacy usage")
 			legacyElapsed := time.Since(legacyStart)
 
 			cache, cacheErr := database.usageCache.Generation(
 				ctx, snapshot.DatabaseID)
-			require.NoError(cacheErr, "open usage cache")
+			require.NoError(t, cacheErr, "open usage cache")
 			clearUsageFactsBenchmarkCache(t, cache)
 			var before, after runtime.MemStats
 			runtime.ReadMemStats(&before)
 			coldStart := time.Now()
 			rollup, rollupErr := database.GetDailyUsage(ctx, test.filter)
-			require.NoError(rollupErr, "rollup usage")
+			require.NoError(t, rollupErr, "rollup usage")
 			coldElapsed := time.Since(coldStart)
 			runtime.ReadMemStats(&after)
 
 			legacyJSON, marshalErr := json.Marshal(legacy)
-			require.NoError(marshalErr, "marshal legacy result")
+			require.NoError(t, marshalErr, "marshal legacy result")
 			rollupJSON, marshalErr := json.Marshal(rollup)
-			require.NoError(marshalErr, "marshal rollup result")
-			require.JSONEq(string(legacyJSON), string(rollupJSON),
+			require.NoError(t, marshalErr, "marshal rollup result")
+			require.Equal(t, legacyJSON, rollupJSON,
 				"rollup and legacy results must be byte-equivalent")
 
 			warmStart := time.Now()
 			warm, warmErr := database.GetDailyUsage(ctx, test.filter)
-			require.NoError(warmErr, "warm rollup usage")
+			require.NoError(t, warmErr, "warm rollup usage")
 			warmElapsed := time.Since(warmStart)
 			warmJSON, marshalErr := json.Marshal(warm)
-			require.NoError(marshalErr, "marshal warm facts result")
-			require.JSONEq(string(rollupJSON), string(warmJSON),
+			require.NoError(t, marshalErr, "marshal warm facts result")
+			require.Equal(t, rollupJSON, warmJSON,
 				"cold and warm rollup results must be byte-equivalent")
 
 			t.Logf(
@@ -352,35 +350,31 @@ func TestDumpSidebarJSONRejectsDBAndSidecars(t *testing.T) {
 }
 
 func TestDumpSidebarJSONDoesNotClobberExistingFile(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "sessions.db")
 	outPath := filepath.Join(dir, "sidebar.json")
-	require.NoError(os.WriteFile(dbPath, []byte("db"), 0o644))
-	require.NoError(os.WriteFile(outPath, []byte("existing"), 0o644))
+	require.NoError(t, os.WriteFile(dbPath, []byte("db"), 0o644))
+	require.NoError(t, os.WriteFile(outPath, []byte("existing"), 0o644))
 
 	err := dumpSidebarJSON(outPath, dbPath, []byte(`{"sessions":[]}`))
-	require.Error(err)
+	require.Error(t, err)
 
 	got, readErr := os.ReadFile(outPath)
-	require.NoError(readErr)
+	require.NoError(t, readErr)
 	assert.Equal(t, "existing", string(got))
 }
 
 func TestDumpSidebarJSONCreatesNewFile(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "sessions.db")
 	outPath := filepath.Join(dir, "sidebar.json")
 	payload := []byte(`{"sessions":[]}`)
-	require.NoError(os.WriteFile(dbPath, []byte("db"), 0o644))
+	require.NoError(t, os.WriteFile(dbPath, []byte("db"), 0o644))
 
-	require.NoError(dumpSidebarJSON(outPath, dbPath, payload))
+	require.NoError(t, dumpSidebarJSON(outPath, dbPath, payload))
 
 	got, err := os.ReadFile(outPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Equal(t, payload, got)
 }
 
@@ -429,6 +423,7 @@ func cleanAbsPath(path string) (string, error) {
 }
 
 func timeConcurrent(t *testing.T, label string, fns []func() error) {
+	t.Helper()
 	start := time.Now()
 	var wg sync.WaitGroup
 	errs := make([]error, len(fns))
@@ -442,7 +437,7 @@ func timeConcurrent(t *testing.T, label string, fns []func() error) {
 	wg.Wait()
 	for _, e := range errs {
 		if e != nil {
-			t.Fatalf("%s: %v", label, e)
+			require.NoErrorf(t, e, "%s", label)
 		}
 	}
 	t.Logf("%-52s  wall=%s", label, round(time.Since(start)))

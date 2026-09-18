@@ -74,13 +74,13 @@ type MessageContentAggregate struct {
 // MessageContentFingerprints is the batched twin of
 // MessageContentFingerprint. Sessions without messages are absent from the
 // map; the zero MessageContentAggregate matches the per-session result.
-func (db *DB) MessageContentFingerprints(
+func (db *DB) MessageContentFingerprints(ctx context.Context,
 	sessionIDs []string,
 ) (map[string]MessageContentAggregate, error) {
 	out := make(map[string]MessageContentAggregate, len(sessionIDs))
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
-		rows, err := db.getReader().Query(`
+		rows, err := db.getReader().Query(ctx, `
 			SELECT session_id, COALESCE(SUM(content_length), 0),
 				COALESCE(MAX(content_length), 0),
 				COALESCE(MIN(content_length), 0)
@@ -112,13 +112,13 @@ func (db *DB) MessageContentFingerprints(
 }
 
 // MessageTokenFingerprints is the batched twin of MessageTokenFingerprint.
-func (db *DB) MessageTokenFingerprints(
+func (db *DB) MessageTokenFingerprints(ctx context.Context,
 	sessionIDs []string,
 ) (map[string]string, error) {
 	out := make(map[string]string, len(sessionIDs))
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
-		rows, err := db.getReader().Query(`
+		rows, err := db.getReader().Query(ctx, `
 			SELECT session_id, ordinal, model, reasoning_effort, provider_id, token_usage, context_tokens,
 				output_tokens, has_context_tokens, has_output_tokens,
 				claude_message_id, claude_request_id,
@@ -163,13 +163,13 @@ func (db *DB) MessageTokenFingerprints(
 
 // MessageContentHashFingerprints is the batched twin of
 // MessageContentHashFingerprint.
-func (db *DB) MessageContentHashFingerprints(
+func (db *DB) MessageContentHashFingerprints(ctx context.Context,
 	sessionIDs []string,
 ) (map[string]string, error) {
 	out := make(map[string]string, len(sessionIDs))
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
-		rows, err := db.getReader().Query(`
+		rows, err := db.getReader().Query(ctx, `
 			SELECT session_id, ordinal, content, content_length
 			 FROM messages
 			 WHERE session_id IN (`+ph+`)
@@ -207,14 +207,14 @@ func (db *DB) MessageContentHashFingerprints(
 
 // MessageRoleTimeFingerprintsWithTimestampNormalizer is the batched twin of
 // MessageRoleTimeFingerprintWithTimestampNormalizer.
-func (db *DB) MessageRoleTimeFingerprintsWithTimestampNormalizer(
+func (db *DB) MessageRoleTimeFingerprintsWithTimestampNormalizer(ctx context.Context,
 	sessionIDs []string,
 	normalizeTimestamp func(string) string,
 ) (map[string]string, error) {
 	out := make(map[string]string, len(sessionIDs))
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
-		rows, err := db.getReader().Query(`
+		rows, err := db.getReader().Query(ctx, `
 			SELECT session_id, ordinal, role, COALESCE(timestamp, '')
 			 FROM messages
 			 WHERE session_id IN (`+ph+`)
@@ -252,13 +252,13 @@ func (db *DB) MessageRoleTimeFingerprintsWithTimestampNormalizer(
 }
 
 // MessageFlagsFingerprints is the batched twin of MessageFlagsFingerprint.
-func (db *DB) MessageFlagsFingerprints(
+func (db *DB) MessageFlagsFingerprints(ctx context.Context,
 	sessionIDs []string,
 ) (map[string]string, error) {
 	out := make(map[string]string, len(sessionIDs))
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
-		rows, err := db.getReader().Query(`
+		rows, err := db.getReader().Query(ctx, `
 			SELECT session_id, ordinal, is_system, has_thinking,
 				has_tool_use, thinking_text
 			 FROM messages
@@ -297,13 +297,13 @@ func (db *DB) MessageFlagsFingerprints(
 // SystemMessageFingerprints is the batched twin of SystemMessageFingerprint.
 // The ordinal list is joined in Go rather than with GROUP_CONCAT so the
 // per-session ordering never depends on SQLite's aggregate scan order.
-func (db *DB) SystemMessageFingerprints(
+func (db *DB) SystemMessageFingerprints(ctx context.Context,
 	sessionIDs []string,
 ) (map[string]string, error) {
 	out := make(map[string]string, len(sessionIDs))
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
-		rows, err := db.getReader().Query(`
+		rows, err := db.getReader().Query(ctx, `
 			SELECT session_id, ordinal FROM messages
 			WHERE session_id IN (`+ph+`) AND is_system = 1
 			ORDER BY session_id, ordinal`,
@@ -340,11 +340,11 @@ func (db *DB) SystemMessageFingerprints(
 
 // ToolCallCounts is the batched twin of ToolCallCount. Sessions without
 // tool calls are absent from the map; zero matches the per-session result.
-func (db *DB) ToolCallCounts(sessionIDs []string) (map[string]int, error) {
+func (db *DB) ToolCallCounts(ctx context.Context, sessionIDs []string) (map[string]int, error) {
 	out := make(map[string]int, len(sessionIDs))
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
-		rows, err := db.getReader().Query(`
+		rows, err := db.getReader().Query(ctx, `
 			SELECT session_id, COUNT(*) FROM tool_calls
 			WHERE session_id IN (`+ph+`)
 			GROUP BY session_id`,
@@ -372,13 +372,13 @@ func (db *DB) ToolCallCounts(sessionIDs []string) (map[string]int, error) {
 
 // ToolCallContentFingerprints is the batched twin of
 // ToolCallContentFingerprint.
-func (db *DB) ToolCallContentFingerprints(
+func (db *DB) ToolCallContentFingerprints(ctx context.Context,
 	sessionIDs []string,
 ) (map[string]int64, error) {
 	out := make(map[string]int64, len(sessionIDs))
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
-		rows, err := db.getReader().Query(`
+		rows, err := db.getReader().Query(ctx, `
 			SELECT session_id, COALESCE(SUM(result_content_length), 0)
 			FROM tool_calls
 			WHERE session_id IN (`+ph+`)
@@ -406,13 +406,13 @@ func (db *DB) ToolCallContentFingerprints(
 }
 
 // ToolCallFingerprints is the batched twin of ToolCallFingerprint.
-func (db *DB) ToolCallFingerprints(
+func (db *DB) ToolCallFingerprints(ctx context.Context,
 	sessionIDs []string,
 ) (map[string]string, error) {
 	out := make(map[string]string, len(sessionIDs))
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
-		rows, err := db.getReader().Query(`
+		rows, err := db.getReader().Query(ctx, `
 			SELECT tc.session_id, m.ordinal, tc.tool_name, tc.category,
 				COALESCE(tc.tool_use_id, ''), COALESCE(tc.input_json, ''),
 				COALESCE(tc.skill_name, ''),
@@ -460,14 +460,14 @@ func (db *DB) ToolCallFingerprints(
 
 // ToolResultEventFingerprintsWithTimestampNormalizer is the batched twin of
 // ToolResultEventFingerprintWithTimestampNormalizer.
-func (db *DB) ToolResultEventFingerprintsWithTimestampNormalizer(
+func (db *DB) ToolResultEventFingerprintsWithTimestampNormalizer(ctx context.Context,
 	sessionIDs []string,
 	normalizeTimestamp func(string) string,
 ) (map[string]string, error) {
 	out := make(map[string]string, len(sessionIDs))
 	err := forEachSessionIDBatch(sessionIDs, func(chunk []string) error {
 		ph, args := sessionIDArgs(chunk)
-		rows, err := db.getReader().Query(`
+		rows, err := db.getReader().Query(ctx, `
 			SELECT session_id, tool_call_message_ordinal, call_index,
 				event_index, COALESCE(tool_use_id, ''),
 				COALESCE(agent_id, ''),

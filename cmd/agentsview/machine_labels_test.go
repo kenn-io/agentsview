@@ -47,9 +47,6 @@ func TestMachineLabelCatalogNilSuccessReturnsEmpty(t *testing.T) {
 }
 
 func TestSessionListJSONDegradesWhenMachineCatalogUnavailable(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	_ = newAgentDataDir(t)
 	server := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter, r *http.Request,
@@ -71,13 +68,13 @@ func TestSessionListJSONDegradesWhenMachineCatalogUnavailable(t *testing.T) {
 	})
 
 	_, err := root.ExecuteC()
-	require.NoError(err)
+	require.NoError(t, err)
 	var document sessionListDocument
-	require.NoError(json.Unmarshal(stdout.Bytes(), &document))
-	require.Len(document.Sessions, 1)
-	assert.Equal("remote-session", document.Sessions[0].ID)
-	assert.Empty(document.MachineLabels)
-	assert.Contains(stderr.String(), "HTTP 500")
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &document))
+	require.Len(t, document.Sessions, 1)
+	assert.Equal(t, "remote-session", document.Sessions[0].ID)
+	assert.Empty(t, document.MachineLabels)
+	assert.Contains(t, stderr.String(), "HTTP 500")
 }
 
 func TestMachineLabelCatalogHTTPNullBodyReturnsEmpty(t *testing.T) {
@@ -128,9 +125,6 @@ func TestSessionListHumanSkipsMachineCatalog(t *testing.T) {
 }
 
 func TestSessionListJSONIncludesMachineLabelCatalog(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := newAgentDataDir(t)
 	const machineKey = "machine-key"
 	seedSessionsWithOpts(t, dataDir, sessionSeed{
@@ -140,36 +134,33 @@ func TestSessionListJSONIncludesMachineLabelCatalog(t *testing.T) {
 			s.Machine = machineKey
 		},
 	})
-	database, err := db.Open(sessionsDBPath(dataDir))
-	require.NoError(err)
-	require.NoError(database.SetSyncState(
+	database, err := db.Open(t.Context(), sessionsDBPath(dataDir))
+	require.NoError(t, err)
+	require.NoError(t, database.SetSyncState(t.Context(),
 		db.MachineLabelKeyPrefix+machineKey, "Build Host",
 	))
-	require.NoError(database.SetSyncState(
+	require.NoError(t, database.SetSyncState(t.Context(),
 		db.MachineLabelKeyPrefix+"unrelated-machine", "Other Host",
 	))
-	require.NoError(database.Close())
+	require.NoError(t, database.Close())
 
 	out, err := executeCommand(
 		newRootCommand(), "session", "list", "--format", "json",
 	)
 
-	require.NoError(err)
+	require.NoError(t, err)
 	var document struct {
 		Sessions      []db.Session      `json:"sessions"`
 		MachineLabels map[string]string `json:"machine_labels"`
 	}
-	require.NoError(json.Unmarshal([]byte(out), &document))
-	require.Len(document.Sessions, 1)
-	assert.Equal(machineKey, document.Sessions[0].Machine)
-	assert.Equal("Build Host", document.MachineLabels[machineKey])
-	assert.NotContains(document.MachineLabels, "unrelated-machine")
+	require.NoError(t, json.Unmarshal([]byte(out), &document))
+	require.Len(t, document.Sessions, 1)
+	assert.Equal(t, machineKey, document.Sessions[0].Machine)
+	assert.Equal(t, "Build Host", document.MachineLabels[machineKey])
+	assert.NotContains(t, document.MachineLabels, "unrelated-machine")
 }
 
 func TestRunUsageDailyBreakdownJSONMachineLabelsFromDaemon(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := newAgentDataDir(t)
 	const machineKey = "machine-key"
 	ts := sessionUsageRuntimeServerWithMachines(t,
@@ -197,12 +188,12 @@ func TestRunUsageDailyBreakdownJSONMachineLabelsFromDaemon(t *testing.T) {
 	})
 
 	var document usageDailyDocument
-	require.NoError(json.Unmarshal([]byte(out), &document))
-	require.Len(document.Daily, 1)
-	require.Len(document.Daily[0].MachineBreakdowns, 1)
-	assert.Equal(machineKey, document.Daily[0].MachineBreakdowns[0].MachineName)
-	assert.Equal("Build Host", document.MachineLabels[machineKey])
-	assert.NotContains(document.MachineLabels, "unrelated-machine")
+	require.NoError(t, json.Unmarshal([]byte(out), &document))
+	require.Len(t, document.Daily, 1)
+	require.Len(t, document.Daily[0].MachineBreakdowns, 1)
+	assert.Equal(t, machineKey, document.Daily[0].MachineBreakdowns[0].MachineName)
+	assert.Equal(t, "Build Host", document.MachineLabels[machineKey])
+	assert.NotContains(t, document.MachineLabels, "unrelated-machine")
 }
 
 func TestRunUsageDailyBreakdownJSONEmitsEmptyMachineLabels(t *testing.T) {

@@ -42,9 +42,6 @@ func TestParseGenAIRateAcceptsZeroPrices(t *testing.T) {
 }
 
 func TestParseGenAIPricesResolvesMatchingConditionsAndTiers(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	data := []byte(`[
 		{
 			"id": "openai",
@@ -91,35 +88,35 @@ func TestParseGenAIPricesResolvesMatchingConditionsAndTiers(t *testing.T) {
 	]`)
 
 	prices, err := ParseGenAIPrices(data)
-	require.NoError(err)
-	assert.Equal(data, prices.RawJSON(), "the persisted document stays upstream JSON")
-	assert.NotEmpty(prices.Version())
+	require.NoError(t, err)
+	assert.Equal(t, data, prices.RawJSON(), "the persisted document stays upstream JSON")
+	assert.NotEmpty(t, prices.Version())
 
 	before, ok := prices.Resolve(
 		"openai-compatible", "gpt-5.6-luna-2026-07-13",
 		time.Date(2026, 7, 29, 16, 59, 59, 0, time.FixedZone("west", -7*60*60)),
 	)
-	require.True(ok)
-	assert.Equal(money.MustParseDollars("1"), before.InputPerMTok)
-	assert.Equal(money.MustParseDollars("6"), before.OutputPerMTok)
-	assert.Equal(money.MustParseDollars("2"), before.CacheCreation1hPerMTok)
-	require.Len(before.Bands, 1)
-	assert.Equal(272000, before.Bands[0].AboveInputTokens)
-	assert.Equal(money.MustParseDollars("2"), before.Bands[0].InputPerMTok)
-	assert.Equal(money.MustParseDollars("6"), before.Bands[0].OutputPerMTok)
+	require.True(t, ok)
+	assert.Equal(t, money.MustParseDollars("1"), before.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("6"), before.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("2"), before.CacheCreation1hPerMTok)
+	require.Len(t, before.Bands, 1)
+	assert.Equal(t, 272000, before.Bands[0].AboveInputTokens)
+	assert.Equal(t, money.MustParseDollars("2"), before.Bands[0].InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("6"), before.Bands[0].OutputPerMTok)
 
 	after, ok := prices.Resolve(
 		"azure-private-gateway", "gpt-5.6-luna",
 		time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC),
 	)
-	require.True(ok, "Azure finds the OpenAI model through its fallback provider")
-	assert.Equal(money.MustParseDollars("0.2"), after.InputPerMTok)
-	assert.Equal(money.MustParseDollars("1.2"), after.OutputPerMTok)
-	assert.Equal(money.MustParseDollars("0.4"), after.CacheCreation1hPerMTok)
-	require.Len(after.Bands, 1)
-	assert.Equal(money.MustParseDollars("0.4"), after.Bands[0].InputPerMTok)
-	assert.Equal(money.MustParseDollars("1.8"), after.Bands[0].OutputPerMTok)
-	assert.Equal(money.MustParseDollars("0.8"),
+	require.True(t, ok, "Azure finds the OpenAI model through its fallback provider")
+	assert.Equal(t, money.MustParseDollars("0.2"), after.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("1.2"), after.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("0.4"), after.CacheCreation1hPerMTok)
+	require.Len(t, after.Bands, 1)
+	assert.Equal(t, money.MustParseDollars("0.4"), after.Bands[0].InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("1.8"), after.Bands[0].OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("0.8"),
 		after.Bands[0].CacheCreation1hPerMTok)
 }
 

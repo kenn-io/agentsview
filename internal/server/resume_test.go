@@ -99,8 +99,6 @@ func TestClaudeMessagePointResponseCommandUsesPOSIXShellOffWindows(
 func TestClaudeMessagePointResponseCommandUsesPowerShellOnWindows(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-
 	promptPath := `C:\Users\Ada\AppData\Local\Temp\prompt's file.txt`
 	cwd := `C:\Users\Ada\source\agentsview`
 
@@ -110,24 +108,24 @@ func TestClaudeMessagePointResponseCommandUsesPowerShellOnWindows(
 
 	const prefix = "powershell.exe -NoProfile -EncodedCommand "
 	require.True(t, strings.HasPrefix(got, prefix), "command = %q", got)
-	assert.NotContains(got, " < ")
-	assert.NotContains(got, "rm -f --")
+	assert.NotContains(t, got, " < ")
+	assert.NotContains(t, got, "rm -f --")
 
 	script := decodePowerShellEncodedCommandForTest(
 		t, strings.TrimPrefix(got, prefix),
 	)
-	assert.Contains(script,
+	assert.Contains(t, script,
 		"Set-Location -LiteralPath 'C:\\Users\\Ada\\source\\agentsview'")
-	assert.Contains(script,
+	assert.Contains(t, script,
 		"Get-Content -Raw -Encoding UTF8 -LiteralPath "+
 			"'C:\\Users\\Ada\\AppData\\Local\\Temp\\prompt''s file.txt' | "+
 			"& 'claude' --dangerously-skip-permissions")
-	assert.Contains(script,
+	assert.Contains(t, script,
 		"Remove-Item -LiteralPath "+
 			"'C:\\Users\\Ada\\AppData\\Local\\Temp\\prompt''s file.txt' "+
 			"-Force -ErrorAction SilentlyContinue")
-	assert.NotContains(script, " < ")
-	assert.NotContains(script, "rm -f --")
+	assert.NotContains(t, script, " < ")
+	assert.NotContains(t, script, "rm -f --")
 }
 
 func decodePowerShellEncodedCommandForTest(
@@ -165,47 +163,41 @@ func TestDetectTerminalLinux_NoTerminal(t *testing.T) {
 }
 
 func TestDetectTerminalLinux_EnvTerminal(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if runtime.GOOS == "windows" {
 		t.Skip("Linux-only terminal detection")
 	}
 	// Create a fake terminal binary on PATH.
 	binDir := t.TempDir()
 	fakeBin := filepath.Join(binDir, "myterm")
-	require.NoError(os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755))
+	require.NoError(t, os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755))
 	t.Setenv("PATH", binDir)
 	t.Setenv("TERMINAL", "myterm")
 
 	bin, args, name, err := detectTerminalLinux("echo hello")
-	require.NoError(err)
-	assert.Equal(fakeBin, bin)
-	assert.Equal("myterm", name)
-	assert.NotEmpty(args, "expected non-empty args")
+	require.NoError(t, err)
+	assert.Equal(t, fakeBin, bin)
+	assert.Equal(t, "myterm", name)
+	assert.NotEmpty(t, args, "expected non-empty args")
 }
 
 func TestDetectTerminalLinux_EnvTerminalWithArgs(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if runtime.GOOS == "windows" {
 		t.Skip("Linux-only terminal detection")
 	}
 	binDir := t.TempDir()
 	fakeBin := filepath.Join(binDir, "kitty")
-	require.NoError(os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755))
+	require.NoError(t, os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755))
 	t.Setenv("PATH", binDir)
 	t.Setenv("TERMINAL", "kitty --single-instance")
 
 	bin, args, name, err := detectTerminalLinux("echo hello")
-	require.NoError(err)
-	assert.Equal(fakeBin, bin)
-	assert.Equal("kitty", name)
+	require.NoError(t, err)
+	assert.Equal(t, fakeBin, bin)
+	assert.Equal(t, "kitty", name)
 	// Should have --single-instance prepended before template args.
-	require.GreaterOrEqual(len(args), 2,
+	require.GreaterOrEqual(t, len(args), 2,
 		"args = %v, want --single-instance as first arg", args)
-	assert.Equal("--single-instance", args[0],
+	assert.Equal(t, "--single-instance", args[0],
 		"args = %v, want --single-instance as first arg", args)
 }
 
@@ -238,7 +230,7 @@ func TestLaunchClaudeDesktop(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cmd := launchClaudeDesktop(tt.sessionID, tt.cwd)
+			cmd := launchClaudeDesktop(t.Context(), tt.sessionID, tt.cwd)
 			require.NotEmpty(t, cmd.Path,
 				"expected non-empty command path")
 			// The command should be "open <url>".
@@ -349,19 +341,17 @@ func TestCursorProjectDirNameFromTranscriptPath(t *testing.T) {
 }
 
 func TestResolveCursorProjectDirNameFromRoot(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	want := filepath.Join(
 		root, "Users", "alice", "code", "li",
 		"project-cache-hdfs",
 	)
-	require.NoError(os.MkdirAll(want, 0o755))
-	require.NoError(os.MkdirAll(
+	require.NoError(t, os.MkdirAll(want, 0o755))
+	require.NoError(t, os.MkdirAll(
 		filepath.Join(root, "Users", "alice", "code", "li"),
 		0o755,
 	))
-	require.NoError(os.MkdirAll(
+	require.NoError(t, os.MkdirAll(
 		filepath.Join(root, "Users", "alice", "code", "li", "project"),
 		0o755,
 	))
@@ -391,15 +381,12 @@ func TestResolveCursorProjectDirNameFromRootMatchesUnderscoreComponents(
 func TestResolveCursorProjectDirFromSessionFileDetectsAmbiguity(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	want := filepath.Join(
 		root, "Users", "alice", "code", "li-tools",
 	)
-	require.NoError(os.MkdirAll(want, 0o755))
-	require.NoError(os.MkdirAll(
+	require.NoError(t, os.MkdirAll(want, 0o755))
+	require.NoError(t, os.MkdirAll(
 		filepath.Join(root, "Users", "alice", "code", "li", "tools"),
 		0o755,
 	))
@@ -418,8 +405,8 @@ func TestResolveCursorProjectDirFromSessionFileDetectsAmbiguity(
 		got = matches[0]
 	}
 	ambiguous := len(matches) > 1
-	assert.Equal(want, got)
-	assert.True(ambiguous, "expected ambiguous transcript path")
+	assert.Equal(t, want, got)
+	assert.True(t, ambiguous, "expected ambiguous transcript path")
 }
 
 func TestResolveCursorProjectDirFromSessionFileUnambiguous(
@@ -491,20 +478,18 @@ func TestResolveCursorProjectDirNameFromRootHintPrefersContainingPath(
 func TestResolveCursorProjectDirNameFromRootHintStaleReturnsEmpty(
 	t *testing.T,
 ) {
-	require := require.New(t)
-
 	root := t.TempDir()
-	require.NoError(os.MkdirAll(
+	require.NoError(t, os.MkdirAll(
 		filepath.Join(root, "Users", "alice", "code", "li-tools"),
 		0o755,
 	))
-	require.NoError(os.MkdirAll(
+	require.NoError(t, os.MkdirAll(
 		filepath.Join(root, "Users", "alice", "code", "li", "tools"),
 		0o755,
 	))
 
 	staleHint := filepath.Join(root, "unrelated")
-	require.NoError(os.MkdirAll(staleHint, 0o755))
+	require.NoError(t, os.MkdirAll(staleHint, 0o755))
 
 	got := resolveCursorProjectDirNameFromRootHint(
 		root, "Users-alice-code-li-tools", staleHint,
@@ -543,51 +528,49 @@ func TestResolveCursorProjectDirNameFromRootHintSymlinkMatch(
 }
 
 func TestResolveSessionDir(t *testing.T) {
-	require := require.New(t)
-
 	// Create a real temp directory for the "absolute path" cases.
 	tmpDir := t.TempDir()
 
 	// Create a session file with a cwd field.
 	sessionFile := filepath.Join(tmpDir, "session.jsonl")
 	cwdDir := filepath.Join(tmpDir, "project")
-	require.NoError(os.Mkdir(cwdDir, 0o755))
+	require.NoError(t, os.Mkdir(cwdDir, 0o755))
 	cwdJSON, _ := json.Marshal(cwdDir)
 	content := `{"cwd":` + string(cwdJSON) + `}` + "\n"
-	require.NoError(os.WriteFile(sessionFile, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(sessionFile, []byte(content), 0o644))
 
 	kiroStoreDir := filepath.Join(tmpDir, "kiro-store")
-	require.NoError(os.Mkdir(kiroStoreDir, 0o755))
+	require.NoError(t, os.Mkdir(kiroStoreDir, 0o755))
 	kiroProjectDir := filepath.Join(tmpDir, "kiro-project")
-	require.NoError(os.Mkdir(kiroProjectDir, 0o755))
+	require.NoError(t, os.Mkdir(kiroProjectDir, 0o755))
 	kiroVirtualPath := filepath.Join(kiroStoreDir, "data.sqlite3") + "#sqlite-session"
 
 	hashPathDir := filepath.Join(tmpDir, "project#dev")
 	hashPathCwd := filepath.Join(hashPathDir, "workspace")
-	require.NoError(os.MkdirAll(hashPathCwd, 0o755))
+	require.NoError(t, os.MkdirAll(hashPathCwd, 0o755))
 	hashPathSessionFile := filepath.Join(hashPathDir, "session.jsonl")
 	hashPathCwdJSON, _ := json.Marshal(hashPathCwd)
 	hashPathContent := `{"cwd":` + string(hashPathCwdJSON) + `}` + "\n"
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		hashPathSessionFile, []byte(hashPathContent), 0o644,
 	))
 
 	cursorProject := filepath.Join(
 		tmpDir, "workspace-root", "li-openhouse",
 	)
-	require.NoError(os.MkdirAll(cursorProject, 0o755))
+	require.NoError(t, os.MkdirAll(cursorProject, 0o755))
 	cursorTranscript := filepath.Join(
 		tmpDir, ".cursor", "projects",
 		encodeCursorProjectPathForTest(cursorProject),
 		"agent-transcripts", "cursor-sess",
 		"cursor-sess.jsonl",
 	)
-	require.NoError(os.MkdirAll(
+	require.NoError(t, os.MkdirAll(
 		filepath.Dir(cursorTranscript), 0o755,
 	))
-	require.NoError(os.WriteFile(cursorTranscript, []byte("{}\n"), 0o644))
+	require.NoError(t, os.WriteFile(cursorTranscript, []byte("{}\n"), 0o644))
 	cursorLastDir := filepath.Join(cursorProject, "frontend")
-	require.NoError(os.MkdirAll(cursorLastDir, 0o755))
+	require.NoError(t, os.MkdirAll(cursorLastDir, 0o755))
 	cursorLastDirJSON, _ := json.Marshal(cursorLastDir)
 	cursorTranscriptWithLastDir := filepath.Join(
 		tmpDir, ".cursor", "projects",
@@ -595,12 +578,12 @@ func TestResolveSessionDir(t *testing.T) {
 		"agent-transcripts", "cursor-sess-last",
 		"cursor-sess-last.jsonl",
 	)
-	require.NoError(os.MkdirAll(
+	require.NoError(t, os.MkdirAll(
 		filepath.Dir(cursorTranscriptWithLastDir), 0o755,
 	))
 	lastDirContent := `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"pwd","working_directory":` +
 		string(cursorLastDirJSON) + `}}]}}` + "\n"
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		cursorTranscriptWithLastDir, []byte(lastDirContent), 0o644,
 	))
 
@@ -755,16 +738,14 @@ func TestResolveResumeDir(t *testing.T) {
 }
 
 func TestResolveCursorWorkspaceDirUsesLastWorkingDirHint(t *testing.T) {
-	require := require.New(t)
-
 	tmpDir := t.TempDir()
 
 	cursorProject := filepath.Join(
 		tmpDir, "workspace-root", "li", "tools",
 	)
 	cursorLastDir := filepath.Join(cursorProject, "frontend")
-	require.NoError(os.MkdirAll(cursorLastDir, 0o755))
-	require.NoError(os.MkdirAll(
+	require.NoError(t, os.MkdirAll(cursorLastDir, 0o755))
+	require.NoError(t, os.MkdirAll(
 		filepath.Join(tmpDir, "workspace-root", "li-tools"),
 		0o755,
 	))
@@ -776,12 +757,12 @@ func TestResolveCursorWorkspaceDirUsesLastWorkingDirHint(t *testing.T) {
 		"agent-transcripts", "cursor-sess-last",
 		"cursor-sess-last.jsonl",
 	)
-	require.NoError(os.MkdirAll(
+	require.NoError(t, os.MkdirAll(
 		filepath.Dir(cursorTranscript), 0o755,
 	))
 	lastDirContent := `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"pwd","working_directory":` +
 		string(cursorLastDirJSON) + `}}]}}` + "\n"
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		cursorTranscript, []byte(lastDirContent), 0o644,
 	))
 
@@ -828,18 +809,16 @@ func TestResolveCursorWorkspaceDirAmbiguousWithoutHintReturnsEmpty(
 func TestResolveCursorWorkspaceDirStaleHintReturnsEmpty(
 	t *testing.T,
 ) {
-	require := require.New(t)
-
 	tmpDir := t.TempDir()
 
 	pathA := filepath.Join(tmpDir, "li-tools")
 	pathB := filepath.Join(tmpDir, "li", "tools")
-	require.NoError(os.MkdirAll(pathA, 0o755))
-	require.NoError(os.MkdirAll(pathB, 0o755))
+	require.NoError(t, os.MkdirAll(pathA, 0o755))
+	require.NoError(t, os.MkdirAll(pathB, 0o755))
 
 	// Stale hint: exists on disk but not under either candidate.
 	staleDir := filepath.Join(tmpDir, "unrelated-project")
-	require.NoError(os.MkdirAll(staleDir, 0o755))
+	require.NoError(t, os.MkdirAll(staleDir, 0o755))
 
 	encoded := encodeCursorProjectPathForTest(pathA)
 	staleDirJSON, _ := json.Marshal(staleDir)
@@ -849,14 +828,14 @@ func TestResolveCursorWorkspaceDirStaleHintReturnsEmpty(
 		"agent-transcripts", "cursor-sess",
 		"cursor-sess.jsonl",
 	)
-	require.NoError(os.MkdirAll(
+	require.NoError(t, os.MkdirAll(
 		filepath.Dir(cursorTranscript), 0o755,
 	))
 	content := `{"role":"assistant","message":{"content":[` +
 		`{"type":"tool_use","name":"Shell","input":{` +
 		`"command":"pwd","working_directory":` +
 		string(staleDirJSON) + `}}]}}` + "\n"
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		cursorTranscript, []byte(content), 0o644,
 	))
 
@@ -874,14 +853,12 @@ func TestResolveCursorWorkspaceDirStaleHintReturnsEmpty(
 }
 
 func TestResolveSessionDirDoesNotUseCursorLastWorkingDirHint(t *testing.T) {
-	require := require.New(t)
-
 	tmpDir := t.TempDir()
 	pathA := filepath.Join(tmpDir, "li-tools")
 	pathB := filepath.Join(tmpDir, "li", "tools")
 	lastDir := filepath.Join(pathA, "frontend")
-	require.NoError(os.MkdirAll(lastDir, 0o755))
-	require.NoError(os.MkdirAll(pathB, 0o755))
+	require.NoError(t, os.MkdirAll(lastDir, 0o755))
+	require.NoError(t, os.MkdirAll(pathB, 0o755))
 
 	encoded := encodeCursorProjectPathForTest(pathA)
 	lastDirJSON, _ := json.Marshal(lastDir)
@@ -889,8 +866,8 @@ func TestResolveSessionDirDoesNotUseCursorLastWorkingDirHint(t *testing.T) {
 		tmpDir, ".cursor", "projects", encoded,
 		"agent-transcripts", "cursor-sess", "cursor-sess.jsonl",
 	)
-	require.NoError(os.MkdirAll(filepath.Dir(cursorTranscript), 0o755))
-	require.NoError(os.WriteFile(cursorTranscript, []byte(
+	require.NoError(t, os.MkdirAll(filepath.Dir(cursorTranscript), 0o755))
+	require.NoError(t, os.WriteFile(cursorTranscript, []byte(
 		`{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"pwd","working_directory":`+
 			string(lastDirJSON)+`}}]}}`+"\n",
 	), 0o644))

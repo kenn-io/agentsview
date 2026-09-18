@@ -63,6 +63,8 @@ type SyncOptions struct {
 }
 
 // PushResult summarizes a DuckDB push operation.
+//
+//nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type PushResult struct {
 	SessionsPushed int
 	MessagesPushed int
@@ -160,13 +162,13 @@ type SyncStatus struct {
 // creates or migrates schema: callers reach New only from rebuildMirror
 // (which creates schema itself on a fresh file) and incrementalPush (which
 // requires an already-valid mirror, verified by ProbeMirror beforehand).
-func New(
+func New(ctx context.Context,
 	path string, local *db.DB, machine string, opts SyncOptions,
 ) (*Sync, error) {
 	if err := validateSyncInputs(local, machine); err != nil {
 		return nil, err
 	}
-	duck, err := Open(path)
+	duck, err := Open(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +277,7 @@ func Push(
 		result, err := incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
 		switch {
 		case err == nil:
-			cleanUpLegacyDuckDBSyncState(local)
+			cleanUpLegacyDuckDBSyncState(ctx, local)
 			return result, nil
 		case !isMirrorHeldError(err):
 			return result, err
@@ -291,7 +293,7 @@ func Push(
 	result, err := rebuildMirror(ctx, path, local, machine, opts, onProgress)
 	result.Diagnostics.RebuildReason = reason
 	if err == nil {
-		cleanUpLegacyDuckDBSyncState(local)
+		cleanUpLegacyDuckDBSyncState(ctx, local)
 	}
 	return result, err
 }
@@ -344,8 +346,8 @@ const legacyDuckDBSyncStateKeyPrefix = "duckdb_"
 // cleanUpLegacyDuckDBSyncState removes leftover pre-schema-v3 pg_sync_state
 // rows. Best-effort: a failure here does not affect the push that just
 // succeeded, so it is only logged, not returned as an error.
-func cleanUpLegacyDuckDBSyncState(local *db.DB) {
-	if err := local.DeleteSyncStateByPrefix(legacyDuckDBSyncStateKeyPrefix); err != nil {
+func cleanUpLegacyDuckDBSyncState(ctx context.Context, local *db.DB) {
+	if err := local.DeleteSyncStateByPrefix(ctx, legacyDuckDBSyncStateKeyPrefix); err != nil {
 		log.Printf("duckdbsync: cleaning up legacy sync state: %v", err)
 	}
 }
@@ -359,7 +361,7 @@ func incrementalPush(
 	ctx context.Context, path string, local *db.DB, machine string,
 	opts SyncOptions, probe MirrorProbe, onProgress func(PushProgress),
 ) (PushResult, error) {
-	s, err := New(path, local, machine, opts)
+	s, err := New(ctx, path, local, machine, opts)
 	if err != nil {
 		return PushResult{}, err
 	}
@@ -990,7 +992,7 @@ func (s *Sync) sessionFingerprints(
 		// file_path and call_index are json:"-" on ToolCall, so the
 		// marshaled Messages do not cover them. Fold in the tool-call
 		// fingerprint so a file_path-only backfill invalidates the mirror.
-		toolCalls, err := s.local.ToolCallFingerprint(sess.ID)
+		toolCalls, err := s.local.ToolCallFingerprint(ctx, sess.ID)
 		if err != nil {
 			return nil, fmt.Errorf("tool call fingerprint %s: %w", sess.ID, err)
 		}

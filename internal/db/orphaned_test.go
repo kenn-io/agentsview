@@ -13,23 +13,21 @@ import (
 )
 
 func TestCopySyncStateQueuesBothRecordedLocalArtifactIdentities(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	source := testDB(t)
-	require.NoError(source.SetSyncState("artifact_origin_id", "origin-a"))
-	require.NoError(source.SetSyncState("artifact_local_machine_name", "previous-machine"))
-	require.NoError(source.SetSyncState("artifact_local_installation_id", "installation-a"))
+	require.NoError(t, source.SetSyncState(ctx, "artifact_origin_id", "origin-a"))
+	require.NoError(t, source.SetSyncState(ctx, "artifact_local_machine_name", "previous-machine"))
+	require.NoError(t, source.SetSyncState(ctx, "artifact_local_installation_id", "installation-a"))
 
 	replacement := testDB(t)
 	for _, machine := range []string{"local", "previous-machine", "installation-a", "other-machine"} {
-		require.NoError(replacement.UpsertSession(Session{
+		require.NoError(t, replacement.UpsertSession(ctx, Session{
 			ID: machine, Machine: machine, Agent: "claude", Project: "project-a",
 		}))
 	}
-	require.NoError(replacement.CopySyncStateFrom(source.Path()))
+	require.NoError(t, replacement.CopySyncStateFrom(source.Path()))
 	queued, err := replacement.PendingArtifactExports(ctx, 10)
-	require.NoError(err)
+	require.NoError(t, err)
 	ids := make([]string, 0, len(queued))
 	for _, item := range queued {
 		ids = append(ids, item.SessionID)
@@ -38,33 +36,30 @@ func TestCopySyncStateQueuesBothRecordedLocalArtifactIdentities(t *testing.T) {
 }
 
 func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
 	source := testDBAtPath(t, sourcePath, "source")
 	work := artifactImportTestWork("peer-a1b2c3", 2)
-	require.NoError(source.EnqueueArtifactImport(ctx, work))
+	require.NoError(t, source.EnqueueArtifactImport(ctx, work))
 	attempt, err := source.ReserveArtifactImportAttemptGeneration(ctx)
-	require.NoError(err)
+	require.NoError(t, err)
 	pending, err := source.PendingArtifactImports(
 		ctx,
 		ArtifactImportVersions{Checkpoint: 1, Manifest: 2, Segment: 1},
 		attempt,
 		10,
 	)
-	require.NoError(err)
-	require.Len(pending, 1)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
 	marked, err := source.MarkArtifactImportAttempted(
 		ctx, pending[0], attempt,
 	)
-	require.NoError(err)
-	require.True(marked)
+	require.NoError(t, err)
+	require.True(t, marked)
 	marked, err = source.MarkArtifactImportQuarantinePending(ctx, pending[0])
-	require.NoError(err)
-	require.True(marked)
+	require.NoError(t, err)
+	require.True(t, marked)
 
 	head := ArtifactPeerCheckpointHead{
 		Origin:           work.Origin,
@@ -73,7 +68,7 @@ func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
 		CheckpointSize:   99,
 	}
 	_, err = source.RecordArtifactPeerCheckpointHead(ctx, head)
-	require.NoError(err)
+	require.NoError(t, err)
 	landing := ArtifactCheckpointLanding(head)
 	sessionMap := map[string]string{
 		head.Origin + "~one": strings.Repeat("e", 64),
@@ -84,17 +79,17 @@ func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
 		ManifestHash:      sessionMap[head.Origin+"~one"],
 		ImportedSessionID: head.Origin + "~one",
 	}
-	require.NoError(source.RecordArtifactImportedSession(ctx, imported))
-	require.NoError(source.BeginArtifactCheckpointStage(ctx, landing, 1))
-	require.NoError(source.StageArtifactCheckpointSessions(
+	require.NoError(t, source.RecordArtifactImportedSession(ctx, imported))
+	require.NoError(t, source.BeginArtifactCheckpointStage(ctx, landing, 1))
+	require.NoError(t, source.StageArtifactCheckpointSessions(
 		ctx, landing, []ArtifactCheckpointSession{{
 			GID: imported.GID, ManifestHash: imported.ManifestHash,
 		}},
 	))
-	require.NoError(source.CompleteArtifactCheckpointStage(
+	require.NoError(t, source.CompleteArtifactCheckpointStage(
 		ctx, landing, 1,
 	))
-	require.NoError(source.RecordArtifactCheckpointLandingFromStage(
+	require.NoError(t, source.RecordArtifactCheckpointLandingFromStage(
 		ctx, landing,
 	))
 	partial := ArtifactCheckpointLanding{
@@ -105,9 +100,9 @@ func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
 	_, err = source.RecordArtifactPeerCheckpointHead(
 		ctx, ArtifactPeerCheckpointHead(partial),
 	)
-	require.NoError(err)
-	require.NoError(source.BeginArtifactCheckpointStage(ctx, partial, 2))
-	require.NoError(source.StageArtifactCheckpointSessionPage(
+	require.NoError(t, err)
+	require.NoError(t, source.BeginArtifactCheckpointStage(ctx, partial, 2))
+	require.NoError(t, source.StageArtifactCheckpointSessionPage(
 		ctx, partial,
 		[]ArtifactCheckpointSession{{
 			GID:          partial.Origin + "~partial",
@@ -115,58 +110,55 @@ func TestCopySyncStatePreservesArtifactImportAuthority(t *testing.T) {
 		}},
 		0, 42,
 	))
-	require.NoError(source.Close())
+	require.NoError(t, source.Close())
 
 	destination := testDBAtPath(
 		t, filepath.Join(dir, "destination.db"), "destination",
 	)
 	defer destination.Close()
-	require.NoError(destination.CopySyncStateFrom(sourcePath))
+	require.NoError(t, destination.CopySyncStateFrom(sourcePath))
 
 	nextAttempt, err := destination.ReserveArtifactImportAttemptGeneration(ctx)
-	require.NoError(err)
-	assert.Greater(nextAttempt, attempt)
+	require.NoError(t, err)
+	assert.Greater(t, nextAttempt, attempt)
 	pending, err = destination.PendingArtifactImports(
 		ctx,
 		ArtifactImportVersions{Checkpoint: 1, Manifest: 2, Segment: 1},
 		nextAttempt,
 		10,
 	)
-	require.NoError(err)
-	require.Len(pending, 1)
-	assert.Equal(work.Name, pending[0].Name)
-	assert.True(pending[0].QuarantinePending)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, work.Name, pending[0].Name)
+	assert.True(t, pending[0].QuarantinePending)
 
 	gotHead, found, err := destination.GetArtifactPeerCheckpointHead(
 		ctx, head.Origin,
 	)
-	require.NoError(err)
-	require.True(found)
-	assert.Equal(head, gotHead)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, head, gotHead)
 	gotLanding, gotMap, found, err := destination.GetArtifactCheckpointLanding(ctx, head.Origin)
-	require.NoError(err)
-	require.True(found)
-	assert.Equal(landing, gotLanding)
-	assert.Equal(sessionMap, gotMap)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, landing, gotLanding)
+	assert.Equal(t, sessionMap, gotMap)
 	gotProvenance, err := destination.ArtifactImportedManifestHashes(
 		ctx, head.Origin, []string{imported.GID},
 	)
-	require.NoError(err)
-	assert.Equal(map[string]string{
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
 		imported.GID: imported.ManifestHash,
 	}, gotProvenance)
-	require.NoError(destination.BeginArtifactCheckpointStage(ctx, partial, 2))
+	require.NoError(t, destination.BeginArtifactCheckpointStage(ctx, partial, 2))
 	progress, err := destination.ArtifactCheckpointStageProgress(ctx, partial)
-	require.NoError(err)
-	assert.False(progress.Complete)
-	assert.Equal(1, progress.DecodedCount)
-	assert.Equal(int64(42), progress.DecodeOffset)
+	require.NoError(t, err)
+	assert.False(t, progress.Complete)
+	assert.Equal(t, 1, progress.DecodedCount)
+	assert.Equal(t, int64(42), progress.DecodeOffset)
 }
 
 func TestFullResyncPreservesImportedSessionUsage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
@@ -177,7 +169,7 @@ func TestFullResyncPreservesImportedSessionUsage(t *testing.T) {
 		session.Machine = origin
 	})
 	ordinal := 2
-	require.NoError(source.ReplaceSessionUsageEvents(gid, []UsageEvent{{
+	require.NoError(t, source.ReplaceSessionUsageEvents(ctx, gid, []UsageEvent{{
 		SessionID:                gid,
 		MessageOrdinal:           &ordinal,
 		Source:                   "artifact",
@@ -200,14 +192,14 @@ func TestFullResyncPreservesImportedSessionUsage(t *testing.T) {
 		CheckpointSize:   123,
 	}
 	_, err := source.RecordArtifactPeerCheckpointHead(ctx, head)
-	require.NoError(err)
+	require.NoError(t, err)
 	manifestHash := strings.Repeat("b", 64)
-	require.NoError(source.RecordArtifactCheckpointLanding(
+	require.NoError(t, source.RecordArtifactCheckpointLanding(
 		ctx,
 		ArtifactCheckpointLanding(head),
 		map[string]string{gid: manifestHash},
 	))
-	require.NoError(source.RecordArtifactImportedSession(
+	require.NoError(t, source.RecordArtifactImportedSession(
 		ctx,
 		ArtifactImportedSession{
 			Origin:            origin,
@@ -216,22 +208,22 @@ func TestFullResyncPreservesImportedSessionUsage(t *testing.T) {
 			ImportedSessionID: gid,
 		},
 	))
-	require.NoError(source.Close())
+	require.NoError(t, source.Close())
 
 	destination := testDBAtPath(
 		t, filepath.Join(dir, "destination.db"), "destination",
 	)
 	defer destination.Close()
-	require.NoError(destination.CopySyncStateFrom(sourcePath))
+	require.NoError(t, destination.CopySyncStateFrom(sourcePath))
 	copied, err := destination.CopyOrphanedDataFrom(sourcePath)
-	require.NoError(err)
-	require.Equal(1, copied)
+	require.NoError(t, err)
+	require.Equal(t, 1, copied)
 
 	events, err := destination.GetUsageEvents(ctx, gid)
-	require.NoError(err)
-	require.Len(events, 1)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
 	events[0].ID = 0
-	assert.Equal(UsageEvent{
+	assert.Equal(t, UsageEvent{
 		SessionID:                gid,
 		MessageOrdinal:           &ordinal,
 		Source:                   "artifact",
@@ -250,34 +242,30 @@ func TestFullResyncPreservesImportedSessionUsage(t *testing.T) {
 	provenance, err := destination.ArtifactImportedManifestHashes(
 		ctx, origin, []string{gid},
 	)
-	require.NoError(err)
-	assert.Equal(map[string]string{gid: manifestHash}, provenance)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{gid: manifestHash}, provenance)
 }
 
 func TestCopySyncStateAcceptsDatabaseWithoutArtifactImportTables(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "old.db")
 	source, err := sql.Open("sqlite3", makeDSN(sourcePath, false))
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = source.ExecContext(t.Context(), `CREATE TABLE pg_sync_state (
 		key TEXT PRIMARY KEY,
 		value TEXT NOT NULL
 	)`)
-	require.NoError(err)
-	require.NoError(source.Close())
+	require.NoError(t, err)
+	require.NoError(t, source.Close())
 
 	destination := testDBAtPath(
 		t, filepath.Join(dir, "destination.db"), "destination",
 	)
 	defer destination.Close()
-	require.NoError(destination.CopySyncStateFrom(sourcePath))
+	require.NoError(t, destination.CopySyncStateFrom(sourcePath))
 }
 
 func TestCopySyncStateRejectsEqualLandingWithDifferentMap(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
@@ -289,28 +277,28 @@ func TestCopySyncStateRejectsEqualLandingWithDifferentMap(t *testing.T) {
 		CheckpointSize:   42,
 	}
 	_, err := source.RecordArtifactPeerCheckpointHead(ctx, head)
-	require.NoError(err)
-	require.NoError(source.RecordArtifactCheckpointLanding(
+	require.NoError(t, err)
+	require.NoError(t, source.RecordArtifactCheckpointLanding(
 		ctx,
 		ArtifactCheckpointLanding(head),
 		map[string]string{head.Origin + "~source": strings.Repeat("b", 64)},
 	))
-	require.NoError(source.Close())
+	require.NoError(t, source.Close())
 
 	destination := testDBAtPath(
 		t, filepath.Join(dir, "destination.db"), "destination",
 	)
 	defer destination.Close()
 	_, err = destination.RecordArtifactPeerCheckpointHead(ctx, head)
-	require.NoError(err)
-	require.NoError(destination.RecordArtifactCheckpointLanding(
+	require.NoError(t, err)
+	require.NoError(t, destination.RecordArtifactCheckpointLanding(
 		ctx,
 		ArtifactCheckpointLanding(head),
 		map[string]string{head.Origin + "~destination": strings.Repeat("c", 64)},
 	))
 
 	err = destination.CopySyncStateFrom(sourcePath)
-	require.ErrorIs(err, ErrArtifactImportConflict)
+	require.ErrorIs(t, err, ErrArtifactImportConflict)
 }
 
 func TestCopySyncStateRejectsIncompatibleCheckpointStages(t *testing.T) {
@@ -391,9 +379,6 @@ func TestCopySyncStateRejectsIncompatibleCheckpointStages(t *testing.T) {
 }
 
 func TestCopySyncStateMergesCompatibleCheckpointStagePrefix(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
@@ -413,7 +398,7 @@ func TestCopySyncStateMergesCompatibleCheckpointStagePrefix(t *testing.T) {
 	stageCheckpointForCopyTest(
 		t, source, landing, []ArtifactCheckpointSession{one, two}, 20, false,
 	)
-	require.NoError(source.Close())
+	require.NoError(t, source.Close())
 
 	destination := testDBAtPath(
 		t, filepath.Join(dir, "destination.db"), "destination",
@@ -423,20 +408,20 @@ func TestCopySyncStateMergesCompatibleCheckpointStagePrefix(t *testing.T) {
 		t, destination, landing, []ArtifactCheckpointSession{one}, 10, false,
 	)
 
-	require.NoError(destination.CopySyncStateFrom(sourcePath))
+	require.NoError(t, destination.CopySyncStateFrom(sourcePath))
 	progress, err := destination.ArtifactCheckpointStageProgress(ctx, landing)
-	require.NoError(err)
-	assert.False(progress.Complete)
-	assert.Equal(2, progress.DecodedCount)
-	assert.Equal(int64(20), progress.DecodeOffset)
+	require.NoError(t, err)
+	assert.False(t, progress.Complete)
+	assert.Equal(t, 2, progress.DecodedCount)
+	assert.Equal(t, int64(20), progress.DecodeOffset)
 	var stagedCount int
-	require.NoError(destination.getReader().QueryRowContext(ctx, `
+	require.NoError(t, destination.getReader().QueryRowContext(ctx, `
 		SELECT count(*)
 		FROM artifact_checkpoint_stage_sessions
 		WHERE origin = ? AND sequence = ?`,
 		landing.Origin, landing.Sequence,
 	).Scan(&stagedCount))
-	assert.Equal(2, stagedCount)
+	assert.Equal(t, 2, stagedCount)
 }
 
 func stageCheckpointForCopyTest(
@@ -448,6 +433,7 @@ func stageCheckpointForCopyTest(
 	complete bool,
 ) {
 	t.Helper()
+
 	ctx := t.Context()
 	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, landing, 1))
 	if complete {
@@ -465,42 +451,37 @@ func stageCheckpointForCopyTest(
 }
 
 func TestExecWithoutCancelDropsTempTableWithCanceledContext(t *testing.T) {
-	require := require.New(t)
-
 	path := filepath.Join(t.TempDir(), "test.db")
 	pool, err := sql.Open("sqlite3", path)
-	require.NoError(err, "open sqlite")
+	require.NoError(t, err, "open sqlite")
 	defer pool.Close()
 
 	baseCtx := t.Context()
 	conn, err := pool.Conn(baseCtx)
-	require.NoError(err, "pin sqlite connection")
+	require.NoError(t, err, "pin sqlite connection")
 	defer conn.Close()
 
 	_, err = conn.ExecContext(baseCtx, `
 		CREATE TEMP TABLE _test_cleanup (
 			id TEXT PRIMARY KEY
 		)`)
-	require.NoError(err, "create temp table")
+	require.NoError(t, err, "create temp table")
 
 	ctx, cancel := context.WithCancel(baseCtx)
 	cancel()
 
 	_, err = execWithoutCancel(ctx, conn,
 		"DROP TABLE IF EXISTS _test_cleanup")
-	require.NoError(err, "drop with canceled context")
+	require.NoError(t, err, "drop with canceled context")
 
 	_, err = conn.ExecContext(baseCtx, `
 		CREATE TEMP TABLE _test_cleanup (
 			id TEXT PRIMARY KEY
 		)`)
-	require.NoError(err, "recreate temp table after cleanup")
+	require.NoError(t, err, "recreate temp table after cleanup")
 }
 
 func TestCopyOrphanedDataPreservesSessionKindAndPromptSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "old.db")
@@ -519,31 +500,28 @@ func TestCopyOrphanedDataPreservesSessionKindAndPromptSource(t *testing.T) {
 			Content: "second", PromptSource: "queued",
 		},
 	)
-	require.NoError(srcDB.Close(), "close source")
+	require.NoError(t, srcDB.Close(), "close source")
 
 	dstPath := filepath.Join(dir, "new.db")
 	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 
 	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
-	require.NoError(err, "CopyOrphanedDataFrom")
-	require.Equal(1, count, "expected one orphan")
+	require.NoError(t, err, "CopyOrphanedDataFrom")
+	require.Equal(t, 1, count, "expected one orphan")
 
 	session, err := dstDB.GetSession(ctx, "kind-orphan")
-	require.NoError(err, "get copied session")
-	assert.Equal("bg", session.SessionKind)
+	require.NoError(t, err, "get copied session")
+	assert.Equal(t, "bg", session.SessionKind)
 
 	msgs, err := dstDB.GetMessages(ctx, "kind-orphan", 0, 10, true)
-	require.NoError(err, "get copied messages")
-	require.Len(msgs, 2)
-	assert.Equal("typed", msgs[0].PromptSource)
-	assert.Equal("queued", msgs[1].PromptSource)
+	require.NoError(t, err, "get copied messages")
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "typed", msgs[0].PromptSource)
+	assert.Equal(t, "queued", msgs[1].PromptSource)
 }
 
 func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "old.db")
@@ -551,7 +529,7 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 	insertSession(t, srcDB, "poison-orphan", "proj")
 	insertMessages(t, srcDB, userMsg("poison-orphan", 0, "clean"))
 	var messageID int64
-	require.NoError(srcDB.getWriter().QueryRowContext(ctx,
+	require.NoError(t, srcDB.getWriter().QueryRowContext(ctx,
 		`SELECT id FROM messages WHERE session_id = ? AND ordinal = 0`,
 		"poison-orphan",
 	).Scan(&messageID), "query source message id")
@@ -574,7 +552,7 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 		 WHERE id = ?`,
 		messageContent, len(messageContent)+messageLengthExcess, messageID,
 	)
-	require.NoError(err, "plant poisoned message")
+	require.NoError(t, err, "plant poisoned message")
 	_, err = srcDB.getWriter().ExecContext(ctx,
 		`INSERT INTO tool_calls (
 			message_id, session_id, tool_name, category,
@@ -584,7 +562,7 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 		messageID, "poison-orphan", "Read", "file", "tool-1",
 		toolInput, len(toolResult)+toolLengthExcess, toolResult, 0,
 	)
-	require.NoError(err, "plant poisoned tool call")
+	require.NoError(t, err, "plant poisoned tool call")
 	_, err = srcDB.getWriter().ExecContext(ctx,
 		`INSERT INTO tool_calls (
 			message_id, session_id, tool_name, category,
@@ -593,7 +571,7 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 		messageID, "poison-orphan", "Read", "file", "tool-empty",
 		emptyToolInput, 1,
 	)
-	require.NoError(err, "plant empty-sanitized tool input")
+	require.NoError(t, err, "plant empty-sanitized tool input")
 	_, err = srcDB.getWriter().ExecContext(ctx,
 		`INSERT INTO tool_calls (
 			message_id, session_id, tool_name, category,
@@ -603,7 +581,7 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 		messageID, "poison-orphan", "Read", "file", "tool-empty-result",
 		emptyResultLength, emptyToolResult, 2,
 	)
-	require.NoError(err, "plant empty-sanitized tool result")
+	require.NoError(t, err, "plant empty-sanitized tool result")
 	_, err = srcDB.getWriter().ExecContext(ctx,
 		`INSERT INTO tool_result_events (
 			session_id, tool_call_message_ordinal, call_index,
@@ -613,69 +591,69 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 		"poison-orphan", 0, 0, "tool-1", "tool_result", "ok",
 		eventContent, len(eventContent)+eventLengthExcess, 0,
 	)
-	require.NoError(err, "plant poisoned tool result event")
+	require.NoError(t, err, "plant poisoned tool result event")
 	// Dirty content only exists in archives written before
 	// sanitizedSourceDataVersion; sources at or above it skip the
 	// sanitize pass entirely.
 	_, err = srcDB.getWriter().ExecContext(ctx, fmt.Sprintf(
 		"PRAGMA user_version = %d", sanitizedSourceDataVersion-1,
 	))
-	require.NoError(err, "downgrade source data version")
-	require.NoError(srcDB.Close(), "close source")
+	require.NoError(t, err, "downgrade source data version")
+	require.NoError(t, srcDB.Close(), "close source")
 
 	dstPath := filepath.Join(dir, "new.db")
 	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 
 	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
-	require.NoError(err, "CopyOrphanedDataFrom")
-	require.Equal(1, count, "expected one orphan")
+	require.NoError(t, err, "CopyOrphanedDataFrom")
+	require.Equal(t, 1, count, "expected one orphan")
 
 	var gotMessage string
 	var gotMessageLength int
-	require.NoError(dstDB.getReader().QueryRowContext(ctx,
+	require.NoError(t, dstDB.getReader().QueryRowContext(ctx,
 		`SELECT content, content_length
 		 FROM messages
 		 WHERE session_id = ? AND ordinal = 0`,
 		"poison-orphan",
 	).Scan(&gotMessage, &gotMessageLength), "query copied message")
 	wantMessage := SanitizeUTF8(messageContent)
-	assert.Equal(wantMessage, gotMessage)
-	assert.Equal(len(wantMessage)+messageLengthExcess, gotMessageLength)
+	assert.Equal(t, wantMessage, gotMessage)
+	assert.Equal(t, len(wantMessage)+messageLengthExcess, gotMessageLength)
 
 	var gotToolInput string
-	require.NoError(dstDB.getReader().QueryRowContext(ctx,
+	require.NoError(t, dstDB.getReader().QueryRowContext(ctx,
 		`SELECT input_json
 		 FROM tool_calls
 		 WHERE session_id = ? AND call_index = 0`,
 		"poison-orphan",
 	).Scan(&gotToolInput), "query copied tool input")
-	assert.Equal(SanitizeUTF8(toolInput), gotToolInput)
+	assert.Equal(t, SanitizeUTF8(toolInput), gotToolInput)
 
 	var gotEmptyToolInput sql.NullString
-	require.NoError(dstDB.getReader().QueryRowContext(ctx,
+	require.NoError(t, dstDB.getReader().QueryRowContext(ctx,
 		`SELECT input_json
 		 FROM tool_calls
 		 WHERE session_id = ? AND call_index = 1`,
 		"poison-orphan",
 	).Scan(&gotEmptyToolInput), "query empty copied tool input")
-	assert.False(gotEmptyToolInput.Valid)
+	assert.False(t, gotEmptyToolInput.Valid)
 
 	var gotToolResult string
 	var gotToolResultLength int
-	require.NoError(dstDB.getReader().QueryRowContext(ctx,
+	require.NoError(t, dstDB.getReader().QueryRowContext(ctx,
 		`SELECT result_content, result_content_length
 		 FROM tool_calls
 		 WHERE session_id = ? AND call_index = 0`,
 		"poison-orphan",
 	).Scan(&gotToolResult, &gotToolResultLength), "query copied tool call")
 	wantToolResult := SanitizeUTF8(toolResult)
-	assert.Equal(wantToolResult, gotToolResult)
-	assert.Equal(len(wantToolResult)+toolLengthExcess, gotToolResultLength)
+	assert.Equal(t, wantToolResult, gotToolResult)
+	assert.Equal(t, len(wantToolResult)+toolLengthExcess, gotToolResultLength)
 
 	var gotEmptyToolResult sql.NullString
 	var gotEmptyToolResultLength sql.NullInt64
-	require.NoError(dstDB.getReader().QueryRowContext(ctx,
+	require.NoError(t, dstDB.getReader().QueryRowContext(ctx,
 		`SELECT result_content, result_content_length
 		 FROM tool_calls
 		 WHERE session_id = ? AND call_index = 2`,
@@ -684,23 +662,23 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 		&gotEmptyToolResult,
 		&gotEmptyToolResultLength,
 	), "query empty copied tool call result")
-	assert.False(gotEmptyToolResult.Valid)
-	require.True(gotEmptyToolResultLength.Valid)
-	assert.Equal(int64(emptyResultLength-len(emptyToolResult)),
+	assert.False(t, gotEmptyToolResult.Valid)
+	require.True(t, gotEmptyToolResultLength.Valid)
+	assert.Equal(t, int64(emptyResultLength-len(emptyToolResult)),
 		gotEmptyToolResultLength.Int64,
 	)
 
 	var gotEventContent string
 	var gotEventLength int
-	require.NoError(dstDB.getReader().QueryRowContext(ctx,
+	require.NoError(t, dstDB.getReader().QueryRowContext(ctx,
 		`SELECT content, content_length
 		 FROM tool_result_events
 		 WHERE session_id = ? AND event_index = 0`,
 		"poison-orphan",
 	).Scan(&gotEventContent, &gotEventLength), "query copied tool result event")
 	wantEventContent := SanitizeUTF8(eventContent)
-	assert.Equal(wantEventContent, gotEventContent)
-	assert.Equal(len(wantEventContent)+eventLengthExcess, gotEventLength)
+	assert.Equal(t, wantEventContent, gotEventContent)
+	assert.Equal(t, len(wantEventContent)+eventLengthExcess, gotEventLength)
 }
 
 // TestCopySkipsSanitizeForSanitizedSource guards the resync fast
@@ -756,9 +734,6 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 	for _, cp := range copies {
 		for _, ver := range versions {
 			t.Run(cp.name+"/"+ver.name, func(t *testing.T) {
-				assert := assert.New(t)
-				require := require.New(t)
-
 				ctx := t.Context()
 				dir := t.TempDir()
 				srcPath := filepath.Join(dir, "old.db")
@@ -769,9 +744,9 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 					`UPDATE messages SET content = ? WHERE session_id = ?`,
 					rawContent, "sess",
 				)
-				require.NoError(err, "plant raw content")
+				require.NoError(t, err, "plant raw content")
 				var messageID int64
-				require.NoError(srcDB.getWriter().QueryRowContext(ctx,
+				require.NoError(t, srcDB.getWriter().QueryRowContext(ctx,
 					`SELECT id FROM messages WHERE session_id = ?`, "sess",
 				).Scan(&messageID), "read message id")
 				_, err = srcDB.getWriter().ExecContext(ctx,
@@ -783,39 +758,39 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 					messageID, "sess", "Bash", "execution", "tool-1",
 					rawToolInput, len(rawToolResult), rawToolResult, 0,
 				)
-				require.NoError(err, "plant raw tool call")
+				require.NoError(t, err, "plant raw tool call")
 				_, err = srcDB.getWriter().ExecContext(ctx, fmt.Sprintf(
 					"PRAGMA user_version = %d", ver.sourceVersion,
 				))
-				require.NoError(err, "set source data version")
+				require.NoError(t, err, "set source data version")
 				if cp.trash {
-					require.NoError(srcDB.SoftDeleteSession("sess"),
+					require.NoError(t, srcDB.SoftDeleteSession(ctx, "sess"),
 						"soft delete source session")
 				}
-				require.NoError(srcDB.Close(), "close source")
+				require.NoError(t, srcDB.Close(), "close source")
 
 				dstDB := testDBAtPath(t, filepath.Join(dir, "new.db"), "dst")
 				defer dstDB.Close()
 				count, err := cp.copy(dstDB, srcPath)
-				require.NoError(err, "copy from source")
-				require.Equal(1, count, "copied sessions")
+				require.NoError(t, err, "copy from source")
+				require.Equal(t, 1, count, "copied sessions")
 
 				var got string
-				require.NoError(dstDB.getReader().QueryRowContext(ctx,
+				require.NoError(t, dstDB.getReader().QueryRowContext(ctx,
 					`SELECT content FROM messages WHERE session_id = ?`,
 					"sess",
 				).Scan(&got), "query copied message")
-				assert.Equal(rawContent, got,
+				assert.Equal(t, rawContent, got,
 					"content-sanitized source must copy content verbatim")
 
 				var gotInput, gotResult string
-				require.NoError(dstDB.getReader().QueryRowContext(ctx,
+				require.NoError(t, dstDB.getReader().QueryRowContext(ctx,
 					`SELECT input_json, result_content
 					 FROM tool_calls WHERE session_id = ?`,
 					"sess",
 				).Scan(&gotInput, &gotResult), "query copied tool call")
-				assert.Equal(ver.wantInput, gotInput)
-				assert.Equal(rawToolResult, gotResult,
+				assert.Equal(t, ver.wantInput, gotInput)
+				assert.Equal(t, rawToolResult, gotResult,
 					"tool result must copy verbatim for sanitized sources")
 			})
 		}

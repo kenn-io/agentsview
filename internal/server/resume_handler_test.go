@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -127,6 +129,7 @@ func assertMessagePointCommandForRuntime(
 	t *testing.T, command string, promptPath string,
 ) {
 	t.Helper()
+
 	if runtime.GOOS == "windows" {
 		script := decodeMessagePointPowerShellCommandForTest(t, command)
 		quotedPromptPath := powerShellSingleQuoteForTest(promptPath)
@@ -150,6 +153,7 @@ func decodeMessagePointPowerShellCommandForTest(
 	t *testing.T, command string,
 ) string {
 	t.Helper()
+
 	const prefix = "powershell.exe -NoProfile -EncodedCommand "
 	require.True(t, strings.HasPrefix(command, prefix), "command = %q", command)
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(command, prefix))
@@ -168,9 +172,6 @@ func powerShellSingleQuoteForTest(s string) string {
 }
 
 func TestResumeRemoteCommandOnly(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 	te.seedSession(t, "devbox1~claude:abc-123", "remote-project", 1, func(s *db.Session) {
 		s.Agent = "claude"
@@ -178,17 +179,17 @@ func TestResumeRemoteCommandOnly(t *testing.T) {
 	})
 	w := te.post(t, "/api/v1/sessions/devbox1~claude:abc-123/resume", `{"command_only":true}`)
 	t.Logf("status=%d body=%s", w.Code, w.Body.String())
-	require.Equal(http.StatusOK, w.Code)
+	require.Equal(t, http.StatusOK, w.Code)
 	var resp struct {
 		Launched bool   `json:"launched"`
 		Command  string `json:"command"`
 		Cwd      string `json:"cwd"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.False(resp.Launched)
-	assert.Equal("cd '/home/user/project' && claude --resume abc-123", resp.Command)
-	assert.Equal("/home/user/project", resp.Cwd)
-	assert.NotContains(resp.Command, "~")
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.False(t, resp.Launched)
+	assert.Equal(t, "cd '/home/user/project' && claude --resume abc-123", resp.Command)
+	assert.Equal(t, "/home/user/project", resp.Cwd)
+	assert.NotContains(t, resp.Command, "~")
 }
 
 func TestResumeSession(t *testing.T) {
@@ -212,7 +213,7 @@ func TestResumeSession(t *testing.T) {
 
 	t.Run("remote deleted row precedes guard", func(t *testing.T) {
 		te.seedSession(t, "devbox1~deleted", "remote", 1)
-		require.NoError(t, te.db.SoftDeleteSession("devbox1~deleted"))
+		require.NoError(t, te.db.SoftDeleteSession(t.Context(), "devbox1~deleted"))
 		for _, body := range []string{`{}`, `{"command_only":true}`} {
 			w := te.post(t, "/api/v1/sessions/devbox1~deleted/resume", body)
 			assert.Equal(t, http.StatusNotFound, w.Code)
@@ -536,8 +537,6 @@ func TestResumeSession(t *testing.T) {
 			},
 		} {
 			t.Run(tt.name, func(t *testing.T) {
-				assert := assert.New(t)
-
 				w := te.post(t,
 					"/api/v1/sessions/"+tt.id+"/resume",
 					`{"command_only":true}`,
@@ -550,9 +549,9 @@ func TestResumeSession(t *testing.T) {
 					Cwd      string `json:"cwd"`
 				}
 				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-				assert.False(resp.Launched, "expected launched=false for command_only")
-				assert.Equal("cd '"+tt.wantCwd+"' && "+tt.wantSuffix, resp.Command)
-				assert.Equal(tt.wantCwd, resp.Cwd)
+				assert.False(t, resp.Launched, "expected launched=false for command_only")
+				assert.Equal(t, "cd '"+tt.wantCwd+"' && "+tt.wantSuffix, resp.Command)
+				assert.Equal(t, tt.wantCwd, resp.Cwd)
 			})
 		}
 	})
@@ -569,17 +568,14 @@ func TestResumeSession(t *testing.T) {
 	})
 
 	t.Run("cursor command only", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		projectDir := t.TempDir()
 		runDir := filepath.Join(projectDir, "frontend")
-		require.NoError(os.MkdirAll(runDir, 0o755))
+		require.NoError(t, os.MkdirAll(runDir, 0o755))
 		runDirJSON, _ := json.Marshal(runDir)
 		sessionFile := filepath.Join(t.TempDir(), "cursor.jsonl")
 		content := `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"pwd","working_directory":` +
 			string(runDirJSON) + `}}]}}` + "\n"
-		require.NoError(os.WriteFile(sessionFile, []byte(content), 0o644))
+		require.NoError(t, os.WriteFile(sessionFile, []byte(content), 0o644))
 		te.seedSession(t, "cursor:chat-1", projectDir, 3, func(s *db.Session) {
 			s.Agent = "cursor"
 			s.FilePath = &sessionFile
@@ -594,25 +590,22 @@ func TestResumeSession(t *testing.T) {
 			Command  string `json:"command"`
 			Cwd      string `json:"cwd"`
 		}
-		require.NoError(json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.False(resp.Launched, "expected launched=false for command_only")
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.False(t, resp.Launched, "expected launched=false for command_only")
 		wantProjectDir := canonicalTestPath(projectDir)
-		assert.Equal("cursor agent --resume chat-1 --workspace '"+wantProjectDir+"'",
+		assert.Equal(t, "cursor agent --resume chat-1 --workspace '"+wantProjectDir+"'",
 			resp.Command)
 		assertSamePath(t, "cwd", resp.Cwd, runDir)
 	})
 
 	t.Run("cursor command only omits unresolved workspace", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		runDir := filepath.Join(t.TempDir(), "frontend")
-		require.NoError(os.MkdirAll(runDir, 0o755))
+		require.NoError(t, os.MkdirAll(runDir, 0o755))
 		runDirJSON, _ := json.Marshal(runDir)
 		sessionFile := filepath.Join(t.TempDir(), "cursor.jsonl")
 		content := `{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"pwd","working_directory":` +
 			string(runDirJSON) + `}}]}}` + "\n"
-		require.NoError(os.WriteFile(sessionFile, []byte(content), 0o644))
+		require.NoError(t, os.WriteFile(sessionFile, []byte(content), 0o644))
 		te.seedSession(t, "cursor:chat-2", "li_tools", 3, func(s *db.Session) {
 			s.Agent = "cursor"
 			s.FilePath = &sessionFile
@@ -627,9 +620,9 @@ func TestResumeSession(t *testing.T) {
 			Command  string `json:"command"`
 			Cwd      string `json:"cwd"`
 		}
-		require.NoError(json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.False(resp.Launched, "expected launched=false for command_only")
-		assert.Equal("cursor agent --resume chat-2", resp.Command)
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.False(t, resp.Launched, "expected launched=false for command_only")
+		assert.Equal(t, "cursor agent --resume chat-2", resp.Command)
 		assertSamePath(t, "cwd", resp.Cwd, runDir)
 	})
 
@@ -645,9 +638,6 @@ func TestResumeSession(t *testing.T) {
 	})
 
 	t.Run("message point command only", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		removeMessagePointPrompts(t, "sess-2", 1)
 
 		te.seedSession(t, "sess-2", projectDir, 3, func(s *db.Session) {
@@ -665,18 +655,18 @@ func TestResumeSession(t *testing.T) {
 			Command  string `json:"command"`
 			Cwd      string `json:"cwd"`
 		}
-		require.NoError(json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.False(resp.Launched, "expected launched=false for command_only")
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.False(t, resp.Launched, "expected launched=false for command_only")
 		promptPath := findSingleMessagePointPrompt(t, "sess-2", 1)
 		assertMessagePointCommandForRuntime(t, resp.Command, promptPath)
 		if runtime.GOOS != "windows" {
-			assert.Contains(resp.Command, "< '")
+			assert.Contains(t, resp.Command, "< '")
 		}
 		assertSamePath(t, "cwd", resp.Cwd, projectDir)
 
 		if runtime.GOOS != "windows" {
 			idx := strings.LastIndex(resp.Command, "< ")
-			require.Positive(idx, "command = %q", resp.Command)
+			require.Positive(t, idx, "command = %q", resp.Command)
 			extracted := strings.TrimSpace(resp.Command[idx+2:])
 			if semi := strings.Index(extracted, ";"); semi >= 0 {
 				extracted = strings.TrimSpace(extracted[:semi])
@@ -687,18 +677,15 @@ func TestResumeSession(t *testing.T) {
 		}
 
 		data, err := os.ReadFile(promptPath)
-		require.NoError(err)
+		require.NoError(t, err)
 		t.Cleanup(func() { _ = os.Remove(promptPath) })
 		text := string(data)
-		assert.Contains(text, "Message A")
-		assert.Contains(text, "Message B")
-		assert.NotContains(text, "Message C")
+		assert.Contains(t, text, "Message A")
+		assert.Contains(t, text, "Message B")
+		assert.NotContains(t, text, "Message C")
 	})
 
 	t.Run("message point command only finds sparse ordinals", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		removeMessagePointPrompts(t, "sess-sparse", 3)
 
 		te.seedSession(t, "sess-sparse", projectDir, 3, func(s *db.Session) {
@@ -721,19 +708,19 @@ func TestResumeSession(t *testing.T) {
 			Command  string `json:"command"`
 			Cwd      string `json:"cwd"`
 		}
-		require.NoError(json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.False(resp.Launched, "expected launched=false for command_only")
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.False(t, resp.Launched, "expected launched=false for command_only")
 		promptPath := findSingleMessagePointPrompt(t, "sess-sparse", 3)
 		assertMessagePointCommandForRuntime(t, resp.Command, promptPath)
 		assertSamePath(t, "cwd", resp.Cwd, projectDir)
 		t.Cleanup(func() { _ = os.Remove(promptPath) })
 
 		data, err := os.ReadFile(promptPath)
-		require.NoError(err)
+		require.NoError(t, err)
 		text := string(data)
-		assert.Contains(text, "Message A")
-		assert.Contains(text, "Message B")
-		assert.Contains(text, "Message D")
+		assert.Contains(t, text, "Message A")
+		assert.Contains(t, text, "Message B")
+		assert.Contains(t, text, "Message D")
 	})
 
 	t.Run("message point rejects unsupported agents", func(t *testing.T) {
@@ -994,7 +981,7 @@ func TestResumeSession(t *testing.T) {
 		te.seedSession(t, "del-1", "/tmp", 3, func(s *db.Session) {
 			s.Agent = "claude"
 		})
-		require.NoError(t, te.db.SoftDeleteSession("del-1"))
+		require.NoError(t, te.db.SoftDeleteSession(t.Context(), "del-1"))
 		w := te.post(t,
 			"/api/v1/sessions/del-1/resume",
 			`{"command_only":true}`,
@@ -1124,17 +1111,14 @@ func TestResumeRemoteCwd(t *testing.T) {
 	} {
 		for _, cwd := range []string{"", "/home/user/project", "/remote/project dir", `C:\remote\project`} {
 			t.Run(tc.agent+"/"+cwd, func(t *testing.T) {
-				assert := assert.New(t)
-				require := require.New(t)
-
 				te := setup(t)
 				localDir := t.TempDir()
 				file := filepath.Join(t.TempDir(), "session.jsonl")
 				pathJSON, err := json.Marshal(localDir)
-				require.NoError(err)
+				require.NoError(t, err)
 				// Conflicting local transcript paths must never influence remote output.
 				content := `{"cwd":` + string(pathJSON) + `,"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"working_directory":` + string(pathJSON) + `}}]}}`
-				require.NoError(os.WriteFile(file, []byte(content), 0o600))
+				require.NoError(t, os.WriteFile(file, []byte(content), 0o600))
 				id := "devbox1~" + tc.agent + ":abc-123"
 				te.seedSession(t, id, localDir, 1, func(s *db.Session) {
 					s.Agent = tc.agent
@@ -1142,20 +1126,20 @@ func TestResumeRemoteCwd(t *testing.T) {
 					s.FilePath = &file
 				})
 				w := te.post(t, "/api/v1/sessions/"+id+"/resume", `{"command_only":true,"opener_id":"missing-terminal"}`)
-				require.Equal(http.StatusOK, w.Code, w.Body.String())
+				require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 				var resp struct {
 					Launched bool   `json:"launched"`
 					Command  string `json:"command"`
 					Cwd      string `json:"cwd"`
 				}
-				require.NoError(json.Unmarshal(w.Body.Bytes(), &resp))
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 				want := tc.command
 				if cwd != "" && (tc.agent == "claude" || tc.agent == "kiro") {
 					want = "cd '" + cwd + "' && " + want
 				}
-				assert.Equal(want, resp.Command)
-				assert.Equal(cwd, resp.Cwd)
-				assert.False(resp.Launched)
+				assert.Equal(t, want, resp.Command)
+				assert.Equal(t, cwd, resp.Cwd)
+				assert.False(t, resp.Launched)
 			})
 		}
 	}
@@ -1303,9 +1287,6 @@ func TestGetTerminalConfig(t *testing.T) {
 }
 
 func TestSetTerminalConfigExpandsHomeBeforeImmediateResume(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if runtime.GOOS == "windows" {
 		t.Skip("test fixture uses a POSIX executable script")
 	}
@@ -1313,8 +1294,8 @@ func TestSetTerminalConfigExpandsHomeBeforeImmediateResume(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	binDir := filepath.Join(home, "bin")
-	require.NoError(os.MkdirAll(binDir, 0o755))
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	require.NoError(t, os.WriteFile(
 		filepath.Join(binDir, "test-terminal"),
 		[]byte("#!/bin/sh\nexit 0\n"),
 		0o755,
@@ -1339,8 +1320,79 @@ func TestSetTerminalConfigExpandsHomeBeforeImmediateResume(t *testing.T) {
 		Terminal string `json:"terminal"`
 		Error    string `json:"error"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.True(resp.Launched)
-	assert.Equal("test-terminal", resp.Terminal)
-	assert.Empty(resp.Error)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Launched)
+	assert.Equal(t, "test-terminal", resp.Terminal)
+	assert.Empty(t, resp.Error)
+}
+
+func TestResumeTerminalSurvivesRequestCancellation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test fixture uses a POSIX executable script")
+	}
+	home := t.TempDir()
+	started := filepath.Join(home, "started")
+	completed := filepath.Join(home, "completed")
+	release := filepath.Join(home, "release")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("RESUME_STARTED", started)
+	t.Setenv("RESUME_COMPLETED", completed)
+	t.Setenv("RESUME_RELEASE", release)
+	binDir := filepath.Join(home, "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	require.NoError(t, exec.CommandContext(t.Context(), "mkfifo", release).Run())
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "test-terminal"),
+		[]byte("#!/bin/sh\nprintf started > \"$RESUME_STARTED\"\nIFS= read -r _ < \"$RESUME_RELEASE\"\nprintf completed > \"$RESUME_COMPLETED\"\n"), 0o755))
+	releaseFile, err := os.OpenFile(release, os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = releaseFile.WriteString("\n")
+		_ = releaseFile.Close()
+	})
+
+	te := setup(t)
+	projectDir := t.TempDir()
+	te.seedSession(t, "cancelled-resume", projectDir, 1, func(s *db.Session) {
+		s.Agent = "claude"
+	})
+	w := te.post(t, "/api/v1/config/terminal",
+		`{"mode":"custom","custom_bin":"~/bin/test-terminal"}`)
+	assertStatus(t, w, http.StatusOK)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost,
+		"/api/v1/sessions/cancelled-resume/resume", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		te.handler.ServeHTTP(response, req)
+		close(done)
+	}()
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(started)
+		return err == nil
+	}, time.Second, 5*time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.FailNow(t, "resume request did not return")
+	}
+	assertStatus(t, response, http.StatusOK)
+	var result struct {
+		Launched bool `json:"launched"`
+	}
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
+	assert.True(t, result.Launched)
+	assert.NoFileExists(t, completed)
+	_, err = releaseFile.WriteString("release\n")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(completed)
+		return err == nil
+	}, time.Second, 5*time.Millisecond)
 }

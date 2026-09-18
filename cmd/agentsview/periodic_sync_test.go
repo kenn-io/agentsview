@@ -19,18 +19,15 @@ import (
 )
 
 func TestScheduledReconcileTargetsSelectsOnlyOptedInProviders(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	home := t.TempDir()
 	aiderDir := filepath.Join(home, "aider")
 	coworkDir := filepath.Join(home, "cowork")
 	claudeDir := filepath.Join(home, "claude")
 	omnigentDir := filepath.Join(home, "omnigent")
-	require.NoError(os.MkdirAll(aiderDir, 0o755))
-	require.NoError(os.MkdirAll(coworkDir, 0o755))
-	require.NoError(os.MkdirAll(claudeDir, 0o755))
-	require.NoError(os.MkdirAll(omnigentDir, 0o755))
+	require.NoError(t, os.MkdirAll(aiderDir, 0o755))
+	require.NoError(t, os.MkdirAll(coworkDir, 0o755))
+	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+	require.NoError(t, os.MkdirAll(omnigentDir, 0o755))
 
 	cfg := config.Config{
 		AgentDirs: map[parser.AgentType][]string{
@@ -41,11 +38,11 @@ func TestScheduledReconcileTargetsSelectsOnlyOptedInProviders(t *testing.T) {
 		},
 	}
 	targets := scheduledReconcileTargets(cfg)
-	require.Len(targets, 2, "only opted-in providers are scheduled")
-	assert.Equal(parser.AgentAider, targets[0].Agent)
-	assert.Equal([]string{aiderDir}, targets[0].Roots)
-	assert.Equal(parser.AgentOmnigent, targets[1].Agent)
-	assert.Equal([]string{omnigentDir}, targets[1].Roots)
+	require.Len(t, targets, 2, "only opted-in providers are scheduled")
+	assert.Equal(t, parser.AgentAider, targets[0].Agent)
+	assert.Equal(t, []string{aiderDir}, targets[0].Roots)
+	assert.Equal(t, parser.AgentOmnigent, targets[1].Agent)
+	assert.Equal(t, []string{omnigentDir}, targets[1].Roots)
 }
 
 func TestScheduledReconcileDefersUnavailableOptedInRoots(t *testing.T) {
@@ -72,9 +69,6 @@ func TestScheduledReconcileDefersUnavailableOptedInRoots(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			missingRoot := filepath.Join(t.TempDir(), "unavailable")
 			sourcePath := tc.sourcePath(missingRoot)
 			cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
@@ -87,13 +81,13 @@ func TestScheduledReconcileDefersUnavailableOptedInRoots(t *testing.T) {
 					session.Agent = string(tc.agent)
 					session.FilePath = &sourcePath
 				})
-			require.NoError(database.SetSessionDataVersion(sessionID, db.CurrentDataVersion()))
-			require.NoError(database.BaselineActiveSessionSourcePaths(
+			require.NoError(t, database.SetSessionDataVersion(t.Context(), sessionID, db.CurrentDataVersion()))
+			require.NoError(t, database.BaselineActiveSessionSourcePaths(
 				t.Context(), "local", []db.SessionSourcePath{{
 					Agent: string(tc.agent), FilePath: sourcePath,
 				}},
 			))
-			engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 				AgentDirs: cfg.AgentDirs,
 				Machine:   "local",
 			})
@@ -102,24 +96,21 @@ func TestScheduledReconcileDefersUnavailableOptedInRoots(t *testing.T) {
 			targets := scheduledReconcileTargets(cfg)
 			runScheduledSyncPass(t.Context(), engine, targets)
 
-			assert.Empty(targets,
+			assert.Empty(t, targets,
 				"an unavailable physical root must defer its authoritative scope")
 			preserved, err := database.GetSession(
 				t.Context(), sessionID,
 			)
-			require.NoError(err)
-			assert.NotNil(preserved,
+			require.NoError(t, err)
+			assert.NotNil(t, preserved,
 				"scheduled reconciliation must preserve the archived session")
 		})
 	}
 }
 
 func TestScheduledReconcileDefersNestedUnavailableRoots(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	parent := filepath.Join(t.TempDir(), "aider")
-	require.NoError(os.MkdirAll(parent, 0o755))
+	require.NoError(t, os.MkdirAll(parent, 0o755))
 	child := filepath.Join(parent, "unavailable")
 	sourcePath := filepath.Join(child, "project", ".aider.chat.history.md#0")
 
@@ -133,13 +124,13 @@ func TestScheduledReconcileDefersNestedUnavailableRoots(t *testing.T) {
 			session.Agent = string(parser.AgentAider)
 			session.FilePath = &sourcePath
 		})
-	require.NoError(database.SetSessionDataVersion(sessionID, db.CurrentDataVersion()))
-	require.NoError(database.BaselineActiveSessionSourcePaths(
+	require.NoError(t, database.SetSessionDataVersion(t.Context(), sessionID, db.CurrentDataVersion()))
+	require.NoError(t, database.BaselineActiveSessionSourcePaths(
 		t.Context(), "local", []db.SessionSourcePath{{
 			Agent: string(parser.AgentAider), FilePath: sourcePath,
 		}},
 	))
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
 		Machine:   "local",
 	})
@@ -148,12 +139,12 @@ func TestScheduledReconcileDefersNestedUnavailableRoots(t *testing.T) {
 	targets := scheduledReconcileTargets(cfg)
 	runScheduledSyncPass(t.Context(), engine, targets)
 
-	assert.Empty(targets,
+	assert.Empty(t, targets,
 		"a present root must defer with a missing nested same-agent scope: "+
 			"the engine expands it back to the missing dir")
 	preserved, err := database.GetSession(t.Context(), sessionID)
-	require.NoError(err)
-	assert.NotNil(preserved,
+	require.NoError(t, err)
+	assert.NotNil(t, preserved,
 		"scheduled reconciliation must preserve sessions under the missing nested root")
 }
 
@@ -211,32 +202,28 @@ func (f *fakeRemoteSourceSyncEngine) SyncRootsSince(
 }
 
 func TestRunRemoteSourceSyncPassSyncsConfiguredRemoteRoots(t *testing.T) {
-	assert := assert.New(t)
-
 	engine := &fakeRemoteSourceSyncEngine{}
 	runRemoteSourceSyncPass(t.Context(), engine, nil)
-	assert.Empty(engine.calls, "no remote roots -> no scoped sync")
+	assert.Empty(t, engine.calls, "no remote roots -> no scoped sync")
 
 	roots := []string{"s3://bucket/machine/raw/claude"}
 	runRemoteSourceSyncPass(t.Context(), engine, roots)
 	require.Len(t, engine.calls, 1)
-	assert.Equal(roots, engine.calls[0])
-	assert.True(engine.since[0].IsZero(),
+	assert.Equal(t, roots, engine.calls[0])
+	assert.True(t, engine.since[0].IsZero(),
 		"the pass must cover the full remote scope; unchanged objects skip on fingerprints")
 }
 
 func TestRunScheduledSyncPassCallsPerAgent(t *testing.T) {
-	assert := assert.New(t)
-
 	engine := &fakeScheduledEngine{}
 	runScheduledSyncPass(t.Context(), engine, nil)
-	assert.Empty(engine.calls, "no targets -> no reconciliation")
+	assert.Empty(t, engine.calls, "no targets -> no reconciliation")
 
 	runScheduledSyncPass(t.Context(), engine,
 		[]scheduledReconcileTarget{{Agent: parser.AgentAider, Roots: []string{"/a"}}})
 	require.Len(t, engine.calls, 1)
-	assert.Equal(parser.AgentAider, engine.calls[0].Agent)
-	assert.Equal([]string{"/a"}, engine.calls[0].Roots)
+	assert.Equal(t, parser.AgentAider, engine.calls[0].Agent)
+	assert.Equal(t, []string{"/a"}, engine.calls[0].Roots)
 }
 
 func TestRunScheduledSyncPassLogsLifecycle(t *testing.T) {
@@ -251,8 +238,6 @@ func TestRunScheduledSyncPassLogsLifecycle(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			logs := captureLogOutput(t)
 			engine := &fakeScheduledEngine{err: tc.err}
 			runScheduledSyncPass(t.Context(), engine,
@@ -262,12 +247,12 @@ func TestRunScheduledSyncPassLogsLifecycle(t *testing.T) {
 			)
 
 			output := logs.String()
-			assert.Contains(output,
+			assert.Contains(t, output,
 				"scheduled reconciliation started: targets=1")
-			assert.Contains(output,
+			assert.Contains(t, output,
 				"scheduled reconciliation finished: targets=1")
-			assert.Contains(output, "duration=")
-			assert.Contains(output, "outcome="+tc.wantOutcome)
+			assert.Contains(t, output, "duration=")
+			assert.Contains(t, output, "outcome="+tc.wantOutcome)
 		})
 	}
 }

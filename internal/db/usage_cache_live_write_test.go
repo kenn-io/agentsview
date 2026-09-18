@@ -32,7 +32,7 @@ func appendLiveWriteMessage(
 ) {
 	t.Helper()
 	suffix := id + "-" + strconv.Itoa(ordinal)
-	require.NoError(t, database.InsertMessages([]Message{{
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
 		SessionID: id, Ordinal: ordinal, Role: "assistant",
 		Timestamp: timestamp, Model: "model-a",
 		TokenUsage: json.RawMessage(
@@ -77,22 +77,19 @@ func TestUsageSummarySurvivesArchiveWriteDuringRollupBuild(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			database := testDB(t)
 			seedLiveWriteSession(t, database, "reported", "keep",
 				"2026-08-10T09:00:00Z", 0, 10)
 			seedLiveWriteSession(t, database, "other-project", "drop",
 				"2026-08-10T09:30:00Z", 0, 4)
-			require.Equal(10, liveWriteDailyInput(t, database, "keep"))
+			require.Equal(t, 10, liveWriteDailyInput(t, database, "keep"))
 
 			snapshot, err := database.captureUsageQuery(
 				t.Context(), UsageFilter{}, usageQueryKindToken)
-			require.NoError(err)
+			require.NoError(t, err)
 			cache, err := database.usageCache.Generation(
 				t.Context(), snapshot.DatabaseID)
-			require.NoError(err)
+			require.NoError(t, err)
 			var written atomic.Bool
 			cache.rollup.observer.beforeEnsure = func() {
 				if written.Swap(true) {
@@ -101,12 +98,12 @@ func TestUsageSummarySurvivesArchiveWriteDuringRollupBuild(t *testing.T) {
 				appendLiveWriteMessage(t, database, testCase.writtenID,
 					"2026-08-10T09:45:00Z", 1, 7)
 			}
-			assert.Contains(testCase.wantDuring,
+			assert.Contains(t, testCase.wantDuring,
 				liveWriteDailyInput(t, database, "keep"))
-			assert.True(written.Load(), "the build seam never ran")
+			assert.True(t, written.Load(), "the build seam never ran")
 
 			cache.rollup.observer.beforeEnsure = nil
-			assert.Equal(testCase.wantAfterFill,
+			assert.Equal(t, testCase.wantAfterFill,
 				liveWriteDailyInput(t, database, "keep"))
 		})
 	}
@@ -116,9 +113,6 @@ func TestUsageSummarySurvivesArchiveWriteDuringRollupBuild(t *testing.T) {
 // archive moved underneath it. Facts now come from each session's own read
 // snapshot, so a pass finishes against a continuously written archive.
 func TestUsageCacheBackfillCompletesUnderConcurrentArchiveWrites(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := testDB(t)
 	for index := range 4 {
 		id := "churn-" + strconv.Itoa(index)
@@ -127,10 +121,10 @@ func TestUsageCacheBackfillCompletesUnderConcurrentArchiveWrites(t *testing.T) {
 	}
 	snapshot, err := database.captureUsageQuery(
 		t.Context(), UsageFilter{}, usageQueryKindToken)
-	require.NoError(err)
+	require.NoError(t, err)
 	cache, err := database.usageCache.Generation(
 		t.Context(), snapshot.DatabaseID)
-	require.NoError(err)
+	require.NoError(t, err)
 	// Write into the archive from both phases of the pass: while facts are
 	// being extracted, and while the rollups are being aggregated.
 	var appends atomic.Int32
@@ -142,16 +136,16 @@ func TestUsageCacheBackfillCompletesUnderConcurrentArchiveWrites(t *testing.T) {
 	cache.fill.observer.afterExtract = func([]usageSourceVersion) { churn() }
 	cache.rollup.observer.beforeEnsure = churn
 
-	require.NoError(database.StartUsageCacheBackfill(t.Context()))
-	require.NoError(database.WaitUsageCacheBackfill(t.Context()))
+	require.NoError(t, database.StartUsageCacheBackfill(t.Context()))
+	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
 	written := int(appends.Load())
-	require.Positive(written)
-	assert.Equal(4, usageCacheCount(t, cache, "usage_cached_sessions"))
-	assert.Equal(4, usageCacheCount(t, cache, "usage_rollup_installs"))
+	require.Positive(t, written)
+	assert.Equal(t, 4, usageCacheCount(t, cache, "usage_cached_sessions"))
+	assert.Equal(t, 4, usageCacheCount(t, cache, "usage_rollup_installs"))
 
 	cache.fill.observer.afterExtract = nil
 	cache.rollup.observer.beforeEnsure = nil
 	// Every write the pass raced is still accounted for once the next
 	// request refills the session it touched.
-	assert.Equal(4+written, liveWriteDailyInput(t, database, "project"))
+	assert.Equal(t, 4+written, liveWriteDailyInput(t, database, "project"))
 }

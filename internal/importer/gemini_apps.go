@@ -18,9 +18,9 @@ func ImportGeminiApps(
 	cb *ImportCallbacks,
 	machine ...string,
 ) (stats ImportStats, retErr error) {
-	fts := newLazyFTS(store, cb.indexing)
+	fts := newLazyFTS(ctx, store, cb.indexing)
 	defer func() {
-		if err := fts.restore(); err != nil {
+		if err := fts.restore(ctx); err != nil {
 			retErr = errors.Join(retErr, err)
 		}
 	}()

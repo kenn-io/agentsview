@@ -64,7 +64,7 @@ func TestContentTypeWrapper(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
+			t.Parallel()
 
 			w := httptest.NewRecorder()
 			wrapper := &contentTypeWrapper{
@@ -83,15 +83,15 @@ func TestContentTypeWrapper(t *testing.T) {
 
 			gotCT := resp.Header.Get("Content-Type")
 			if tt.wantContentType != "" {
-				assert.Equal(tt.wantContentType, gotCT)
+				assert.Equal(t, tt.wantContentType, gotCT)
 			} else {
-				assert.NotEqual("application/json", gotCT,
+				assert.NotEqual(t, "application/json", gotCT,
 					"Content-Type unexpectedly forced by wrapper")
 			}
 
 			body, err := io.ReadAll(resp.Body)
 			require.NoError(t, err)
-			assert.Equal(tt.wantBody, string(body))
+			assert.Equal(t, tt.wantBody, string(body))
 		})
 	}
 }
@@ -136,7 +136,9 @@ func TestMiddlewareTimeout(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			resp, err := ts.Client().Get(ts.URL + tt.path)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+tt.path, nil)
+			require.NoError(t, err)
+			resp, err := ts.Client().Do(req)
 			require.NoError(t, err)
 			defer resp.Body.Close()
 
@@ -240,8 +242,6 @@ func TestCSPMiddlewareSetsHeaderOnNonAPIRoutes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			t.Parallel()
 			inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
@@ -254,15 +254,15 @@ func TestCSPMiddlewareSetsHeaderOnNonAPIRoutes(t *testing.T) {
 
 			csp := w.Header().Get("Content-Security-Policy")
 			if !tt.wantCSP {
-				assert.Empty(csp, "expected no CSP header on API route")
+				assert.Empty(t, csp, "expected no CSP header on API route")
 				return
 			}
 			require.NotEmpty(t, csp, "expected CSP header")
 			got := parseCSP(csp)
 			for name, want := range tt.wantDirectives {
-				assert.Equal(want, got[name], "directive %s", name)
+				assert.Equal(t, want, got[name], "directive %s", name)
 			}
-			assert.Equal("DENY", w.Header().Get("X-Frame-Options"))
+			assert.Equal(t, "DENY", w.Header().Get("X-Frame-Options"))
 		})
 	}
 }
@@ -298,8 +298,6 @@ func TestBuildCSPPolicyWidensConnectSrcOnly(t *testing.T) {
 }
 
 func TestBuildCSPPolicyPinsPublicURLOrigin(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 
 	directives := parseCSP(buildCSPPolicy(
@@ -308,16 +306,16 @@ func TestBuildCSPPolicyPinsPublicURLOrigin(t *testing.T) {
 		nil,
 	))
 
-	assert.Equal("'self' https://agentsview.example.com",
+	assert.Equal(t, "'self' https://agentsview.example.com",
 		directives["default-src"],
 	)
-	assert.Equal("'self' https://agentsview.example.com",
+	assert.Equal(t, "'self' https://agentsview.example.com",
 		directives["script-src"],
 	)
-	assert.Equal("'self' https://agentsview.example.com data: blob:",
+	assert.Equal(t, "'self' https://agentsview.example.com data: blob:",
 		directives["img-src"],
 	)
-	assert.NotContains(directives["default-src"], "0.0.0.0")
+	assert.NotContains(t, directives["default-src"], "0.0.0.0")
 }
 
 func TestBuildCSPPolicyKeepsLocalOriginWithPublicURL(t *testing.T) {

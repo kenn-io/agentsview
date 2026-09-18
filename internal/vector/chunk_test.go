@@ -37,7 +37,7 @@ func requireIndexVarLimitConstrained(t *testing.T, ix *Index) {
 	t.Helper()
 	ctx := t.Context()
 	overLimitPh, overLimitArgs := inPlaceholders(make([]string, 1001))
-	_, probeErr := ix.db.QueryContext(ctx, "SELECT 1 WHERE '' IN "+overLimitPh, overLimitArgs...)
+	_, probeErr := ix.db.ExecContext(ctx, "SELECT 1 WHERE '' IN "+overLimitPh, overLimitArgs...)
 	require.Error(t, probeErr, "index variable limit was not constrained")
 }
 
@@ -46,9 +46,6 @@ func requireIndexVarLimitConstrained(t *testing.T, ix *Index) {
 // that a non-multiple-of-maxSQLVars input yields a shorter final chunk
 // rather than an empty trailing one.
 func TestChunkKeysSplitsAtMaxSQLVars(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	total := maxSQLVars*2 + 137
 	keys := make([]string, total)
 	for i := range keys {
@@ -64,13 +61,13 @@ func TestChunkKeysSplitsAtMaxSQLVars(t *testing.T) {
 		}
 		return nil
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
-	require.Len(chunkSizes, 3)
-	assert.Equal([]int{maxSQLVars, maxSQLVars, 137}, chunkSizes)
-	assert.Len(seen, total, "every key must be visited")
+	require.Len(t, chunkSizes, 3)
+	assert.Equal(t, []int{maxSQLVars, maxSQLVars, 137}, chunkSizes)
+	assert.Len(t, seen, total, "every key must be visited")
 	for _, k := range keys {
-		assert.Equal(1, seen[k], "key %s must be visited exactly once", k)
+		assert.Equal(t, 1, seen[k], "key %s must be visited exactly once", k)
 	}
 }
 
@@ -92,6 +89,7 @@ func TestChunkKeysEmptyInputInvokesNothing(t *testing.T) {
 // stays fast.
 func seedVectorMessages(t *testing.T, ix *Index, n int) []string {
 	t.Helper()
+
 	ctx := t.Context()
 	tx, err := ix.db.BeginTx(ctx, nil)
 	require.NoError(t, err)
@@ -116,9 +114,6 @@ VALUES (?, ?, ?, ?, ?, ?)`,
 // overfetch (limit * over-fetch factor, in the low thousands) can trigger in
 // a single Search call.
 func TestLookupMirrorDocsOverMaxSQLVars(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	forceIndexVarLimit(t, ix, 999)
@@ -128,15 +123,15 @@ func TestLookupMirrorDocsOverMaxSQLVars(t *testing.T) {
 	keys := seedVectorMessages(t, ix, n)
 
 	docs, err := ix.lookupMirrorDocs(ctx, keys)
-	require.NoError(err)
+	require.NoError(t, err)
 
-	require.Len(docs, n)
+	require.Len(t, docs, n)
 	for i, key := range keys {
 		doc, ok := docs[key]
-		require.True(ok, "doc_key %s missing from result", key)
-		assert.Equal(fmt.Sprintf("s%d", i), doc.sessionID)
-		assert.Equal(i, doc.ordinal)
-		assert.Equal(fmt.Sprintf("content %d", i), doc.content)
+		require.True(t, ok, "doc_key %s missing from result", key)
+		assert.Equal(t, fmt.Sprintf("s%d", i), doc.sessionID)
+		assert.Equal(t, i, doc.ordinal)
+		assert.Equal(t, fmt.Sprintf("content %d", i), doc.content)
 	}
 }
 

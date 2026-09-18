@@ -30,9 +30,6 @@ func pushWindowSessionIDs(sessions []db.Session) []string {
 }
 
 func TestPushWindowSelectsFutureMarkerSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	local := testDB(t)
 	ctx := t.Context()
 
@@ -42,7 +39,7 @@ func TestPushWindowSelectsFutureMarkerSession(t *testing.T) {
 	futureMtime := time.Now().Add(48 * time.Hour).
 		Truncate(time.Millisecond).UTC()
 	futureNanos := futureMtime.UnixNano()
-	require.NoError(local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
 		ID:           "sess-future",
 		Project:      "proj",
 		Machine:      "m",
@@ -61,14 +58,14 @@ func TestPushWindowSelectsFutureMarkerSession(t *testing.T) {
 	bounded, err := local.ListSessionsModifiedBetween(
 		ctx, lastPush, cutoff, nil, nil,
 	)
-	require.NoError(err, "bounded selection")
-	assert.NotContains(pushWindowSessionIDs(bounded), "sess-future",
+	require.NoError(t, err, "bounded selection")
+	assert.NotContains(t, pushWindowSessionIDs(bounded), "sess-future",
 		"fixture must reproduce the masking the bounded query suffered")
 
 	// The mirror window the push now uses selects it.
 	window, err := local.ListSessionsForMirrorWindow(ctx, lastPush, nil, nil)
-	require.NoError(err, "mirror window selection")
-	assert.Contains(pushWindowSessionIDs(window), "sess-future",
+	require.NoError(t, err, "mirror window selection")
+	assert.Contains(t, pushWindowSessionIDs(window), "sess-future",
 		"the unbounded mirror window must select the future-marker session")
 
 	// A subsequent real change must be selected on the next push even
@@ -76,7 +73,7 @@ func TestPushWindowSelectsFutureMarkerSession(t *testing.T) {
 	// marker keeps the session a candidate in every later window, so the
 	// changed fingerprint gets pushed instead of staying stale until wall
 	// time catches up.
-	require.NoError(local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
 		ID:           "sess-future",
 		Project:      "proj",
 		Machine:      "m",
@@ -86,8 +83,8 @@ func TestPushWindowSelectsFutureMarkerSession(t *testing.T) {
 		FileMtime:    &futureNanos,
 	}), "update future-mtime session")
 	nextWindow, err := local.ListSessionsForMirrorWindow(ctx, cutoff, nil, nil)
-	require.NoError(err, "mirror window after change")
-	assert.Contains(pushWindowSessionIDs(nextWindow), "sess-future",
+	require.NoError(t, err, "mirror window after change")
+	assert.Contains(t, pushWindowSessionIDs(nextWindow), "sess-future",
 		"a later change to the future-marker session must be selected")
 }
 
@@ -97,16 +94,13 @@ func TestPushWindowSelectsFutureMarkerSession(t *testing.T) {
 // the primary window (the per-session fingerprint comparison then skips it
 // when unchanged), while markers strictly below the watermark stay out.
 func TestPushWindowIncludesBoundaryEqualSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	local := testDB(t)
 	ctx := t.Context()
 
 	boundary := time.Now().Add(time.Hour).Truncate(time.Millisecond).UTC()
 	boundaryNanos := boundary.UnixNano()
 	started := "2026-03-11T12:00:00Z"
-	require.NoError(local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
 		ID:           "sess-boundary",
 		Project:      "proj",
 		Machine:      "m",
@@ -119,8 +113,8 @@ func TestPushWindowIncludesBoundaryEqualSession(t *testing.T) {
 	atBoundary, err := local.ListSessionsForMirrorWindow(
 		ctx, boundary.Format(LocalSyncTimestampLayout), nil, nil,
 	)
-	require.NoError(err, "window at boundary")
-	assert.Contains(pushWindowSessionIDs(atBoundary), "sess-boundary",
+	require.NoError(t, err, "window at boundary")
+	assert.Contains(t, pushWindowSessionIDs(atBoundary), "sess-boundary",
 		"marker == lastPush must be selected by the inclusive window")
 
 	pastBoundary, err := local.ListSessionsForMirrorWindow(
@@ -128,7 +122,7 @@ func TestPushWindowIncludesBoundaryEqualSession(t *testing.T) {
 		boundary.Add(time.Millisecond).Format(LocalSyncTimestampLayout),
 		nil, nil,
 	)
-	require.NoError(err, "window past boundary")
-	assert.NotContains(pushWindowSessionIDs(pastBoundary), "sess-boundary",
+	require.NoError(t, err, "window past boundary")
+	assert.NotContains(t, pushWindowSessionIDs(pastBoundary), "sess-boundary",
 		"markers strictly below the watermark must stay out of the window")
 }

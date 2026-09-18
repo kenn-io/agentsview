@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net"
 	"testing"
 
@@ -8,28 +9,26 @@ import (
 )
 
 func TestFindAvailablePortWildcardZeroRetriesCrossFamilyCollision(t *testing.T) {
-	require := require.New(t)
-
 	occupiedListener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "0.0.0.0:0")
-	require.NoError(err, "bind IPv4 wildcard")
+	require.NoError(t, err, "bind IPv4 wildcard")
 	defer occupiedListener.Close()
 	occupied := occupiedListener.Addr().(*net.TCPAddr).Port
 
 	second := 0
 	for range 100 {
 		candidate4, listenErr := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "0.0.0.0:0")
-		require.NoError(listenErr, "select second IPv4 port")
+		require.NoError(t, listenErr, "select second IPv4 port")
 		candidate := candidate4.Addr().(*net.TCPAddr).Port
 		candidate6, listenErr := net.ListenTCP("tcp6", &net.TCPAddr{
 			IP:   net.IPv6unspecified,
 			Port: candidate,
 		})
 		if listenErr != nil {
-			require.NoError(candidate4.Close())
+			require.NoError(t, candidate4.Close())
 			continue
 		}
-		require.NoError(candidate6.Close())
-		require.NoError(candidate4.Close())
+		require.NoError(t, candidate6.Close())
+		require.NoError(t, candidate4.Close())
 		second = candidate
 		break
 	}
@@ -38,10 +37,10 @@ func TestFindAvailablePortWildcardZeroRetriesCrossFamilyCollision(t *testing.T) 
 	}
 
 	selections := 0
-	got, err := findAvailablePort(
+	got, err := findAvailablePort(t.Context(),
 		"0.0.0.0",
 		0,
-		func(string) (int, error) {
+		func(context.Context, string) (int, error) {
 			selections++
 			if selections == 1 {
 				return occupied, nil
@@ -49,8 +48,8 @@ func TestFindAvailablePortWildcardZeroRetriesCrossFamilyCollision(t *testing.T) 
 			return second, nil
 		},
 	)
-	require.NoError(err)
-	require.Equal(second, got,
+	require.NoError(t, err)
+	require.Equal(t, second, got,
 		"wildcard ephemeral selection must retry a cross-family collision")
-	require.Equal(2, selections)
+	require.Equal(t, 2, selections)
 }

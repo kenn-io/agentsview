@@ -13,9 +13,6 @@ import (
 )
 
 func TestOversizedManifestDoesNotReplaceRecoverableState(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	state, err := createState(filepath.Join(root, "capture"), manifest{
 		OccurrenceID:      "bounded-manifest",
@@ -27,7 +24,7 @@ func TestOversizedManifestDoesNotReplaceRecoverableState(t *testing.T) {
 		Invocation:        invocationName(ProviderClaude),
 		Limits:            DefaultLimits(),
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	t.Cleanup(state.close)
 
 	for i := range state.manifest.Limits.MaxSources {
@@ -46,9 +43,9 @@ func TestOversizedManifestDoesNotReplaceRecoverableState(t *testing.T) {
 
 	err = state.saveManifest()
 
-	require.Error(err)
-	assert.Equal(ReasonSourceLimit, reasonForError(err, ReasonIngestFailed))
+	require.Error(t, err)
+	assert.Equal(t, ReasonSourceLimit, reasonForError(err, ReasonIngestFailed))
 	recovered, readErr := readCaptureManifest(state.dir)
-	require.NoError(readErr)
-	assert.Empty(recovered.Sources)
+	require.NoError(t, readErr)
+	assert.Empty(t, recovered.Sources)
 }

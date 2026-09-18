@@ -19,9 +19,6 @@ import (
 )
 
 func TestLiveActivityPollerRefreshesOpenCodexActivityAndUsage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	const (
 		uuid      = "019f0000-0000-7000-8000-000000000003"
 		sessionID = "codex:" + uuid
@@ -36,7 +33,7 @@ func TestLiveActivityPollerRefreshesOpenCodexActivityAndUsage(t *testing.T) {
 
 	base := t.TempDir()
 	sessions := filepath.Join(base, "sessions")
-	require.NoError(os.MkdirAll(sessions, 0o755))
+	require.NoError(t, os.MkdirAll(sessions, 0o755))
 	env := setupSingleAgentTestEnvWithDirs(
 		t, parser.AgentCodex, []string{sessions},
 	)
@@ -64,25 +61,25 @@ func TestLiveActivityPollerRefreshesOpenCodexActivityAndUsage(t *testing.T) {
 		initial,
 	)
 	initialMTime := firstUser.Add(-time.Hour)
-	require.NoError(os.Chtimes(rollout, initialMTime, initialMTime))
-	require.NoError(env.engine.SyncPathsContext(t.Context(), []string{rollout}))
+	require.NoError(t, os.Chtimes(rollout, initialMTime, initialMTime))
+	require.NoError(t, env.engine.SyncPathsContext(t.Context(), []string{rollout}))
 
 	before, err := env.db.GetSessionFull(t.Context(), sessionID)
-	require.NoError(err)
-	require.NotNil(before)
-	require.NotNil(before.FileSize)
-	require.NotNil(before.FileMtime)
-	assert.Equal(2, before.MessageCount)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotNil(t, before.FileSize)
+	require.NotNil(t, before.FileMtime)
+	assert.Equal(t, 2, before.MessageCount)
 	initialUsage := requireDailyOutputTokens(t, env.db, "2026-07-29")
-	assert.Equal(100, initialUsage)
+	assert.Equal(t, 100, initialUsage)
 
 	appendDescriptor, err := os.OpenFile(rollout, os.O_APPEND|os.O_WRONLY, 0)
-	require.NoError(err)
+	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(appendDescriptor.Close())
+		require.NoError(t, appendDescriptor.Close())
 	})
 	history := filepath.Join(base, "history.jsonl")
-	require.NoError(os.WriteFile(history, fmt.Appendf(nil,
+	require.NoError(t, os.WriteFile(history, fmt.Appendf(nil,
 		`{"session_id":"%s","ts":%d,"text":"private prompt sentinel"}`+"\n",
 		uuid, secondUser.Unix(),
 	), 0o644))
@@ -100,18 +97,18 @@ func TestLiveActivityPollerRefreshesOpenCodexActivityAndUsage(t *testing.T) {
 			secondAssistant.Format(time.RFC3339), 2_000, 250, 800,
 		),
 	))
-	require.NoError(err)
+	require.NoError(t, err)
 
 	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{
 		Roots:   []string{sessions},
 		Machine: "local",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	hints, supported, err := parser.ResolveActivityHintProvider(provider)
-	require.NoError(err)
-	require.True(supported)
+	require.NoError(t, err)
+	require.True(t, supported)
 	hintSources, err := hints.ActivityHintSources(t.Context())
-	require.NoError(err)
+	require.NoError(t, err)
 	poller := agentsync.NewLiveActivityPoller(
 		[]agentsync.LiveActivityTarget{{
 			Provider: provider,
@@ -144,23 +141,23 @@ func TestLiveActivityPollerRefreshesOpenCodexActivityAndUsage(t *testing.T) {
 	)
 
 	stats, err := poller.PollOnce(t.Context(), now)
-	require.NoError(err)
-	assert.Equal(1, stats.SessionLookups)
-	assert.Equal(1, stats.SourceStats)
-	assert.Equal(1, stats.SyncPaths)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SessionLookups)
+	assert.Equal(t, 1, stats.SourceStats)
+	assert.Equal(t, 1, stats.SyncPaths)
 
 	afterSecond, err := env.db.GetSessionFull(t.Context(), sessionID)
-	require.NoError(err)
-	require.NotNil(afterSecond)
-	require.NotNil(afterSecond.FileSize)
-	require.NotNil(afterSecond.FileMtime)
-	assert.Greater(*afterSecond.FileSize, *before.FileSize)
-	assert.Greater(*afterSecond.FileMtime, *before.FileMtime)
-	assert.Equal(4, afterSecond.MessageCount)
-	require.NotNil(afterSecond.EndedAt)
-	assert.Equal(secondAssistant.Format(time.RFC3339), *afterSecond.EndedAt)
+	require.NoError(t, err)
+	require.NotNil(t, afterSecond)
+	require.NotNil(t, afterSecond.FileSize)
+	require.NotNil(t, afterSecond.FileMtime)
+	assert.Greater(t, *afterSecond.FileSize, *before.FileSize)
+	assert.Greater(t, *afterSecond.FileMtime, *before.FileMtime)
+	assert.Equal(t, 4, afterSecond.MessageCount)
+	require.NotNil(t, afterSecond.EndedAt)
+	assert.Equal(t, secondAssistant.Format(time.RFC3339), *afterSecond.EndedAt)
 	secondUsage := requireDailyOutputTokens(t, env.db, "2026-07-29")
-	assert.Equal(350, secondUsage)
+	assert.Equal(t, 350, secondUsage)
 	requireActivityBucketMembership(
 		t, env.db, now, sessionID,
 		secondUser.Truncate(5*time.Minute),
@@ -178,20 +175,20 @@ func TestLiveActivityPollerRefreshesOpenCodexActivityAndUsage(t *testing.T) {
 			thirdAssistant.Format(time.RFC3339), 500, 75, 200,
 		),
 	))
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute))
-	require.NoError(err)
+	require.NoError(t, err)
 	afterThird, err := env.db.GetSessionFull(t.Context(), sessionID)
-	require.NoError(err)
-	require.NotNil(afterThird)
-	require.NotNil(afterThird.FileSize)
-	assert.Greater(*afterThird.FileSize, *afterSecond.FileSize)
-	assert.Equal(6, afterThird.MessageCount)
-	require.NotNil(afterThird.EndedAt)
-	assert.Equal(thirdAssistant.Format(time.RFC3339), *afterThird.EndedAt)
+	require.NoError(t, err)
+	require.NotNil(t, afterThird)
+	require.NotNil(t, afterThird.FileSize)
+	assert.Greater(t, *afterThird.FileSize, *afterSecond.FileSize)
+	assert.Equal(t, 6, afterThird.MessageCount)
+	require.NotNil(t, afterThird.EndedAt)
+	assert.Equal(t, thirdAssistant.Format(time.RFC3339), *afterThird.EndedAt)
 	thirdUsage := requireDailyOutputTokens(t, env.db, "2026-07-29")
-	assert.Equal(425, thirdUsage)
-	assert.Greater(thirdUsage, secondUsage)
+	assert.Equal(t, 425, thirdUsage)
+	assert.Greater(t, thirdUsage, secondUsage)
 	requireActivityBucketMembership(
 		t, env.db, now, sessionID,
 		thirdUser.Truncate(5*time.Minute),
@@ -221,6 +218,7 @@ func requireActivityBucketMembership(
 	bucketEnd time.Time,
 ) {
 	t.Helper()
+
 	query, err := activity.ResolveQuery(activity.QueryInput{
 		Preset:         "day",
 		Date:           now.Format(time.DateOnly),

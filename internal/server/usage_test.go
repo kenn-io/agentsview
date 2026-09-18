@@ -201,8 +201,6 @@ func seedUsagePairwiseEnv(t *testing.T, te *testEnv) {
 }
 
 func TestHandleUsageSummaryJSONShape(t *testing.T) {
-	assert := assert.New(t)
-
 	te := setup(t)
 	seedUsageEnv(t, te)
 
@@ -224,19 +222,17 @@ func TestHandleUsageSummaryJSONShape(t *testing.T) {
 		"sessionCounts", "cacheStats",
 	}
 	for _, key := range required {
-		assert.Contains(raw, key, "missing key in response")
+		assert.Contains(t, raw, key, "missing key in response")
 	}
 
 	resp := decode[service.UsageSummaryResult](t, w)
-	assert.NotEmpty(resp.Daily)
-	assert.NotEmpty(resp.ProjectTotals)
-	assert.NotEmpty(resp.ModelTotals)
-	assert.NotEmpty(resp.AgentTotals)
+	assert.NotEmpty(t, resp.Daily)
+	assert.NotEmpty(t, resp.ProjectTotals)
+	assert.NotEmpty(t, resp.ModelTotals)
+	assert.NotEmpty(t, resp.AgentTotals)
 }
 
 func TestHandleUsageSummaryIncludesUnsupportedCopilotSignal(t *testing.T) {
-	assert := assert.New(t)
-
 	te := setup(t)
 	seedCopilotNoTokenSession(t, te, "copilot-unsupported")
 
@@ -251,9 +247,9 @@ func TestHandleUsageSummaryIncludesUnsupportedCopilotSignal(t *testing.T) {
 
 	resp := decode[server.UsageSummaryResponse](t, w)
 	require.NotNil(t, resp.UnsupportedUsage)
-	assert.Equal(service.UnsupportedUsageKindCopilotNoTokenData, resp.UnsupportedUsage.Kind)
-	assert.Equal(0, resp.SessionCounts.Total)
-	assert.Equal(money.Money{}, resp.Totals.TotalCost)
+	assert.Equal(t, service.UnsupportedUsageKindCopilotNoTokenData, resp.UnsupportedUsage.Kind)
+	assert.Equal(t, 0, resp.SessionCounts.Total)
+	assert.Equal(t, money.Money{}, resp.Totals.TotalCost)
 }
 
 func TestHandleUsageSummarySkipsUnsupportedCopilotSignalForMixedFilters(t *testing.T) {
@@ -275,12 +271,9 @@ func TestHandleUsageSummarySkipsUnsupportedCopilotSignalForMixedFilters(t *testi
 }
 
 func TestHandleUsageSummaryIncludesCursorUsageEvents(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 
-	require.NoError(te.db.InsertCursorUsageEvents([]db.CursorUsageEvent{{
+	require.NoError(t, te.db.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{{
 		OccurredAt:       "2026-05-14T10:05:00Z",
 		Model:            "claude-4.6-opus-high-thinking",
 		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
@@ -304,10 +297,10 @@ func TestHandleUsageSummaryIncludesCursorUsageEvents(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	resp := decode[server.UsageSummaryResponse](t, w)
-	require.Len(resp.Daily, 1)
-	assert.Equal(money.MustParseDollars("0.1566"), resp.Totals.TotalCost)
-	require.NotEmpty(resp.AgentTotals)
-	assert.Equal("cursor", resp.AgentTotals[0].Agent)
+	require.Len(t, resp.Daily, 1)
+	assert.Equal(t, money.MustParseDollars("0.1566"), resp.Totals.TotalCost)
+	require.NotEmpty(t, resp.AgentTotals)
+	assert.Equal(t, "cursor", resp.AgentTotals[0].Agent)
 }
 
 func TestHandleUsageTopSessionsEmpty(t *testing.T) {
@@ -347,11 +340,8 @@ func TestHandleUsageTopSessionsLimit(t *testing.T) {
 }
 
 func TestHandleUsageTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
-	require.NoError(te.db.SetSyncState(db.MachineAliasKeyPrefix+"old-owner", "test"))
+	require.NoError(t, te.db.SetSyncState(t.Context(), db.MachineAliasKeyPrefix+"old-owner", "test"))
 	for _, fixture := range []struct {
 		id        string
 		input     int
@@ -396,12 +386,12 @@ func TestHandleUsageTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	var entries []db.TopSessionEntry
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &entries))
-	require.Len(entries, 1)
-	assert.Equal("output-heavy", entries[0].SessionID)
-	assert.Equal(10, entries[0].InputTokens)
-	assert.Equal(50, entries[0].OutputTokens)
-	assert.Equal(60, entries[0].TotalTokens)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	assert.Equal(t, "output-heavy", entries[0].SessionID)
+	assert.Equal(t, 10, entries[0].InputTokens)
+	assert.Equal(t, 50, entries[0].OutputTokens)
+	assert.Equal(t, 60, entries[0].TotalTokens)
 }
 
 func TestHandleUsageTopSessionsRejectsUnknownTokenType(t *testing.T) {
@@ -415,8 +405,6 @@ func TestHandleUsageTopSessionsRejectsUnknownTokenType(t *testing.T) {
 }
 
 func TestHandleUsagePairwiseComparisonJSONShape(t *testing.T) {
-	assert := assert.New(t)
-
 	te := setup(t)
 	seedUsagePairwiseEnv(t, te)
 
@@ -436,13 +424,13 @@ func TestHandleUsagePairwiseComparisonJSONShape(t *testing.T) {
 
 	var raw map[string]jsontext.Value
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
-	assert.Contains(raw, "left")
-	assert.Contains(raw, "right")
-	assert.Contains(raw, "deltas")
+	assert.Contains(t, raw, "left")
+	assert.Contains(t, raw, "right")
+	assert.Contains(t, raw, "deltas")
 
 	resp := decode[service.UsagePairwiseComparisonResponse](t, w)
-	assert.Equal(1, resp.Left.SessionCount)
-	assert.Equal(1, resp.Right.SessionCount)
+	assert.Equal(t, 1, resp.Left.SessionCount)
+	assert.Equal(t, 1, resp.Right.SessionCount)
 }
 
 func TestHandleUsagePairwiseComparisonValidation(t *testing.T) {

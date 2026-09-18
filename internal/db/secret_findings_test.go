@@ -9,22 +9,20 @@ import (
 )
 
 func TestSecretFindingsSchemaExists(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	r := d.getReader()
 	var n int
-	err := r.QueryRow(
+	err := r.QueryRow(t.Context(),
 		`SELECT count(*) FROM sqlite_master
 		 WHERE type='table' AND name='secret_findings'`).Scan(&n)
-	require.NoError(err, "probe")
-	require.Equal(1, n, "secret_findings table missing")
+	require.NoError(t, err, "probe")
+	require.Equal(t, 1, n, "secret_findings table missing")
 	for _, col := range []string{"secret_leak_count", "secrets_rules_version"} {
 		var cnt int
-		err := r.QueryRow(
+		err := r.QueryRow(t.Context(),
 			`SELECT count(*) FROM pragma_table_info('sessions') WHERE name=?`,
 			col).Scan(&cnt)
-		require.NoError(err, "probe col %s", col)
+		require.NoError(t, err, "probe col %s", col)
 		assert.Equal(t, 1, cnt, "sessions.%s missing", col)
 	}
 }
@@ -35,7 +33,7 @@ func TestSecretFindingsSchemaExists(t *testing.T) {
 func TestHasSecretPartialIndexExists(t *testing.T) {
 	d := testDB(t)
 	var n int
-	err := d.getReader().QueryRow(
+	err := d.getReader().QueryRow(t.Context(),
 		`SELECT count(*) FROM sqlite_master
 		 WHERE type='index' AND name='idx_sessions_has_secret'`).Scan(&n)
 	require.NoError(t, err, "probe index")
@@ -43,9 +41,6 @@ func TestHasSecretPartialIndexExists(t *testing.T) {
 }
 
 func TestReplaceSessionSecretFindings(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")
 	findings := []SecretFinding{
@@ -60,22 +55,22 @@ func TestReplaceSessionSecretFindings(t *testing.T) {
 			MatchStart: 0, MatchEnd: 24, MatchIndex: 0, RedactedMatch: "…abcd",
 		},
 	}
-	require.NoError(d.ReplaceSessionSecretFindings("s1", findings, 1, "rulesv1"),
+	require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(), "s1", findings, 1, "rulesv1"),
 		"ReplaceSessionSecretFindings")
 	got, err := d.SessionSecretFindings(t.Context(), "s1")
-	require.NoError(err, "read")
-	require.Len(got, 2)
+	require.NoError(t, err, "read")
+	require.Len(t, got, 2)
 	// A message finding has no call/event index (NULL round-trips to nil); a
 	// tool finding with CallIndex 0 must read back as a non-nil pointer to 0,
 	// not collapse to nil (the NULL-vs-zero trap for nullable ints).
-	assert.Nil(got[0].CallIndex, "message finding CallIndex")
-	assert.Nil(got[0].EventIndex, "message finding EventIndex")
-	require.NotNil(got[1].CallIndex, "tool finding CallIndex")
-	assert.Equal(0, *got[1].CallIndex, "tool finding CallIndex")
-	require.NoError(d.ReplaceSessionSecretFindings("s1", findings[:1], 1, "rulesv1"),
+	assert.Nil(t, got[0].CallIndex, "message finding CallIndex")
+	assert.Nil(t, got[0].EventIndex, "message finding EventIndex")
+	require.NotNil(t, got[1].CallIndex, "tool finding CallIndex")
+	assert.Equal(t, 0, *got[1].CallIndex, "tool finding CallIndex")
+	require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(), "s1", findings[:1], 1, "rulesv1"),
 		"re-replace")
 	got, _ = d.SessionSecretFindings(t.Context(), "s1")
-	require.Len(got, 1, "replace not idempotent")
+	require.Len(t, got, 1, "replace not idempotent")
 }
 
 // TestReplaceSessionMessagesResetsSecretState verifies that replacing a
@@ -85,13 +80,10 @@ func TestReplaceSessionSecretFindings(t *testing.T) {
 // must be re-scanned by `secrets scan --backfill`, which skips sessions already
 // at the current rules version.
 func TestReplaceSessionMessagesResetsSecretState(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "proj")
-	require.NoError(d.ReplaceSessionMessages("s1", []Message{
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "s1", []Message{
 		{SessionID: "s1", Ordinal: 0, Role: "user", Content: "key AKIA7QHWN2DKR4FYPLJM"},
 	}), "seed messages")
 	findings := []SecretFinding{{
@@ -99,81 +91,75 @@ func TestReplaceSessionMessagesResetsSecretState(t *testing.T) {
 		LocationKind: "message", MessageOrdinal: 0, MatchStart: 4, MatchEnd: 24,
 		MatchIndex: 0, RedactedMatch: "AKIA…MPLE",
 	}}
-	require.NoError(d.ReplaceSessionSecretFindings("s1", findings, 1, "rulesvX"),
+	require.NoError(t, d.ReplaceSessionSecretFindings(ctx, "s1", findings, 1, "rulesvX"),
 		"seed findings")
 
-	require.NoError(d.ReplaceSessionMessages("s1", []Message{
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "s1", []Message{
 		{SessionID: "s1", Ordinal: 0, Role: "user", Content: "nothing secret here"},
 	}), "replace messages")
 
 	got, err := d.SessionSecretFindings(ctx, "s1")
-	require.NoError(err, "read findings")
-	assert.Empty(got, "stale findings survived message replace")
+	require.NoError(t, err, "read findings")
+	assert.Empty(t, got, "stale findings survived message replace")
 	var leak int
 	var ver string
-	err = d.getReader().QueryRow(
+	err = d.getReader().QueryRow(ctx,
 		"SELECT secret_leak_count, secrets_rules_version FROM sessions WHERE id = 's1'",
 	).Scan(&leak, &ver)
-	require.NoError(err, "read scan state")
-	assert.Equal(0, leak, "secret_leak_count after content replace")
-	assert.Empty(ver, "secrets_rules_version (forces backfill rescan)")
+	require.NoError(t, err, "read scan state")
+	assert.Equal(t, 0, leak, "secret_leak_count after content replace")
+	assert.Empty(t, ver, "secrets_rules_version (forces backfill rescan)")
 }
 
 func TestReplaceSessionMessagesPreservesSecretStateWhenTranscriptIsUnchanged(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "proj")
 	messages := []Message{{
 		SessionID: "s1", Ordinal: 0, Role: "user", Content: "same content",
 	}}
-	require.NoError(d.ReplaceSessionMessages("s1", messages), "seed messages")
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "s1", messages), "seed messages")
 	findings := []SecretFinding{{
 		SessionID: "s1", RuleName: "test-rule", Confidence: "definite",
 		LocationKind: "message", MessageOrdinal: 0, MatchStart: 0, MatchEnd: 4,
 		MatchIndex: 0, RedactedMatch: "same",
 	}}
-	require.NoError(d.ReplaceSessionSecretFindings("s1", findings, 1, "rules-v1"),
+	require.NoError(t, d.ReplaceSessionSecretFindings(ctx, "s1", findings, 1, "rules-v1"),
 		"seed findings",
 	)
 
-	require.NoError(d.ReplaceSessionMessages("s1", messages), "no-op replace")
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "s1", messages), "no-op replace")
 
 	got, err := d.SessionSecretFindings(ctx, "s1")
-	require.NoError(err, "read findings")
-	require.Len(got, 1, "no-op replace must preserve current findings")
-	assert.Equal("test-rule", got[0].RuleName)
+	require.NoError(t, err, "read findings")
+	require.Len(t, got, 1, "no-op replace must preserve current findings")
+	assert.Equal(t, "test-rule", got[0].RuleName)
 	var leak int
 	var version string
-	err = d.getReader().QueryRow(`
+	err = d.getReader().QueryRow(ctx, `
 		SELECT secret_leak_count, secrets_rules_version
 		FROM sessions WHERE id = 's1'`,
 	).Scan(&leak, &version)
-	require.NoError(err, "read scan state")
-	assert.Equal(1, leak)
-	assert.Equal("rules-v1", version)
+	require.NoError(t, err, "read scan state")
+	assert.Equal(t, 1, leak)
+	assert.Equal(t, "rules-v1", version)
 }
 
 func TestOrphanCopyPreservesSecretFindings(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 	ctx := t.Context()
 
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	require.NoError(err, "Open src")
+	srcDB, err := Open(ctx, srcPath)
+	require.NoError(t, err, "Open src")
 	insertSession(t, srcDB, "s1", "proj")
 	insertMessages(t, srcDB,
 		userMsg("s1", 0, "hello"),
 		asstMsg("s1", 1, "reply"),
 	)
-	err = srcDB.ReplaceSessionSecretFindings("s1", []SecretFinding{
+	err = srcDB.ReplaceSessionSecretFindings(ctx, "s1", []SecretFinding{
 		{
 			SessionID:      "s1",
 			RuleName:       "aws-access-key",
@@ -186,59 +172,56 @@ func TestOrphanCopyPreservesSecretFindings(t *testing.T) {
 			RedactedMatch:  "AKIA…MPLE",
 		},
 	}, 1, "rulesv1")
-	require.NoError(err, "ReplaceSessionSecretFindings src")
+	require.NoError(t, err, "ReplaceSessionSecretFindings src")
 	// Stamp a distinctive past created_at so the copy can be shown to preserve
 	// it rather than regenerating from the destination default.
-	_, err = srcDB.getWriter().Exec(
+	_, err = srcDB.getWriter().Exec(ctx,
 		"UPDATE secret_findings SET created_at = ? WHERE session_id = 's1'",
 		"2020-01-01T00:00:00.000Z")
-	require.NoError(err, "stamp created_at")
+	require.NoError(t, err, "stamp created_at")
 	srcDB.Close()
 
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
-	require.NoError(err, "Open dst")
+	dstDB, err := Open(ctx, dstPath)
+	require.NoError(t, err, "Open dst")
 	defer dstDB.Close()
 
 	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
-	require.NoError(err, "CopyOrphanedDataFrom")
-	require.Equal(1, count, "expected 1 orphaned session")
+	require.NoError(t, err, "CopyOrphanedDataFrom")
+	require.Equal(t, 1, count, "expected 1 orphaned session")
 
 	s, err := dstDB.GetSession(ctx, "s1")
-	require.NoError(err, "GetSession")
-	require.NotNil(s, "session s1 not found in dst")
-	assert.Equal(1, s.SecretLeakCount, "SecretLeakCount")
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, s, "session s1 not found in dst")
+	assert.Equal(t, 1, s.SecretLeakCount, "SecretLeakCount")
 
 	findings, err := dstDB.SessionSecretFindings(ctx, "s1")
-	require.NoError(err, "SessionSecretFindings")
-	require.Len(findings, 1)
+	require.NoError(t, err, "SessionSecretFindings")
+	require.Len(t, findings, 1)
 	f := findings[0]
-	assert.Equal("aws-access-key", f.RuleName, "RuleName")
-	assert.Equal("message", f.LocationKind, "LocationKind")
-	assert.Equal("AKIA…MPLE", f.RedactedMatch, "RedactedMatch")
+	assert.Equal(t, "aws-access-key", f.RuleName, "RuleName")
+	assert.Equal(t, "message", f.LocationKind, "LocationKind")
+	assert.Equal(t, "AKIA…MPLE", f.RedactedMatch, "RedactedMatch")
 
 	var createdAt string
-	require.NoError(dstDB.getReader().QueryRow(
+	require.NoError(t, dstDB.getReader().QueryRow(ctx,
 		"SELECT created_at FROM secret_findings WHERE session_id = 's1'",
 	).Scan(&createdAt), "query copied created_at")
-	assert.Equal("2020-01-01T00:00:00.000Z", createdAt, "preserved created_at")
+	assert.Equal(t, "2020-01-01T00:00:00.000Z", createdAt, "preserved created_at")
 }
 
 func TestListSecretFindings(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "alpha", func(s *Session) { s.Agent = "claude" })
 	insertSession(t, d, "s2", "beta", func(s *Session) { s.Agent = "codex" })
-	_ = d.ReplaceSessionSecretFindings("s1", []SecretFinding{
+	_ = d.ReplaceSessionSecretFindings(t.Context(), "s1", []SecretFinding{
 		{
 			SessionID: "s1", RuleName: "aws-access-key", Confidence: "definite",
 			LocationKind: "message", MessageOrdinal: 0, MatchStart: 0, MatchEnd: 20,
 			MatchIndex: 0, RedactedMatch: "AKIA…MPLE",
 		},
 	}, 1, "v1")
-	_ = d.ReplaceSessionSecretFindings("s2", []SecretFinding{
+	_ = d.ReplaceSessionSecretFindings(t.Context(), "s2", []SecretFinding{
 		{
 			SessionID: "s2", RuleName: "jwt", Confidence: "candidate",
 			LocationKind: "message", MessageOrdinal: 0, MatchStart: 0, MatchEnd: 10,
@@ -247,32 +230,30 @@ func TestListSecretFindings(t *testing.T) {
 	}, 0, "v1")
 
 	all, err := d.ListSecretFindings(t.Context(), SecretFindingFilter{Limit: 50})
-	require.NoError(err, "ListSecretFindings")
-	require.Len(all.Findings, 2)
+	require.NoError(t, err, "ListSecretFindings")
+	require.Len(t, all.Findings, 2)
 	// project filter
 	alpha, _ := d.ListSecretFindings(t.Context(),
 		SecretFindingFilter{Project: "alpha", Limit: 50})
-	require.Len(alpha.Findings, 1, "project filter")
-	assert.Equal("s1", alpha.Findings[0].SessionID, "project filter")
+	require.Len(t, alpha.Findings, 1, "project filter")
+	assert.Equal(t, "s1", alpha.Findings[0].SessionID, "project filter")
 	// confidence filter
 	def, _ := d.ListSecretFindings(t.Context(),
 		SecretFindingFilter{Confidence: "definite", Limit: 50})
-	require.Len(def.Findings, 1, "confidence filter")
-	assert.Equal("aws-access-key", def.Findings[0].RuleName, "confidence filter")
+	require.Len(t, def.Findings, 1, "confidence filter")
+	assert.Equal(t, "aws-access-key", def.Findings[0].RuleName, "confidence filter")
 	current, _ := d.ListSecretFindings(t.Context(),
 		SecretFindingFilter{RulesVersions: []string{"v1"}, Limit: 50})
-	assert.Len(current.Findings, 2, "rules version filter current")
+	assert.Len(t, current.Findings, 2, "rules version filter current")
 	stale, _ := d.ListSecretFindings(t.Context(),
 		SecretFindingFilter{RulesVersions: []string{"v2"}, Limit: 50})
-	assert.Empty(stale.Findings, "rules version filter stale")
+	assert.Empty(t, stale.Findings, "rules version filter stale")
 }
 
 // TestListSecretFindingsPagination walks pages with a small limit and asserts
 // every finding is seen exactly once (no OFFSET drop/duplicate at the page
 // boundary) and NextCursor advances then stops.
 func TestListSecretFindingsPagination(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj", func(s *Session) { s.Agent = "claude" })
 	var findings []SecretFinding
@@ -284,25 +265,25 @@ func TestListSecretFindingsPagination(t *testing.T) {
 			RedactedMatch: "AKIA…",
 		})
 	}
-	require.NoError(d.ReplaceSessionSecretFindings("s1", findings, 5, "v1"),
+	require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(), "s1", findings, 5, "v1"),
 		"ReplaceSessionSecretFindings")
 	seen := map[int]int{}
 	cursor, pages := 0, 0
 	for {
 		page, err := d.ListSecretFindings(t.Context(),
 			SecretFindingFilter{Limit: 2, Cursor: cursor})
-		require.NoError(err, "page at cursor %d", cursor)
+		require.NoError(t, err, "page at cursor %d", cursor)
 		for _, f := range page.Findings {
 			seen[f.MatchStart]++
 		}
 		pages++
-		require.LessOrEqual(pages, 10, "pagination did not terminate")
+		require.LessOrEqual(t, pages, 10, "pagination did not terminate")
 		if page.NextCursor == 0 {
 			break
 		}
 		cursor = page.NextCursor
 	}
-	require.Len(seen, 5, "distinct findings across pages")
+	require.Len(t, seen, 5, "distinct findings across pages")
 	for start, n := range seen {
 		assert.Equal(t, 1, n, "finding at MatchStart=%d seen %d times", start, n)
 	}
@@ -312,9 +293,6 @@ func TestListSecretFindingsPagination(t *testing.T) {
 // a session with an empty-string started_at must filter on created_at rather
 // than being silently dropped (date(”) is NULL).
 func TestListSecretFindingsDateFilter(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "dated", "proj", func(s *Session) {
 		s.Agent = "claude"
@@ -325,12 +303,12 @@ func TestListSecretFindingsDateFilter(t *testing.T) {
 		s.StartedAt = Ptr("")
 	})
 	// Pin the empty session's created_at so the assertions are deterministic.
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(t.Context(),
 		"UPDATE sessions SET created_at = ? WHERE id = 'empty'",
 		"2026-05-10T00:00:00Z")
-	require.NoError(err, "stamp created_at")
+	require.NoError(t, err, "stamp created_at")
 	for _, id := range []string{"dated", "empty"} {
-		require.NoError(d.ReplaceSessionSecretFindings(id, []SecretFinding{{
+		require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(), id, []SecretFinding{{
 			SessionID: id, RuleName: "aws-access-key", Confidence: "definite",
 			LocationKind: "message", MessageOrdinal: 0, MatchStart: 0,
 			MatchEnd: 20, MatchIndex: 0, RedactedMatch: "AKIA…MPLE",
@@ -339,14 +317,14 @@ func TestListSecretFindingsDateFilter(t *testing.T) {
 	// Wide range includes both; the empty started_at falls back to created_at.
 	wide, err := d.ListSecretFindings(t.Context(),
 		SecretFindingFilter{DateFrom: "2000-01-01", Limit: 50})
-	require.NoError(err, "wide")
-	assert.Len(wide.Findings, 2,
+	require.NoError(t, err, "wide")
+	assert.Len(t, wide.Findings, 2,
 		"DateFrom 2000-01-01 (empty must fall back to created_at)")
 	// Range covering only the dated session (empty's created_at is in May).
 	mar, _ := d.ListSecretFindings(t.Context(),
 		SecretFindingFilter{DateFrom: "2026-03-01", DateTo: "2026-03-31", Limit: 50})
-	require.Len(mar.Findings, 1, "March range")
-	assert.Equal("dated", mar.Findings[0].SessionID, "March range")
+	require.Len(t, mar.Findings, 1, "March range")
+	assert.Equal(t, "dated", mar.Findings[0].SessionID, "March range")
 }
 
 // TestUpdateSessionSignalsPreservesSecretColumns verifies a signals-only
@@ -354,60 +332,55 @@ func TestListSecretFindingsDateFilter(t *testing.T) {
 // reset secret_leak_count/secrets_rules_version or drop findings: the
 // secret columns are owned solely by the findings replacement path.
 func TestUpdateSessionSignalsPreservesSecretColumns(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "proj")
-	require.NoError(d.ReplaceSessionSecretFindings("s1", []SecretFinding{{
+	require.NoError(t, d.ReplaceSessionSecretFindings(ctx, "s1", []SecretFinding{{
 		SessionID: "s1", RuleName: "aws-access-key", Confidence: "definite",
 		LocationKind: "message", MessageOrdinal: 0, MatchStart: 0, MatchEnd: 20,
 		MatchIndex: 0, RedactedMatch: "AKIA…MPLE",
 	}}, 1, "rulesv1"), "ReplaceSessionSecretFindings")
 	// A signals-only recompute carries zero secret fields; it must not reset
 	// the secret summary while findings still exist.
-	require.NoError(d.UpdateSessionSignals(
+	require.NoError(t, d.UpdateSessionSignals(ctx,
 		"s1", SessionSignalUpdate{Outcome: "success"},
 	), "UpdateSessionSignals")
 	s, err := d.GetSession(ctx, "s1")
-	require.NoError(err, "GetSession")
-	require.NotNil(s, "GetSession")
-	assert.Equal(1, s.SecretLeakCount, "SecretLeakCount preserved")
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, s, "GetSession")
+	assert.Equal(t, 1, s.SecretLeakCount, "SecretLeakCount preserved")
 	findings, err := d.SessionSecretFindings(ctx, "s1")
-	require.NoError(err, "SessionSecretFindings")
-	assert.Len(findings, 1, "findings preserved")
+	require.NoError(t, err, "SessionSecretFindings")
+	assert.Len(t, findings, 1, "findings preserved")
 	var rv string
-	err = d.getReader().QueryRow(
+	err = d.getReader().QueryRow(ctx,
 		"SELECT secrets_rules_version FROM sessions WHERE id = 's1'",
 	).Scan(&rv)
-	require.NoError(err, "query secrets_rules_version")
-	assert.Equal("rulesv1", rv, "secrets_rules_version preserved")
+	require.NoError(t, err, "query secrets_rules_version")
+	assert.Equal(t, "rulesv1", rv, "secrets_rules_version preserved")
 }
 
 func TestSecretScanCandidates(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "scanned", "proj", func(s *Session) { s.MessageCount = 1 })
 	insertSession(t, d, "stale", "proj", func(s *Session) { s.MessageCount = 1 })
 	insertSession(t, d, "empty", "proj", func(s *Session) { s.MessageCount = 0 })
 	// Mark "scanned" at the current version; the others stay at "".
-	require.NoError(d.ReplaceSessionSecretFindings("scanned", nil, 0, "vCur"),
+	require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(), "scanned", nil, 0, "vCur"),
 		"mark scanned")
 	ctx := t.Context()
 	stale, err := d.SecretScanCandidates(ctx, SecretScanCandidateFilter{
 		CurrentVersion: "vCur", OnlyStale: true,
 	})
-	require.NoError(err, "SecretScanCandidates stale")
+	require.NoError(t, err, "SecretScanCandidates stale")
 	// Only "stale" qualifies: "scanned" is current, "empty" has no messages.
-	require.Equal([]string{"stale"}, stale, "OnlyStale candidates")
+	require.Equal(t, []string{"stale"}, stale, "OnlyStale candidates")
 	all, err := d.SecretScanCandidates(ctx, SecretScanCandidateFilter{
 		CurrentVersion: "vCur", OnlyStale: false,
 	})
-	require.NoError(err, "SecretScanCandidates forced")
+	require.NoError(t, err, "SecretScanCandidates forced")
 	// Forced rescan ignores version but still requires messages.
-	require.Len(all, 2, "forced candidates (scanned+stale)")
+	require.Len(t, all, 2, "forced candidates (scanned+stale)")
 }
 
 func TestSecretFindingSource(t *testing.T) {
@@ -432,7 +405,7 @@ func TestSecretFindingSource(t *testing.T) {
 			},
 		},
 	}}
-	require.NoError(t, d.ReplaceSessionMessages("s1", msgs),
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", msgs),
 		"ReplaceSessionMessages")
 	ctx := t.Context()
 	cases := []struct {
@@ -494,15 +467,13 @@ func TestSecretFindingSource(t *testing.T) {
 // tool_call INSERT, SQLite may assign new ids in an arbitrary order, causing
 // call_index=1 to resolve to the wrong tool call.
 func TestOrphanCopyPreservesToolCallIndex(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	ctx := t.Context()
 
 	// --- Source DB: one session, one assistant message, two tool calls ---
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	require.NoError(err, "Open src")
+	srcDB, err := Open(ctx, srcPath)
+	require.NoError(t, err, "Open src")
 
 	insertSession(t, srcDB, "s1", "proj")
 	msgs := []Message{{
@@ -526,7 +497,7 @@ func TestOrphanCopyPreservesToolCallIndex(t *testing.T) {
 			},
 		},
 	}}
-	require.NoError(srcDB.ReplaceSessionMessages("s1", msgs),
+	require.NoError(t, srcDB.ReplaceSessionMessages(ctx, "s1", msgs),
 		"ReplaceSessionMessages")
 
 	// Finding at call_index=1 (second tool call), tool_result location.
@@ -542,32 +513,32 @@ func TestOrphanCopyPreservesToolCallIndex(t *testing.T) {
 		MatchIndex:     0,
 		RedactedMatch:  "AKIA…MPLE",
 	}
-	require.NoError(srcDB.ReplaceSessionSecretFindings(
+	require.NoError(t, srcDB.ReplaceSessionSecretFindings(ctx,
 		"s1", []SecretFinding{finding}, 1, "rulesv1",
 	), "ReplaceSessionSecretFindings")
 	srcDB.Close()
 
 	// --- Destination DB: copy orphaned data ---
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
-	require.NoError(err, "Open dst")
+	dstDB, err := Open(ctx, dstPath)
+	require.NoError(t, err, "Open dst")
 	defer dstDB.Close()
 
 	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
-	require.NoError(err, "CopyOrphanedDataFrom")
-	require.Equal(1, count, "expected 1 orphaned session")
+	require.NoError(t, err, "CopyOrphanedDataFrom")
+	require.Equal(t, 1, count, "expected 1 orphaned session")
 
 	// --- Verify: call_index=1 must resolve to the SECOND tool call ---
 	findings, err := dstDB.SessionSecretFindings(ctx, "s1")
-	require.NoError(err, "SessionSecretFindings")
-	require.Len(findings, 1)
+	require.NoError(t, err, "SessionSecretFindings")
+	require.Len(t, findings, 1)
 	f := findings[0]
-	require.NotNil(f.CallIndex, "CallIndex")
-	require.Equal(1, *f.CallIndex, "CallIndex")
+	require.NotNil(t, f.CallIndex, "CallIndex")
+	require.Equal(t, 1, *f.CallIndex, "CallIndex")
 
 	got, ok, err := dstDB.SecretFindingSource(ctx, f)
-	require.NoError(err, "SecretFindingSource")
-	require.True(ok, "SecretFindingSource returned ok=false; "+
+	require.NoError(t, err, "SecretFindingSource")
+	require.True(t, ok, "SecretFindingSource returned ok=false; "+
 		"tool call order corrupted during orphan copy")
 	const wantContent = "AKIA7QHWN2DKR4FYPLJM"
 	assert.Equal(t, wantContent, got,

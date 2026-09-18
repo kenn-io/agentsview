@@ -47,17 +47,14 @@ func TestFlattenTrajectoryTextInvalidJSON(t *testing.T) {
 }
 
 func TestFlattenTrajectoryTextDeterministic(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	in := jsontext.Value(`{"c":"3","a":"1","b":"2"}`)
 	first, err := flattenTrajectoryText(in)
-	require.NoError(err)
-	assert.Equal("1\n2\n3", first)
+	require.NoError(t, err)
+	assert.Equal(t, "1\n2\n3", first)
 	for range 5 {
 		again, err := flattenTrajectoryText(in)
-		require.NoError(err)
-		assert.Equal(first, again)
+		require.NoError(t, err)
+		assert.Equal(t, first, again)
 	}
 }
 
@@ -83,33 +80,27 @@ func TestChunkText(t *testing.T) {
 }
 
 func TestEvalIngestIDDeterministicAndCollisionSafe(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	a, err := evalIngestID("eval-trajectory", "run1", "traj1", 0)
-	require.NoError(err)
+	require.NoError(t, err)
 	b, err := evalIngestID("eval-trajectory", "run1", "traj1", 0)
-	require.NoError(err)
-	assert.Equal(a, b, "same parts must produce the same id")
-	assert.Len(a, 64, "sha-256 hex is 64 chars")
+	require.NoError(t, err)
+	assert.Equal(t, a, b, "same parts must produce the same id")
+	assert.Len(t, a, 64, "sha-256 hex is 64 chars")
 
 	other, err := evalIngestID("eval-trajectory", "run1", "traj1", 1)
-	require.NoError(err)
-	assert.NotEqual(a, other, "a different chunk index must produce a different id")
+	require.NoError(t, err)
+	assert.NotEqual(t, a, other, "a different chunk index must produce a different id")
 
 	// Raw concatenation of ("a","b:c") and ("a:b","c") would collide; the
 	// JSON-tuple hash must not.
 	x, err := evalIngestID("a", "b:c")
-	require.NoError(err)
+	require.NoError(t, err)
 	y, err := evalIngestID("a:b", "c")
-	require.NoError(err)
-	assert.NotEqual(x, y, "delimiter-ambiguous tuples must not collide")
+	require.NoError(t, err)
+	assert.NotEqual(t, x, y, "delimiter-ambiguous tuples must not collide")
 }
 
 func TestIngestEvalTrajectory(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -124,46 +115,43 @@ func TestIngestEvalTrajectory(t *testing.T) {
 	}
 
 	res, err := d.IngestEvalTrajectory(ctx, in)
-	require.NoError(err)
-	assert.Equal("run1", res.RunID)
-	assert.Equal("traj1", res.TrajectoryID)
-	assert.Equal(3, res.EntriesIndexed)
+	require.NoError(t, err)
+	assert.Equal(t, "run1", res.RunID)
+	assert.Equal(t, "traj1", res.TrajectoryID)
+	assert.Equal(t, 3, res.EntriesIndexed)
 
 	id0, err := evalTrajectoryChunkID(
 		in, evalTrajectoryContentDigest(long), 0,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	m0, err := d.GetRecallEntry(ctx, id0)
-	require.NoError(err)
-	require.NotNil(m0)
-	assert.Equal(corerecall.TypeFact, m0.Type)
-	assert.Equal(corerecall.ScopeRepository, m0.Scope)
-	assert.Equal(corerecall.StatusAccepted, m0.Status)
-	assert.Equal(corerecall.ReviewStateEvalRaw, m0.ReviewState)
-	assert.Equal(in.ExtractorMethod, m0.ExtractorMethod)
-	assert.Equal("run1", m0.SourceRunID)
-	assert.Equal("traj1:chunk:0", m0.SourceEpisodeID)
-	assert.True(m0.Transferable)
-	assert.True(m0.ProvenanceOK)
-	assert.Nil(m0.Confidence, "raw chunks carry no confidence")
-	assert.Len([]rune(m0.Body), defaultEvalChunkChars)
-	assert.Equal(defaultEvalTrajectoryProject, m0.Project)
-	assert.Equal(defaultEvalTrajectoryAgent, m0.Agent)
+	require.NoError(t, err)
+	require.NotNil(t, m0)
+	assert.Equal(t, corerecall.TypeFact, m0.Type)
+	assert.Equal(t, corerecall.ScopeRepository, m0.Scope)
+	assert.Equal(t, corerecall.StatusAccepted, m0.Status)
+	assert.Equal(t, corerecall.ReviewStateEvalRaw, m0.ReviewState)
+	assert.Equal(t, in.ExtractorMethod, m0.ExtractorMethod)
+	assert.Equal(t, "run1", m0.SourceRunID)
+	assert.Equal(t, "traj1:chunk:0", m0.SourceEpisodeID)
+	assert.True(t, m0.Transferable)
+	assert.True(t, m0.ProvenanceOK)
+	assert.Nil(t, m0.Confidence, "raw chunks carry no confidence")
+	assert.Len(t, []rune(m0.Body), defaultEvalChunkChars)
+	assert.Equal(t, defaultEvalTrajectoryProject, m0.Project)
+	assert.Equal(t, defaultEvalTrajectoryAgent, m0.Agent)
 
 	sess, err := d.GetSession(ctx, m0.SourceSessionID)
-	require.NoError(err)
-	require.NotNil(sess)
-	assert.Equal(in.SourceVersion, sess.SourceVersion)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, in.SourceVersion, sess.SourceVersion)
 
 	res2, err := d.IngestEvalTrajectory(ctx, in)
-	require.NoError(err)
-	assert.Equal(0, res2.EntriesIndexed, "re-ingest must insert nothing new")
+	require.NoError(t, err)
+	assert.Equal(t, 0, res2.EntriesIndexed, "re-ingest must insert nothing new")
 }
 
 func TestIngestEvalTrajectoryConcurrentReingestIsIdempotent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	in := EvalTrajectoryIngest{
 		RunID:           "run-concurrent",
@@ -195,23 +183,20 @@ func TestIngestEvalTrajectoryConcurrentReingestIsIdempotent(t *testing.T) {
 	totalIndexed := 0
 	for range workers {
 		outcome := <-outcomes
-		require.NoError(outcome.err)
+		require.NoError(t, outcome.err)
 		totalIndexed += outcome.result.EntriesIndexed
 	}
-	assert.Equal(3, totalIndexed)
+	assert.Equal(t, 3, totalIndexed)
 	entries, err := d.ListRecallEntries(t.Context(), RecallQuery{
 		SourceRunID: in.RunID,
 		Status:      corerecall.StatusAccepted,
 		Limit:       10,
 	})
-	require.NoError(err)
-	assert.Len(entries, 3)
+	require.NoError(t, err)
+	assert.Len(t, entries, 3)
 }
 
 func TestIngestEvalTrajectoryVersionsIdentityByExtractorMetadataAndContent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	base := EvalTrajectoryIngest{
@@ -223,35 +208,35 @@ func TestIngestEvalTrajectoryVersionsIdentityByExtractorMetadataAndContent(t *te
 	}
 
 	first, err := d.IngestEvalTrajectory(ctx, base)
-	require.NoError(err)
-	assert.Equal(1, first.EntriesIndexed)
+	require.NoError(t, err)
+	assert.Equal(t, 1, first.EntriesIndexed)
 
 	changedExtractor := base
 	changedExtractor.ExtractorMethod = "extractor-v2"
 	second, err := d.IngestEvalTrajectory(ctx, changedExtractor)
-	require.NoError(err)
-	assert.Equal(1, second.EntriesIndexed)
+	require.NoError(t, err)
+	assert.Equal(t, 1, second.EntriesIndexed)
 
 	changedSourceVersion := base
 	changedSourceVersion.SourceVersion = "harness-v2"
 	third, err := d.IngestEvalTrajectory(ctx, changedSourceVersion)
-	require.NoError(err)
-	assert.Equal(1, third.EntriesIndexed)
+	require.NoError(t, err)
+	assert.Equal(t, 1, third.EntriesIndexed)
 
 	changedContent := base
 	changedContent.Trajectory = jsontext.Value(`{"text":"revised trajectory"}`)
 	fourth, err := d.IngestEvalTrajectory(ctx, changedContent)
-	require.NoError(err)
-	assert.Equal(1, fourth.EntriesIndexed)
+	require.NoError(t, err)
+	assert.Equal(t, 1, fourth.EntriesIndexed)
 
 	entries, err := d.ListRecallEntries(ctx, RecallQuery{
 		SourceRunID: "run1",
 		Status:      corerecall.StatusAccepted,
 		Limit:       10,
 	})
-	require.NoError(err)
-	require.Len(entries, 4)
-	assert.ElementsMatch([]string{
+	require.NoError(t, err)
+	require.Len(t, entries, 4)
+	assert.ElementsMatch(t, []string{
 		"first trajectory",
 		"first trajectory",
 		"first trajectory",

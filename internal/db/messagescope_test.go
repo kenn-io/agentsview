@@ -34,8 +34,6 @@ func TestScopeFilterMatchesDayHour(t *testing.T) {
 }
 
 func TestScopeStats(t *testing.T) {
-	assert := assert.New(t)
-
 	rows := []ScopedMessage{
 		{Role: "user"},
 		{Role: "user", IsSystem: true},
@@ -43,13 +41,13 @@ func TestScopeStats(t *testing.T) {
 		{Role: "assistant", HasOutputTokens: true, OutputTokens: 5},
 	}
 	s := ScopeStats(rows)
-	assert.Equal(4, s.Messages)
-	assert.Equal(1, s.UserMessages) // system user not counted
-	assert.Equal(2, s.AssistantMessages)
-	assert.Equal(1, s.ToolUseMessages)
-	assert.Equal(1, s.ThinkingMessages)
-	assert.Equal(15, s.OutputTokens)
-	assert.True(s.HasOutputTokens)
+	assert.Equal(t, 4, s.Messages)
+	assert.Equal(t, 1, s.UserMessages) // system user not counted
+	assert.Equal(t, 2, s.AssistantMessages)
+	assert.Equal(t, 1, s.ToolUseMessages)
+	assert.Equal(t, 1, s.ThinkingMessages)
+	assert.Equal(t, 15, s.OutputTokens)
+	assert.True(t, s.HasOutputTokens)
 }
 
 func TestScopeTiming(t *testing.T) {
@@ -66,8 +64,6 @@ func TestScopeTiming(t *testing.T) {
 }
 
 func TestScopeTimingRestoresOrdinalOrderAfterReducer(t *testing.T) {
-	require := require.New(t)
-
 	// The reviewer's case: an empty-model user (ord 0) is buffered behind a
 	// model-bearing user (ord 1) that emits immediately, then the selected
 	// assistant (ord 2) flushes the buffer. The reducer therefore emits out of
@@ -81,9 +77,9 @@ func TestScopeTimingRestoresOrdinalOrderAfterReducer(t *testing.T) {
 		{SessionID: "s1", Ordinal: 2, Role: "assistant", Model: "sonnet", HasLocalTime: true, LocalTime: t0.Add(2 * time.Minute), ContentLength: 30},
 	}
 	emitted, err := collectScopeRows(t, f, rows)
-	require.NoError(err)
-	require.Len(emitted, 3)
-	require.Equal([]int{1, 0, 2},
+	require.NoError(t, err)
+	require.Len(t, emitted, 3)
+	require.Equal(t, []int{1, 0, 2},
 		[]int{emitted[0].Ordinal, emitted[1].Ordinal, emitted[2].Ordinal},
 		"reducer emits the model-bearing user ahead of the buffered user")
 

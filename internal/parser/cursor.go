@@ -590,8 +590,7 @@ func parseCursorJSONL(data string) []ParsedMessage {
 		} else {
 			msg.Role = RoleAssistant
 			text, _, hasThinking, hasToolUse,
-				toolCalls, toolResults :=
-				ExtractTextContent(context.Background(), content)
+				toolCalls, toolResults := ExtractTextContent(context.Background(), content)
 			msg.Content = text
 			msg.HasThinking = hasThinking
 			msg.HasToolUse = hasToolUse

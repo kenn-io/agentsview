@@ -365,6 +365,7 @@ SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content
 		if err != nil {
 			return fmt.Errorf("look up search hit documents: %w", err)
 		}
+		defer rows.Close()
 		for rows.Next() {
 			var key, offsets string
 			var doc mirrorDoc

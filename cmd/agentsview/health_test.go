@@ -256,7 +256,7 @@ func TestHealthListFilterIncludesAllSessions(t *testing.T) {
 func TestResolveHealthSessionIDMatchesDisplayedShortID(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "abcdef1234567890", Project: "p", Machine: "m",
 		Agent: "claude", MessageCount: 1,
 	}), "upsert one-shot session")
@@ -272,16 +272,14 @@ func TestResolveHealthSessionIDMatchesDisplayedShortID(t *testing.T) {
 }
 
 func TestResolveHealthSessionIDExactMatchCanBeOutsideHealthList(t *testing.T) {
-	require := require.New(t)
-
 	database := dbtest.OpenTestDB(t)
 
 	parentID := "parent-session"
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: parentID, Project: "p", Machine: "m", Agent: "claude",
 		MessageCount: 2, UserMessageCount: 2,
 	}), "upsert parent session")
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "child-session", Project: "p", Machine: "m", Agent: "codex",
 		MessageCount: 2, UserMessageCount: 2,
 		ParentSessionID: &parentID, RelationshipType: "subagent",
@@ -293,13 +291,11 @@ func TestResolveHealthSessionIDExactMatchCanBeOutsideHealthList(t *testing.T) {
 		"child-session",
 	)
 
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Equal(t, "child-session", got)
 }
 
 func TestResolveHealthSessionIDPartialMatchCanBeOutsideHealthList(t *testing.T) {
-	require := require.New(t)
-
 	database := dbtest.OpenTestDB(t)
 
 	writes := make([]db.SessionBatchWrite, 0, maxHealthLimit+1)
@@ -316,9 +312,9 @@ func TestResolveHealthSessionIDPartialMatchCanBeOutsideHealthList(t *testing.T) 
 		ID: "old-partial-target", Project: "p", Machine: "m",
 		Agent: "codex", MessageCount: 1, StartedAt: &oldStarted,
 	}})
-	result, err := database.WriteSessionBatchAtomic(writes)
-	require.NoError(err, "seed health sessions")
-	require.Equal(maxHealthLimit+1, result.WrittenSessions)
+	result, err := database.WriteSessionBatchAtomic(t.Context(), writes)
+	require.NoError(t, err, "seed health sessions")
+	require.Equal(t, maxHealthLimit+1, result.WrittenSessions)
 
 	got, err := resolveHealthSessionID(
 		t.Context(),
@@ -326,7 +322,7 @@ func TestResolveHealthSessionIDPartialMatchCanBeOutsideHealthList(t *testing.T) 
 		"partial-target",
 	)
 
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Equal(t, "old-partial-target", got)
 }
 
@@ -353,16 +349,13 @@ func TestResolveHealthSessionIDUsesDaemonPartialLookup(t *testing.T) {
 func TestResolveHealthSessionIDExactMatchStillChecksShortIDAmbiguity(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := dbtest.OpenTestDB(t)
 
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "abcdef12", Project: "p", Machine: "m",
 		Agent: "claude", MessageCount: 1,
 	}), "upsert exact session")
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "abcdef1234567890", Project: "p", Machine: "m",
 		Agent: "codex", MessageCount: 1,
 	}), "upsert short-id collision")
@@ -373,10 +366,10 @@ func TestResolveHealthSessionIDExactMatchStillChecksShortIDAmbiguity(
 		"abcdef12",
 	)
 
-	require.Error(err)
-	assert.Empty(got)
-	assert.Contains(err.Error(), "ambiguous")
-	assert.Contains(err.Error(), "abcdef1234567890")
+	require.Error(t, err)
+	assert.Empty(t, got)
+	assert.Contains(t, err.Error(), "ambiguous")
+	assert.Contains(t, err.Error(), "abcdef1234567890")
 }
 
 func TestResolveSessionID(t *testing.T) {
@@ -384,7 +377,7 @@ func TestResolveSessionID(t *testing.T) {
 
 	upsert := func(id string) {
 		t.Helper()
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "p", Machine: "m",
 			Agent: "claude", MessageCount: 1,
 		}), "upsert %q", id)
@@ -454,7 +447,7 @@ func TestResolveSessionIDCollisionBeyondTopFew(t *testing.T) {
 
 	upsert := func(id string, started string) {
 		t.Helper()
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "p", Machine: "m",
 			Agent: "claude", MessageCount: 1,
 			StartedAt: &started,

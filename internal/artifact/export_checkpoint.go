@@ -127,13 +127,13 @@ func decodeCheckpointCandidate(
 			fmt.Errorf("verifying artifact checkpoint: %w", verifyErr)
 	}
 	if verifyErr != nil || closeErr != nil {
-		return db.ArtifactCheckpointHead{}, false, nil
+		return db.ArtifactCheckpointHead{}, false, nil //nolint:nilerr // Corrupt checkpoint metadata is ineligible; operational verification errors propagate above.
 	}
 	if errors.Is(decodeErr, errFutureArtifactVersion) {
 		return db.ArtifactCheckpointHead{}, false, decodeErr
 	}
 	if decodeErr != nil {
-		return db.ArtifactCheckpointHead{}, false, nil
+		return db.ArtifactCheckpointHead{}, false, nil //nolint:nilerr // Corrupt checkpoint metadata is ineligible; operational verification errors propagate above.
 	}
 	return candidate, true, nil
 }

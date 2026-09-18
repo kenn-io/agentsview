@@ -144,8 +144,6 @@ func assistantUsageMsg(
 }
 
 func TestBuildUsageFilter_ValidMapping(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 	f, err := service.BuildUsageFilter(service.UsageRequest{
 		From:    "2024-06-01",
@@ -155,13 +153,13 @@ func TestBuildUsageFilter_ValidMapping(t *testing.T) {
 		// IncludeOneShot/IncludeAutomated default false -> exclude true.
 	})
 	require.NoError(t, err)
-	assert.Equal("2024-06-01", f.From)
-	assert.Equal("2024-06-15", f.To)
-	assert.Equal("proj", f.Project)
-	assert.Equal("UTC", f.Timezone, "empty timezone defaults to UTC")
-	assert.True(f.ExcludeOneShot, "IncludeOneShot=false -> ExcludeOneShot=true")
-	assert.True(f.ExcludeAutomated, "IncludeAutomated=false -> ExcludeAutomated=true")
-	assert.True(f.Breakdowns, "summary needs per-day breakdowns")
+	assert.Equal(t, "2024-06-01", f.From)
+	assert.Equal(t, "2024-06-15", f.To)
+	assert.Equal(t, "proj", f.Project)
+	assert.Equal(t, "UTC", f.Timezone, "empty timezone defaults to UTC")
+	assert.True(t, f.ExcludeOneShot, "IncludeOneShot=false -> ExcludeOneShot=true")
+	assert.True(t, f.ExcludeAutomated, "IncludeAutomated=false -> ExcludeAutomated=true")
+	assert.True(t, f.Breakdowns, "summary needs per-day breakdowns")
 }
 
 func TestBuildUsageFilter_IncludeFlagsInvert(t *testing.T) {
@@ -230,9 +228,6 @@ func TestDirectBackend_UsageSummary_UnknownProjectKeyHasStableCode(t *testing.T)
 }
 
 func TestDirectBackend_UsageSummary_EmptyRange(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	be := service.NewDirectBackend(d, nil)
@@ -240,17 +235,14 @@ func TestDirectBackend_UsageSummary_EmptyRange(t *testing.T) {
 	res, err := be.UsageSummary(t.Context(), service.UsageRequest{
 		From: "2024-06-01", To: "2024-06-03",
 	})
-	require.NoError(err)
-	require.NotNil(res)
-	assert.Equal("2024-06-01", res.From)
-	assert.Equal("2024-06-03", res.To)
-	assert.NotNil(res.ProjectTotals, "folds should be non-nil slices")
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, "2024-06-01", res.From)
+	assert.Equal(t, "2024-06-03", res.To)
+	assert.NotNil(t, res.ProjectTotals, "folds should be non-nil slices")
 }
 
 func TestHTTPBackend_UsageSummary_Roundtrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	svc := env.Backend("", false)
@@ -258,10 +250,10 @@ func TestHTTPBackend_UsageSummary_Roundtrip(t *testing.T) {
 	res, err := svc.UsageSummary(t.Context(), service.UsageRequest{
 		From: "2024-06-01", To: "2024-06-03",
 	})
-	require.NoError(err)
-	require.NotNil(res)
-	assert.Equal("2024-06-01", res.From)
-	assert.Equal("2024-06-03", res.To)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, "2024-06-01", res.From)
+	assert.Equal(t, "2024-06-03", res.To)
 }
 
 // The server defaults include_one_shot to true, so the HTTP backend must
@@ -332,13 +324,11 @@ func TestBuildUsagePairwiseFilters_Validation(t *testing.T) {
 	)
 	require.Error(t, err)
 	var ue *service.UsageInputError
-	assert.ErrorAs(t, err, &ue)
+	require.ErrorAs(t, err, &ue)
 	assert.Equal(t, "right_dimension must be model or project", ue.Msg)
 }
 
 func TestBuildUsagePairwiseFilters_PreservesNonComparedBaseFilters(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 
 	left, leftEmpty, right, rightEmpty, err := service.BuildUsagePairwiseFilters(
@@ -355,17 +345,15 @@ func TestBuildUsagePairwiseFilters_PreservesNonComparedBaseFilters(t *testing.T)
 		},
 	)
 	require.NoError(t, err)
-	assert.False(leftEmpty)
-	assert.False(rightEmpty)
-	assert.Equal("model-b", left.Model)
-	assert.Equal("alpha,beta", left.Project)
-	assert.Equal("model-a,model-b", right.Model)
-	assert.Equal("beta", right.Project)
+	assert.False(t, leftEmpty)
+	assert.False(t, rightEmpty)
+	assert.Equal(t, "model-b", left.Model)
+	assert.Equal(t, "alpha,beta", left.Project)
+	assert.Equal(t, "model-a,model-b", right.Model)
+	assert.Equal(t, "beta", right.Project)
 }
 
 func TestBuildUsagePairwiseFilters_ConflictingBaseFilterMarksEmptySide(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 
 	left, leftEmpty, right, rightEmpty, err := service.BuildUsagePairwiseFilters(
@@ -380,16 +368,13 @@ func TestBuildUsagePairwiseFilters_ConflictingBaseFilterMarksEmptySide(t *testin
 		},
 	)
 	require.NoError(t, err)
-	assert.True(leftEmpty)
-	assert.False(rightEmpty)
-	assert.Empty(left.Model)
-	assert.Equal("gpt-4o", right.Model)
+	assert.True(t, leftEmpty)
+	assert.False(t, rightEmpty)
+	assert.Empty(t, left.Model)
+	assert.Equal(t, "gpt-4o", right.Model)
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	d := dbtest.OpenTestDB(t)
@@ -409,21 +394,18 @@ func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
 			RightValue:     "gpt-4o",
 		},
 	)
-	require.NoError(err)
-	require.NotNil(res)
-	assert.Equal(2, res.Left.SessionCount)
-	assert.Equal(285, res.Left.TotalTokens)
-	assert.Equal(1, res.Right.SessionCount)
-	assert.Equal(50, res.Right.TotalTokens)
-	assert.Equal(-235, res.Deltas.TotalTokensDelta)
-	require.NotNil(res.Left.CostPerSession)
-	require.NotNil(res.Right.CostPerSession)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, 2, res.Left.SessionCount)
+	assert.Equal(t, 285, res.Left.TotalTokens)
+	assert.Equal(t, 1, res.Right.SessionCount)
+	assert.Equal(t, 50, res.Right.TotalTokens)
+	assert.Equal(t, -235, res.Deltas.TotalTokensDelta)
+	require.NotNil(t, res.Left.CostPerSession)
+	require.NotNil(t, res.Right.CostPerSession)
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ProjectVsModel(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	d := dbtest.OpenTestDB(t)
@@ -433,14 +415,14 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectVsModel(t *testing.T) {
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
 		IncludeOneShot: true,
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	var betaKey string
 	for _, project := range summary.ProjectTotals {
 		if project.Project == "beta" {
 			betaKey = project.ProjectKey
 		}
 	}
-	require.NotEmpty(betaKey)
+	require.NotEmpty(t, betaKey)
 
 	res, err := be.UsagePairwiseComparison(
 		t.Context(),
@@ -455,20 +437,17 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectVsModel(t *testing.T) {
 			RightValue:     "gpt-4o",
 		},
 	)
-	require.NoError(err)
-	require.NotNil(res)
-	assert.Equal(2, res.Left.SessionCount)
-	assert.Equal(155, res.Left.TotalTokens)
-	assert.Equal(1, res.Right.SessionCount)
-	assert.Equal(50, res.Right.TotalTokens)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, 2, res.Left.SessionCount)
+	assert.Equal(t, 155, res.Left.TotalTokens)
+	assert.Equal(t, 1, res.Right.SessionCount)
+	assert.Equal(t, 50, res.Right.TotalTokens)
 }
 
 func TestDirectBackend_UsagePairwiseComparison_PreservesCommaProjectLabel(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	d := dbtest.OpenTestDB(t)
@@ -479,13 +458,13 @@ func TestDirectBackend_UsagePairwiseComparison_PreservesCommaProjectLabel(
 		IncludeOneShot: true,
 	}
 	summary, err := be.UsageSummary(t.Context(), base)
-	require.NoError(err)
+	require.NoError(t, err)
 	keys := make(map[string]string)
 	for _, project := range summary.ProjectTotals {
 		keys[project.Project] = project.ProjectKey
 	}
-	require.NotEmpty(keys["team,core"])
-	require.NotEmpty(keys["other"])
+	require.NotEmpty(t, keys["team,core"])
+	require.NotEmpty(t, keys["other"])
 
 	comparison, err := be.UsagePairwiseComparison(
 		t.Context(),
@@ -497,17 +476,15 @@ func TestDirectBackend_UsagePairwiseComparison_PreservesCommaProjectLabel(
 			RightValue:     keys["other"],
 		},
 	)
-	require.NoError(err)
-	require.NotNil(comparison)
-	assert.Equal(1, comparison.Left.SessionCount)
-	assert.Equal(100, comparison.Left.TotalTokens)
-	assert.Equal(1, comparison.Right.SessionCount)
-	assert.Equal(25, comparison.Right.TotalTokens)
+	require.NoError(t, err)
+	require.NotNil(t, comparison)
+	assert.Equal(t, 1, comparison.Left.SessionCount)
+	assert.Equal(t, 100, comparison.Left.TotalTokens)
+	assert.Equal(t, 1, comparison.Right.SessionCount)
+	assert.Equal(t, 25, comparison.Right.TotalTokens)
 }
 
 func TestDirectBackend_UsageSummary_ExcludesOpaqueProjectKey(t *testing.T) {
-	require := require.New(t)
-
 	t.Parallel()
 
 	d := dbtest.OpenTestDB(t)
@@ -518,26 +495,23 @@ func TestDirectBackend_UsageSummary_ExcludesOpaqueProjectKey(t *testing.T) {
 		IncludeOneShot: true,
 	}
 	summary, err := be.UsageSummary(t.Context(), base)
-	require.NoError(err)
+	require.NoError(t, err)
 	var betaKey string
 	for _, project := range summary.ProjectTotals {
 		if project.Project == "beta" {
 			betaKey = project.ProjectKey
 		}
 	}
-	require.NotEmpty(betaKey)
+	require.NotEmpty(t, betaKey)
 
 	base.ExcludeProjectKey = betaKey
 	filtered, err := be.UsageSummary(t.Context(), base)
-	require.NoError(err)
-	require.Len(filtered.ProjectTotals, 1)
+	require.NoError(t, err)
+	require.Len(t, filtered.ProjectTotals, 1)
 	assert.Equal(t, "alpha", filtered.ProjectTotals[0].Project)
 }
 
 func TestDirectBackend_UsageSummary_ExcludesSubagentOnlyProjectKey(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	d := dbtest.OpenTestDB(t)
@@ -570,24 +544,21 @@ func TestDirectBackend_UsageSummary_ExcludesSubagentOnlyProjectKey(t *testing.T)
 	}
 
 	summary, err := be.UsageSummary(t.Context(), base)
-	require.NoError(err)
-	require.Len(summary.ProjectTotals, 1)
-	require.NotEmpty(summary.ProjectTotals[0].ProjectKey)
-	assert.Equal("subagent-only", summary.ProjectTotals[0].Project)
+	require.NoError(t, err)
+	require.Len(t, summary.ProjectTotals, 1)
+	require.NotEmpty(t, summary.ProjectTotals[0].ProjectKey)
+	assert.Equal(t, "subagent-only", summary.ProjectTotals[0].Project)
 
 	base.ExcludeProjectKey = summary.ProjectTotals[0].ProjectKey
 	filtered, err := be.UsageSummary(t.Context(), base)
-	require.NoError(err)
-	assert.Empty(filtered.ProjectTotals)
-	assert.Zero(filtered.Totals.InputTokens)
+	require.NoError(t, err)
+	assert.Empty(t, filtered.ProjectTotals)
+	assert.Zero(t, filtered.Totals.InputTokens)
 }
 
 func TestDirectBackend_UsageSummary_ExcludesCommaProjectByOpaqueKey(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	d := dbtest.OpenTestDB(t)
@@ -598,27 +569,24 @@ func TestDirectBackend_UsageSummary_ExcludesCommaProjectByOpaqueKey(
 		IncludeOneShot: true,
 	}
 	summary, err := be.UsageSummary(t.Context(), base)
-	require.NoError(err)
+	require.NoError(t, err)
 	var commaKey string
 	for _, project := range summary.ProjectTotals {
 		if project.Project == "team,core" {
 			commaKey = project.ProjectKey
 		}
 	}
-	require.NotEmpty(commaKey)
+	require.NotEmpty(t, commaKey)
 
 	base.ExcludeProjectKey = commaKey
 	filtered, err := be.UsageSummary(t.Context(), base)
-	require.NoError(err)
-	require.Len(filtered.ProjectTotals, 1)
-	assert.Equal("other", filtered.ProjectTotals[0].Project)
-	assert.Equal(25, filtered.ProjectTotals[0].InputTokens)
+	require.NoError(t, err)
+	require.Len(t, filtered.ProjectTotals, 1)
+	assert.Equal(t, "other", filtered.ProjectTotals[0].Project)
+	assert.Equal(t, 25, filtered.ProjectTotals[0].InputTokens)
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ZeroDataSide(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	d := dbtest.OpenTestDB(t)
@@ -638,18 +606,15 @@ func TestDirectBackend_UsagePairwiseComparison_ZeroDataSide(t *testing.T) {
 			RightValue:     "gpt-4o",
 		},
 	)
-	require.NoError(err)
-	require.NotNil(res)
-	assert.Zero(res.Left.SessionCount)
-	assert.Zero(res.Left.TotalTokens)
-	assert.Nil(res.Left.CostPerSession)
-	assert.Nil(res.Deltas.TotalCostDeltaRatio)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Zero(t, res.Left.SessionCount)
+	assert.Zero(t, res.Left.TotalTokens)
+	assert.Nil(t, res.Left.CostPerSession)
+	assert.Nil(t, res.Deltas.TotalCostDeltaRatio)
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ConflictingBaseFilterReturnsZeroData(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	d := dbtest.OpenTestDB(t)
@@ -670,18 +635,15 @@ func TestDirectBackend_UsagePairwiseComparison_ConflictingBaseFilterReturnsZeroD
 			RightValue:     "gpt-4o",
 		},
 	)
-	require.NoError(err)
-	require.NotNil(res)
-	assert.Zero(res.Left.SessionCount)
-	assert.Zero(res.Left.TotalTokens)
-	assert.Equal(1, res.Right.SessionCount)
-	assert.Equal(50, res.Right.TotalTokens)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Zero(t, res.Left.SessionCount)
+	assert.Zero(t, res.Left.TotalTokens)
+	assert.Equal(t, 1, res.Right.SessionCount)
+	assert.Equal(t, 50, res.Right.TotalTokens)
 }
 
 func TestDirectBackend_UsagePairwiseComparison_DoesNotUseSentinelFilterValues(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	d := dbtest.OpenTestDB(t)
@@ -737,18 +699,15 @@ func TestDirectBackend_UsagePairwiseComparison_DoesNotUseSentinelFilterValues(t 
 			RightValue:     "gpt-4o",
 		},
 	)
-	require.NoError(err)
-	require.NotNil(res)
-	assert.Zero(res.Left.SessionCount)
-	assert.Zero(res.Left.TotalTokens)
-	assert.Equal(1, res.Right.SessionCount)
-	assert.Equal(50, res.Right.TotalTokens)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Zero(t, res.Left.SessionCount)
+	assert.Zero(t, res.Left.TotalTokens)
+	assert.Equal(t, 1, res.Right.SessionCount)
+	assert.Equal(t, 50, res.Right.TotalTokens)
 }
 
 func TestHTTPBackend_UsagePairwiseComparison_Roundtrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	env := newHTTPBackendEnv(t)
@@ -768,16 +727,13 @@ func TestHTTPBackend_UsagePairwiseComparison_Roundtrip(t *testing.T) {
 			RightValue:     "gpt-4o",
 		},
 	)
-	require.NoError(err)
-	require.NotNil(res)
-	assert.Equal(2, res.Left.SessionCount)
-	assert.Equal(1, res.Right.SessionCount)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, 2, res.Left.SessionCount)
+	assert.Equal(t, 1, res.Right.SessionCount)
 }
 
 func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	var queryValues map[string]string
@@ -809,13 +765,13 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 			RightValue:        "gpt-4o",
 		},
 	)
-	require.NoError(err)
-	require.NotNil(res)
-	assert.Equal("project", queryValues["left_dimension"])
-	assert.Equal("alpha", queryValues["left_value"])
-	assert.Equal("model", queryValues["right_dimension"])
-	assert.Equal("gpt-4o", queryValues["right_value"])
-	assert.Equal("alpha/main", queryValues["git_branch"])
-	assert.Equal("pl1:sha256:hidden", queryValues["exclude_project_key"])
-	assert.Equal(22, res.Deltas.TotalTokensDelta)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, "project", queryValues["left_dimension"])
+	assert.Equal(t, "alpha", queryValues["left_value"])
+	assert.Equal(t, "model", queryValues["right_dimension"])
+	assert.Equal(t, "gpt-4o", queryValues["right_value"])
+	assert.Equal(t, "alpha/main", queryValues["git_branch"])
+	assert.Equal(t, "pl1:sha256:hidden", queryValues["exclude_project_key"])
+	assert.Equal(t, 22, res.Deltas.TotalTokensDelta)
 }

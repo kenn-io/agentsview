@@ -40,6 +40,7 @@ func writeTestAsset(
 	t *testing.T, dataDir, contentType string, body []byte,
 ) (string, string) {
 	t.Helper()
+
 	ref, err := assets.Reference(contentType, body)
 	require.NoError(t, err)
 	filename := strings.TrimPrefix(ref, "asset://")
@@ -101,14 +102,12 @@ func runAssetCache(t *testing.T, cache *assetCache) context.CancelFunc {
 		select {
 		case <-done:
 		case <-time.After(time.Second):
-			t.Fatal("cache sweep loop did not stop after cancellation")
+			require.FailNow(t, "cache sweep loop did not stop after cancellation")
 		}
 	}
 }
 
 func TestImageRenderCacheRepeatedRequestReadsOriginalOnce(t *testing.T) {
-	assert := assert.New(t)
-
 	dataDir := t.TempDir()
 	filename, _ := writeTestAsset(t, dataDir, "image/png", testPNG)
 	var fullBodyReads atomic.Int32
@@ -125,16 +124,13 @@ func TestImageRenderCacheRepeatedRequestReadsOriginalOnce(t *testing.T) {
 	}
 	first := assetResponse(t, srv, filename)
 	second := assetResponse(t, srv, filename)
-	assert.Equal(testPNG, first.Body)
-	assert.Equal(testPNG, second.Body)
-	assert.Equal(int32(1), fullBodyReads.Load())
-	assert.Equal(first.ContentType, second.ContentType)
+	assert.Equal(t, testPNG, first.Body)
+	assert.Equal(t, testPNG, second.Body)
+	assert.Equal(t, int32(1), fullBodyReads.Load())
+	assert.Equal(t, first.ContentType, second.ContentType)
 }
 
 func TestImageRenderCacheWarmedEntryOpenFailure(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := t.TempDir()
 	body := append([]byte(nil), testPNG...)
 	filename, filePath := writeTestAsset(t, dataDir, "image/png", body)
@@ -144,9 +140,9 @@ func TestImageRenderCacheWarmedEntryOpenFailure(t *testing.T) {
 	}
 	assetResponse(t, srv, filename)
 	beforeBody, err := os.ReadFile(filePath)
-	require.NoError(err)
+	require.NoError(t, err)
 	beforeInfo, err := os.Stat(filePath)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var fullBodyReads atomic.Int32
 	previousReadAssetFile := readAssetFile
@@ -163,42 +159,39 @@ func TestImageRenderCacheWarmedEntryOpenFailure(t *testing.T) {
 		openAssetReadOnly = previousOpenAssetReadOnly
 	})
 
-	assert.Equal(http.StatusNotFound, assetErrorStatus(t, srv, filename))
-	assert.Zero(fullBodyReads.Load(), "an open failure must not fall through to a body read")
+	assert.Equal(t, http.StatusNotFound, assetErrorStatus(t, srv, filename))
+	assert.Zero(t, fullBodyReads.Load(), "an open failure must not fall through to a body read")
 	afterBody, err := os.ReadFile(filePath)
-	require.NoError(err)
+	require.NoError(t, err)
 	afterInfo, err := os.Stat(filePath)
-	require.NoError(err)
-	assert.Equal(beforeBody, afterBody)
-	assert.True(beforeInfo.ModTime().Equal(afterInfo.ModTime()))
-	assert.Equal(beforeInfo.Size(), afterInfo.Size())
+	require.NoError(t, err)
+	assert.Equal(t, beforeBody, afterBody)
+	assert.True(t, beforeInfo.ModTime().Equal(afterInfo.ModTime()))
+	assert.Equal(t, beforeInfo.Size(), afterInfo.Size())
 }
 
 func TestImageRenderCacheAgeBoundary(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		body := append([]byte(nil), testPNG...)
 		filename, size, modTime := cacheAsset(t, "image/png", body)
 		cache := newAssetCache()
-		require.True(cache.put(filename, "image/png", body, size, modTime))
+		require.True(t, cache.put(filename, "image/png", body, size, modTime))
 
 		time.Sleep(assetCacheMaxAge - time.Nanosecond)
 		got, ok := cache.get(filename, "image/png", size, modTime)
-		require.True(ok, "an entry below the seven-day cutoff is served")
-		assert.Equal(body, got)
+		require.True(t, ok, "an entry below the seven-day cutoff is served")
+		assert.Equal(t, body, got)
 
 		time.Sleep(2 * time.Nanosecond)
 		_, ok = cache.get(filename, "image/png", size, modTime)
-		assert.False(ok, "an entry beyond the seven-day cutoff is expired")
+		assert.False(t, ok, "an entry beyond the seven-day cutoff is expired")
 
-		require.True(cache.put(filename, "image/png", body, size, modTime))
+		require.True(t, cache.put(filename, "image/png", body, size, modTime))
 		_, ok = cache.get(filename, "image/png", size, modTime)
-		assert.True(ok, "a re-read after expiry stores a fresh entry")
+		assert.True(t, ok, "a re-read after expiry stores a fresh entry")
 		time.Sleep(assetCacheMaxAge - time.Nanosecond)
 		_, ok = cache.get(filename, "image/png", size, modTime)
-		assert.True(ok, "the fresh entry gets its own seven-day clock")
+		assert.True(t, ok, "the fresh entry gets its own seven-day clock")
 	})
 }
 
@@ -220,9 +213,6 @@ func TestImageRenderCacheHitDoesNotExtendAge(t *testing.T) {
 }
 
 func TestImageRenderCacheCapacity(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	first := append([]byte(nil), testPNG...)
 	second := variantPNG(0x81)
 	third := variantPNG(0x83)
@@ -233,93 +223,87 @@ func TestImageRenderCacheCapacity(t *testing.T) {
 	entryCache := newAssetCacheWithLimits(
 		assetCacheMaxAge, 2, uint64(firstSize*4),
 	)
-	require.True(entryCache.put(firstName, "image/png", first, firstSize, modTime))
-	require.True(entryCache.put(secondName, "image/png", second, secondSize, modTime))
-	require.True(entryCache.put(thirdName, "image/png", third, thirdSize, modTime))
+	require.True(t, entryCache.put(firstName, "image/png", first, firstSize, modTime))
+	require.True(t, entryCache.put(secondName, "image/png", second, secondSize, modTime))
+	require.True(t, entryCache.put(thirdName, "image/png", third, thirdSize, modTime))
 	_, firstPresent := entryCache.get(firstName, "image/png", firstSize, modTime)
-	assert.False(firstPresent, "the entry limit evicts the oldest entry")
+	assert.False(t, firstPresent, "the entry limit evicts the oldest entry")
 	_, secondPresent := entryCache.get(secondName, "image/png", secondSize, modTime)
-	assert.True(secondPresent)
+	assert.True(t, secondPresent)
 	_, thirdPresent := entryCache.get(thirdName, "image/png", thirdSize, modTime)
-	assert.True(thirdPresent)
-	assert.Equal(2, entryCache.len())
-	assert.Equal(uint64(secondSize+thirdSize), entryCache.bytes())
+	assert.True(t, thirdPresent)
+	assert.Equal(t, 2, entryCache.len())
+	assert.Equal(t, uint64(secondSize+thirdSize), entryCache.bytes())
 
 	byteCache := newAssetCacheWithLimits(
 		assetCacheMaxAge, 4, uint64(firstSize+secondSize),
 	)
-	require.True(byteCache.put(firstName, "image/png", first, firstSize, modTime))
-	require.True(byteCache.put(secondName, "image/png", second, secondSize, modTime))
-	require.True(byteCache.put(thirdName, "image/png", third, thirdSize, modTime))
+	require.True(t, byteCache.put(firstName, "image/png", first, firstSize, modTime))
+	require.True(t, byteCache.put(secondName, "image/png", second, secondSize, modTime))
+	require.True(t, byteCache.put(thirdName, "image/png", third, thirdSize, modTime))
 	_, firstPresent = byteCache.get(firstName, "image/png", firstSize, modTime)
-	assert.False(firstPresent, "the byte limit evicts the oldest entry")
+	assert.False(t, firstPresent, "the byte limit evicts the oldest entry")
 	_, secondPresent = byteCache.get(secondName, "image/png", secondSize, modTime)
-	assert.True(secondPresent)
+	assert.True(t, secondPresent)
 	_, thirdPresent = byteCache.get(thirdName, "image/png", thirdSize, modTime)
-	assert.True(thirdPresent)
-	assert.Equal(2, byteCache.len())
-	assert.Equal(uint64(firstSize+secondSize), byteCache.bytes())
+	assert.True(t, thirdPresent)
+	assert.Equal(t, 2, byteCache.len())
+	assert.Equal(t, uint64(firstSize+secondSize), byteCache.bytes())
 
 	oversize := newAssetCacheWithLimits(
 		assetCacheMaxAge, 4, uint64(len(first)-1),
 	)
-	assert.False(oversize.put(firstName, "image/png", first, firstSize, modTime))
-	assert.Zero(oversize.len())
-	assert.Zero(oversize.bytes())
+	assert.False(t, oversize.put(firstName, "image/png", first, firstSize, modTime))
+	assert.Zero(t, oversize.len())
+	assert.Zero(t, oversize.bytes())
 }
 
 func TestImageRenderCachePreservesDurableAssets(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := t.TempDir()
 	body := append([]byte(nil), testPNG...)
 	filename, filePath := writeTestAsset(t, dataDir, "image/png", body)
 	unrelatedBody := []byte("unrelated durable file")
 	unrelatedPath := filepath.Join(dataDir, "assets", "unrelated.bin")
-	require.NoError(os.WriteFile(unrelatedPath, unrelatedBody, 0o644))
+	require.NoError(t, os.WriteFile(unrelatedPath, unrelatedBody, 0o644))
 	modTime := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
-	require.NoError(os.Chtimes(filePath, modTime, modTime))
-	require.NoError(os.Chtimes(unrelatedPath, modTime, modTime))
+	require.NoError(t, os.Chtimes(filePath, modTime, modTime))
+	require.NoError(t, os.Chtimes(unrelatedPath, modTime, modTime))
 
 	beforeBody, err := os.ReadFile(filePath)
-	require.NoError(err)
+	require.NoError(t, err)
 	beforeInfo, err := os.Stat(filePath)
-	require.NoError(err)
+	require.NoError(t, err)
 	beforeUnrelated, err := os.Stat(unrelatedPath)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	cache := newAssetCacheWithLimits(assetCacheMaxAge, 1, assetCacheMaxBytes)
 	stop := runAssetCache(t, cache)
 	got, err := cache.read(filename, filePath, "image/png")
-	require.NoError(err)
-	assert.Equal(body, got)
+	require.NoError(t, err)
+	assert.Equal(t, body, got)
 
 	secondName, secondPath := writeTestAsset(t, dataDir, "image/png", variantPNG(0x83))
-	require.NoError(os.Chtimes(secondPath, modTime, modTime))
+	require.NoError(t, os.Chtimes(secondPath, modTime, modTime))
 	_, err = cache.read(secondName, secondPath, "image/png")
-	require.NoError(err)
-	assert.Equal(1, cache.len(), "eviction only touches memory")
+	require.NoError(t, err)
+	assert.Equal(t, 1, cache.len(), "eviction only touches memory")
 	stop()
 
 	afterBody, err := os.ReadFile(filePath)
-	require.NoError(err)
+	require.NoError(t, err)
 	afterInfo, err := os.Stat(filePath)
-	require.NoError(err)
+	require.NoError(t, err)
 	afterUnrelated, err := os.Stat(unrelatedPath)
-	require.NoError(err)
-	assert.Equal(beforeBody, afterBody)
-	assert.True(beforeInfo.ModTime().Equal(afterInfo.ModTime()))
-	assert.True(beforeUnrelated.ModTime().Equal(afterUnrelated.ModTime()))
+	require.NoError(t, err)
+	assert.Equal(t, beforeBody, afterBody)
+	assert.True(t, beforeInfo.ModTime().Equal(afterInfo.ModTime()))
+	assert.True(t, beforeUnrelated.ModTime().Equal(afterUnrelated.ModTime()))
 	afterUnrelatedBody, err := os.ReadFile(unrelatedPath)
-	require.NoError(err)
-	assert.Equal(unrelatedBody, afterUnrelatedBody)
+	require.NoError(t, err)
+	assert.Equal(t, unrelatedBody, afterUnrelatedBody)
 }
 
 func TestImageRenderCacheRouteBoundaries(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := t.TempDir()
 	body := append([]byte(nil), testPNG...)
 	filename, filePath := writeTestAsset(t, dataDir, "image/png", body)
@@ -328,42 +312,40 @@ func TestImageRenderCacheRouteBoundaries(t *testing.T) {
 		assetCache: newAssetCache(),
 	}
 	response := assetResponse(t, srv, filename)
-	assert.Equal("image/png", response.ContentType)
-	assert.Equal("nosniff", response.NoSniff)
-	assert.Equal("public, max-age=31536000, immutable", response.CacheControl)
-	assert.Equal(body, response.Body)
+	assert.Equal(t, "image/png", response.ContentType)
+	assert.Equal(t, "nosniff", response.NoSniff)
+	assert.Equal(t, "public, max-age=31536000, immutable", response.CacheControl)
+	assert.Equal(t, body, response.Body)
 
-	assert.Equal(http.StatusBadRequest, assetErrorStatus(t, srv, "../"+filename))
-	assert.Equal(http.StatusBadRequest, assetErrorStatus(t, srv, "nested/"+filename))
-	assert.Equal(http.StatusForbidden, assetErrorStatus(t, srv, "image.svg"))
+	assert.Equal(t, http.StatusBadRequest, assetErrorStatus(t, srv, "../"+filename))
+	assert.Equal(t, http.StatusBadRequest, assetErrorStatus(t, srv, "nested/"+filename))
+	assert.Equal(t, http.StatusForbidden, assetErrorStatus(t, srv, "image.svg"))
 
-	assert.NoError(os.Remove(filePath))
-	assert.Equal(http.StatusNotFound, assetErrorStatus(t, srv, filename))
+	require.NoError(t, os.Remove(filePath))
+	assert.Equal(t, http.StatusNotFound, assetErrorStatus(t, srv, filename))
 
 	changed := variantPNG(0x84)
 	filename, filePath = writeTestAsset(t, dataDir, "image/png", body)
 	assetResponse(t, srv, filename)
-	require.NoError(os.WriteFile(filePath, changed, 0o644))
+	require.NoError(t, os.WriteFile(filePath, changed, 0o644))
 	changedModTime := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
-	require.NoError(os.Chtimes(filePath, changedModTime, changedModTime))
+	require.NoError(t, os.Chtimes(filePath, changedModTime, changedModTime))
 	changedResponse := assetResponse(t, srv, filename)
-	assert.Equal(changed, changedResponse.Body)
+	assert.Equal(t, changed, changedResponse.Body)
 
 	resized := append(append([]byte(nil), changed...), 0x01)
-	require.NoError(os.WriteFile(filePath, resized, 0o644))
+	require.NoError(t, os.WriteFile(filePath, resized, 0o644))
 	resizedModTime := changedModTime.Add(time.Second)
-	require.NoError(os.Chtimes(filePath, resizedModTime, resizedModTime))
+	require.NoError(t, os.Chtimes(filePath, resizedModTime, resizedModTime))
 	resizedResponse := assetResponse(t, srv, filename)
-	assert.Equal(resized, resizedResponse.Body)
+	assert.Equal(t, resized, resizedResponse.Body)
 
 	nonregular := filepath.Join(dataDir, "assets", "nonregular.png")
-	require.NoError(os.Mkdir(nonregular, 0o755))
-	assert.Equal(http.StatusNotFound, assetErrorStatus(t, srv, "nonregular.png"))
+	require.NoError(t, os.Mkdir(nonregular, 0o755))
+	assert.Equal(t, http.StatusNotFound, assetErrorStatus(t, srv, "nonregular.png"))
 }
 
 func TestImageRenderCacheFallbackAndLegacy(t *testing.T) {
-	assert := assert.New(t)
-
 	dataDir := t.TempDir()
 	body := append([]byte(nil), testPNG...)
 	canonical, _ := writeTestAsset(t, dataDir, "image/png", body)
@@ -374,35 +356,32 @@ func TestImageRenderCacheFallbackAndLegacy(t *testing.T) {
 		assetCacheMaxAge, assetCacheMaxEntries, uint64(len(body)-1),
 	)
 	srv := &Server{cfg: config.Config{DataDir: dataDir}, assetCache: cache}
-	assert.Equal(body, assetResponse(t, srv, canonical).Body)
-	assert.Zero(cache.len(), "an oversize original remains servable")
-	assert.Equal(body, assetResponse(t, srv, "legacy.png").Body)
-	assert.Zero(cache.len(), "legacy filenames bypass admission")
+	assert.Equal(t, body, assetResponse(t, srv, canonical).Body)
+	assert.Zero(t, cache.len(), "an oversize original remains servable")
+	assert.Equal(t, body, assetResponse(t, srv, "legacy.png").Body)
+	assert.Zero(t, cache.len(), "legacy filenames bypass admission")
 
 	nilCache := &Server{cfg: config.Config{DataDir: dataDir}}
-	assert.Equal(body, assetResponse(t, nilCache, canonical).Body)
+	assert.Equal(t, body, assetResponse(t, nilCache, canonical).Body)
 }
 
 func TestImageRenderCacheLifecycle(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := t.TempDir()
 	body := append([]byte(nil), testPNG...)
 	filename, filePath := writeTestAsset(t, dataDir, "image/png", body)
 	info, err := os.Stat(filePath)
-	require.NoError(err)
+	require.NoError(t, err)
 	srv := New(config.Config{Host: "127.0.0.1", DataDir: dataDir}, dbtest.OpenTestDB(t), nil)
-	require.NotNil(srv.assetCache)
-	assert.Zero(srv.assetCache.len())
+	require.NotNil(t, srv.assetCache)
+	assert.Zero(t, srv.assetCache.len())
 	cache := newAssetCacheWithLimits(
 		20*time.Millisecond, assetCacheMaxEntries, assetCacheMaxBytes,
 	)
 	cache.sweepInterval = 5 * time.Millisecond
 	srv.assetCache = cache
-	require.True(cache.put(filename, "image/png", body, info.Size(), info.ModTime()))
+	require.True(t, cache.put(filename, "image/png", body, info.Size(), info.ModTime()))
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	require.NoError(err)
+	require.NoError(t, err)
 	serveDone := make(chan error, 1)
 	go func() {
 		serveDone <- srv.Serve(listener)
@@ -421,24 +400,24 @@ func TestImageRenderCacheLifecycle(t *testing.T) {
 		select {
 		case <-serveDone:
 		case <-time.After(time.Second):
-			t.Errorf("Serve did not stop during cleanup")
+			assert.Failf(t, "test failed", "Serve did not stop during cleanup")
 		}
 	})
-	require.Eventually(func() bool {
+	require.Eventually(t, func() bool {
 		srv.mu.RLock()
 		defer srv.mu.RUnlock()
 		return srv.httpSrv != nil
 	}, time.Second, 5*time.Millisecond)
-	require.Eventually(func() bool {
+	require.Eventually(t, func() bool {
 		return cache.len() == 0
 	}, time.Second, 5*time.Millisecond, "the server's sweep loop releases the expired entry")
-	require.NoError(shutdown())
+	require.NoError(t, shutdown())
 	select {
 	case err := <-serveDone:
 		serveDoneReceived = true
-		assert.ErrorIs(err, http.ErrServerClosed)
+		require.ErrorIs(t, err, http.ErrServerClosed)
 	case <-time.After(time.Second):
-		t.Fatal("Serve did not stop after Shutdown")
+		require.FailNow(t, "Serve did not stop after Shutdown")
 	}
 }
 
@@ -451,18 +430,15 @@ func TestImageRenderCacheExpiryWorkBound(t *testing.T) {
 
 	for _, residentCount := range []int{1, int(assetCacheMaxEntries)} {
 		synctest.Test(t, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			cache := newAssetCacheWithLimits(
 				time.Hour, assetCacheMaxEntries, assetCacheMaxBytes,
 			)
 			for index := range residentCount {
 				body := variantPNG(byte(index + residentCount))
 				filename, size, modTime := cacheAsset(t, "image/png", body)
-				require.True(cache.put(filename, "image/png", body, size, modTime))
+				require.True(t, cache.put(filename, "image/png", body, size, modTime))
 			}
-			require.Equal(residentCount, cache.len())
+			require.Equal(t, residentCount, cache.len())
 
 			ctx, cancel := context.WithCancel(t.Context())
 			done := make(chan struct{})
@@ -472,8 +448,8 @@ func TestImageRenderCacheExpiryWorkBound(t *testing.T) {
 			}()
 			time.Sleep(time.Hour + cache.sweepInterval)
 			synctest.Wait()
-			assert.Zero(cache.len())
-			assert.Zero(cache.bytes())
+			assert.Zero(t, cache.len())
+			assert.Zero(t, cache.bytes())
 			cancel()
 			<-done
 		})
@@ -517,7 +493,7 @@ func TestImageRenderCacheConcurrent(t *testing.T) {
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		t.Error(err)
+		assert.Fail(t, fmt.Sprint(err))
 	}
 	stop()
 	assert.Equal(t, len(files), cache.len())
@@ -525,24 +501,21 @@ func TestImageRenderCacheConcurrent(t *testing.T) {
 }
 
 func TestImageRenderCacheImmutableIdentityAndMediaType(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	body := append([]byte(nil), testPNG...)
 	filename, size, modTime := cacheAsset(t, "image/png", body)
 	cache := newAssetCache()
-	require.True(cache.put(filename, "image/png", body, size, modTime))
+	require.True(t, cache.put(filename, "image/png", body, size, modTime))
 	got, ok := cache.get(filename, "image/png", size, modTime)
-	require.True(ok)
+	require.True(t, ok)
 	got[0] ^= 0xff
 	gotAgain, ok := cache.get(filename, "image/png", size, modTime)
-	require.True(ok)
-	assert.Equal(body, gotAgain)
+	require.True(t, ok)
+	assert.Equal(t, body, gotAgain)
 	_, ok = cache.get(filename, "image/jpeg", size, modTime)
-	assert.False(ok)
+	assert.False(t, ok)
 	_, ok = cache.get(filename, "image/png", size+1, modTime)
-	assert.False(ok)
+	assert.False(t, ok)
 	_, ok = cache.get(filename, "image/png", size, modTime.Add(time.Second))
-	assert.False(ok)
-	assert.False(cache.put("legacy.png", "image/png", body, size, modTime))
+	assert.False(t, ok)
+	assert.False(t, cache.put("legacy.png", "image/png", body, size, modTime))
 }

@@ -32,20 +32,17 @@ func TestActivityAutomationFilter(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			excludeAuto, excludeInter, err := activityAutomationFilter(tc.automation)
 			if tc.wantErr {
-				require.Error(err)
-				assert.False(excludeAuto, "error must not exclude automated")
-				assert.False(excludeInter, "error must not exclude interactive")
+				require.Error(t, err)
+				assert.False(t, excludeAuto, "error must not exclude automated")
+				assert.False(t, excludeInter, "error must not exclude interactive")
 				return
 			}
-			require.NoError(err)
-			assert.Equal(tc.wantExcludeAuto, excludeAuto)
-			assert.Equal(tc.wantExcludeInter, excludeInter)
-			assert.False(excludeAuto && excludeInter,
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantExcludeAuto, excludeAuto)
+			assert.Equal(t, tc.wantExcludeInter, excludeInter)
+			assert.False(t, excludeAuto && excludeInter,
 				"the two exclusions are mutually exclusive")
 		})
 	}

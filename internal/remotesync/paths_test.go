@@ -106,27 +106,33 @@ func TestPathWithinForbiddenRootsWindowsStyleFixtures(t *testing.T) {
 	tests := []forbiddenRootCase{
 		{
 			"unc_root_matches_child",
-			[]string{`\\server\share\Secret`}, `\\server\share\Secret\file.txt`, true,
+			[]string{`\\server\share\Secret`},
+			`\\server\share\Secret\file.txt`, true,
 		},
 		{
 			"unc_root_matches_itself",
-			[]string{`\\server\share\Secret`}, `\\server\share\Secret`, true,
+			[]string{`\\server\share\Secret`},
+			`\\server\share\Secret`, true,
 		},
 		{
 			"unc_prefix_not_boundary",
-			[]string{`\\server\share\Secret`}, `\\server\share\Secret2\file.txt`, false,
+			[]string{`\\server\share\Secret`},
+			`\\server\share\Secret2\file.txt`, false,
 		},
 		{
 			"drive_letter_root_matches_child",
-			[]string{`C:\Users\foo\Secret`}, `C:\Users\foo\Secret\file.txt`, true,
+			[]string{`C:\Users\foo\Secret`},
+			`C:\Users\foo\Secret\file.txt`, true,
 		},
 		{
 			"drive_letter_mismatch_different_volume_rejected",
-			[]string{`C:\Users\foo\Secret`}, `D:\Users\foo\Secret\file.txt`, false,
+			[]string{`C:\Users\foo\Secret`},
+			`D:\Users\foo\Secret\file.txt`, false,
 		},
 		{
 			"drive_letter_relative_traversal_resolves_to_sibling",
-			[]string{`C:\a\b`}, `C:\a\b\..\c`, false,
+			[]string{`C:\a\b`},
+			`C:\a\b\..\c`, false,
 		},
 	}
 	for _, tc := range tests {
@@ -167,22 +173,20 @@ func TestPathWithinForbiddenRootsLocalWrapper(t *testing.T) {
 func TestPathWithinForbiddenRootsLocalWrapperCanonicalizesRelativeSpellings(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	t.Chdir(base)
 	absRoot := filepath.Join(base, "sessions")
 
-	assert.True(pathWithinForbiddenRoots(
+	assert.True(t, pathWithinForbiddenRoots(
 		[]string{"sessions"}, filepath.Join(absRoot, "chat.db"),
 	), "relative root spelling must guard absolute children")
-	assert.True(pathWithinForbiddenRoots(
+	assert.True(t, pathWithinForbiddenRoots(
 		[]string{absRoot}, filepath.Join("sessions", "chat.db"),
 	), "absolute root must guard relatively spelled children")
-	assert.True(pathWithinForbiddenRoots([]string{"."}, "sessions"),
+	assert.True(t, pathWithinForbiddenRoots([]string{"."}, "sessions"),
 		"root \".\" must guard relative children of the working directory")
-	assert.False(pathWithinForbiddenRoots(
+	assert.False(t, pathWithinForbiddenRoots(
 		[]string{"sessions"}, filepath.Join(base, "sessions2"),
 	), "canonicalization must preserve component-boundary matching")
 }
@@ -195,29 +199,26 @@ func TestPathWithinForbiddenRootsLocalWrapperCanonicalizesRelativeSpellings(
 func TestPathWithinForbiddenRootsLocalWrapperResolvesSymlinkAliases(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if runtime.GOOS == "windows" {
 		t.Skip("test fixture uses POSIX symlinks")
 	}
 	base, err := filepath.EvalSymlinks(t.TempDir())
-	require.NoError(err)
+	require.NoError(t, err)
 	forbidden := filepath.Join(base, "trae")
-	require.NoError(os.MkdirAll(filepath.Join(forbidden, "sub"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(forbidden, "sub"), 0o755))
 	alias := filepath.Join(base, "alias")
-	require.NoError(os.Symlink(forbidden, alias))
+	require.NoError(t, os.Symlink(forbidden, alias))
 
-	assert.True(pathWithinForbiddenRoots(
+	assert.True(t, pathWithinForbiddenRoots(
 		[]string{forbidden}, filepath.Join(alias, "sub", "chat.db"),
 	), "alias-spelled path must resolve into the physical forbidden root")
-	assert.True(pathWithinForbiddenRoots(
+	assert.True(t, pathWithinForbiddenRoots(
 		[]string{alias}, filepath.Join(forbidden, "sub", "chat.db"),
 	), "alias-spelled forbidden root must guard its physical children")
-	assert.True(pathWithinForbiddenRoots(
+	assert.True(t, pathWithinForbiddenRoots(
 		[]string{forbidden}, filepath.Join(alias, "sub", "missing", "x"),
 	), "missing tails resolve through their longest existing ancestor")
-	assert.False(pathWithinForbiddenRoots(
+	assert.False(t, pathWithinForbiddenRoots(
 		[]string{forbidden}, filepath.Join(base, "other"),
 	), "unrelated siblings stay outside the boundary")
 }
@@ -246,13 +247,10 @@ func TestPathWithinForbiddenRootsLocalWrapperCaseFolding(t *testing.T) {
 func TestSelectAllowedFilesNeverCanonicalizesUnmatchedClientPaths(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	base, err := filepath.EvalSymlinks(t.TempDir())
-	require.NoError(err)
+	require.NoError(t, err)
 	forbiddenRoot := filepath.Join(base, "trae")
-	require.NoError(os.MkdirAll(forbiddenRoot, 0o755))
+	require.NoError(t, os.MkdirAll(forbiddenRoot, 0o755))
 	allowed := TargetSet{ForbiddenRoots: []string{forbiddenRoot}}
 
 	var touched []string
@@ -270,9 +268,9 @@ func TestSelectAllowedFilesNeverCanonicalizesUnmatchedClientPaths(
 		"/attacker/evil",
 	} {
 		_, ok := SelectAllowedFiles(allowed, []string{attacker})
-		assert.False(ok, "unmatched path %q must be rejected", attacker)
+		assert.False(t, ok, "unmatched path %q must be rejected", attacker)
 	}
-	assert.Empty(touched,
+	assert.Empty(t, touched,
 		"client paths matching no allowed root must never reach filesystem canonicalization")
 }
 

@@ -65,47 +65,39 @@ func (s failingRefreshSource) ScanEmbeddableUnits(
 }
 
 func TestBuildFirstBuildEmbedsAllAndActivates(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 
 	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(err)
-	assert.True(result.Activated)
-	assert.Equal(gen.Fingerprint(), result.Fingerprint)
-	assert.Equal(2, result.Fill.Documents)
+	require.NoError(t, err)
+	assert.True(t, result.Activated)
+	assert.Equal(t, gen.Fingerprint(), result.Fingerprint)
+	assert.Equal(t, 2, result.Fill.Documents)
 
 	active, ok, err := ix.ActiveFingerprint(ctx)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(gen.Fingerprint(), active)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, gen.Fingerprint(), active)
 }
 
 func TestBuildSecondBuildNoChangesFillsZero(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 
 	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(err)
-	assert.Equal(0, result.Fill.Documents)
-	assert.False(result.Activated, "already active, no re-activation")
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Fill.Documents)
+	assert.False(t, result.Activated, "already active, no re-activation")
 }
 
 func TestBuildFailureDoesNotAdvanceCompletedCorpusRevision(t *testing.T) {
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	gen := fakeGeneration("fake-model")
@@ -113,7 +105,7 @@ func TestBuildFailureDoesNotAdvanceCompletedCorpusRevision(t *testing.T) {
 
 	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen,
 		BuildOptions{CorpusRevision: "revision-1"})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	src.rows[0].unit.Content = "changed"
 	src.rows[0].endedAt = "2024-02-01T00:00:00Z"
@@ -122,17 +114,14 @@ func TestBuildFailureDoesNotAdvanceCompletedCorpusRevision(t *testing.T) {
 	}
 	_, err = ix.Build(ctx, src, failingEncoder, gen,
 		BuildOptions{CorpusRevision: "revision-2"})
-	require.Error(err)
+	require.Error(t, err)
 
 	stale, err := ix.StaleActive(ctx, gen.Fingerprint(), "revision-2")
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.True(t, stale, "a failed fill must not mark the new corpus revision complete")
 }
 
 func TestFailedFullRebuildClearsCompletedCorpusRevision(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	gen := fakeGeneration("fake-model")
@@ -140,7 +129,7 @@ func TestFailedFullRebuildClearsCompletedCorpusRevision(t *testing.T) {
 
 	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen,
 		BuildOptions{CorpusRevision: "revision-1"})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	failingEncoder := func(context.Context, []string) ([][]float32, error) {
 		return nil, errors.New("endpoint unavailable")
@@ -149,34 +138,31 @@ func TestFailedFullRebuildClearsCompletedCorpusRevision(t *testing.T) {
 		FullRebuild:    true,
 		CorpusRevision: "revision-1",
 	})
-	require.Error(err)
+	require.Error(t, err)
 
 	stale, err := ix.StaleActive(ctx, gen.Fingerprint(), "revision-1")
-	require.NoError(err)
-	assert.True(stale,
+	require.NoError(t, err)
+	assert.True(t, stale,
 		"a failed full rebuild must not leave the reset generation marked complete")
 
 	_, err = ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{
 		FullRebuild:    true,
 		CorpusRevision: "revision-1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	stale, err = ix.StaleActive(ctx, gen.Fingerprint(), "revision-1")
-	require.NoError(err)
-	assert.False(stale, "a successful full rebuild restores the completed revision")
+	require.NoError(t, err)
+	assert.False(t, stale, "a successful full rebuild restores the completed revision")
 }
 
 func TestFailedFullRefreshClearsCompletedCorpusRevision(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	gen := fakeGeneration("fake-model")
 
 	_, err := ix.Build(ctx, twoDocSource(), fakeBuildEncoder(), gen,
 		BuildOptions{CorpusRevision: "revision-1"})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	_, err = ix.Build(ctx, failingRefreshSource{
 		unit: userDoc("s1", "u1", 0, "partially refreshed"),
@@ -185,33 +171,30 @@ func TestFailedFullRefreshClearsCompletedCorpusRevision(t *testing.T) {
 		Backstop:       true,
 		CorpusRevision: "revision-1",
 	})
-	require.Error(err)
-	assert.ErrorContains(err, "source scan failed")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "source scan failed")
 
 	row, ok := readMirrorRow(t, ix, DocKey("user", "s1", "u1", 0, 1))
-	require.True(ok)
-	assert.Equal("partially refreshed", row.content,
+	require.True(t, ok)
+	assert.Equal(t, "partially refreshed", row.content,
 		"the refresh must mutate the mirror before failing")
 	stale, err := ix.StaleActive(ctx, gen.Fingerprint(), "revision-1")
-	require.NoError(err)
-	assert.True(stale,
+	require.NoError(t, err)
+	assert.True(t, stale,
 		"a failed full refresh must not leave the partially changed mirror marked complete")
 
 	_, err = ix.Build(ctx, twoDocSource(), fakeBuildEncoder(), gen, BuildOptions{
 		Backstop:       true,
 		CorpusRevision: "revision-1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	stale, err = ix.StaleActive(ctx, gen.Fingerprint(), "revision-1")
-	require.NoError(err)
-	assert.False(stale,
+	require.NoError(t, err)
+	assert.False(t, stale,
 		"a successful full refresh and fill restore the completed revision")
 }
 
 func TestBuildCorpusFingerprintChangeForcesFullReconciliation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	ix, err := OpenSpec(
 		ctx,
@@ -220,8 +203,8 @@ func TestBuildCorpusFingerprintChangeForcesFullReconciliation(t *testing.T) {
 		false,
 		4000,
 	)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(ix.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, ix.Close()) })
 
 	oldSource := &fakeUnitSource{rows: []fakeUnit{{
 		unit:    userDoc("old-entry", "old-entry", 0, "old content"),
@@ -232,7 +215,7 @@ func TestBuildCorpusFingerprintChangeForcesFullReconciliation(t *testing.T) {
 		Params: map[string]string{CorpusFingerprintParam: "extract-old"},
 	}
 	_, err = ix.Build(ctx, oldSource, fakeBuildEncoder(), oldGeneration, BuildOptions{})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	newSource := &fakeUnitSource{rows: []fakeUnit{{
 		unit:    userDoc("new-entry", "new-entry", 0, "new content"),
@@ -246,33 +229,30 @@ func TestBuildCorpusFingerprintChangeForcesFullReconciliation(t *testing.T) {
 		ctx, newSource, fakeBuildEncoder(), newGeneration, BuildOptions{},
 	)
 
-	require.NoError(err)
-	assert.Equal(1, result.Refresh.Upserted)
-	assert.Equal(1, result.Refresh.Deleted)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Refresh.Upserted)
+	assert.Equal(t, 1, result.Refresh.Deleted)
 	rows, err := ix.db.QueryContext(ctx, `SELECT doc_key FROM vector_recall_entries ORDER BY doc_key`)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer rows.Close()
 	var keys []string
 	for rows.Next() {
 		var key string
-		require.NoError(rows.Scan(&key))
+		require.NoError(t, rows.Scan(&key))
 		keys = append(keys, key)
 	}
-	require.NoError(rows.Err())
-	assert.Equal([]string{"u:new-entry:new-entry"}, keys)
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"u:new-entry:new-entry"}, keys)
 }
 
 func TestBuildContentChangeReembedsExactlyOne(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 
 	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// A real edit bumps the session's ended_at, so give the changed row a
 	// newer timestamp than the watermark the first build advanced to, or
@@ -282,68 +262,62 @@ func TestBuildContentChangeReembedsExactlyOne(t *testing.T) {
 	src.rows[0].endedAt = "2024-01-02T00:00:00Z"
 
 	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(err)
-	assert.Equal(1, result.Fill.Documents, "only the changed document is re-embedded")
-	assert.False(result.Activated, "target was already active")
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Fill.Documents, "only the changed document is re-embedded")
+	assert.False(t, result.Activated, "target was already active")
 }
 
 func TestBuildModelChangeBuildsSecondGenerationAndRetiresOld(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	src := twoDocSource()
 	gen1 := fakeGeneration("model-a")
 
 	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen1, BuildOptions{})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	gen2 := fakeGeneration("model-b")
 	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen2, BuildOptions{})
-	require.NoError(err)
-	assert.True(result.Activated)
-	assert.Equal(gen2.Fingerprint(), result.Fingerprint)
-	assert.Equal(2, result.Fill.Documents)
+	require.NoError(t, err)
+	assert.True(t, result.Activated)
+	assert.Equal(t, gen2.Fingerprint(), result.Fingerprint)
+	assert.Equal(t, 2, result.Fill.Documents)
 
 	active, ok, err := ix.ActiveFingerprint(ctx)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(gen2.Fingerprint(), active)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, gen2.Fingerprint(), active)
 
 	gens, err := ix.Generations(ctx)
-	require.NoError(err)
-	require.Len(gens, 2)
+	require.NoError(t, err)
+	require.Len(t, gens, 2)
 	var oldState string
 	for _, g := range gens {
 		if g.Fingerprint == gen1.Fingerprint() {
 			oldState = g.State
 		}
 	}
-	assert.Equal(string(sqlitevec.StateRetired), oldState, "old active generation is retired")
+	assert.Equal(t, string(sqlitevec.StateRetired), oldState, "old active generation is retired")
 }
 
 func TestBuildFullRebuildSameFingerprintReembedsEverything(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 
 	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{FullRebuild: true})
-	require.NoError(err)
-	assert.Equal(2, result.Fill.Documents, "full rebuild re-embeds every document")
-	assert.False(result.Activated, "already-active generation stays active without reactivation")
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Fill.Documents, "full rebuild re-embeds every document")
+	assert.False(t, result.Activated, "already-active generation stays active without reactivation")
 
 	active, ok, err := ix.ActiveFingerprint(ctx)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(gen.Fingerprint(), active)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, gen.Fingerprint(), active)
 }
 
 // TestBuildFullRebuildRetiredGenerationReembeds covers the resolveBuildTarget
@@ -353,9 +327,6 @@ func TestBuildFullRebuildSameFingerprintReembedsEverything(t *testing.T) {
 // nothing pending, silently reactivating stale embeddings instead of
 // performing the requested rebuild.
 func TestBuildFullRebuildRetiredGenerationReembeds(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	src := twoDocSource()
@@ -363,9 +334,9 @@ func TestBuildFullRebuildRetiredGenerationReembeds(t *testing.T) {
 	genB := fakeGeneration("model-b")
 
 	_, err := ix.Build(ctx, src, fakeBuildEncoder(), genA, BuildOptions{})
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = ix.Build(ctx, src, fakeBuildEncoder(), genB, BuildOptions{})
-	require.NoError(err, "genA is now retired, genB active")
+	require.NoError(t, err, "genA is now retired, genB active")
 
 	var encodeCalls int
 	countingEncoder := func(_ context.Context, texts []string) ([][]float32, error) {
@@ -378,10 +349,10 @@ func TestBuildFullRebuildRetiredGenerationReembeds(t *testing.T) {
 	}
 
 	result, err := ix.Build(ctx, src, countingEncoder, genA, BuildOptions{FullRebuild: true})
-	require.NoError(err)
-	assert.Equal(2, result.Fill.Documents,
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Fill.Documents,
 		"full rebuild on a retired generation must re-embed every document")
-	assert.Positive(encodeCalls, "encoder must actually be invoked, not skipped")
+	assert.Positive(t, encodeCalls, "encoder must actually be invoked, not skipped")
 }
 
 // TestBuildScopeChangeToIncludeAutomatedForcesFullRefreshAndEmbedsOlderDoc
@@ -393,9 +364,6 @@ func TestBuildFullRebuildRetiredGenerationReembeds(t *testing.T) {
 // build's incremental scan would stay restricted to the stored watermark and
 // permanently miss the now-in-scope but chronologically older document.
 func TestBuildScopeChangeToIncludeAutomatedForcesFullRefreshAndEmbedsOlderDoc(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	gen := fakeGeneration("fake-model")
@@ -413,14 +381,14 @@ func TestBuildScopeChangeToIncludeAutomatedForcesFullRefreshAndEmbedsOlderDoc(t 
 	}}
 
 	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(err)
-	assert.Equal(1, result.Fill.Documents, "the automated doc is excluded by the default scope")
-	assert.ElementsMatch([]string{"u:s1:human"}, mirrorDocKeys(t, ix))
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Fill.Documents, "the automated doc is excluded by the default scope")
+	assert.ElementsMatch(t, []string{"u:s1:human"}, mirrorDocKeys(t, ix))
 
 	result, err = ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: true})
-	require.NoError(err)
-	assert.Equal(1, result.Fill.Documents, "only the newly in-scope automated doc is embedded")
-	assert.ElementsMatch([]string{"u:s1:human", "u:s2:auto"}, mirrorDocKeys(t, ix),
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Fill.Documents, "only the newly in-scope automated doc is embedded")
+	assert.ElementsMatch(t, []string{"u:s1:human", "u:s2:auto"}, mirrorDocKeys(t, ix),
 		"the older automated doc must be picked up despite predating the stored refresh watermark")
 }
 
@@ -430,9 +398,6 @@ func TestBuildScopeChangeToIncludeAutomatedForcesFullRefreshAndEmbedsOlderDoc(t 
 // (and its vectors) away, without touching the still-in-scope human
 // document's existing embedding.
 func TestBuildScopeChangeToExcludeAutomatedRemovesOutOfScopeMirrorRow(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	gen := fakeGeneration("fake-model")
@@ -450,20 +415,20 @@ func TestBuildScopeChangeToExcludeAutomatedRemovesOutOfScopeMirrorRow(t *testing
 	}}
 
 	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: true})
-	require.NoError(err)
-	assert.Equal(2, result.Fill.Documents)
-	assert.ElementsMatch([]string{"u:s1:human", "u:s2:auto"}, mirrorDocKeys(t, ix))
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Fill.Documents)
+	assert.ElementsMatch(t, []string{"u:s1:human", "u:s2:auto"}, mirrorDocKeys(t, ix))
 
 	result, err = ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: false})
-	require.NoError(err)
-	assert.Equal(0, result.Fill.Documents,
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Fill.Documents,
 		"no embedding work: the human doc was already embedded and stays so")
-	assert.Equal(1, result.Refresh.Deleted,
+	assert.Equal(t, 1, result.Refresh.Deleted,
 		"the now-out-of-scope automated row must be reconciled away")
-	assert.ElementsMatch([]string{"u:s1:human"}, mirrorDocKeys(t, ix))
+	assert.ElementsMatch(t, []string{"u:s1:human"}, mirrorDocKeys(t, ix))
 
 	_, ok := readMirrorRow(t, ix, "u:s2:auto")
-	assert.False(ok, "the out-of-scope mirror row must be removed")
+	assert.False(t, ok, "the out-of-scope mirror row must be removed")
 }
 
 // TestBuildLegacyMirrorMissingScopeKeyForcesFullRefresh covers a mirror built
@@ -475,19 +440,16 @@ func TestBuildScopeChangeToExcludeAutomatedRemovesOutOfScopeMirrorRow(t *testing
 // pick up a document older than the stored watermark, nor would it ever
 // reconcile away now-out-of-scope automated rows a legacy mirror might carry.
 func TestBuildLegacyMirrorMissingScopeKeyForcesFullRefresh(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	gen := fakeGeneration("fake-model")
 
 	// Simulate the pre-scope-feature mirror state directly: a stamped
 	// watermark with no scope_include_automated row in vector_meta.
-	require.NoError(ix.setRefreshWatermark(ctx, "2024-06-01T00:00:00Z"))
+	require.NoError(t, ix.setRefreshWatermark(ctx, "2024-06-01T00:00:00Z"))
 	_, hasScope, err := ix.storedIncludeAutomatedScope(ctx)
-	require.NoError(err)
-	require.False(hasScope, "test setup must not pre-seed a scope key")
+	require.NoError(t, err)
+	require.False(t, hasScope, "test setup must not pre-seed a scope key")
 
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{
@@ -497,19 +459,19 @@ func TestBuildLegacyMirrorMissingScopeKeyForcesFullRefresh(t *testing.T) {
 	}}
 
 	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.Empty(src.gotSince,
+	assert.Empty(t, src.gotSince,
 		"a legacy mirror with no stored scope key must force a full (since=\"\") rescan")
-	assert.Equal(1, result.Fill.Documents,
+	assert.Equal(t, 1, result.Fill.Documents,
 		"the pre-watermark document must be picked up despite predating the stored refresh watermark")
-	assert.ElementsMatch([]string{"u:s1:human"}, mirrorDocKeys(t, ix))
+	assert.ElementsMatch(t, []string{"u:s1:human"}, mirrorDocKeys(t, ix))
 
 	storedScope, hasScope, err := ix.storedIncludeAutomatedScope(ctx)
-	require.NoError(err)
-	assert.True(hasScope,
+	require.NoError(t, err)
+	assert.True(t, hasScope,
 		"Build must stamp the scope key so later builds compare against a real stored value")
-	assert.False(storedScope)
+	assert.False(t, storedScope)
 }
 
 // TestCountPendingIncludesRevisionChangedDocs covers countPending's
@@ -518,31 +480,28 @@ func TestBuildLegacyMirrorMissingScopeKeyForcesFullRefresh(t *testing.T) {
 // the s.revision = d.content_hash predicate generationCoverageQuery's
 // Missing column uses, or Total under-reports outstanding work.
 func TestCountPendingIncludesRevisionChangedDocs(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 
 	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	fp := gen.Fingerprint()
 	total, err := ix.countPending(ctx, fp)
-	require.NoError(err)
-	assert.Zero(total, "fully embedded generation has nothing pending")
+	require.NoError(t, err)
+	assert.Zero(t, total, "fully embedded generation has nothing pending")
 
 	// Simulate content changing without a mirror refresh reconciling the
 	// stamp: the stamp's revision no longer matches content_hash.
 	_, err = ix.db.ExecContext(ctx,
 		`UPDATE vector_messages SET content_hash = 'changed-hash' WHERE doc_key = 'u:s1:u1'`)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	total, err = ix.countPending(ctx, fp)
-	require.NoError(err)
-	assert.EqualValues(1, total, "content-changed doc must count as pending, not complete")
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, total, "content-changed doc must count as pending, not complete")
 }
 
 // TestCountPendingSumsChunksAcrossMultiChunkDocuments covers the units bug
@@ -551,8 +510,6 @@ func TestCountPendingIncludesRevisionChangedDocs(t *testing.T) {
 // reported percentage past 100%. countPending must sum chunks, matching
 // Done's unit, not count the document once.
 func TestCountPendingSumsChunksAcrossMultiChunkDocuments(t *testing.T) {
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	longContent := strings.Repeat("word ", 2000) // far past the 4000-rune split threshold
@@ -569,11 +526,11 @@ func TestCountPendingSumsChunksAcrossMultiChunkDocuments(t *testing.T) {
 	gen := fakeGeneration("fake-model")
 
 	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(err)
+	require.NoError(t, err)
 	fp := gen.Fingerprint()
 
 	longChunks := len(kitvec.Split(longContent, ix.split))
-	require.Greater(longChunks, 1,
+	require.Greater(t, longChunks, 1,
 		"content must actually split into multiple chunks for this test to be meaningful")
 
 	// Simulate the long document changing without a mirror refresh
@@ -581,18 +538,15 @@ func TestCountPendingSumsChunksAcrossMultiChunkDocuments(t *testing.T) {
 	// as TestCountPendingIncludesRevisionChangedDocs).
 	_, err = ix.db.ExecContext(ctx,
 		`UPDATE vector_messages SET content_hash = 'changed-hash' WHERE doc_key = 'u:s1:u2'`)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	total, err := ix.countPending(ctx, fp)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.EqualValues(t, longChunks, total,
 		"Total must sum the pending document's chunks, not count it as one document")
 }
 
 func TestBuildProgressReceivesFinalDoneEqualToTotalChunks(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	previous := progressInterval
 	progressInterval = 0
 	t.Cleanup(func() { progressInterval = previous })
@@ -606,16 +560,16 @@ func TestBuildProgressReceivesFinalDoneEqualToTotalChunks(t *testing.T) {
 	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{
 		Progress: func(p BuildProgress) { calls = append(calls, p) },
 	})
-	require.NoError(err)
-	require.NotEmpty(calls)
-	assert.Equal("scanning", calls[0].Phase,
+	require.NoError(t, err)
+	require.NotEmpty(t, calls)
+	assert.Equal(t, "scanning", calls[0].Phase,
 		"the first report must announce the mirror-refresh scan, before any "+
 			"chunk totals exist, so consumers can render more than 0/0 chunks")
 	last := calls[len(calls)-1]
-	assert.EqualValues(result.Fill.Chunks, last.Done)
-	assert.EqualValues(result.Fill.Chunks, last.Total,
+	assert.EqualValues(t, result.Fill.Chunks, last.Done)
+	assert.EqualValues(t, result.Fill.Chunks, last.Total,
 		"Total must also be in chunks so Done/Total settles at exactly 100%")
-	assert.Equal("embedding", last.Phase)
+	assert.Equal(t, "embedding", last.Phase)
 }
 
 // TestBuildProgressNeverExceedsTotalWithMultiChunkMessage covers the
@@ -623,9 +577,6 @@ func TestBuildProgressReceivesFinalDoneEqualToTotalChunks(t *testing.T) {
 // split into several chunks must never push a progress call's Done past its
 // Total (which would render as a percentage over 100%).
 func TestBuildProgressNeverExceedsTotalWithMultiChunkMessage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	previous := progressInterval
 	progressInterval = 0
 	t.Cleanup(func() { progressInterval = previous })
@@ -644,27 +595,24 @@ func TestBuildProgressNeverExceedsTotalWithMultiChunkMessage(t *testing.T) {
 		},
 	}}
 	gen := fakeGeneration("fake-model")
-	require.Greater(len(kitvec.Split(longContent, ix.split)), 1,
+	require.Greater(t, len(kitvec.Split(longContent, ix.split)), 1,
 		"content must actually split into multiple chunks for this test to be meaningful")
 
 	var calls []BuildProgress
 	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{
 		Progress: func(p BuildProgress) { calls = append(calls, p) },
 	})
-	require.NoError(err)
-	require.NotEmpty(calls)
+	require.NoError(t, err)
+	require.NotEmpty(t, calls)
 	for _, p := range calls {
-		assert.LessOrEqualf(p.Done, p.Total, "progress must never exceed 100%%: %+v", p)
+		assert.LessOrEqualf(t, p.Done, p.Total, "progress must never exceed 100%%: %+v", p)
 	}
 	last := calls[len(calls)-1]
-	assert.EqualValues(result.Fill.Chunks, last.Done)
-	assert.EqualValues(result.Fill.Chunks, last.Total)
+	assert.EqualValues(t, result.Fill.Chunks, last.Done)
+	assert.EqualValues(t, result.Fill.Chunks, last.Total)
 }
 
 func TestBuildEncoderErrorAbortsAndRetryResumesWithoutReembedding(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	src := &fakeUnitSource{rows: []fakeUnit{
@@ -695,24 +643,21 @@ func TestBuildEncoderErrorAbortsAndRetryResumesWithoutReembedding(t *testing.T) 
 	}
 
 	_, err := ix.Build(ctx, src, failOnBad, gen, BuildOptions{})
-	require.Error(err)
+	require.Error(t, err)
 
 	var stampCount int
-	require.NoError(ix.db.QueryRowContext(ctx,
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_stamps`,
 	).Scan(&stampCount))
-	assert.Equal(1, stampCount, "only the document before the failing one was stamped")
+	assert.Equal(t, 1, stampCount, "only the document before the failing one was stamped")
 
 	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
-	require.NoError(err)
-	assert.Equal(2, result.Fill.Documents, "retry embeds only the two remaining documents")
-	assert.True(result.Activated)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Fill.Documents, "retry embeds only the two remaining documents")
+	assert.True(t, result.Activated)
 }
 
 func TestBuildRejectsInvalidEncoderOutput(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	src := twoDocSource()
@@ -728,15 +673,15 @@ func TestBuildRejectsInvalidEncoderOutput(t *testing.T) {
 	result, err := ix.Build(ctx, src, invalidEncoder, gen, BuildOptions{})
 
 	var invalidErr *InvalidEmbeddingError
-	require.ErrorAs(err, &invalidErr)
-	assert.Zero(result.Fill.Documents)
+	require.ErrorAs(t, err, &invalidErr)
+	assert.Zero(t, result.Fill.Documents)
 	var stamps, chunks int
-	require.NoError(ix.db.QueryRowContext(ctx,
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_stamps`).Scan(&stamps))
-	require.NoError(ix.db.QueryRowContext(ctx,
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_chunks`).Scan(&chunks))
-	assert.Zero(stamps, "invalid output must not stamp a document complete")
-	assert.Zero(chunks, "invalid output must not reach vector persistence")
+	assert.Zero(t, stamps, "invalid output must not stamp a document complete")
+	assert.Zero(t, chunks, "invalid output must not reach vector persistence")
 }
 
 // TestBuildSkipsPermanentlyRejectedDocumentAndContinues is the fix-1
@@ -746,9 +691,6 @@ func TestBuildRejectsInvalidEncoderOutput(t *testing.T) {
 // still auto-activates once every document — including the skipped one —
 // is stamped.
 func TestBuildSkipsPermanentlyRejectedDocumentAndContinues(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	src := &fakeUnitSource{rows: []fakeUnit{
@@ -781,27 +723,27 @@ func TestBuildSkipsPermanentlyRejectedDocumentAndContinues(t *testing.T) {
 	}
 
 	result, err := ix.Build(ctx, src, rejectPoison, gen, BuildOptions{})
-	require.NoError(err, "a permanently-rejected document must not abort the whole build")
-	assert.Equal(2, result.Fill.Documents, "the two good documents still embed")
-	assert.Equal(1, result.Fill.Skipped, "the poison document is counted as skipped")
-	assert.True(result.Activated,
+	require.NoError(t, err, "a permanently-rejected document must not abort the whole build")
+	assert.Equal(t, 2, result.Fill.Documents, "the two good documents still embed")
+	assert.Equal(t, 1, result.Fill.Skipped, "the poison document is counted as skipped")
+	assert.True(t, result.Activated,
 		"coverage is complete (every document stamped) once the poison doc is stamped-skipped")
 
 	var stampCount int
-	require.NoError(ix.db.QueryRowContext(ctx,
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_stamps`,
 	).Scan(&stampCount))
-	assert.Equal(3, stampCount, "the skipped document is still stamped, just without vectors")
+	assert.Equal(t, 3, stampCount, "the skipped document is still stamped, just without vectors")
 
 	// kit only re-embeds a skipped document once its content_hash changes;
 	// a later build over unchanged content must not retry the encoder for
 	// it at all.
 	callsBefore := calls
 	result2, err := ix.Build(ctx, src, rejectPoison, gen, BuildOptions{})
-	require.NoError(err)
-	assert.Equal(0, result2.Fill.Documents)
-	assert.Equal(0, result2.Fill.Skipped)
-	assert.Equal(callsBefore, calls,
+	require.NoError(t, err)
+	assert.Equal(t, 0, result2.Fill.Documents)
+	assert.Equal(t, 0, result2.Fill.Skipped)
+	assert.Equal(t, callsBefore, calls,
 		"unchanged content must not re-invoke the encoder for the already-skipped document")
 }
 
@@ -810,9 +752,6 @@ func TestBuildSkipsPermanentlyRejectedDocumentAndContinues(t *testing.T) {
 // route. It must abort rather than stamp-skipping the whole corpus and
 // auto-activating an empty generation.
 func TestBuildConfig404EncodeErrorAbortsAndLeavesDocumentsPending(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	src := twoDocSource()
@@ -823,32 +762,29 @@ func TestBuildConfig404EncodeErrorAbortsAndLeavesDocumentsPending(t *testing.T) 
 	}
 
 	result, err := ix.Build(ctx, src, notFound, gen, BuildOptions{})
-	require.Error(err)
-	assert.Equal(0, result.Fill.Documents)
-	assert.Equal(0, result.Fill.Skipped,
+	require.Error(t, err)
+	assert.Equal(t, 0, result.Fill.Documents)
+	assert.Equal(t, 0, result.Fill.Skipped,
 		"route/config failures must not stamp-skip every document")
 
 	active, ok, err := ix.ActiveFingerprint(ctx)
-	require.NoError(err)
-	assert.False(ok, "an empty failed generation must not activate")
-	assert.Empty(active)
+	require.NoError(t, err)
+	assert.False(t, ok, "an empty failed generation must not activate")
+	assert.Empty(t, active)
 
 	var stampCount int
-	require.NoError(ix.db.QueryRowContext(ctx,
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_stamps`,
 	).Scan(&stampCount))
-	assert.Equal(0, stampCount, "failed route/config errors leave documents retryable")
+	assert.Equal(t, 0, stampCount, "failed route/config errors leave documents retryable")
 
 	pending, err := ix.countPending(ctx, gen.Fingerprint())
-	require.NoError(err)
-	assert.EqualValues(2, pending,
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, pending,
 		"later builds must still see the same documents as pending")
 }
 
 func TestBuildSchema400EncodeErrorAbortsAndLeavesDocumentsPending(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	src := twoDocSource()
@@ -859,13 +795,13 @@ func TestBuildSchema400EncodeErrorAbortsAndLeavesDocumentsPending(t *testing.T) 
 	}
 
 	result, err := ix.Build(ctx, src, badSchema, gen, BuildOptions{})
-	require.Error(err)
-	assert.Equal(0, result.Fill.Documents)
-	assert.Equal(0, result.Fill.Skipped)
+	require.Error(t, err)
+	assert.Equal(t, 0, result.Fill.Documents)
+	assert.Equal(t, 0, result.Fill.Skipped)
 
 	pending, err := ix.countPending(ctx, gen.Fingerprint())
-	require.NoError(err)
-	assert.EqualValues(2, pending)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, pending)
 }
 
 // TestBuild5xxEncodeErrorStillAbortsFill guards the other side of the OnEncodeError
@@ -920,39 +856,36 @@ func TestPermanentEncodeErrorRejectsTypedNilStatusError(t *testing.T) {
 // building-percent shown to a caller with no active generation) resolves
 // to the generation actually being built, not the abandoned one.
 func TestResolveBuildTargetRetiresOtherBuildingGeneration(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 
 	genA := fakeGeneration("model-a")
 	fpA, err := ix.EnsureGeneration(ctx, genA, sqlitevec.StateBuilding)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	genB := fakeGeneration("model-b")
 	target, wasBuilding, err := ix.resolveBuildTarget(ctx, genB, genB.Fingerprint(), false)
-	require.NoError(err)
-	assert.True(wasBuilding)
-	assert.Equal(genB.Fingerprint(), target)
+	require.NoError(t, err)
+	assert.True(t, wasBuilding)
+	assert.Equal(t, genB.Fingerprint(), target)
 
 	gens, err := ix.Generations(ctx)
-	require.NoError(err)
-	require.Len(gens, 2)
+	require.NoError(t, err)
+	require.Len(t, gens, 2)
 	for _, g := range gens {
 		switch g.Fingerprint {
 		case fpA:
-			assert.Equal(string(sqlitevec.StateRetired), g.State,
+			assert.Equal(t, string(sqlitevec.StateRetired), g.State,
 				"the abandoned generation must be retired, not left building forever")
 		case target:
-			assert.Equal(string(sqlitevec.StateBuilding), g.State)
+			assert.Equal(t, string(sqlitevec.StateBuilding), g.State)
 		}
 	}
 
 	building, ok, err := ix.BuildingFingerprint(ctx)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(target, building,
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, target, building,
 		"the building-generation lookup must resolve to B, not the abandoned A")
 }
 
@@ -963,27 +896,24 @@ func TestResolveBuildTargetRetiresOtherBuildingGeneration(t *testing.T) {
 // (genB) must retire genA rather than leave two generations in state
 // building.
 func TestBuildRetiresAbandonedBuildingGenerationEndToEnd(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	src := twoDocSource()
 
 	genA := fakeGeneration("model-a")
 	_, err := ix.Refresh(ctx, src, true, true)
-	require.NoError(err)
+	require.NoError(t, err)
 	fpA, err := ix.EnsureGeneration(ctx, genA, sqlitevec.StateBuilding)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	genB := fakeGeneration("model-b")
 	result, err := ix.Build(ctx, src, fakeBuildEncoder(), genB, BuildOptions{})
-	require.NoError(err)
-	assert.True(result.Activated)
+	require.NoError(t, err)
+	assert.True(t, result.Activated)
 
 	gens, err := ix.Generations(ctx)
-	require.NoError(err)
-	require.Len(gens, 2)
+	require.NoError(t, err)
+	require.Len(t, gens, 2)
 	var stateA, stateB string
 	for _, g := range gens {
 		switch g.Fingerprint {
@@ -993,12 +923,12 @@ func TestBuildRetiresAbandonedBuildingGenerationEndToEnd(t *testing.T) {
 			stateB = g.State
 		}
 	}
-	assert.Equal(string(sqlitevec.StateRetired), stateA, "abandoned generation A must be retired")
-	assert.Equal(string(sqlitevec.StateActive), stateB)
+	assert.Equal(t, string(sqlitevec.StateRetired), stateA, "abandoned generation A must be retired")
+	assert.Equal(t, string(sqlitevec.StateActive), stateB)
 
 	_, ok, err := ix.BuildingFingerprint(ctx)
-	require.NoError(err)
-	assert.False(ok, "no generation should remain in state building")
+	require.NoError(t, err)
+	assert.False(t, ok, "no generation should remain in state building")
 }
 
 // TestBuildActiveFingerprintEarlyReturnRetiresAbandonedBuildingGeneration
@@ -1012,16 +942,13 @@ func TestBuildRetiresAbandonedBuildingGenerationEndToEnd(t *testing.T) {
 // in state building forever once every subsequent build targets the active
 // generation again.
 func TestBuildActiveFingerprintEarlyReturnRetiresAbandonedBuildingGeneration(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ix := openTestIndex(t)
 	ctx := t.Context()
 	src := twoDocSource()
 	genA := fakeGeneration("model-a")
 
 	_, err := ix.Build(ctx, src, fakeBuildEncoder(), genA, BuildOptions{})
-	require.NoError(err, "genA is now active")
+	require.NoError(t, err, "genA is now active")
 
 	// Simulate an abandoned first build of a different config: registered as
 	// building, but never filled or retired (standing in for a crashed
@@ -1029,27 +956,27 @@ func TestBuildActiveFingerprintEarlyReturnRetiresAbandonedBuildingGeneration(t *
 	// could be cleaned up).
 	genB := fakeGeneration("model-b")
 	fpB, err := ix.EnsureGeneration(ctx, genB, sqlitevec.StateBuilding)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// Build again with genA, the still-active fingerprint: this must take
 	// the active-fingerprint early-return path in resolveBuildTarget, not
 	// the EnsureGeneration path.
 	result, err := ix.Build(ctx, src, fakeBuildEncoder(), genA, BuildOptions{})
-	require.NoError(err)
-	assert.False(result.Activated, "already-active generation stays active without reactivation")
+	require.NoError(t, err)
+	assert.False(t, result.Activated, "already-active generation stays active without reactivation")
 
 	gens, err := ix.Generations(ctx)
-	require.NoError(err)
-	require.Len(gens, 2)
+	require.NoError(t, err)
+	require.Len(t, gens, 2)
 	for _, g := range gens {
 		if g.Fingerprint == fpB {
-			assert.Equal(string(sqlitevec.StateRetired), g.State,
+			assert.Equal(t, string(sqlitevec.StateRetired), g.State,
 				"the abandoned building generation must be retired once a build "+
 					"resolves back to the active fingerprint")
 		}
 	}
 
 	_, ok, err := ix.BuildingFingerprint(ctx)
-	require.NoError(err)
-	assert.False(ok, "no generation should remain in state building")
+	require.NoError(t, err)
+	assert.False(t, ok, "no generation should remain in state building")
 }

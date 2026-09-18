@@ -12,7 +12,7 @@ import (
 )
 
 func TestOpenConfiguresThreadCount(t *testing.T) {
-	duck, err := Open(filepath.Join(t.TempDir(), "threads.duckdb"))
+	duck, err := Open(t.Context(), filepath.Join(t.TempDir(), "threads.duckdb"))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, duck.Close())

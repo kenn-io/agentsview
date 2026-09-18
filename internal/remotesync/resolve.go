@@ -785,7 +785,7 @@ func regularCuratedFile(root, path string) (bool, error) {
 	path = filepath.Clean(path)
 	rel, err := filepath.Rel(root, path)
 	if err != nil || !filepath.IsLocal(rel) || symlinkEscapesRoot(root, path) {
-		return false, nil
+		return false, nil //nolint:nilerr // Paths outside the discovery root are not eligible source candidates.
 	}
 	return statRegularRemoteSyncFile(path)
 }
@@ -826,7 +826,7 @@ func curatedFileOrMissing(root, path string) (bool, error) {
 	path = filepath.Clean(path)
 	rel, err := filepath.Rel(root, path)
 	if err != nil || !filepath.IsLocal(rel) || symlinkEscapesRoot(root, path) {
-		return false, nil
+		return false, nil //nolint:nilerr // Paths outside the discovery root are not eligible source candidates.
 	}
 	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {

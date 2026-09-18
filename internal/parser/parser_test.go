@@ -22,28 +22,48 @@ func TestGetProjectName(t *testing.T) {
 		want string
 	}{
 		{"simple name", "my-project", "my_project"},
-		{"encoded path with code",
-			"-Users-alice-code-my-app", "my_app"},
-		{"encoded path with projects",
-			"-Users-alice-projects-api-server", "api_server"},
-		{"encoded path with repos",
-			"-home-user-repos-frontend", "frontend"},
-		{"encoded path without marker",
-			"-Users-alice", "alice"},
+		{
+			"encoded path with code",
+			"-Users-alice-code-my-app", "my_app",
+		},
+		{
+			"encoded path with projects",
+			"-Users-alice-projects-api-server", "api_server",
+		},
+		{
+			"encoded path with repos",
+			"-home-user-repos-frontend", "frontend",
+		},
+		{
+			"encoded path without marker",
+			"-Users-alice", "alice",
+		},
 		{"empty", "", ""},
 		{"no prefix", "plain_name", "plain_name"},
-		{"with src marker",
-			"-Users-alice-src-my-lib", "my_lib"},
-		{"multi-word after marker",
-			"-Users-alice-code-my-cool-project", "my_cool_project"},
-		{"deeply nested",
-			"-Users-alice-code-org-team-repo", "org_team_repo"},
-		{"unicode components",
-			"-Users-alice-code-café-app", "café_app"},
-		{"trailing dash",
-			"-Users-alice-code-myapp-", "myapp_"},
-		{"double dashes",
-			"-Users-alice-code--my-app", "_my_app"},
+		{
+			"with src marker",
+			"-Users-alice-src-my-lib", "my_lib",
+		},
+		{
+			"multi-word after marker",
+			"-Users-alice-code-my-cool-project", "my_cool_project",
+		},
+		{
+			"deeply nested",
+			"-Users-alice-code-org-team-repo", "org_team_repo",
+		},
+		{
+			"unicode components",
+			"-Users-alice-code-café-app", "café_app",
+		},
+		{
+			"trailing dash",
+			"-Users-alice-code-myapp-", "myapp_",
+		},
+		{
+			"double dashes",
+			"-Users-alice-code--my-app", "_my_app",
+		},
 	}
 
 	for _, tt := range tests {
@@ -213,8 +233,7 @@ func TestExtractTextContent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := gjson.Parse(tt.json)
-			text, _, hasThinking, hasToolUse, tcs, _ :=
-				ExtractTextContent(t.Context(), result)
+			text, _, hasThinking, hasToolUse, tcs, _ := ExtractTextContent(t.Context(), result)
 			assert.Equal(t, tt.wantText, text, "text")
 			assert.Equal(t, tt.wantThink, hasThinking, "hasThinking")
 			assert.Equal(t, tt.wantToolUse, hasToolUse, "hasToolUse")
@@ -224,28 +243,24 @@ func TestExtractTextContent(t *testing.T) {
 }
 
 func TestExtractTextContent_AmpSkillNameExtraction(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	result := gjson.Parse(
 		`[{"type":"tool_use","id":"toolu_amp_skill","name":"skill","input":{"name":"walkthrough"}}]`,
 	)
 
-	text, _, hasThinking, hasToolUse, toolCalls, toolResults :=
-		ExtractTextContent(t.Context(), result)
+	text, _, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(t.Context(), result)
 
-	require.Equal("[Skill: walkthrough]", text, "text")
-	require.False(hasThinking, "hasThinking")
-	require.True(hasToolUse, "hasToolUse")
-	require.Empty(toolResults, "toolResults")
-	require.Len(toolCalls, 1, "toolCalls")
+	require.Equal(t, "[Skill: walkthrough]", text, "text")
+	require.False(t, hasThinking, "hasThinking")
+	require.True(t, hasToolUse, "hasToolUse")
+	require.Empty(t, toolResults, "toolResults")
+	require.Len(t, toolCalls, 1, "toolCalls")
 
 	got := toolCalls[0]
-	assert.Equal("toolu_amp_skill", got.ToolUseID, "ToolUseID")
-	assert.Equal("skill", got.ToolName, "ToolName")
-	assert.Equal("Tool", got.Category, "Category")
-	assert.Equal("walkthrough", got.SkillName, "SkillName")
-	assert.Equal(`{"name":"walkthrough"}`, got.InputJSON, "InputJSON")
+	assert.Equal(t, "toolu_amp_skill", got.ToolUseID, "ToolUseID")
+	assert.Equal(t, "skill", got.ToolName, "ToolName")
+	assert.Equal(t, "Tool", got.Category, "Category")
+	assert.Equal(t, "walkthrough", got.SkillName, "SkillName")
+	assert.Equal(t, `{"name":"walkthrough"}`, got.InputJSON, "InputJSON")
 }
 
 func TestExtractToolResults(t *testing.T) {
@@ -280,17 +295,15 @@ func TestExtractToolResults(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			result := gjson.Parse(tt.json)
 			_, _, _, _, _, trs := ExtractTextContent(t.Context(), result)
 			require.Len(t, trs, len(tt.wantResults), "tool_results count")
 			for i := range tt.wantResults {
-				assert.Equalf(tt.wantResults[i].ToolUseID, trs[i].ToolUseID,
+				assert.Equalf(t, tt.wantResults[i].ToolUseID, trs[i].ToolUseID,
 					"[%d].ToolUseID", i)
-				assert.Equalf(tt.wantResults[i].ContentLength, trs[i].ContentLength,
+				assert.Equalf(t, tt.wantResults[i].ContentLength, trs[i].ContentLength,
 					"[%d].ContentLength", i)
-				assert.Equalf(tt.wantResults[i].ContentRaw, trs[i].ContentRaw,
+				assert.Equalf(t, tt.wantResults[i].ContentRaw, trs[i].ContentRaw,
 					"[%d].ContentRaw", i)
 			}
 		})
@@ -328,9 +341,6 @@ func TestDecodeContent(t *testing.T) {
 }
 
 func TestExtractTextContent_IflowToolResult(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	// iFlow tool results use an object with nested output.
 	content := `[{
 		"type":"tool_result",
@@ -338,12 +348,12 @@ func TestExtractTextContent_IflowToolResult(t *testing.T) {
 		"content":{"responseParts":{"functionResponse":{"response":{"output":"result text"}}}}
 	}]`
 	_, _, _, _, _, trs := ExtractTextContent(t.Context(), gjson.Parse(content))
-	require.Len(trs, 1, "expected 1 tool result")
+	require.Len(t, trs, 1, "expected 1 tool result")
 	tr := trs[0]
-	assert.Equal("tu_123", tr.ToolUseID, "ToolUseID")
-	assert.Equal(len("result text"), tr.ContentLength, "ContentLength")
+	assert.Equal(t, "tu_123", tr.ToolUseID, "ToolUseID")
+	assert.Equal(t, len("result text"), tr.ContentLength, "ContentLength")
 	decoded := DecodeContent(tr.ContentRaw)
-	assert.Equal("result text", decoded, "DecodeContent")
+	assert.Equal(t, "result text", decoded, "DecodeContent")
 
 	// Object without nested output: both length and decode
 	// should be zero/empty.
@@ -353,9 +363,9 @@ func TestExtractTextContent_IflowToolResult(t *testing.T) {
 		"content":{"other":"data"}
 	}]`
 	_, _, _, _, _, trs2 := ExtractTextContent(t.Context(), gjson.Parse(noOutput))
-	require.Len(trs2, 1, "expected 1 tool result")
-	assert.Zero(trs2[0].ContentLength, "ContentLength")
-	assert.Empty(DecodeContent(trs2[0].ContentRaw), "DecodeContent")
+	require.Len(t, trs2, 1, "expected 1 tool result")
+	assert.Zero(t, trs2[0].ContentLength, "ContentLength")
+	assert.Empty(t, DecodeContent(trs2[0].ContentRaw), "DecodeContent")
 }
 
 func TestFormatToolUseVariants(t *testing.T) {
@@ -712,18 +722,16 @@ func TestParseTimestamp(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			got := parseTimestamp(tt.input)
 			if tt.wantOK {
 				require.Falsef(t, got.IsZero(),
 					"parseTimestamp(%q) = zero, want %v", tt.input, tt.wantUTC)
-				assert.Truef(got.Equal(tt.wantUTC),
+				assert.Truef(t, got.Equal(tt.wantUTC),
 					"parseTimestamp(%q) = %v, want %v", tt.input, got, tt.wantUTC)
-				assert.Equalf(time.UTC, got.Location(),
+				assert.Equalf(t, time.UTC, got.Location(),
 					"parseTimestamp(%q) location", tt.input)
 			} else {
-				assert.Truef(got.IsZero(),
+				assert.Truef(t, got.IsZero(),
 					"parseTimestamp(%q) = %v, want zero", tt.input, got)
 			}
 		})
@@ -834,57 +842,97 @@ func TestIsClaudeSystemMessage(t *testing.T) {
 		content string
 		want    bool
 	}{
-		{"context continuation",
+		{
+			"context continuation",
 			"This session is being continued from a previous conversation.",
-			true},
-		{"request interrupted",
-			"[Request interrupted by user]", true},
-		{"task-notification",
+			true,
+		},
+		{
+			"request interrupted",
+			"[Request interrupted by user]", true,
+		},
+		{
+			"task-notification",
 			"<task-notification>some data</task-notification>",
-			true},
-		{"system-reminder",
-			"<system-reminder>some data</system-reminder>", true},
-		{"system-reminder plus prompt",
-			"<system-reminder>some data</system-reminder>\n\nreal prompt", false},
-		{"task-notification-status",
-			"<task-notification-status>some data", false},
-		{"command-message is not system",
-			"<command-message>foo</command-message>", false},
-		{"command-name is not system",
-			"<command-name>commit</command-name>", false},
-		{"command-message with args is not system",
+			true,
+		},
+		{
+			"system-reminder",
+			"<system-reminder>some data</system-reminder>", true,
+		},
+		{
+			"system-reminder plus prompt",
+			"<system-reminder>some data</system-reminder>\n\nreal prompt", false,
+		},
+		{
+			"task-notification-status",
+			"<task-notification-status>some data", false,
+		},
+		{
+			"command-message is not system",
+			"<command-message>foo</command-message>", false,
+		},
+		{
+			"command-name is not system",
+			"<command-name>commit</command-name>", false,
+		},
+		{
+			"command-message with args is not system",
 			"<command-message>roborev-fix</command-message>\n<command-name>/roborev-fix</command-name>\n<command-args>450</command-args>",
-			false},
-		{"local-command tag",
+			false,
+		},
+		{
+			"local-command tag",
 			"<local-command-result>ok</local-command-result>",
-			true},
-		{"stop hook feedback",
-			"Stop hook feedback: rejected by policy", true},
-		{"leading whitespace trimmed",
+			true,
+		},
+		{
+			"stop hook feedback",
+			"Stop hook feedback: rejected by policy", true,
+		},
+		{
+			"leading whitespace trimmed",
 			"  \n This session is being continued...",
-			true},
-		{"leading tabs trimmed",
+			true,
+		},
+		{
+			"leading tabs trimmed",
 			"\t<task-notification>data</task-notification>",
-			true},
-		{"BOM prefix trimmed",
+			true,
+		},
+		{
+			"BOM prefix trimmed",
 			"\uFEFFThis session is being continued...",
-			true},
-		{"BOM plus whitespace trimmed",
+			true,
+		},
+		{
+			"BOM plus whitespace trimmed",
 			"\uFEFF \t<task-notification>data</task-notification>",
-			true},
-		{"whitespace before BOM trimmed",
+			true,
+		},
+		{
+			"whitespace before BOM trimmed",
 			" \uFEFFThis session is being continued...",
-			true},
-		{"normal user message",
-			"Fix the login bug", false},
-		{"implement plan is not filtered",
+			true,
+		},
+		{
+			"normal user message",
+			"Fix the login bug", false,
+		},
+		{
+			"implement plan is not filtered",
 			"Implement the following plan:\n## Steps",
-			false},
+			false,
+		},
 		{"empty string", "", false},
-		{"partial prefix mismatch",
-			"This session was great", false},
-		{"assistant-like content not matched",
-			"Looking at the auth module...", false},
+		{
+			"partial prefix mismatch",
+			"This session was great", false,
+		},
+		{
+			"assistant-like content not matched",
+			"Looking at the auth module...", false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -897,6 +945,7 @@ func TestIsClaudeSystemMessage(t *testing.T) {
 }
 
 func TestExtractCommandText(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		content string
@@ -967,6 +1016,7 @@ func TestExtractCommandText(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, ok := extractCommandText(tt.content)
 			assert.Equalf(t, tt.ok, ok,
 				"extractCommandText(%q) ok", tt.content)
@@ -1002,6 +1052,7 @@ func TestPreprocessClaudeUserText(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, skip := preprocessClaudeUserText(tt.in)
 			assert.Equal(t, tt.want, got)
 			assert.Equal(t, tt.skip, skip)
@@ -1010,8 +1061,6 @@ func TestPreprocessClaudeUserText(t *testing.T) {
 }
 
 func TestCodexUserMessageCount(t *testing.T) {
-	require := require.New(t)
-
 	content := testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON(
 			"umc-test", "/Users/alice/code/app", "user", tsEarly,
@@ -1026,9 +1075,9 @@ func TestCodexUserMessageCount(t *testing.T) {
 
 	path := createTestFile(t, "codex-umc.jsonl", content)
 	sess, msgs, err := parseCodexTestSession(t, path, "local", false)
-	require.NoError(err, "ParseCodexSession")
-	require.NotNil(sess, "session")
-	require.Len(msgs, 4, "messages")
+	require.NoError(t, err, "ParseCodexSession")
+	require.NotNil(t, sess, "session")
+	require.Len(t, msgs, 4, "messages")
 	// 2 user messages with real text content.
 	assert.Equal(t, 2, sess.UserMessageCount, "UserMessageCount")
 }
@@ -1264,8 +1313,6 @@ func TestFormatGeminiToolCall(t *testing.T) {
 }
 
 func TestGeminiUserMessageCount(t *testing.T) {
-	require := require.New(t)
-
 	hash := "abc123def456"
 	content := testjsonl.GeminiSessionJSON(
 		"umc-gemini", hash, tsEarly, tsLateS5,
@@ -1285,9 +1332,9 @@ func TestGeminiUserMessageCount(t *testing.T) {
 	sess, msgs, err := parseGeminiTestSession(
 		t, path, "my_project", "local",
 	)
-	require.NoError(err, "parseGeminiTestSession")
-	require.NotNil(sess, "session")
-	require.Len(msgs, 4, "messages")
+	require.NoError(t, err, "parseGeminiTestSession")
+	require.NotNil(t, sess, "session")
+	require.Len(t, msgs, 4, "messages")
 	assert.Equal(t, 2, sess.UserMessageCount, "UserMessageCount")
 }
 
@@ -1354,26 +1401,21 @@ func TestClaudeUserMessageCount(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require := require.New(t)
-
 			path := createTestFile(t, "test.jsonl", tt.content)
 			results, err := parseClaudeSession(
 				path, "test-proj", "local",
 			)
-			require.NoError(err, "ParseClaudeSession")
-			require.NotEmpty(results, "ParseClaudeSession returned no results")
+			require.NoError(t, err, "ParseClaudeSession")
+			require.NotEmpty(t, results, "ParseClaudeSession returned no results")
 			sess := results[0].Session
 			msgs := results[0].Messages
-			require.Len(msgs, tt.wantMsgCount, "message count")
+			require.Len(t, msgs, tt.wantMsgCount, "message count")
 			assert.Equal(t, tt.wantUserCount, sess.UserMessageCount, "UserMessageCount")
 		})
 	}
 }
 
 func TestParseClaudeToolResults(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	lines := []string{
 		`{"type":"assistant","timestamp":"2024-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"toolu_abc","name":"Read","input":{"file_path":"main.go"}}]}}`,
 		`{"type":"user","timestamp":"2024-01-01T00:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_abc","content":"package main\nfunc main() {}"}]}}`,
@@ -1382,16 +1424,16 @@ func TestParseClaudeToolResults(t *testing.T) {
 	path := createTestFile(t, "tool-results.jsonl", content)
 
 	results, err := parseClaudeSession(path, "test-project", "local")
-	require.NoError(err, "ParseClaudeSession")
-	require.NotEmpty(results, "ParseClaudeSession returned no results")
+	require.NoError(t, err, "ParseClaudeSession")
+	require.NotEmpty(t, results, "ParseClaudeSession returned no results")
 	msgs := results[0].Messages
 
 	// Should have 2 messages: assistant tool_use + user tool_result
-	require.Len(msgs, 2, "messages")
+	require.Len(t, msgs, 2, "messages")
 
 	// User message should have ToolResults populated
 	userMsg := msgs[1]
-	require.Len(userMsg.ToolResults, 1, "ToolResults count")
-	assert.Equal("toolu_abc", userMsg.ToolResults[0].ToolUseID, "ToolUseID")
-	assert.Equal(27, userMsg.ToolResults[0].ContentLength, "ContentLength")
+	require.Len(t, userMsg.ToolResults, 1, "ToolResults count")
+	assert.Equal(t, "toolu_abc", userMsg.ToolResults[0].ToolUseID, "ToolUseID")
+	assert.Equal(t, 27, userMsg.ToolResults[0].ContentLength, "ContentLength")
 }

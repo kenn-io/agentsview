@@ -46,18 +46,26 @@ func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 		oneShot, automated bool
 		want               db.Stats
 	}{
-		{"all", false, false, db.Stats{SessionCount: 4, MessageCount: 23,
+		{"all", false, false, db.Stats{
+			SessionCount: 4, MessageCount: 23,
 			ProjectCount: 2, MachineCount: 3,
-			EarliestSession: new("2026-01-01T00:00:00Z")}},
-		{"exclude one-shot", true, false, db.Stats{SessionCount: 3, MessageCount: 20,
+			EarliestSession: new("2026-01-01T00:00:00Z"),
+		}},
+		{"exclude one-shot", true, false, db.Stats{
+			SessionCount: 3, MessageCount: 20,
 			ProjectCount: 2, MachineCount: 3,
-			EarliestSession: new("2026-01-01T00:00:00Z")}},
-		{"exclude automated", false, true, db.Stats{SessionCount: 2, MessageCount: 13,
+			EarliestSession: new("2026-01-01T00:00:00Z"),
+		}},
+		{"exclude automated", false, true, db.Stats{
+			SessionCount: 2, MessageCount: 13,
 			ProjectCount: 1, MachineCount: 2,
-			EarliestSession: new("2026-01-03T00:00:00Z")}},
-		{"exclude both", true, true, db.Stats{SessionCount: 1, MessageCount: 10,
+			EarliestSession: new("2026-01-03T00:00:00Z"),
+		}},
+		{"exclude both", true, true, db.Stats{
+			SessionCount: 1, MessageCount: 10,
 			ProjectCount: 1, MachineCount: 1,
-			EarliestSession: new("2026-01-04T00:00:00Z")}},
+			EarliestSession: new("2026-01-04T00:00:00Z"),
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := d.GetStats(ctx, tc.oneShot, tc.automated)

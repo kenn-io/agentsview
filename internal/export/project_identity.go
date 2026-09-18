@@ -633,11 +633,11 @@ func ProjectCatalogIdentity(identity *ProjectIdentity) *ProjectIdentity {
 	if identity == nil {
 		return nil
 	}
-	copy := *identity
-	if copy.Kind == ProjectKindGitRemote {
-		copy.RootKey = ""
+	copied := *identity
+	if copied.Kind == ProjectKindGitRemote {
+		copied.RootKey = ""
 	}
-	return &copy
+	return &copied
 }
 
 func BuildProjectsMapWithScope(

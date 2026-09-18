@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"errors"
 	"os"
 	"runtime"
@@ -221,7 +222,7 @@ server.example:/export on /corp/home (autofs, nobrowse)
 func TestDetectAutofsPrefixes(t *testing.T) {
 	origSrc := autofsMountSource
 	defer func() { autofsMountSource = origSrc }()
-	autofsMountSource = func() ([]byte, error) {
+	autofsMountSource = func(ctx context.Context) ([]byte, error) {
 		return []byte(
 			"map auto_home on /System/Volumes/Data/home " +
 				"(autofs, automounted, nobrowse)\n" +
@@ -230,7 +231,7 @@ func TestDetectAutofsPrefixes(t *testing.T) {
 		), nil
 	}
 
-	got := detectAutofsPrefixes()
+	got := detectAutofsPrefixes(t.Context())
 	if runtime.GOOS != "darwin" {
 		assert.Nil(t, got, "detectAutofsPrefixes() on %s", runtime.GOOS)
 		return
@@ -285,7 +286,6 @@ func TestExtractProjectFromCwd_AutofsConcurrent_SingleProbe(t *testing.T) {
 	assert.Equal(t, int64(1), count.Load(),
 		"concurrent probes issued osStat calls; "+
 			"expected exactly 1 under %d-way concurrency", workers)
-
 }
 
 // TestExtractProjectFromCwd_AutofsProbe_TTLExpires guards against
@@ -337,8 +337,8 @@ func TestExtractProjectFromCwd_AutofsProbe_TTLExpires(t *testing.T) {
 func TestDetectAutofsPrefixes_MountFails(t *testing.T) {
 	origSrc := autofsMountSource
 	defer func() { autofsMountSource = origSrc }()
-	autofsMountSource = func() ([]byte, error) {
+	autofsMountSource = func(ctx context.Context) ([]byte, error) {
 		return nil, errors.New("mock mount failure")
 	}
-	assert.Nil(t, detectAutofsPrefixes(), "detectAutofsPrefixes() with mount failure")
+	assert.Nil(t, detectAutofsPrefixes(t.Context()), "detectAutofsPrefixes() with mount failure")
 }

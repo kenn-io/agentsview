@@ -42,23 +42,20 @@ const crushSyncTestSchema = `
 `
 
 func TestSyncCrushReparsesWhenRegistryProjectPathChanges(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir, _, _ := writeSyncCrushDB(t)
 	oldProjectDir := filepath.Join(t.TempDir(), "old-project")
 	newProjectDir := filepath.Join(t.TempDir(), "new-project")
-	require.NoError(os.MkdirAll(oldProjectDir, 0o755))
-	require.NoError(os.MkdirAll(newProjectDir, 0o755))
+	require.NoError(t, os.MkdirAll(oldProjectDir, 0o755))
+	require.NoError(t, os.MkdirAll(newProjectDir, 0o755))
 
 	registryDir := t.TempDir()
 	registryPath := filepath.Join(registryDir, parser.CrushProjectsFileName)
 	registry := `{"projects":[{"path":"` + filepath.ToSlash(oldProjectDir) +
 		`","data_dir":"` + filepath.ToSlash(dataDir) + `"}]}`
-	require.NoError(os.WriteFile(registryPath, []byte(registry), 0o600))
+	require.NoError(t, os.WriteFile(registryPath, []byte(registry), 0o600))
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCrush: {registryDir},
 		},
@@ -68,32 +65,29 @@ func TestSyncCrushReparsesWhenRegistryProjectPathChanges(t *testing.T) {
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
 
 	session, err := database.GetSession(t.Context(), "crush:sess-001")
-	require.NoError(err)
-	require.NotNil(session)
-	assert.Equal(oldProjectDir, session.Cwd)
-	assert.Equal("old_project", session.Project)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, oldProjectDir, session.Cwd)
+	assert.Equal(t, "old_project", session.Project)
 
 	registry = `{"projects":[{"path":"` + filepath.ToSlash(newProjectDir) +
 		`","data_dir":"` + filepath.ToSlash(dataDir) + `"}]}`
-	require.NoError(os.WriteFile(registryPath, []byte(registry), 0o600))
+	require.NoError(t, os.WriteFile(registryPath, []byte(registry), 0o600))
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
 
 	session, err = database.GetSession(t.Context(), "crush:sess-001")
-	require.NoError(err)
-	require.NotNil(session)
-	assert.Equal(newProjectDir, session.Cwd)
-	assert.Equal("new_project", session.Project)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, newProjectDir, session.Cwd)
+	assert.Equal(t, "new_project", session.Project)
 }
 
 func TestReconcileProviderRootsCrushDBFileRootPreservesDeletedSourceSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	_, dbPath, sourceDB := writeSyncCrushDB(t)
 	database := openTestDB(t)
 	// Configure the database-file root that normalizeCrushRoots accepts and
 	// ResolveReconciliationScopes must map onto the data directory.
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCrush: {dbPath},
 		},
@@ -106,27 +100,28 @@ func TestReconcileProviderRootsCrushDBFileRootPreservesDeletedSourceSession(t *t
 		DELETE FROM messages WHERE session_id = 'sess-001';
 		DELETE FROM sessions WHERE id = 'sess-001';
 	`)
-	require.NoError(err)
-	require.NoError(sourceDB.Close())
+	require.NoError(t, err)
+	require.NoError(t, sourceDB.Close())
 
 	// Reconcile with the original crush.db request root: the provider must
 	// expand it to the data directory so virtual members are in scope.
-	require.NoError(engine.ReconcileProviderRoots(
+	require.NoError(t, engine.ReconcileProviderRoots(
 		t.Context(), parser.AgentCrush, []string{dbPath},
 	))
 
 	active, err := database.GetSession(t.Context(), "crush:sess-001")
-	require.NoError(err)
-	assert.NotNil(active)
+	require.NoError(t, err)
+	assert.NotNil(t, active)
 	archived, err := database.GetSessionFull(t.Context(), "crush:sess-001")
-	require.NoError(err)
-	require.NotNil(archived)
-	assert.Nil(archived.SourceMissingAt,
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	assert.Nil(t, archived.SourceMissingAt,
 		"source deletion must not hide a session from the persistent archive")
 }
 
 func writeSyncCrushDB(t *testing.T) (string, string, *sql.DB) {
 	t.Helper()
+
 	projectDir := t.TempDir()
 	dataDir := filepath.Join(projectDir, ".crush")
 	require.NoError(t, os.MkdirAll(dataDir, 0o755))

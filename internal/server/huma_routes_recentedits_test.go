@@ -21,7 +21,7 @@ func seedRecentEdit(
 	filePath, ts string,
 ) {
 	t.Helper()
-	require.NoError(t, d.UpsertSession(db.Session{
+	require.NoError(t, d.UpsertSession(t.Context(), db.Session{
 		ID:           sessionID,
 		Project:      project,
 		Machine:      "test",
@@ -46,16 +46,13 @@ func seedRecentEdit(
 			},
 		},
 	}
-	require.NoError(t, d.InsertMessages([]db.Message{msg}),
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{msg}),
 		"seedRecentEdit: insert message %s/%d", sessionID, ordinal)
 }
 
 // TestRecentEditsReturnsFiles confirms the endpoint returns seeded files in
 // the response body with the expected fields populated.
 func TestRecentEditsReturnsFiles(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := dbtest.OpenTestDB(t)
 
 	seedRecentEdit(t, database, "proj", "s1", 1, 0, "main.go", "2026-06-24T10:00:00Z")
@@ -65,12 +62,12 @@ func TestRecentEditsReturnsFiles(t *testing.T) {
 	assertRecorderStatus(t, w, http.StatusOK)
 
 	var result db.RecentEditsResult
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &result))
-	require.Len(result.Files, 1)
-	assert.Equal("proj", result.Files[0].Project)
-	assert.Equal("main.go", result.Files[0].FilePath)
-	assert.Equal(1, result.Files[0].EditCount)
-	assert.False(result.HasMore)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	require.Len(t, result.Files, 1)
+	assert.Equal(t, "proj", result.Files[0].Project)
+	assert.Equal(t, "main.go", result.Files[0].FilePath)
+	assert.Equal(t, 1, result.Files[0].EditCount)
+	assert.False(t, result.HasMore)
 }
 
 // TestRecentEditsHasMoreTrue confirms has_more is true when the number of
@@ -96,9 +93,6 @@ func TestRecentEditsHasMoreTrue(t *testing.T) {
 // TestRecentEditsProjectFilter confirms the project query param narrows
 // results to only that project's files.
 func TestRecentEditsProjectFilter(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := dbtest.OpenTestDB(t)
 
 	seedRecentEdit(t, database, "alpha", "sAlpha", 1, 0, "a.go", "2026-06-24T10:00:00Z")
@@ -109,10 +103,10 @@ func TestRecentEditsProjectFilter(t *testing.T) {
 	assertRecorderStatus(t, w, http.StatusOK)
 
 	var result db.RecentEditsResult
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &result))
-	require.Len(result.Files, 1, "project filter should narrow to alpha only")
-	assert.Equal("alpha", result.Files[0].Project)
-	assert.Equal("a.go", result.Files[0].FilePath)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	require.Len(t, result.Files, 1, "project filter should narrow to alpha only")
+	assert.Equal(t, "alpha", result.Files[0].Project)
+	assert.Equal(t, "a.go", result.Files[0].FilePath)
 }
 
 // TestRecentEditsOffset confirms offset skips the first N file groups.

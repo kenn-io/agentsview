@@ -151,9 +151,6 @@ func TestOpenAPIDocumentsEmbeddingsRoutesWithoutManager(t *testing.T) {
 }
 
 func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	fake := &fakeEmbeddingsManager{}
 	s := newEmbeddingsTestServer(t, fake)
 
@@ -164,12 +161,12 @@ func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
 	var body struct {
 		Started bool `json:"started"`
 	}
-	require.NoError(json.Unmarshal(w.Body.Bytes(), &body))
-	assert.True(body.Started)
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.True(t, body.Started)
 
-	require.Len(fake.startBuildCalls, 1)
-	assert.True(fake.startBuildCalls[0].FullRebuild)
-	assert.False(fake.startBuildCalls[0].RepairInvalid)
+	require.Len(t, fake.startBuildCalls, 1)
+	assert.True(t, fake.startBuildCalls[0].FullRebuild)
+	assert.False(t, fake.startBuildCalls[0].RepairInvalid)
 }
 
 func TestEmbeddingsBuildHoldsIdleLeaseUntilManagerCompletes(t *testing.T) {
@@ -204,9 +201,6 @@ func TestEmbeddingsBuildHoldsIdleLeaseUntilManagerCompletes(t *testing.T) {
 }
 
 func TestEmbeddingsRoutesSelectRecallStoreManager(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	messages := &fakeEmbeddingsManager{status: vector.BuildStatus{Done: 1}}
 	recall := &fakeEmbeddingsManager{status: vector.BuildStatus{Done: 2}}
 	s := testServer(t, 0,
@@ -220,17 +214,17 @@ func TestEmbeddingsRoutesSelectRecallStoreManager(t *testing.T) {
 			"include_automated": true,
 		})
 	assertRecorderStatus(t, w, http.StatusAccepted)
-	assert.Empty(messages.startBuildCalls)
-	require.Len(recall.startBuildCalls, 1)
-	assert.True(recall.startBuildCalls[0].FullRebuild)
-	assert.False(recall.startBuildCalls[0].IncludeAutomated,
+	assert.Empty(t, messages.startBuildCalls)
+	require.Len(t, recall.startBuildCalls, 1)
+	assert.True(t, recall.startBuildCalls[0].FullRebuild)
+	assert.False(t, recall.startBuildCalls[0].IncludeAutomated,
 		"Recall has no automated-session scope and must normalize it")
 
 	statusResponse := serveGet(t, s, "/api/v1/embeddings/status?store=recall")
 	assertRecorderStatus(t, statusResponse, http.StatusOK)
 	var status vector.BuildStatus
-	require.NoError(json.Unmarshal(statusResponse.Body.Bytes(), &status))
-	assert.Equal(int64(2), status.Done)
+	require.NoError(t, json.Unmarshal(statusResponse.Body.Bytes(), &status))
+	assert.Equal(t, int64(2), status.Done)
 }
 
 // TestEmbeddingsBuildIncludeAutomatedDefaulting pins the tri-state contract:

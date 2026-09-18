@@ -22,7 +22,7 @@ func TestShutdownClosesOnDemandEngine(t *testing.T) {
 		WriteTimeout: 30 * time.Second,
 	}, database, nil)
 
-	require.NotNil(t, srv.syncEngineForLocal(database),
+	require.NotNil(t, srv.syncEngineForLocal(t.Context(), database),
 		"on-demand engine should be created lazily")
 
 	require.NoError(t, srv.Shutdown(t.Context()))

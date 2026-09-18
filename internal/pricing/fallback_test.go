@@ -22,6 +22,7 @@ func testRate(dollars string) money.Money {
 
 func assertFlatPricing(t *testing.T, want, got ModelPricing) {
 	t.Helper()
+
 	assert.Equal(t, want.ModelPattern, got.ModelPattern)
 	assert.Equal(t, want.InputPerMTok, got.InputPerMTok)
 	assert.Equal(t, want.OutputPerMTok, got.OutputPerMTok)
@@ -130,9 +131,6 @@ func TestFallbackPricing_Fable5Rates(t *testing.T) {
 }
 
 func TestFallbackPricing_HermesModels(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	byPattern := make(map[string]ModelPricing)
 	for _, p := range requireEmbeddedFallbackPricing(t) {
 		byPattern[p.ModelPattern] = p
@@ -141,17 +139,17 @@ func TestFallbackPricing_HermesModels(t *testing.T) {
 	// gpt-5.5 (Hermes). Source: https://developers.openai.com/api/docs/pricing
 	// standard tier — input $5.00, cached input $0.50, output $30.00 per MTok.
 	gpt, ok := byPattern["gpt-5.5"]
-	require.True(ok, "gpt-5.5 entry missing from FallbackPricing")
-	assert.Equal(testRate("5"), gpt.InputPerMTok)
-	assert.Equal(testRate("30"), gpt.OutputPerMTok)
-	assert.Equal(testRate("0.50"), gpt.CacheReadPerMTok)
+	require.True(t, ok, "gpt-5.5 entry missing from FallbackPricing")
+	assert.Equal(t, testRate("5"), gpt.InputPerMTok)
+	assert.Equal(t, testRate("30"), gpt.OutputPerMTok)
+	assert.Equal(t, testRate("0.50"), gpt.CacheReadPerMTok)
 
 	// openrouter/owl-alpha is a free model: a known $0 (present with
 	// zero rates) rather than an unpriced/unknown model.
 	owl, ok := byPattern["openrouter/owl-alpha"]
-	require.True(ok, "openrouter/owl-alpha entry missing from FallbackPricing")
-	assert.Zero(owl.InputPerMTok)
-	assert.Zero(owl.OutputPerMTok)
+	require.True(t, ok, "openrouter/owl-alpha entry missing from FallbackPricing")
+	assert.Zero(t, owl.InputPerMTok)
+	assert.Zero(t, owl.OutputPerMTok)
 }
 
 func TestFallbackPricing_Deterministic(t *testing.T) {
@@ -197,14 +195,12 @@ func TestFallbackPricing_SortedByModelPattern(t *testing.T) {
 }
 
 func TestFallbackVersion_TracksEmbeddedSnapshot(t *testing.T) {
-	assert := assert.New(t)
-
 	snapshot := requireEmbeddedFallbackSnapshot(t)
-	assert.Equal(snapshot.Version, FallbackVersion)
-	assert.NotEmpty(FallbackVersion, "fallback version should not be empty")
-	assert.True(strings.HasPrefix(FallbackVersion, "litellm-"),
+	assert.Equal(t, snapshot.Version, FallbackVersion)
+	assert.NotEmpty(t, FallbackVersion, "fallback version should not be empty")
+	assert.True(t, strings.HasPrefix(FallbackVersion, "litellm-"),
 		"fallback version should start with litellm- prefix, got %q", FallbackVersion)
-	assert.Len(FallbackVersion, len("litellm-")+12,
+	assert.Len(t, FallbackVersion, len("litellm-")+12,
 		"fallback version should be litellm- plus 12-char hex digest")
 }
 
@@ -273,9 +269,6 @@ func TestFallbackPricing_OverlayOnlyRates(t *testing.T) {
 }
 
 func TestDecodeFallbackSnapshotFromFS(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	snapshot := []byte(`{
 		"version": "litellm-test",
 		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
@@ -292,12 +285,12 @@ func TestDecodeFallbackSnapshotFromFS(t *testing.T) {
 	}
 
 	got, err := decodeFallbackSnapshotFromFS(fsys)
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.Equal("litellm-test", got.Version)
-	require.Len(got.Models, 2)
-	assert.Equal("a-model", got.Models[0].ModelPattern)
-	assert.Equal("z-model", got.Models[1].ModelPattern)
+	assert.Equal(t, "litellm-test", got.Version)
+	require.Len(t, got.Models, 2)
+	assert.Equal(t, "a-model", got.Models[0].ModelPattern)
+	assert.Equal(t, "z-model", got.Models[1].ModelPattern)
 }
 
 func TestDecodeFallbackSnapshotFromFS_Preserves1hCacheWriteRate(t *testing.T) {
@@ -328,9 +321,6 @@ func TestDecodeFallbackSnapshotFromFS_Preserves1hCacheWriteRate(t *testing.T) {
 }
 
 func TestDecodeFallbackSnapshotFromFS_SortsPricingBands(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	snapshot := []byte(`{
 		"version": "litellm-test",
 		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
@@ -348,11 +338,11 @@ func TestDecodeFallbackSnapshotFromFS_SortsPricingBands(t *testing.T) {
 	}
 
 	got, err := decodeFallbackSnapshotFromFS(fys)
-	require.NoError(err)
-	require.Len(got.Models, 1)
-	require.Len(got.Models[0].Bands, 2)
-	assert.Equal(200_000, got.Models[0].Bands[0].AboveInputTokens)
-	assert.Equal(272_000, got.Models[0].Bands[1].AboveInputTokens)
+	require.NoError(t, err)
+	require.Len(t, got.Models, 1)
+	require.Len(t, got.Models[0].Bands, 2)
+	assert.Equal(t, 200_000, got.Models[0].Bands[0].AboveInputTokens)
+	assert.Equal(t, 272_000, got.Models[0].Bands[1].AboveInputTokens)
 }
 
 func TestDecodeFallbackSnapshotFromFS_RejectsInvalidPricingBands(t *testing.T) {

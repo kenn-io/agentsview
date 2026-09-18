@@ -84,7 +84,7 @@ func TestLineReader(t *testing.T) {
 				}
 				got = append(got, line)
 			}
-			assert.NoError(t, lr.Err())
+			require.NoError(t, lr.Err())
 			assert.Equal(t, tt.want, got)
 		})
 	}

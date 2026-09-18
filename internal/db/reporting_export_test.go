@@ -16,38 +16,32 @@ import (
 )
 
 func TestReportingExportCompletedEmptyDayHas24QuietHours(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 
 	day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(err)
-	assert.Equal(export.ReportingSchemaVersion, day.SchemaVersion)
-	assert.True(day.Complete)
-	assert.False(day.HasData)
-	assert.Equal("sha256:308989b5c0df16c9d2d06fd050f3268632327d9faf9088f6dfb85ad9b221fc4c", day.Digest)
-	require.Len(day.Hours, 24)
+	require.NoError(t, err)
+	assert.Equal(t, export.ReportingSchemaVersion, day.SchemaVersion)
+	assert.True(t, day.Complete)
+	assert.False(t, day.HasData)
+	assert.Equal(t, "sha256:308989b5c0df16c9d2d06fd050f3268632327d9faf9088f6dfb85ad9b221fc4c", day.Digest)
+	require.Len(t, day.Hours, 24)
 	for _, hour := range day.Hours {
-		assert.False(hour.HasData)
-		assert.Zero(hour.Activity.Totals.IdleMinutes)
-		assert.Empty(hour.Activity.ByModel)
-		assert.Empty(hour.Activity.ByAgent)
-		assert.Empty(hour.Activity.ByProject)
-		assert.Empty(hour.Usage.ByModel)
-		assert.Empty(hour.Usage.ByAgent)
-		assert.Empty(hour.Usage.ByProject)
-		assert.Len(hour.Activity.Buckets, 12)
+		assert.False(t, hour.HasData)
+		assert.Zero(t, hour.Activity.Totals.IdleMinutes)
+		assert.Empty(t, hour.Activity.ByModel)
+		assert.Empty(t, hour.Activity.ByAgent)
+		assert.Empty(t, hour.Activity.ByProject)
+		assert.Empty(t, hour.Usage.ByModel)
+		assert.Empty(t, hour.Usage.ByAgent)
+		assert.Empty(t, hour.Usage.ByProject)
+		assert.Len(t, hour.Activity.Buckets, 12)
 	}
 }
 
 func TestReportingExportSplitsActivityAndAssignsFirstSeenOnce(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "cross-hour", "project-a", func(s *Session) {
 		s.Agent = "claude"
@@ -65,68 +59,62 @@ func TestReportingExportSplitsActivityAndAssignsFirstSeenOnce(t *testing.T) {
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	hour10 := day.Hours[10]
 	hour11 := day.Hours[11]
-	assert.True(hour10.HasData)
-	assert.True(hour11.HasData)
-	assert.InDelta(1, hour10.Activity.Totals.AgentMinutes, 0.0001)
-	assert.InDelta(2, hour11.Activity.Totals.AgentMinutes, 0.0001)
-	assert.Equal(1, hour10.Activity.Totals.NewSessions)
-	assert.Equal(0, hour11.Activity.Totals.NewSessions)
-	assert.Equal(1, hour10.Activity.Totals.NewInteractiveSessions)
-	assert.Equal(1, hour10.Activity.Totals.NewProjects)
-	assert.Equal(0, hour10.Activity.Totals.NewModels)
-	assert.Equal(1, hour11.Activity.Totals.NewModels)
-	assert.Equal(1, hour10.Activity.Peak.Agents)
-	assert.Equal(1, hour11.Activity.Peak.Agents)
-	require.Len(hour10.Activity.ByProject, 1)
-	assert.Equal("project-a", hour10.Activity.ByProject[0].Project)
-	assert.NotEmpty(hour10.Activity.ByProject[0].ProjectKey)
-	require.Len(hour10.Activity.ByModel, 1)
-	assert.Equal("opus", hour10.Activity.ByModel[0].Key)
+	assert.True(t, hour10.HasData)
+	assert.True(t, hour11.HasData)
+	assert.InDelta(t, 1, hour10.Activity.Totals.AgentMinutes, 0.0001)
+	assert.InDelta(t, 2, hour11.Activity.Totals.AgentMinutes, 0.0001)
+	assert.Equal(t, 1, hour10.Activity.Totals.NewSessions)
+	assert.Equal(t, 0, hour11.Activity.Totals.NewSessions)
+	assert.Equal(t, 1, hour10.Activity.Totals.NewInteractiveSessions)
+	assert.Equal(t, 1, hour10.Activity.Totals.NewProjects)
+	assert.Equal(t, 0, hour10.Activity.Totals.NewModels)
+	assert.Equal(t, 1, hour11.Activity.Totals.NewModels)
+	assert.Equal(t, 1, hour10.Activity.Peak.Agents)
+	assert.Equal(t, 1, hour11.Activity.Peak.Agents)
+	require.Len(t, hour10.Activity.ByProject, 1)
+	assert.Equal(t, "project-a", hour10.Activity.ByProject[0].Project)
+	assert.NotEmpty(t, hour10.Activity.ByProject[0].ProjectKey)
+	require.Len(t, hour10.Activity.ByModel, 1)
+	assert.Equal(t, "opus", hour10.Activity.ByModel[0].Key)
 
-	assert.False(day.Hours[9].HasData)
-	assert.False(day.Hours[12].HasData)
+	assert.False(t, day.Hours[9].HasData)
+	assert.False(t, day.Hours[12].HasData)
 
 	existing, err := d.GetActivityReport(
 		t.Context(),
 		AnalyticsFilter{Timezone: "UTC"},
 		dayQuery(t, "2026-07-28", "UTC"),
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	var hourlyAgentMinutes float64
 	for _, hour := range day.Hours {
 		hourlyAgentMinutes += hour.Activity.Totals.AgentMinutes
 	}
-	assert.InDelta(existing.Totals.AgentMinutes, hourlyAgentMinutes, 0.0001)
+	assert.InDelta(t, existing.Totals.AgentMinutes, hourlyAgentMinutes, 0.0001)
 }
 
 func TestReportingExportCurrentDayOmitsOpenHour(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 
 	day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
 		Date: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 14, 37, 0, 0, time.UTC),
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.False(day.Complete)
-	assert.Empty(day.Digest)
-	require.Len(day.Hours, 14)
-	assert.Equal("2026-07-29-13", day.Hours[13].Period)
+	assert.False(t, day.Complete)
+	assert.Empty(t, day.Digest)
+	require.Len(t, day.Hours, 14)
+	assert.Equal(t, "2026-07-29-13", day.Hours[13].Period)
 }
 
 func TestReportingExportSeparatesSubagentsAndIndependentPeaks(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
-	require.NoError(d.UpsertModelPricing([]ModelPricing{{
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern: "model-a", OutputPerMTok: money.MustParseDollars("1"),
 	}}))
 	for _, session := range []struct {
@@ -166,50 +154,50 @@ func TestReportingExportSeparatesSubagentsAndIndependentPeaks(t *testing.T) {
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(err)
-	require.Len(day.Hours, 24)
+	require.NoError(t, err)
+	require.Len(t, day.Hours, 24)
 	hour := day.Hours[10]
-	assert.Equal(11.0, hour.Activity.Totals.AgentMinutes)
-	assert.Equal(3.0, hour.Activity.Totals.InteractiveAgentMinutes)
-	assert.Equal(5.0, hour.Activity.Totals.SubagentAgentMinutes)
-	assert.Equal(3.0, hour.Activity.Totals.AutomatedAgentMinutes)
-	assert.Equal(money.Money{Microdollars: 70}, hour.Activity.Totals.Cost)
-	assert.Equal(money.Money{Microdollars: 20}, hour.Activity.Totals.InteractiveCost)
-	assert.Equal(money.Money{Microdollars: 30}, hour.Activity.Totals.SubagentCost)
-	assert.Equal(money.Money{Microdollars: 20}, hour.Activity.Totals.AutomatedCost)
-	assert.Equal(int64(70), hour.Activity.Totals.OutputTokens)
-	assert.Equal(hour.Activity.Totals.Cost, hour.Usage.Totals.Cost)
-	assert.Equal(8, hour.Activity.Totals.NewSessions)
-	assert.Equal(2, hour.Activity.Totals.NewInteractiveSessions)
-	assert.Equal(4, hour.Activity.Totals.NewSubagentSessions)
-	assert.Equal(2, hour.Activity.Totals.NewAutomatedSessions)
-	assert.Equal(1, hour.Activity.Totals.NewUntimedSessions)
-	assert.Zero(day.Hours[11].Activity.Totals.NewSessions)
-	assert.Equal(export.ReportingActivityPeak{Agents: 3, At: new("2026-07-28T10:02:00Z")}, hour.Activity.Peak)
-	assert.Equal(export.ReportingActivityPeak{Agents: 2, At: new("2026-07-28T10:00:00Z")}, hour.Activity.InteractivePeak)
-	assert.Equal(export.ReportingActivityPeak{Agents: 3, At: new("2026-07-28T10:02:00Z")}, hour.Activity.SubagentPeak)
-	assert.Equal(export.ReportingActivityPeak{Agents: 2, At: new("2026-07-28T10:03:00Z")}, hour.Activity.AutomatedPeak)
-	require.Len(hour.Activity.Buckets, 12)
+	assert.InDelta(t, 11.0, hour.Activity.Totals.AgentMinutes, 0)
+	assert.InDelta(t, 3.0, hour.Activity.Totals.InteractiveAgentMinutes, 0)
+	assert.InDelta(t, 5.0, hour.Activity.Totals.SubagentAgentMinutes, 0)
+	assert.InDelta(t, 3.0, hour.Activity.Totals.AutomatedAgentMinutes, 0)
+	assert.Equal(t, money.Money{Microdollars: 70}, hour.Activity.Totals.Cost)
+	assert.Equal(t, money.Money{Microdollars: 20}, hour.Activity.Totals.InteractiveCost)
+	assert.Equal(t, money.Money{Microdollars: 30}, hour.Activity.Totals.SubagentCost)
+	assert.Equal(t, money.Money{Microdollars: 20}, hour.Activity.Totals.AutomatedCost)
+	assert.Equal(t, int64(70), hour.Activity.Totals.OutputTokens)
+	assert.Equal(t, hour.Activity.Totals.Cost, hour.Usage.Totals.Cost)
+	assert.Equal(t, 8, hour.Activity.Totals.NewSessions)
+	assert.Equal(t, 2, hour.Activity.Totals.NewInteractiveSessions)
+	assert.Equal(t, 4, hour.Activity.Totals.NewSubagentSessions)
+	assert.Equal(t, 2, hour.Activity.Totals.NewAutomatedSessions)
+	assert.Equal(t, 1, hour.Activity.Totals.NewUntimedSessions)
+	assert.Zero(t, day.Hours[11].Activity.Totals.NewSessions)
+	assert.Equal(t, export.ReportingActivityPeak{Agents: 3, At: new("2026-07-28T10:02:00Z")}, hour.Activity.Peak)
+	assert.Equal(t, export.ReportingActivityPeak{Agents: 2, At: new("2026-07-28T10:00:00Z")}, hour.Activity.InteractivePeak)
+	assert.Equal(t, export.ReportingActivityPeak{Agents: 3, At: new("2026-07-28T10:02:00Z")}, hour.Activity.SubagentPeak)
+	assert.Equal(t, export.ReportingActivityPeak{Agents: 2, At: new("2026-07-28T10:03:00Z")}, hour.Activity.AutomatedPeak)
+	require.Len(t, hour.Activity.Buckets, 12)
 	bucket := hour.Activity.Buckets[0]
-	assert.Equal(3, bucket.MaxAgents)
-	assert.Equal(2, bucket.MaxInteractiveAgents)
-	assert.Equal(3, bucket.MaxSubagentAgents)
-	assert.Equal(2, bucket.MaxAutomatedAgents)
-	assert.Zero(bucket.InteractiveAtPeak)
-	assert.Equal(3, bucket.SubagentAtPeak)
-	assert.Zero(bucket.AutomatedAtPeak)
+	assert.Equal(t, 3, bucket.MaxAgents)
+	assert.Equal(t, 2, bucket.MaxInteractiveAgents)
+	assert.Equal(t, 3, bucket.MaxSubagentAgents)
+	assert.Equal(t, 2, bucket.MaxAutomatedAgents)
+	assert.Zero(t, bucket.InteractiveAtPeak)
+	assert.Equal(t, 3, bucket.SubagentAtPeak)
+	assert.Zero(t, bucket.AutomatedAtPeak)
 	for _, rows := range [][]export.ReportingActivityBreakdown{hour.Activity.ByModel, hour.Activity.ByAgent} {
-		require.Len(rows, 1)
-		assert.Equal(11.0, rows[0].AgentMinutes)
-		assert.Equal(3.0, rows[0].InteractiveAgentMinutes)
-		assert.Equal(5.0, rows[0].SubagentAgentMinutes)
-		assert.Equal(3.0, rows[0].AutomatedAgentMinutes)
-		assert.Equal(money.Money{Microdollars: 30}, rows[0].SubagentCost)
+		require.Len(t, rows, 1)
+		assert.InDelta(t, 11.0, rows[0].AgentMinutes, 0)
+		assert.InDelta(t, 3.0, rows[0].InteractiveAgentMinutes, 0)
+		assert.InDelta(t, 5.0, rows[0].SubagentAgentMinutes, 0)
+		assert.InDelta(t, 3.0, rows[0].AutomatedAgentMinutes, 0)
+		assert.Equal(t, money.Money{Microdollars: 30}, rows[0].SubagentCost)
 	}
-	require.Len(hour.Activity.ByProject, 1)
-	assert.Equal(11.0, hour.Activity.ByProject[0].AgentMinutes)
-	assert.Equal(5.0, hour.Activity.ByProject[0].SubagentAgentMinutes)
-	assert.Equal(money.Money{Microdollars: 30}, hour.Activity.ByProject[0].SubagentCost)
+	require.Len(t, hour.Activity.ByProject, 1)
+	assert.InDelta(t, 11.0, hour.Activity.ByProject[0].AgentMinutes, 0)
+	assert.InDelta(t, 5.0, hour.Activity.ByProject[0].SubagentAgentMinutes, 0)
+	assert.Equal(t, money.Money{Microdollars: 30}, hour.Activity.ByProject[0].SubagentCost)
 }
 
 func TestReportingUsageBreakdownsIgnoreNilAccumulators(t *testing.T) {
@@ -222,11 +210,8 @@ func TestReportingUsageBreakdownsIgnoreNilAccumulators(t *testing.T) {
 func TestReportingExportAllocatesAuthoritativeSessionCostBeforeHourPartition(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
-	require.NoError(d.UpsertModelPricing([]ModelPricing{
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
 		{
 			ModelPattern: "copilot-model-a",
 			InputPerMTok: money.MustParseDollars("10"),
@@ -242,7 +227,7 @@ func TestReportingExportAllocatesAuthoritativeSessionCostBeforeHourPartition(
 		s.EndedAt = Ptr("2026-07-28T11:10:00Z")
 	})
 	reportedCost := money.MustParseDollars("0.03")
-	require.NoError(d.ReplaceSessionUsageEvents(
+	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(),
 		"copilot:hourly-authoritative",
 		[]UsageEvent{
 			{
@@ -269,52 +254,49 @@ func TestReportingExportAllocatesAuthoritativeSessionCostBeforeHourPartition(
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	hour10 := day.Hours[10]
 	hour11 := day.Hours[11]
-	assert.Equal(money.MustParseDollars("0.01"), hour10.Usage.Totals.Cost)
-	assert.Equal(money.MustParseDollars("0.02"), hour11.Usage.Totals.Cost)
-	assert.Equal(int64(1_000_000), hour10.Usage.Totals.InputTokens)
-	assert.Equal(int64(1_000_000), hour11.Usage.Totals.InputTokens)
-	assert.Equal(hour10.Usage.Totals.Cost, hour10.Activity.Totals.Cost)
-	assert.Equal(hour11.Usage.Totals.Cost, hour11.Activity.Totals.Cost)
-	assert.Equal(1, hour10.Activity.Totals.NewModels)
-	assert.Equal(1, hour11.Activity.Totals.NewModels)
+	assert.Equal(t, money.MustParseDollars("0.01"), hour10.Usage.Totals.Cost)
+	assert.Equal(t, money.MustParseDollars("0.02"), hour11.Usage.Totals.Cost)
+	assert.Equal(t, int64(1_000_000), hour10.Usage.Totals.InputTokens)
+	assert.Equal(t, int64(1_000_000), hour11.Usage.Totals.InputTokens)
+	assert.Equal(t, hour10.Usage.Totals.Cost, hour10.Activity.Totals.Cost)
+	assert.Equal(t, hour11.Usage.Totals.Cost, hour11.Activity.Totals.Cost)
+	assert.Equal(t, 1, hour10.Activity.Totals.NewModels)
+	assert.Equal(t, 1, hour11.Activity.Totals.NewModels)
 
 	existing, err := d.GetDailyUsage(t.Context(), UsageFilter{
 		From: "2026-07-28", To: "2026-07-28", Timezone: "UTC",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	var hourlyCost money.Money
 	var hourlyInputTokens int64
 	for _, hour := range day.Hours {
 		hourlyCost = money.MustAdd(hourlyCost, hour.Usage.Totals.Cost)
 		hourlyInputTokens += hour.Usage.Totals.InputTokens
 	}
-	assert.Equal(existing.Totals.TotalCost, hourlyCost)
-	assert.Equal(int64(existing.Totals.InputTokens), hourlyInputTokens)
+	assert.Equal(t, existing.Totals.TotalCost, hourlyCost)
+	assert.Equal(t, int64(existing.Totals.InputTokens), hourlyInputTokens)
 
 	joint, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC), SchemaVersion: 4,
 	})
-	require.NoError(err)
-	require.Len(joint.Hours[10].Joint.Cells, 1)
-	require.Len(joint.Hours[11].Joint.Cells, 1)
-	assert.Equal(int64(10_000), joint.Hours[10].Joint.Cells[0].Pricing.AllocatedCost.Microdollars)
-	assert.Equal(int64(20_000), joint.Hours[11].Joint.Cells[0].Pricing.AllocatedCost.Microdollars)
-	assert.Zero(joint.Hours[10].Joint.Cells[0].Pricing.ComputedCost.Microdollars)
+	require.NoError(t, err)
+	require.Len(t, joint.Hours[10].Joint.Cells, 1)
+	require.Len(t, joint.Hours[11].Joint.Cells, 1)
+	assert.Equal(t, int64(10_000), joint.Hours[10].Joint.Cells[0].Pricing.AllocatedCost.Microdollars)
+	assert.Equal(t, int64(20_000), joint.Hours[11].Joint.Cells[0].Pricing.AllocatedCost.Microdollars)
+	assert.Zero(t, joint.Hours[10].Joint.Cells[0].Pricing.ComputedCost.Microdollars)
 }
 
 func TestReportingExportAllocatesAuthoritativeCostByDailyBreakdownKey(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
-	require.NoError(d.UpsertModelPricing([]ModelPricing{
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
 		{
 			ModelPattern: "model-a",
 			InputPerMTok: money.MustParseDollars("1"),
@@ -330,7 +312,7 @@ func TestReportingExportAllocatesAuthoritativeCostByDailyBreakdownKey(
 		s.EndedAt = Ptr("2026-07-28T10:03:00Z")
 	})
 	reportedCost := money.Money{Microdollars: 1}
-	require.NoError(d.ReplaceSessionUsageEvents(
+	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(),
 		"fixture-authoritative-key",
 		[]UsageEvent{
 			{
@@ -357,16 +339,16 @@ func TestReportingExportAllocatesAuthoritativeCostByDailyBreakdownKey(
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	daily, err := d.GetDailyUsage(t.Context(), UsageFilter{
 		From:       "2026-07-28",
 		To:         "2026-07-28",
 		Timezone:   "UTC",
 		Breakdowns: true,
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
-	require.Len(daily.Daily, 1)
+	require.Len(t, daily.Daily, 1)
 	exportedCosts := make(map[string]money.Money)
 	for _, breakdown := range day.Hours[10].Usage.ByModel {
 		exportedCosts[breakdown.Key] = breakdown.Cost
@@ -375,17 +357,14 @@ func TestReportingExportAllocatesAuthoritativeCostByDailyBreakdownKey(
 	for _, breakdown := range daily.Daily[0].ModelBreakdowns {
 		dailyCosts[breakdown.ModelName] = breakdown.Cost
 	}
-	assert.Equal(money.Money{}, exportedCosts["model-a"])
-	assert.Equal(money.Money{Microdollars: 1}, exportedCosts["model-z"])
-	assert.Equal(dailyCosts, exportedCosts)
+	assert.Equal(t, money.Money{}, exportedCosts["model-a"])
+	assert.Equal(t, money.Money{Microdollars: 1}, exportedCosts["model-z"])
+	assert.Equal(t, dailyCosts, exportedCosts)
 }
 
 func TestReportingExportPreservesZeroWeightAuthoritativeBreakdownKeys(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "fixture-authoritative-zero", "project-a", func(s *Session) {
 		s.Agent = "agent-a"
@@ -393,7 +372,7 @@ func TestReportingExportPreservesZeroWeightAuthoritativeBreakdownKeys(
 		s.EndedAt = Ptr("2026-07-28T10:03:00Z")
 	})
 	reportedCost := money.Money{Microdollars: 1}
-	require.NoError(d.ReplaceSessionUsageEvents(
+	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(),
 		"fixture-authoritative-zero",
 		[]UsageEvent{
 			{
@@ -418,16 +397,16 @@ func TestReportingExportPreservesZeroWeightAuthoritativeBreakdownKeys(
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	daily, err := d.GetDailyUsage(t.Context(), UsageFilter{
 		From:       "2026-07-28",
 		To:         "2026-07-28",
 		Timezone:   "UTC",
 		Breakdowns: true,
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
-	require.Len(daily.Daily, 1)
+	require.Len(t, daily.Daily, 1)
 	exportedCosts := make(map[string]money.Money)
 	for _, breakdown := range day.Hours[10].Usage.ByModel {
 		exportedCosts[breakdown.Key] = breakdown.Cost
@@ -436,17 +415,14 @@ func TestReportingExportPreservesZeroWeightAuthoritativeBreakdownKeys(
 	for _, breakdown := range daily.Daily[0].ModelBreakdowns {
 		dailyCosts[breakdown.ModelName] = breakdown.Cost
 	}
-	assert.Equal(money.Money{}, exportedCosts["model-a"])
-	assert.Equal(money.Money{Microdollars: 1}, exportedCosts["model-z"])
-	assert.Equal(dailyCosts, exportedCosts)
+	assert.Equal(t, money.Money{}, exportedCosts["model-a"])
+	assert.Equal(t, money.Money{Microdollars: 1}, exportedCosts["model-z"])
+	assert.Equal(t, dailyCosts, exportedCosts)
 }
 
 func TestReportingExportClampsStandaloneUsageTokens(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
-	require.NoError(d.InsertCursorUsageEvents([]CursorUsageEvent{
+	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{
 		{
 			OccurredAt:       "2026-07-28T09:05:00Z",
 			Model:            "model-negative",
@@ -473,59 +449,56 @@ func TestReportingExportClampsStandaloneUsageTokens(t *testing.T) {
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	daily, err := d.GetDailyUsage(t.Context(), UsageFilter{
 		From:       "2026-07-28",
 		To:         "2026-07-28",
 		Timezone:   "UTC",
 		Breakdowns: true,
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	hour := day.Hours[9]
-	assert.Equal(int64(MaxPlausibleTokens), hour.Usage.Totals.InputTokens)
-	assert.Equal(int64(MaxPlausibleTokens), hour.Usage.Totals.OutputTokens)
-	assert.Equal(
+	assert.Equal(t, int64(MaxPlausibleTokens), hour.Usage.Totals.InputTokens)
+	assert.Equal(t, int64(MaxPlausibleTokens), hour.Usage.Totals.OutputTokens)
+	assert.Equal(t,
 		int64(MaxPlausibleTokens),
 		hour.Usage.Totals.CacheCreationTokens,
 	)
-	assert.Equal(int64(MaxPlausibleTokens), hour.Usage.Totals.CacheReadTokens)
-	assert.Equal(daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
-	assert.Equal(daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
-	assert.Equal(
+	assert.Equal(t, int64(MaxPlausibleTokens), hour.Usage.Totals.CacheReadTokens)
+	assert.Equal(t, daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
+	assert.Equal(t, daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
+	assert.Equal(t,
 		daily.Totals.CacheCreationTokens,
 		int(hour.Usage.Totals.CacheCreationTokens),
 	)
-	assert.Equal(
+	assert.Equal(t,
 		daily.Totals.CacheReadTokens,
 		int(hour.Usage.Totals.CacheReadTokens),
 	)
-	require.Len(hour.Usage.ByModel, 2)
+	require.Len(t, hour.Usage.ByModel, 2)
 	for _, breakdown := range hour.Usage.ByModel {
 		switch breakdown.Key {
 		case "model-negative":
-			assert.Zero(breakdown.InputTokens)
-			assert.Zero(breakdown.OutputTokens)
-			assert.Zero(breakdown.CacheCreationTokens)
-			assert.Zero(breakdown.CacheReadTokens)
+			assert.Zero(t, breakdown.InputTokens)
+			assert.Zero(t, breakdown.OutputTokens)
+			assert.Zero(t, breakdown.CacheCreationTokens)
+			assert.Zero(t, breakdown.CacheReadTokens)
 		case "model-oversized":
-			assert.Equal(int64(MaxPlausibleTokens), breakdown.InputTokens)
-			assert.Equal(int64(MaxPlausibleTokens), breakdown.OutputTokens)
-			assert.Equal(
+			assert.Equal(t, int64(MaxPlausibleTokens), breakdown.InputTokens)
+			assert.Equal(t, int64(MaxPlausibleTokens), breakdown.OutputTokens)
+			assert.Equal(t,
 				int64(MaxPlausibleTokens),
 				breakdown.CacheCreationTokens,
 			)
-			assert.Equal(int64(MaxPlausibleTokens), breakdown.CacheReadTokens)
+			assert.Equal(t, int64(MaxPlausibleTokens), breakdown.CacheReadTokens)
 		default:
-			assert.Fail("unexpected model breakdown", breakdown.Key)
+			assert.Fail(t, "unexpected model breakdown", breakdown.Key)
 		}
 	}
 }
 
 func TestReportingExportUsesOneCoherentReadSnapshot(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	opts := ReportingExportOptions{
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
@@ -548,20 +521,17 @@ func TestReportingExportUsesOneCoherentReadSnapshot(t *testing.T) {
 	}
 
 	first, err := d.ExportReportingDay(t.Context(), opts)
-	require.NoError(err)
-	assert.False(first.HasData)
+	require.NoError(t, err)
+	assert.False(t, first.HasData)
 
 	opts.afterSnapshot = nil
 	second, err := d.ExportReportingDay(t.Context(), opts)
-	require.NoError(err)
-	assert.True(second.HasData)
-	assert.Equal(1, second.Hours[10].Activity.Totals.NewSessions)
+	require.NoError(t, err)
+	assert.True(t, second.HasData)
+	assert.Equal(t, 1, second.Hours[10].Activity.Totals.NewSessions)
 }
 
 func TestReportingExportIncludesStandaloneRowsOnlyInUsage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "session-linked", "project-a", func(s *Session) {
 		s.Agent = "agent-a"
@@ -576,7 +546,7 @@ func TestReportingExportIncludesStandaloneRowsOnlyInUsage(t *testing.T) {
 		"session-model",
 	)
 	sessionCost := money.MustParseDollars("0.007")
-	require.NoError(d.ReplaceSessionUsageEvents(
+	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(),
 		"session-linked",
 		[]UsageEvent{{
 			Source:       "session-source",
@@ -596,7 +566,7 @@ func TestReportingExportIncludesStandaloneRowsOnlyInUsage(t *testing.T) {
 		s.EndedAt = Ptr("2026-07-27T08:01:00Z")
 	})
 	usageOnlyCost := money.MustParseDollars("0.003")
-	require.NoError(d.ReplaceSessionUsageEvents(
+	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(),
 		"fixture-usage-only",
 		[]UsageEvent{{
 			Source:       "fixture-source",
@@ -610,7 +580,7 @@ func TestReportingExportIncludesStandaloneRowsOnlyInUsage(t *testing.T) {
 			DedupKey:     "fixture-usage-only",
 		}},
 	))
-	require.NoError(d.InsertCursorUsageEvents([]CursorUsageEvent{
+	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{
 		{
 			OccurredAt:       "2026-07-28T09:05:00Z",
 			Model:            "standalone-model-a",
@@ -640,44 +610,44 @@ func TestReportingExportIncludesStandaloneRowsOnlyInUsage(t *testing.T) {
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	hour9 := day.Hours[9]
-	assert.True(hour9.HasData)
-	assert.Equal(int64(31), hour9.Usage.Totals.InputTokens)
-	assert.Equal(int64(6), hour9.Usage.Totals.OutputTokens)
-	assert.Equal(int64(3), hour9.Usage.Totals.CacheCreationTokens)
-	assert.Equal(int64(5), hour9.Usage.Totals.CacheReadTokens)
-	assert.Equal(money.MustParseDollars("0.004"), hour9.Usage.Totals.Cost)
-	assert.ElementsMatch(
+	assert.True(t, hour9.HasData)
+	assert.Equal(t, int64(31), hour9.Usage.Totals.InputTokens)
+	assert.Equal(t, int64(6), hour9.Usage.Totals.OutputTokens)
+	assert.Equal(t, int64(3), hour9.Usage.Totals.CacheCreationTokens)
+	assert.Equal(t, int64(5), hour9.Usage.Totals.CacheReadTokens)
+	assert.Equal(t, money.MustParseDollars("0.004"), hour9.Usage.Totals.Cost)
+	assert.ElementsMatch(t,
 		[]string{"standalone-model-a", "model usage-only"},
 		reportingUsageBreakdownKeys(hour9.Usage.ByModel),
 	)
-	assert.ElementsMatch(
+	assert.ElementsMatch(t,
 		[]string{"cursor", "agent usage-only"},
 		reportingUsageBreakdownKeys(hour9.Usage.ByAgent),
 	)
-	require.Len(hour9.Usage.ByProject, 1)
-	assert.Equal("project usage-only", hour9.Usage.ByProject[0].Project)
-	assert.NotEmpty(hour9.Usage.ByProject[0].ProjectKey)
-	assert.Zero(hour9.Activity.Totals.AgentMinutes)
-	assert.Zero(hour9.Activity.Totals.OutputTokens)
-	assert.Zero(hour9.Activity.Totals.Cost)
-	assert.Zero(hour9.Activity.Totals.NewSessions)
-	assert.Zero(hour9.Activity.Totals.NewAutomatedSessions)
-	assert.Zero(hour9.Activity.Totals.NewInteractiveSessions)
-	assert.Zero(hour9.Activity.Totals.NewUntimedSessions)
-	assert.Zero(hour9.Activity.Totals.NewProjects)
-	assert.Zero(hour9.Activity.Totals.NewModels)
+	require.Len(t, hour9.Usage.ByProject, 1)
+	assert.Equal(t, "project usage-only", hour9.Usage.ByProject[0].Project)
+	assert.NotEmpty(t, hour9.Usage.ByProject[0].ProjectKey)
+	assert.Zero(t, hour9.Activity.Totals.AgentMinutes)
+	assert.Zero(t, hour9.Activity.Totals.OutputTokens)
+	assert.Zero(t, hour9.Activity.Totals.Cost)
+	assert.Zero(t, hour9.Activity.Totals.NewSessions)
+	assert.Zero(t, hour9.Activity.Totals.NewAutomatedSessions)
+	assert.Zero(t, hour9.Activity.Totals.NewInteractiveSessions)
+	assert.Zero(t, hour9.Activity.Totals.NewUntimedSessions)
+	assert.Zero(t, hour9.Activity.Totals.NewProjects)
+	assert.Zero(t, hour9.Activity.Totals.NewModels)
 
 	hour10 := day.Hours[10]
-	assert.True(hour10.HasData)
-	assert.Equal(int64(13), hour10.Usage.Totals.InputTokens)
-	assert.Equal(int64(3), hour10.Usage.Totals.OutputTokens)
-	assert.Equal(money.MustParseDollars("0.002"), hour10.Usage.Totals.Cost)
-	assert.Empty(hour10.Usage.ByProject)
-	assert.Zero(hour10.Activity.Totals.AgentMinutes)
-	assert.Zero(hour10.Activity.Totals.NewModels)
+	assert.True(t, hour10.HasData)
+	assert.Equal(t, int64(13), hour10.Usage.Totals.InputTokens)
+	assert.Equal(t, int64(3), hour10.Usage.Totals.OutputTokens)
+	assert.Equal(t, money.MustParseDollars("0.002"), hour10.Usage.Totals.Cost)
+	assert.Empty(t, hour10.Usage.ByProject)
+	assert.Zero(t, hour10.Activity.Totals.AgentMinutes)
+	assert.Zero(t, hour10.Activity.Totals.NewModels)
 
 	daily, err := d.GetDailyUsage(t.Context(), UsageFilter{
 		From:       "2026-07-28",
@@ -685,7 +655,7 @@ func TestReportingExportIncludesStandaloneRowsOnlyInUsage(t *testing.T) {
 		Timezone:   "UTC",
 		Breakdowns: true,
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var exportedInput, exportedOutput int64
 	var exportedCacheCreation, exportedCacheRead int64
@@ -697,21 +667,18 @@ func TestReportingExportIncludesStandaloneRowsOnlyInUsage(t *testing.T) {
 		exportedCacheRead += hour.Usage.Totals.CacheReadTokens
 		exportedCost = money.MustAdd(exportedCost, hour.Usage.Totals.Cost)
 	}
-	assert.Equal(int64(daily.Totals.InputTokens), exportedInput)
-	assert.Equal(int64(daily.Totals.OutputTokens), exportedOutput)
-	assert.Equal(
+	assert.Equal(t, int64(daily.Totals.InputTokens), exportedInput)
+	assert.Equal(t, int64(daily.Totals.OutputTokens), exportedOutput)
+	assert.Equal(t,
 		int64(daily.Totals.CacheCreationTokens), exportedCacheCreation,
 	)
-	assert.Equal(int64(daily.Totals.CacheReadTokens), exportedCacheRead)
-	assert.Equal(daily.Totals.TotalCost, exportedCost)
+	assert.Equal(t, int64(daily.Totals.CacheReadTokens), exportedCacheRead)
+	assert.Equal(t, daily.Totals.TotalCost, exportedCost)
 }
 
 func TestReportingExportUsesAttributedSessionMetadataForCompleteSnapshot(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "reporting-parent", "parent-project", func(s *Session) {
 		s.Agent = "parent-agent"
@@ -748,20 +715,17 @@ func TestReportingExportUsesAttributedSessionMetadataForCompleteSnapshot(
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	hour := day.Hours[9]
-	assert.Equal(int64(631), hour.Usage.Totals.OutputTokens)
-	assert.Equal([]string{"parent-agent"},
+	assert.Equal(t, int64(631), hour.Usage.Totals.OutputTokens)
+	assert.Equal(t, []string{"parent-agent"},
 		reportingUsageBreakdownKeys(hour.Usage.ByAgent))
-	require.Len(hour.Usage.ByProject, 1)
-	assert.Equal("parent-project", hour.Usage.ByProject[0].Project)
+	require.Len(t, hour.Usage.ByProject, 1)
+	assert.Equal(t, "parent-project", hour.Usage.ByProject[0].Project)
 }
 
 func TestReportingExportDeduplicatesMergedUsageInputs(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "fixture-dedup", "project dedup", func(s *Session) {
 		s.Agent = "agent dedup"
@@ -769,7 +733,7 @@ func TestReportingExportDeduplicatesMergedUsageInputs(t *testing.T) {
 		s.EndedAt = Ptr("2026-07-28T09:01:00Z")
 	})
 	sessionCost := money.MustParseDollars("0.002")
-	require.NoError(d.ReplaceSessionUsageEvents(
+	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(),
 		"fixture-dedup",
 		[]UsageEvent{{
 			Source:       "merged-source",
@@ -783,7 +747,7 @@ func TestReportingExportDeduplicatesMergedUsageInputs(t *testing.T) {
 			DedupKey:     "shared",
 		}},
 	))
-	require.NoError(d.InsertCursorUsageEvents([]CursorUsageEvent{{
+	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
 		OccurredAt:   "2026-07-28T09:05:00Z",
 		Model:        "model standalone winner",
 		Kind:         "usage",
@@ -797,15 +761,15 @@ func TestReportingExportDeduplicatesMergedUsageInputs(t *testing.T) {
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	hour := day.Hours[9]
-	assert.Equal(int64(17), hour.Usage.Totals.InputTokens)
-	assert.Equal(int64(3), hour.Usage.Totals.OutputTokens)
-	assert.Equal(money.MustParseDollars("0.007"), hour.Usage.Totals.Cost)
-	require.Len(hour.Usage.ByModel, 1)
-	assert.Equal("model standalone winner", hour.Usage.ByModel[0].Key)
-	assert.Empty(hour.Usage.ByProject)
+	assert.Equal(t, int64(17), hour.Usage.Totals.InputTokens)
+	assert.Equal(t, int64(3), hour.Usage.Totals.OutputTokens)
+	assert.Equal(t, money.MustParseDollars("0.007"), hour.Usage.Totals.Cost)
+	require.Len(t, hour.Usage.ByModel, 1)
+	assert.Equal(t, "model standalone winner", hour.Usage.ByModel[0].Key)
+	assert.Empty(t, hour.Usage.ByProject)
 
 	daily, err := d.GetDailyUsage(t.Context(), UsageFilter{
 		From:       "2026-07-28",
@@ -813,22 +777,19 @@ func TestReportingExportDeduplicatesMergedUsageInputs(t *testing.T) {
 		Timezone:   "UTC",
 		Breakdowns: true,
 	})
-	require.NoError(err)
-	assert.Equal(daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
-	assert.Equal(daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
-	assert.Equal(daily.Totals.TotalCost, hour.Usage.Totals.Cost)
-	assert.Zero(hour.Activity.Totals.AgentMinutes)
-	assert.Equal(1, hour.Activity.Totals.NewSessions)
-	assert.Equal(1, hour.Activity.Totals.NewProjects)
-	assert.Zero(hour.Activity.Totals.NewModels)
+	require.NoError(t, err)
+	assert.Equal(t, daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
+	assert.Equal(t, daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
+	assert.Equal(t, daily.Totals.TotalCost, hour.Usage.Totals.Cost)
+	assert.Zero(t, hour.Activity.Totals.AgentMinutes)
+	assert.Equal(t, 1, hour.Activity.Totals.NewSessions)
+	assert.Equal(t, 1, hour.Activity.Totals.NewProjects)
+	assert.Zero(t, hour.Activity.Totals.NewModels)
 }
 
 func TestReportingExportDedupMatchesDailyUsageForMixedTimestampPrecision(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "fixture-mixed-precision", "project precision", func(s *Session) {
 		s.Agent = "agent precision"
@@ -836,7 +797,7 @@ func TestReportingExportDedupMatchesDailyUsageForMixedTimestampPrecision(
 		s.EndedAt = Ptr("2026-07-28T09:01:00Z")
 	})
 	sessionCost := money.MustParseDollars("0.002")
-	require.NoError(d.ReplaceSessionUsageEvents(
+	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(),
 		"fixture-mixed-precision",
 		[]UsageEvent{{
 			Source:       "fixture-source",
@@ -850,7 +811,7 @@ func TestReportingExportDedupMatchesDailyUsageForMixedTimestampPrecision(
 			DedupKey:     "shared",
 		}},
 	))
-	require.NoError(d.InsertCursorUsageEvents([]CursorUsageEvent{{
+	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
 		OccurredAt:   "2026-07-28T09:00:00.123Z",
 		Model:        "model text-order winner",
 		Kind:         "usage",
@@ -864,37 +825,34 @@ func TestReportingExportDedupMatchesDailyUsageForMixedTimestampPrecision(
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	daily, err := d.GetDailyUsage(t.Context(), UsageFilter{
 		From:       "2026-07-28",
 		To:         "2026-07-28",
 		Timezone:   "UTC",
 		Breakdowns: true,
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	hour := day.Hours[9]
-	assert.Equal(int64(17), hour.Usage.Totals.InputTokens)
-	assert.Equal(int64(3), hour.Usage.Totals.OutputTokens)
-	assert.Equal(money.MustParseDollars("0.007"), hour.Usage.Totals.Cost)
-	require.Len(hour.Usage.ByModel, 1)
-	assert.Equal("model text-order winner", hour.Usage.ByModel[0].Key)
-	assert.Equal(daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
-	assert.Equal(daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
-	assert.Equal(daily.Totals.TotalCost, hour.Usage.Totals.Cost)
+	assert.Equal(t, int64(17), hour.Usage.Totals.InputTokens)
+	assert.Equal(t, int64(3), hour.Usage.Totals.OutputTokens)
+	assert.Equal(t, money.MustParseDollars("0.007"), hour.Usage.Totals.Cost)
+	require.Len(t, hour.Usage.ByModel, 1)
+	assert.Equal(t, "model text-order winner", hour.Usage.ByModel[0].Key)
+	assert.Equal(t, daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
+	assert.Equal(t, daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
+	assert.Equal(t, daily.Totals.TotalCost, hour.Usage.Totals.Cost)
 }
 
 func TestReportingExportPreservesMessageOrdinalForDedup(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "fixture-ordinal", "", func(s *Session) {
 		s.Agent = "agent ordinal"
 		s.StartedAt = Ptr("2026-07-28T09:00:00Z")
 		s.EndedAt = Ptr("2026-07-28T09:06:00Z")
 	})
-	require.NoError(d.InsertMessages([]Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{
 		{
 			SessionID: "fixture-ordinal",
 			Ordinal:   0,
@@ -934,20 +892,20 @@ func TestReportingExportPreservesMessageOrdinalForDedup(t *testing.T) {
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC),
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	hour := day.Hours[9]
-	assert.Equal(int64(29), hour.Usage.Totals.InputTokens)
-	assert.Equal(int64(3), hour.Usage.Totals.OutputTokens)
-	require.Len(hour.Usage.ByModel, 1)
-	assert.Equal("model-z-ordinal-winner", hour.Usage.ByModel[0].Key)
+	assert.Equal(t, int64(29), hour.Usage.Totals.InputTokens)
+	assert.Equal(t, int64(3), hour.Usage.Totals.OutputTokens)
+	require.Len(t, hour.Usage.ByModel, 1)
+	assert.Equal(t, "model-z-ordinal-winner", hour.Usage.ByModel[0].Key)
 
 	daily, err := d.GetDailyUsage(t.Context(), UsageFilter{
 		From: "2026-07-28", To: "2026-07-28", Timezone: "UTC",
 	})
-	require.NoError(err)
-	assert.Equal(daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
-	assert.Equal(daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
+	require.NoError(t, err)
+	assert.Equal(t, daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
+	assert.Equal(t, daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
 }
 
 func TestFinalizeReportingUsageOrdering(t *testing.T) {
@@ -1034,28 +992,22 @@ func TestFinalizeReportingUsageOrdering(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			for _, reverse := range []bool{false, true} {
 				rows := append([]activity.UsageRow(nil), tt.rows...)
 				if reverse {
 					rows[0], rows[1] = rows[1], rows[0]
 				}
 				survivors, err := finalizeReportingUsage(query, rows, nil)
-				require.NoError(err)
-				require.Len(survivors, 1)
-				assert.Equal(tt.wantInput, survivors[0].InputTokens)
-				assert.Equal(tt.wantCost, survivors[0].Cost)
+				require.NoError(t, err)
+				require.Len(t, survivors, 1)
+				assert.Equal(t, tt.wantInput, survivors[0].InputTokens)
+				assert.Equal(t, tt.wantCost, survivors[0].Cost)
 			}
 		})
 	}
 }
 
 func TestFinalizeReportingUsageAttributesCompleteSnapshotToEarliestSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	query := activity.Query{
 		RangeStart:   time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC),
 		RangeEnd:     time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
@@ -1101,22 +1053,19 @@ func TestFinalizeReportingUsageAttributesCompleteSnapshotToEarliestSession(t *te
 		},
 	}
 	survivors, err := finalizeReportingUsage(query, rows, sessionByID)
-	require.NoError(err)
-	require.Len(survivors, 1)
-	assert.Equal("earlier-parent", survivors[0].SessionID)
-	assert.Equal("parent-agent", survivors[0].Agent)
-	assert.Equal("parent-project", survivors[0].Project)
-	assert.Equal("parent-machine", survivors[0].Machine)
-	assert.Equal(900, survivors[0].OutputTokens)
-	assert.Equal(money.Money{Microdollars: 9000}, survivors[0].Cost)
+	require.NoError(t, err)
+	require.Len(t, survivors, 1)
+	assert.Equal(t, "earlier-parent", survivors[0].SessionID)
+	assert.Equal(t, "parent-agent", survivors[0].Agent)
+	assert.Equal(t, "parent-project", survivors[0].Project)
+	assert.Equal(t, "parent-machine", survivors[0].Machine)
+	assert.Equal(t, 900, survivors[0].OutputTokens)
+	assert.Equal(t, money.Money{Microdollars: 9000}, survivors[0].Cost)
 }
 
 func TestFinalizeReportingUsageAttributesEquivalentInstantBySessionID(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	query := activity.Query{
 		RangeStart:   time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC),
 		RangeEnd:     time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
@@ -1152,21 +1101,18 @@ func TestFinalizeReportingUsageAttributesEquivalentInstantBySessionID(
 	}
 
 	survivors, err := finalizeReportingUsage(query, rows, sessionByID)
-	require.NoError(err)
-	require.Len(survivors, 1)
-	assert.Equal("a-parent", survivors[0].SessionID)
-	assert.Equal("parent-agent", survivors[0].Agent)
-	assert.Equal("parent-project", survivors[0].Project)
-	assert.Equal("parent-machine", survivors[0].Machine)
-	assert.Equal(900, survivors[0].OutputTokens)
+	require.NoError(t, err)
+	require.Len(t, survivors, 1)
+	assert.Equal(t, "a-parent", survivors[0].SessionID)
+	assert.Equal(t, "parent-agent", survivors[0].Agent)
+	assert.Equal(t, "parent-project", survivors[0].Project)
+	assert.Equal(t, "parent-machine", survivors[0].Machine)
+	assert.Equal(t, 900, survivors[0].OutputTokens)
 }
 
 func TestFinalizeReportingUsageCarriesWebSearchFeeToCompleteSnapshot(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	query := activity.Query{
 		RangeStart:   time.Date(2026, 7, 28, 9, 0, 0, 0, time.UTC),
 		RangeEnd:     time.Date(2026, 7, 28, 10, 0, 0, 0, time.UTC),
@@ -1199,11 +1145,11 @@ func TestFinalizeReportingUsageCarriesWebSearchFeeToCompleteSnapshot(
 	}
 
 	survivors, err := finalizeReportingUsage(query, rows, nil)
-	require.NoError(err)
-	require.Len(survivors, 1)
-	assert.Equal(200, survivors[0].OutputTokens)
-	assert.Equal(2, survivors[0].WebSearchRequests)
-	assert.Equal(money.MustParseDollars("0.52"), survivors[0].Cost)
+	require.NoError(t, err)
+	require.Len(t, survivors, 1)
+	assert.Equal(t, 200, survivors[0].OutputTokens)
+	assert.Equal(t, 2, survivors[0].WebSearchRequests)
+	assert.Equal(t, money.MustParseDollars("0.52"), survivors[0].Cost)
 }
 
 func reportingUsageBreakdownKeys(
@@ -1217,9 +1163,6 @@ func reportingUsageBreakdownKeys(
 }
 
 func TestReportingExportIsIndependentOfArchiveLayout(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	first := testDB(t)
 	second := testDB(t)
 	seedReportingLayoutArchive(t, first, false)
@@ -1230,17 +1173,17 @@ func TestReportingExportIsIndependentOfArchiveLayout(t *testing.T) {
 	}
 
 	firstDay, err := first.ExportReportingDay(t.Context(), opts)
-	require.NoError(err)
+	require.NoError(t, err)
 	secondDay, err := second.ExportReportingDay(t.Context(), opts)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, firstBytes, err := export.FinalizeReportingDay(firstDay)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, secondBytes, err := export.FinalizeReportingDay(secondDay)
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.Equal(string(firstBytes), string(secondBytes))
-	assert.Equal(firstDay.Digest, secondDay.Digest)
-	assert.Equal(int64(10), firstDay.Hours[10].Usage.Totals.InputTokens)
+	assert.Equal(t, string(firstBytes), string(secondBytes))
+	assert.Equal(t, firstDay.Digest, secondDay.Digest)
+	assert.Equal(t, int64(10), firstDay.Hours[10].Usage.Totals.InputTokens)
 
 	ids := make([]string, maxSQLVars+1)
 	for i := range ids {
@@ -1249,15 +1192,15 @@ func TestReportingExportIsIndependentOfArchiveLayout(t *testing.T) {
 	events, err := first.activityReportActivityFrom(
 		t.Context(), first.getReader(), ids,
 	)
-	require.NoError(err)
-	require.Len(events, 2*(maxSQLVars+1))
-	assert.Equal("session-000", events[0].SessionID)
-	assert.Equal(1, events[0].Ordinal)
-	assert.Equal(
+	require.NoError(t, err)
+	require.Len(t, events, 2*(maxSQLVars+1))
+	assert.Equal(t, "session-000", events[0].SessionID)
+	assert.Equal(t, 1, events[0].Ordinal)
+	assert.Equal(t,
 		fmt.Sprintf("session-%03d", maxSQLVars),
 		events[len(events)-1].SessionID,
 	)
-	assert.Equal(2, events[len(events)-1].Ordinal)
+	assert.Equal(t, 2, events[len(events)-1].Ordinal)
 }
 
 func seedReportingLayoutArchive(t *testing.T, d *DB, reverse bool) {
@@ -1298,7 +1241,7 @@ func seedReportingLayoutArchive(t *testing.T, d *DB, reverse bool) {
 			},
 		)
 	}
-	require.NoError(t, d.InsertMessages(messages))
+	require.NoError(t, d.InsertMessages(t.Context(), messages))
 
 	firstCost := money.MustParseDollars("0.001")
 	secondCost := money.MustParseDollars("0.009")
@@ -1327,13 +1270,10 @@ func seedReportingLayoutArchive(t *testing.T, d *DB, reverse bool) {
 	if reverse {
 		usage[0], usage[1] = usage[1], usage[0]
 	}
-	require.NoError(t, d.ReplaceSessionUsageEvents("session-000", usage))
+	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "session-000", usage))
 }
 
 func TestReportingHourDerivesAgentMinutes(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	report := activity.Report{
 		Totals: activity.Totals{
 			AgentMinutes:            0.500000001,
@@ -1366,25 +1306,25 @@ func TestReportingHourDerivesAgentMinutes(t *testing.T) {
 		report,
 		export.ReportingSchemaVersion,
 	)
-	require.NoError(err)
-	assert.Equal(0.5, hour.Activity.Totals.AgentMinutes)
-	require.Len(hour.Activity.ByModel, 1)
-	assert.Equal(
+	require.NoError(t, err)
+	assert.InDelta(t, 0.5, hour.Activity.Totals.AgentMinutes, 0)
+	require.Len(t, hour.Activity.ByModel, 1)
+	assert.InDelta(t,
 		hour.Activity.ByModel[0].AutomatedAgentMinutes+
 			hour.Activity.ByModel[0].InteractiveAgentMinutes,
-		hour.Activity.ByModel[0].AgentMinutes,
+		hour.Activity.ByModel[0].AgentMinutes, 0,
 	)
-	require.Len(hour.Activity.ByAgent, 1)
-	assert.Equal(
+	require.Len(t, hour.Activity.ByAgent, 1)
+	assert.InDelta(t,
 		hour.Activity.ByAgent[0].AutomatedAgentMinutes+
 			hour.Activity.ByAgent[0].InteractiveAgentMinutes,
-		hour.Activity.ByAgent[0].AgentMinutes,
+		hour.Activity.ByAgent[0].AgentMinutes, 0,
 	)
-	require.Len(hour.Activity.ByProject, 1)
-	assert.Equal(
+	require.Len(t, hour.Activity.ByProject, 1)
+	assert.InDelta(t,
 		hour.Activity.ByProject[0].AutomatedAgentMinutes+
 			hour.Activity.ByProject[0].InteractiveAgentMinutes,
-		hour.Activity.ByProject[0].AgentMinutes,
+		hour.Activity.ByProject[0].AgentMinutes, 0,
 	)
 }
 
@@ -1485,14 +1425,12 @@ func TestReportingHourRejectsInvalidAgentMinutes(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
+			assert.InDelta(t, tt.want, got, 0)
 		})
 	}
 }
 
 func TestReportingFirstSeenUsesEffectiveIntervals(t *testing.T) {
-	assert := assert.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "cross-day-gap", "project-a", func(s *Session) {
 		s.Agent = "agent-a"
@@ -1513,15 +1451,15 @@ func TestReportingFirstSeenUsesEffectiveIntervals(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.False(day.Hours[0].HasData)
-	assert.Zero(day.Hours[0].Activity.Totals.NewSessions)
-	assert.Zero(day.Hours[0].Activity.Totals.NewProjects)
+	assert.False(t, day.Hours[0].HasData)
+	assert.Zero(t, day.Hours[0].Activity.Totals.NewSessions)
+	assert.Zero(t, day.Hours[0].Activity.Totals.NewProjects)
 
 	hour10 := day.Hours[10]
-	assert.True(hour10.HasData)
-	assert.Zero(hour10.Activity.Totals.AgentMinutes)
-	assert.Equal(1, hour10.Activity.Totals.NewSessions)
-	assert.Equal(1, hour10.Activity.Totals.NewInteractiveSessions)
-	assert.Equal(1, hour10.Activity.Totals.NewUntimedSessions)
-	assert.Equal(1, hour10.Activity.Totals.NewProjects)
+	assert.True(t, hour10.HasData)
+	assert.Zero(t, hour10.Activity.Totals.AgentMinutes)
+	assert.Equal(t, 1, hour10.Activity.Totals.NewSessions)
+	assert.Equal(t, 1, hour10.Activity.Totals.NewInteractiveSessions)
+	assert.Equal(t, 1, hour10.Activity.Totals.NewUntimedSessions)
+	assert.Equal(t, 1, hour10.Activity.Totals.NewProjects)
 }

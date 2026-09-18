@@ -25,13 +25,13 @@ type SecretFinding struct {
 
 // ReplaceSessionSecretFindings atomically replaces all secret findings for a
 // session and updates the summary columns on the sessions row.
-func (db *DB) ReplaceSessionSecretFindings(
+func (db *DB) ReplaceSessionSecretFindings(ctx context.Context,
 	sessionID string, findings []SecretFinding, leakCount int, rulesVersion string,
 ) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning tx: %w", err)
 	}

@@ -58,7 +58,7 @@ var (
 	storeContractSQLiteTemplateDir     string
 	storeContractSQLiteTemplatePath    string
 	storeContractSQLiteTemplateFixture storeContractFixture
-	storeContractSQLiteTemplateErr     error
+	errStoreContractSQLiteTemplate     error
 )
 
 func openStoreContractSQLiteFixtureDB(t *testing.T) Store {
@@ -86,33 +86,34 @@ func storeContractSQLiteFixtureForTest(t *testing.T) storeContractFixture {
 func storeContractSQLiteTemplate(t *testing.T) (string, storeContractFixture) {
 	t.Helper()
 	storeContractSQLiteTemplateOnce.Do(func() {
-		storeContractSQLiteTemplateDir, storeContractSQLiteTemplateErr = os.MkdirTemp("", "agentsview-store-contract-*")
-		if storeContractSQLiteTemplateErr != nil {
+		storeContractSQLiteTemplateDir = filepath.Join(testDBFixtureTempDir, "store-contract")
+		errStoreContractSQLiteTemplate = os.MkdirAll(storeContractSQLiteTemplateDir, 0o700)
+		if errStoreContractSQLiteTemplate != nil {
 			return
 		}
 		storeContractSQLiteTemplatePath = filepath.Join(
 			storeContractSQLiteTemplateDir, "test.db")
-		storeContractSQLiteTemplateErr = copyTestDBTemplate(
+		errStoreContractSQLiteTemplate = copyTestDBTemplate(
 			t, storeContractSQLiteTemplatePath)
-		if storeContractSQLiteTemplateErr != nil {
+		if errStoreContractSQLiteTemplate != nil {
 			return
 		}
 
 		var d *DB
-		d, storeContractSQLiteTemplateErr = OpenPreparedTestDB(
+		d, errStoreContractSQLiteTemplate = OpenPreparedTestDB(
 			storeContractSQLiteTemplatePath)
-		if storeContractSQLiteTemplateErr != nil {
+		if errStoreContractSQLiteTemplate != nil {
 			return
 		}
 		storeContractSQLiteTemplateFixture = seedStoreContractSQLite(t, d)
 		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
-		storeContractSQLiteTemplateErr = d.CheckpointWALTruncate(ctx)
-		if closeErr := d.Close(); storeContractSQLiteTemplateErr == nil {
-			storeContractSQLiteTemplateErr = closeErr
+		errStoreContractSQLiteTemplate = d.CheckpointWALTruncate(ctx)
+		if closeErr := d.Close(); errStoreContractSQLiteTemplate == nil {
+			errStoreContractSQLiteTemplate = closeErr
 		}
 	})
-	require.NoError(t, storeContractSQLiteTemplateErr,
+	require.NoError(t, errStoreContractSQLiteTemplate,
 		"build store-contract fixture")
 	return storeContractSQLiteTemplatePath, storeContractSQLiteTemplateFixture
 }
@@ -151,6 +152,7 @@ func contractSessionsCursorFiltersAndDates(
 	_ storeContractBackend,
 ) {
 	t.Helper()
+
 	ctx := t.Context()
 
 	page, err := store.ListSessions(ctx, SessionFilter{Limit: 2})
@@ -250,6 +252,7 @@ func contractMessagesOrderingAndToolResults(
 	_ storeContractBackend,
 ) {
 	t.Helper()
+
 	ctx := t.Context()
 
 	asc, err := store.GetMessages(ctx, fixture.alphaID, 1, 3, true)
@@ -293,9 +296,10 @@ func contractSearchModesAndSecretFindings(
 	_ storeContractBackend,
 ) {
 	t.Helper()
+
 	ctx := t.Context()
 
-	if store.HasFTS() {
+	if store.HasFTS(ctx) {
 		search, err := store.Search(ctx, SearchFilter{
 			Query: "duckdb",
 			Limit: 5,
@@ -332,7 +336,7 @@ func contractSearchModesAndSecretFindings(
 	require.NoError(t, err)
 	require.Equal(t, []string{fixture.gammaID}, contentSessionIDs(regex.Matches))
 
-	if store.HasFTS() {
+	if store.HasFTS(ctx) {
 		fts, err := store.SearchContent(ctx, ContentSearchFilter{
 			Pattern:        "analytics",
 			Mode:           "fts",
@@ -380,25 +384,26 @@ func contractStarsAndPins(
 	backend storeContractBackend,
 ) {
 	t.Helper()
+
 	if !backend.supportsLocalWrites {
-		_, err := store.StarSession(fixture.alphaID)
+		_, err := store.StarSession(t.Context(), fixture.alphaID)
 		require.ErrorIs(t, err, ErrReadOnly)
-		_, err = store.PinMessage(fixture.alphaID, 1, nil)
+		_, err = store.PinMessage(t.Context(), fixture.alphaID, 1, nil)
 		require.ErrorIs(t, err, ErrReadOnly)
 		return
 	}
 
 	ctx := t.Context()
-	ok, err := store.StarSession(fixture.alphaID)
+	ok, err := store.StarSession(ctx, fixture.alphaID)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.NoError(t, store.BulkStarSessions([]string{fixture.gammaID, "missing-session"}))
+	require.NoError(t, store.BulkStarSessions(ctx, []string{fixture.gammaID, "missing-session"}))
 
 	stars, err := store.ListStarredSessionIDs(ctx)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{fixture.alphaID, fixture.gammaID}, stars)
 
-	require.NoError(t, store.UnstarSession(fixture.gammaID))
+	require.NoError(t, store.UnstarSession(ctx, fixture.gammaID))
 	stars, err = store.ListStarredSessionIDs(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{fixture.alphaID}, stars)
@@ -407,7 +412,7 @@ func contractStarsAndPins(
 	require.NoError(t, err)
 	require.Greater(t, len(msgs), 1)
 	note := "contract pin"
-	pinID, err := store.PinMessage(fixture.alphaID, msgs[1].ID, &note)
+	pinID, err := store.PinMessage(ctx, fixture.alphaID, msgs[1].ID, &note)
 	require.NoError(t, err)
 	require.Positive(t, pinID)
 
@@ -423,7 +428,7 @@ func contractStarsAndPins(
 	require.Equal(t, fixture.alphaID, allPins[0].SessionID)
 	require.NotNil(t, allPins[0].Content)
 
-	require.NoError(t, store.UnpinMessage(fixture.alphaID, msgs[1].ID))
+	require.NoError(t, store.UnpinMessage(ctx, fixture.alphaID, msgs[1].ID))
 	sessionPins, err = store.ListPinnedMessages(ctx, fixture.alphaID, "")
 	require.NoError(t, err)
 	require.Empty(t, sessionPins)
@@ -436,6 +441,7 @@ func contractAnalyticsTrendsAndUsage(
 	_ storeContractBackend,
 ) {
 	t.Helper()
+
 	ctx := t.Context()
 
 	summary, err := store.GetAnalyticsSummary(ctx, AnalyticsFilter{
@@ -590,22 +596,23 @@ func contractLocalOnlyMethods(
 	backend storeContractBackend,
 ) {
 	t.Helper()
+
 	ctx := t.Context()
 
 	if !backend.supportsLocalWrites {
 		require.True(t, store.ReadOnly())
 		ignoredName := "ignored"
-		requireReadOnly(t, store.RenameSession(fixture.alphaID, &ignoredName))
-		requireReadOnly(t, store.SoftDeleteSession(fixture.alphaID))
-		_, err := store.RestoreSession(fixture.deletedID)
+		requireReadOnly(t, store.RenameSession(ctx, fixture.alphaID, &ignoredName))
+		requireReadOnly(t, store.SoftDeleteSession(ctx, fixture.alphaID))
+		_, err := store.RestoreSession(ctx, fixture.deletedID)
 		requireReadOnly(t, err)
-		_, err = store.DeleteSessionIfTrashed(fixture.deletedID)
+		_, err = store.DeleteSessionIfTrashed(ctx, fixture.deletedID)
 		requireReadOnly(t, err)
-		_, err = store.EmptyTrash()
+		_, err = store.EmptyTrash(ctx)
 		requireReadOnly(t, err)
-		_, err = store.InsertInsight(Insight{})
+		_, err = store.InsertInsight(ctx, Insight{})
 		requireReadOnly(t, err)
-		requireReadOnly(t, store.DeleteInsight(1))
+		requireReadOnly(t, store.DeleteInsight(ctx, 1))
 		_, err = store.RecordRecallQueryEvent(ctx, RecallQueryEvent{
 			Surface: RecallQuerySurfaceQuery,
 		})
@@ -615,13 +622,13 @@ func contractLocalOnlyMethods(
 
 	require.False(t, store.ReadOnly())
 	renamed := "Renamed contract session"
-	require.NoError(t, store.RenameSession(fixture.betaID, &renamed))
+	require.NoError(t, store.RenameSession(ctx, fixture.betaID, &renamed))
 	beta, err := store.GetSession(ctx, fixture.betaID)
 	require.NoError(t, err)
 	require.NotNil(t, beta)
 	require.Equal(t, renamed, *beta.DisplayName)
 
-	require.NoError(t, store.SoftDeleteSession(fixture.betaID))
+	require.NoError(t, store.SoftDeleteSession(ctx, fixture.betaID))
 	beta, err = store.GetSession(ctx, fixture.betaID)
 	require.NoError(t, err)
 	require.Nil(t, beta)
@@ -630,19 +637,19 @@ func contractLocalOnlyMethods(
 	require.NoError(t, err)
 	require.Contains(t, sessionIDs(trashed), fixture.betaID)
 
-	restored, err := store.RestoreSession(fixture.betaID)
+	restored, err := store.RestoreSession(ctx, fixture.betaID)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, restored)
 
-	deleted, err := store.DeleteSessionIfTrashed(fixture.deletedID)
+	deleted, err := store.DeleteSessionIfTrashed(ctx, fixture.deletedID)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, deleted)
 
-	emptyCount, err := store.EmptyTrash()
+	emptyCount, err := store.EmptyTrash(ctx)
 	require.NoError(t, err)
 	require.Zero(t, emptyCount)
 
-	insightID, err := store.InsertInsight(Insight{
+	insightID, err := store.InsertInsight(ctx, Insight{
 		Type:     "contract",
 		DateFrom: "2026-01-12",
 		DateTo:   "2026-01-12",
@@ -658,7 +665,7 @@ func contractLocalOnlyMethods(
 	list, err := store.ListInsights(ctx, InsightFilter{})
 	require.NoError(t, err)
 	require.Len(t, list, 1)
-	require.NoError(t, store.DeleteInsight(insightID))
+	require.NoError(t, store.DeleteInsight(ctx, insightID))
 	queryID, err := store.RecordRecallQueryEvent(ctx, RecallQueryEvent{
 		Query:   "store contract recall query",
 		Surface: RecallQuerySurfaceQuery,
@@ -680,6 +687,7 @@ func contractDataInventoryRulesCandidates(
 	_ storeContractBackend,
 ) {
 	t.Helper()
+
 	ctx := t.Context()
 
 	inventory, err := store.GetProjectInventory(ctx, ProjectDateFilter{})
@@ -1062,10 +1070,10 @@ func seedStoreContractSQLite(
 		}),
 	}
 
-	result, err := store.WriteSessionBatchAtomic(writes)
+	result, err := store.WriteSessionBatchAtomic(t.Context(), writes)
 	require.NoError(t, err)
 	require.Equal(t, len(writes), result.WrittenSessions)
-	require.NoError(t, store.SoftDeleteSession(fixture.deletedID))
+	require.NoError(t, store.SoftDeleteSession(t.Context(), fixture.deletedID))
 	return fixture
 }
 
@@ -1241,16 +1249,13 @@ func requireReadOnly(t *testing.T, err error) {
 }
 
 func TestStoreContractBackendsAreRegisteredExplicitly(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	backends := storeContractBackends()
-	require.NotEmpty(backends)
+	require.NotEmpty(t, backends)
 	names := make([]string, 0, len(backends))
 	for _, backend := range backends {
 		names = append(names, backend.name)
-		assert.NotNil(backend.open)
-		assert.NotNil(backend.seed)
+		assert.NotNil(t, backend.open)
+		assert.NotNil(t, backend.seed)
 	}
-	require.True(slices.Contains(names, "sqlite"))
+	require.True(t, slices.Contains(names, "sqlite"))
 }

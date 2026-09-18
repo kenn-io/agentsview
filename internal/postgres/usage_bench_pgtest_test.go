@@ -103,7 +103,7 @@ func openPGUsageBenchmarkFixture(t testing.TB) *pgUsageBenchmarkFixture {
 	require.NoError(err)
 	require.NoError(admin.Close())
 
-	local, err := db.Open(t.TempDir() + "/usage-bench.db")
+	local, err := db.Open(t.Context(), t.TempDir()+"/usage-bench.db")
 	require.NoError(err)
 	seedUsageParityFixture(t, local)
 	syncer, err := New(pgURL, schema, local, "bench-machine", true, SyncOptions{})
@@ -184,9 +184,9 @@ func seedPGUsageBenchmarkBulkFixture(t testing.TB, local *db.DB, count int) {
 		{ModelPattern: "model-bulk-premium", InputPerMTok: money.Money{Microdollars: 2_000_000}, OutputPerMTok: money.Money{Microdollars: 3_000_000}},
 	}))
 	for i := range sessions {
-		require.NoError(t, local.UpsertSession(sessions[i]))
+		require.NoError(t, local.UpsertSession(t.Context(), sessions[i]))
 	}
-	require.NoError(t, local.InsertMessages(messages))
+	require.NoError(t, local.InsertMessages(t.Context(), messages))
 }
 
 func (f *pgUsageBenchmarkFixture) prime(t testing.TB) {
@@ -219,7 +219,7 @@ func (f *pgUsageBenchmarkFixture) resetRemoteEmpty(t testing.TB) {
 
 func (f *pgUsageBenchmarkFixture) requireFixedCardinality(t testing.TB) {
 	t.Helper()
-	messageCount, err := f.local.MessageCount("snapshot-winner")
+	messageCount, err := f.local.MessageCount(t.Context(), "snapshot-winner")
 	require.NoError(t, err)
 	require.Equal(t, 1, messageCount)
 	sessions, messages := pgUsageRemoteCardinality(t, f.remote)
@@ -244,8 +244,8 @@ func (f *pgUsageBenchmarkFixture) replaceDeltaSessionMessage(
 	require.NoError(t, err)
 	require.Len(t, messages, expectedCount)
 	messages[0].TokenUsage = []byte(payload)
-	require.NoError(t, f.local.ReplaceSessionMessages(sessionID, messages))
-	messageCount, err := f.local.MessageCount(sessionID)
+	require.NoError(t, f.local.ReplaceSessionMessages(t.Context(), sessionID, messages))
+	messageCount, err := f.local.MessageCount(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.Equal(t, expectedCount, messageCount)
 }

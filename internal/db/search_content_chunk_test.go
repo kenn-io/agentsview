@@ -18,9 +18,6 @@ import (
 // exceed. It must chunk the query and still return exactly the real,
 // filter-passing sessions.
 func TestSemanticAllowedSessionIDsOverSQLiteVarLimit(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	forceReaderVarLimit(t, d, 999)
@@ -28,9 +25,10 @@ func TestSemanticAllowedSessionIDsOverSQLiteVarLimit(t *testing.T) {
 	// Guard: prove the lowered limit is live on the pool, so a setup that
 	// failed to constrain it cannot mask the regression checked below.
 	overLimitPh, overLimitArgs := inPlaceholders(make([]string, 1001))
-	_, probeErr := d.getReader().QueryContext(
-		ctx, "SELECT 1 WHERE '' IN "+overLimitPh, overLimitArgs...)
-	require.Error(probeErr, "reader variable limit was not constrained")
+	var probe int
+	probeErr := d.getReader().QueryRowContext(
+		ctx, "SELECT 1 WHERE '' IN "+overLimitPh, overLimitArgs...).Scan(&probe)
+	require.Error(t, probeErr, "reader variable limit was not constrained")
 
 	insertSession(t, d, "real-1", "proj")
 	insertSession(t, d, "real-2", "proj")
@@ -42,11 +40,11 @@ func TestSemanticAllowedSessionIDsOverSQLiteVarLimit(t *testing.T) {
 
 	f := ContentSearchFilter{IncludeOneShot: true, IncludeAutomated: true}
 	allowed, err := d.semanticAllowedSessionIDs(ctx, f, ids)
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.True(allowed["real-1"])
-	assert.True(allowed["real-2"])
-	assert.Len(allowed, 2, "no nonexistent id should appear in the result")
+	assert.True(t, allowed["real-1"])
+	assert.True(t, allowed["real-2"])
+	assert.Len(t, allowed, 2, "no nonexistent id should appear in the result")
 }
 
 // TestEnrichSemanticHitsOverSQLiteVarLimit forces the reader pool's SQLite
@@ -55,17 +53,15 @@ func TestSemanticAllowedSessionIDsOverSQLiteVarLimit(t *testing.T) {
 // so 2004 total, well past a single query's budget. It must chunk and still
 // resolve exactly the hits with a real backing message/session row.
 func TestEnrichSemanticHitsOverSQLiteVarLimit(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	forceReaderVarLimit(t, d, 999)
 
 	overLimitPh, overLimitArgs := inPlaceholders(make([]string, 1001))
-	_, probeErr := d.getReader().QueryContext(
-		ctx, "SELECT 1 WHERE '' IN "+overLimitPh, overLimitArgs...)
-	require.Error(probeErr, "reader variable limit was not constrained")
+	var probe int
+	probeErr := d.getReader().QueryRowContext(
+		ctx, "SELECT 1 WHERE '' IN "+overLimitPh, overLimitArgs...).Scan(&probe)
+	require.Error(t, probeErr, "reader variable limit was not constrained")
 
 	insertSession(t, d, "real-sess", "proj")
 	insertMessages(t, d,
@@ -92,11 +88,11 @@ func TestEnrichSemanticHitsOverSQLiteVarLimit(t *testing.T) {
 	}
 
 	meta, err := d.enrichSemanticHits(ctx, hits)
-	require.NoError(err)
+	require.NoError(t, err)
 
-	require.Len(meta, 2)
-	assert.Equal("hello there",
+	require.Len(t, meta, 2)
+	assert.Equal(t, "hello there",
 		meta[semanticHitKey{"real-sess", 0}].content)
-	assert.Equal("hi back",
+	assert.Equal(t, "hi back",
 		meta[semanticHitKey{"real-sess", 1}].content)
 }

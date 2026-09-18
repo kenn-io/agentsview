@@ -388,14 +388,15 @@ type activeCandidateEnd struct {
 
 type activeCandidateHeap []activeCandidateEnd
 
-func (h activeCandidateHeap) Len() int { return len(h) }
-func (h activeCandidateHeap) Less(i, j int) bool {
-	return h[i].end.Before(h[j].end)
+func (h *activeCandidateHeap) Len() int { return len(*h) }
+func (h *activeCandidateHeap) Less(i, j int) bool {
+	return (*h)[i].end.Before((*h)[j].end)
 }
-func (h activeCandidateHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h *activeCandidateHeap) Swap(i, j int) { (*h)[i], (*h)[j] = (*h)[j], (*h)[i] }
 func (h *activeCandidateHeap) Push(value any) {
 	*h = append(*h, value.(activeCandidateEnd))
 }
+
 func (h *activeCandidateHeap) Pop() any {
 	old := *h
 	value := old[len(old)-1]

@@ -1527,7 +1527,7 @@ func collectOpenCodeTokenFields(
 ) (openCodeTokenFields, bool) {
 	var (
 		fields openCodeTokenFields
-		any    bool
+		value  bool
 	)
 
 	for _, raw := range raws {
@@ -1538,26 +1538,26 @@ func collectOpenCodeTokenFields(
 		if field := tokens.Get("input"); field.Exists() {
 			fields.input = int(field.Int())
 			fields.hasInput = true
-			any = true
+			value = true
 		}
 		if field := tokens.Get("output"); field.Exists() {
 			fields.output = int(field.Int())
 			fields.hasOutput = true
-			any = true
+			value = true
 		}
 		if field := tokens.Get("cache.read"); field.Exists() {
 			fields.cacheRead = int(field.Int())
 			fields.hasCacheRead = true
-			any = true
+			value = true
 		}
 		if field := tokens.Get("cache.write"); field.Exists() {
 			fields.cacheCreate = int(field.Int())
 			fields.hasCacheCreate = true
-			any = true
+			value = true
 		}
 	}
 
-	return fields, any
+	return fields, value
 }
 
 // openCodeDefaultTitleRe matches the exact placeholder format

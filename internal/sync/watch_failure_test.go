@@ -160,7 +160,7 @@ func newChangedPathFailureEngine(
 ) *Engine {
 	t.Helper()
 	provider.root = root
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{"changed-path-failure": {root}},
 		Machine:   "local",
 		ProviderFactories: []parser.ProviderFactory{
@@ -184,19 +184,16 @@ func (p *fingerprintCountingProvider) Fingerprint(
 func TestSyncPathsContextPropagatesChangedPathClassificationFailure(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := openTestDB(t)
 	root := t.TempDir()
 	changedPath := filepath.Join(root, "replacement.jsonl")
 	missingPath := filepath.Join(root, "previous.jsonl")
-	require.NoError(os.WriteFile(changedPath, []byte("{}\n"), 0o600))
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, os.WriteFile(changedPath, []byte("{}\n"), 0o600))
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "previous", Agent: "changed-path-failure", Project: "project",
 		Machine: "local", FilePath: &missingPath,
 	}))
-	require.NoError(database.BaselineActiveSessionSourcePaths(
+	require.NoError(t, database.BaselineActiveSessionSourcePaths(
 		t.Context(), "local", []db.SessionSourcePath{{
 			Agent: "changed-path-failure", FilePath: missingPath,
 		}},
@@ -211,12 +208,12 @@ func TestSyncPathsContextPropagatesChangedPathClassificationFailure(
 
 	err := engine.SyncPathsContext(ctx, []string{changedPath, missingPath})
 
-	require.ErrorIs(err, wantErr)
-	assert.Equal("caller", provider.contextValue,
+	require.ErrorIs(t, err, wantErr)
+	assert.Equal(t, "caller", provider.contextValue,
 		"changed-path classification must receive the watcher context")
 	stored, getErr := database.GetSession(t.Context(), "previous")
-	require.NoError(getErr)
-	assert.NotNil(stored,
+	require.NoError(t, getErr)
+	assert.NotNil(t, stored,
 		"a classification failure must suppress missing-source tombstones")
 }
 
@@ -263,15 +260,12 @@ func TestSyncPathsContextPropagatesStoredHintCancellation(t *testing.T) {
 }
 
 func TestSyncPathsContextDoesNotTombstoneAfterIncompleteReplacement(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := openTestDB(t)
 	root := t.TempDir()
 	changedPath := filepath.Join(root, "replacement.jsonl")
 	missingPath := filepath.Join(root, "previous.jsonl")
-	require.NoError(os.WriteFile(changedPath, []byte("{}\n"), 0o600))
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, os.WriteFile(changedPath, []byte("{}\n"), 0o600))
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "previous", Agent: "watch-failure", Project: "project",
 		Machine: "local", FilePath: &missingPath,
 	}))
@@ -289,7 +283,7 @@ func TestSyncPathsContextDoesNotTombstoneAfterIncompleteReplacement(t *testing.T
 		source:   &source,
 		parseErr: errors.New("replacement parse failed"),
 	}
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{"watch-failure": {root}},
 		Machine:   "local",
 		ProviderFactories: []parser.ProviderFactory{
@@ -303,29 +297,26 @@ func TestSyncPathsContextDoesNotTombstoneAfterIncompleteReplacement(t *testing.T
 
 	err := engine.SyncPathsContext(t.Context(), []string{changedPath, missingPath})
 
-	require.Error(err)
-	assert.ErrorContains(err, "incomplete")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "incomplete")
 	stored, getErr := database.GetSession(t.Context(), "previous")
-	require.NoError(getErr)
-	assert.NotNil(stored,
+	require.NoError(t, getErr)
+	assert.NotNil(t, stored,
 		"a failed replacement must not hide the previous archived session")
 }
 
 func TestReconcileWatchRootsCommitsHealthyProvidersAndScopesFailedRetry(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := openTestDB(t)
 	healthyRoot := t.TempDir()
 	failedRoot := t.TempDir()
 	healthyPath := filepath.Join(healthyRoot, "session.jsonl")
 	healthyMissingPath := filepath.Join(healthyRoot, "removed.jsonl")
-	require.NoError(os.WriteFile(healthyPath, []byte("{}\n"), 0o600))
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, os.WriteFile(healthyPath, []byte("{}\n"), 0o600))
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "healthy-removed", Agent: "healthy-stream", Project: "project",
 		Machine: "local", FilePath: &healthyMissingPath,
 	}))
-	require.NoError(database.BaselineActiveSessionSourcePaths(
+	require.NoError(t, database.BaselineActiveSessionSourcePaths(
 		t.Context(), "local", []db.SessionSourcePath{{
 			Agent: "healthy-stream", FilePath: healthyMissingPath,
 		}},
@@ -363,7 +354,7 @@ func TestReconcileWatchRootsCommitsHealthyProvidersAndScopesFailedRetry(t *testi
 		},
 		err: errors.New("permission denied"), failOnCall: 1,
 	}
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			"healthy-stream": {healthyRoot},
 			"failed-stream":  {failedRoot},
@@ -383,15 +374,15 @@ func TestReconcileWatchRootsCommitsHealthyProvidersAndScopesFailedRetry(t *testi
 	// Seed a pending subagent relationship among already-committed sessions:
 	// the global linking pass must still run when only an unrelated provider's
 	// discovery failed, or the relationship stays missing indefinitely.
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "link-parent", Agent: "healthy-stream", Project: "project",
 		Machine: "local",
 	}))
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "link-child", Agent: "healthy-stream", Project: "project",
 		Machine: "local",
 	}))
-	require.NoError(database.InsertMessages([]db.Message{{
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
 		SessionID: "link-parent", Ordinal: 0, Role: "assistant",
 		Content: "spawning subagent", HasToolUse: true,
 		ToolCalls: []db.ToolCall{{
@@ -402,25 +393,25 @@ func TestReconcileWatchRootsCommitsHealthyProvidersAndScopesFailedRetry(t *testi
 
 	err := engine.ReconcileWatchRoots(t.Context(), nil, true)
 
-	require.Error(err)
+	require.Error(t, err)
 	stored, getErr := database.GetSession(t.Context(), "healthy-session")
-	require.NoError(getErr)
-	assert.NotNil(stored,
+	require.NoError(t, getErr)
+	assert.NotNil(t, stored,
 		"one provider failure must not discard healthy provider candidates")
 	linked, getErr := database.GetSession(t.Context(), "link-child")
-	require.NoError(getErr)
-	require.NotNil(linked)
-	assert.Equal("subagent", linked.RelationshipType,
+	require.NoError(t, getErr)
+	require.NotNil(t, linked)
+	assert.Equal(t, "subagent", linked.RelationshipType,
 		"partial provider failure must not suppress the global subagent linking pass")
-	if assert.NotNil(linked.ParentSessionID) {
-		assert.Equal("link-parent", *linked.ParentSessionID)
+	if assert.NotNil(t, linked.ParentSessionID) {
+		assert.Equal(t, "link-parent", *linked.ParentSessionID)
 	}
 	removed, getErr := database.GetSessionFull(t.Context(), "healthy-removed")
-	require.NoError(getErr)
+	require.NoError(t, getErr)
 	assertSourceMissingState(t, removed)
 	var retryErr reconciliationRetryRootError
-	require.ErrorAs(err, &retryErr)
-	assert.Equal([]string{failedRoot}, retryErr.ReconciliationRetryRoots())
+	require.ErrorAs(t, err, &retryErr)
+	assert.Equal(t, []string{failedRoot}, retryErr.ReconciliationRetryRoots())
 }
 
 // TestReconcileWatchRootsLinkingFailureExpandsRetryToCompletedScopes pins the
@@ -429,14 +420,11 @@ func TestReconcileWatchRootsCommitsHealthyProvidersAndScopesFailedRetry(t *testi
 // tombstoned, so they must join the retry roots instead of staying stale
 // indefinitely behind a retry that only re-runs the failed provider.
 func TestReconcileWatchRootsLinkingFailureExpandsRetryToCompletedScopes(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := openTestDB(t)
 	healthyRoot := t.TempDir()
 	failedRoot := t.TempDir()
 	healthyPath := filepath.Join(healthyRoot, "session.jsonl")
-	require.NoError(os.WriteFile(healthyPath, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(healthyPath, []byte("{}\n"), 0o600))
 	healthySource := parser.SourceRef{
 		Provider: "healthy-stream", Key: healthyPath,
 		DisplayPath: healthyPath, FingerprintKey: healthyPath,
@@ -470,7 +458,7 @@ func TestReconcileWatchRootsLinkingFailureExpandsRetryToCompletedScopes(t *testi
 		},
 		err: errors.New("permission denied"), failOnCall: 1,
 	}
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			"healthy-stream": {healthyRoot},
 			"failed-stream":  {failedRoot},
@@ -490,15 +478,15 @@ func TestReconcileWatchRootsLinkingFailureExpandsRetryToCompletedScopes(t *testi
 	// Seed a pending link so the global linking pass performs an update, and
 	// make that update fail: only linking transitions relationship_type to
 	// "subagent", so page writes are unaffected.
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "link-parent", Agent: "healthy-stream", Project: "project",
 		Machine: "local",
 	}))
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "link-child", Agent: "healthy-stream", Project: "project",
 		Machine: "local",
 	}))
-	require.NoError(database.InsertMessages([]db.Message{{
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
 		SessionID: "link-parent", Ordinal: 0, Role: "assistant",
 		Content: "spawning subagent", HasToolUse: true,
 		ToolCalls: []db.ToolCall{{
@@ -507,8 +495,8 @@ func TestReconcileWatchRootsLinkingFailureExpandsRetryToCompletedScopes(t *testi
 		}},
 	}}))
 	raw, err := sql.Open("sqlite3", database.Path())
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(raw.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
 	_, err = raw.ExecContext(t.Context(), `
 		CREATE TRIGGER fail_subagent_link
 		BEFORE UPDATE OF relationship_type ON sessions
@@ -517,28 +505,25 @@ func TestReconcileWatchRootsLinkingFailureExpandsRetryToCompletedScopes(t *testi
 			SELECT RAISE(FAIL, 'injected linking failure');
 		END;
 	`)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	err = engine.ReconcileWatchRoots(t.Context(), nil, true)
 
-	require.Error(err)
-	assert.ErrorContains(err, "link subagent sessions")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "link subagent sessions")
 	var retryErr reconciliationRetryRootError
-	require.ErrorAs(err, &retryErr)
-	assert.ElementsMatch([]string{failedRoot, healthyRoot},
+	require.ErrorAs(t, err, &retryErr)
+	assert.ElementsMatch(t, []string{failedRoot, healthyRoot},
 		retryErr.ReconciliationRetryRoots(),
 		"a linking failure blocks completed-scope tombstoning, so those "+
 			"scopes must join the retry roots")
 	stored, getErr := database.GetSession(t.Context(), "healthy-session")
-	require.NoError(getErr)
-	assert.NotNil(stored,
+	require.NoError(t, getErr)
+	assert.NotNil(t, stored,
 		"the linking failure must not discard committed healthy sessions")
 }
 
 func TestReconcileWatchRootsRetainsPartialFailedProviderWithoutDeletionProof(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := openTestDB(t)
 	failedRoot := t.TempDir()
 	healthyRoot := t.TempDir()
@@ -547,7 +532,7 @@ func TestReconcileWatchRootsRetainsPartialFailedProviderWithoutDeletionProof(t *
 	healthyPath := filepath.Join(healthyRoot, "session.jsonl")
 	healthyMissingPath := filepath.Join(healthyRoot, "missing.jsonl")
 	for _, path := range []string{failedPath, healthyPath} {
-		require.NoError(os.WriteFile(path, []byte("{}\n"), 0o600))
+		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
 	}
 	for _, session := range []db.Session{
 		{
@@ -559,9 +544,9 @@ func TestReconcileWatchRootsRetainsPartialFailedProviderWithoutDeletionProof(t *
 			Machine: "local", FilePath: &healthyMissingPath,
 		},
 	} {
-		require.NoError(database.UpsertSession(session))
+		require.NoError(t, database.UpsertSession(t.Context(), session))
 	}
-	require.NoError(database.BaselineActiveSessionSourcePaths(
+	require.NoError(t, database.BaselineActiveSessionSourcePaths(
 		t.Context(), "local", []db.SessionSourcePath{
 			{Agent: "partial-failure", FilePath: failedMissingPath},
 			{Agent: "partial-healthy", FilePath: healthyMissingPath},
@@ -601,7 +586,7 @@ func TestReconcileWatchRootsRetainsPartialFailedProviderWithoutDeletionProof(t *
 		discoveryErr:            discoveryErr,
 	}
 	healthy := newProvider("partial-healthy", healthyPath, "healthy-session")
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			"partial-failure": {failedRoot},
 			"partial-healthy": {healthyRoot},
@@ -620,52 +605,49 @@ func TestReconcileWatchRootsRetainsPartialFailedProviderWithoutDeletionProof(t *
 
 	err := engine.ReconcileWatchRoots(t.Context(), nil, true)
 
-	require.ErrorIs(err, discoveryErr)
+	require.ErrorIs(t, err, discoveryErr)
 	var retryErr reconciliationRetryRootError
-	require.ErrorAs(err, &retryErr)
-	assert.Equal([]string{failedRoot}, retryErr.ReconciliationRetryRoots())
+	require.ErrorAs(t, err, &retryErr)
+	assert.Equal(t, []string{failedRoot}, retryErr.ReconciliationRetryRoots())
 	partial, getErr := database.GetSession(t.Context(), "partial-session")
-	require.NoError(getErr)
-	assert.NotNil(partial, "a valid source yielded before discovery failure must persist")
+	require.NoError(t, getErr)
+	assert.NotNil(t, partial, "a valid source yielded before discovery failure must persist")
 	failedMissing, getErr := database.GetSessionFull(t.Context(), "failed-missing")
-	require.NoError(getErr)
-	require.NotNil(failedMissing)
-	assert.Nil(failedMissing.DeletionCause,
+	require.NoError(t, getErr)
+	require.NotNil(t, failedMissing)
+	assert.Nil(t, failedMissing.DeletionCause,
 		"an incomplete provider scope must not tombstone missing sources")
 	failedOwnership, listErr := database.ListActiveSessionSourceOwnershipScopesPage(
 		t.Context(), "local", "partial-failure",
 		[]db.StoredSourcePathHintScope{{Path: failedRoot}}, db.SessionSourceCursor{},
 	)
-	require.NoError(listErr)
-	require.Len(failedOwnership, 1,
+	require.NoError(t, listErr)
+	require.Len(t, failedOwnership, 1,
 		"an incomplete provider scope must neither add nor remove deletion proof")
-	assert.Equal(failedMissingPath, failedOwnership[0].FilePath)
+	assert.Equal(t, failedMissingPath, failedOwnership[0].FilePath)
 
 	healthyStored, getErr := database.GetSession(t.Context(), "healthy-session")
-	require.NoError(getErr)
-	assert.NotNil(healthyStored)
+	require.NoError(t, getErr)
+	assert.NotNil(t, healthyStored)
 	healthyMissing, getErr := database.GetSessionFull(t.Context(), "healthy-missing")
-	require.NoError(getErr)
+	require.NoError(t, getErr)
 	assertSourceMissingState(t, healthyMissing)
 	healthyOwnership, listErr := database.ListActiveSessionSourceOwnershipScopesPage(
 		t.Context(), "local", "partial-healthy",
 		[]db.StoredSourcePathHintScope{{Path: healthyRoot}}, db.SessionSourceCursor{},
 	)
-	require.NoError(listErr)
-	require.Len(healthyOwnership, 1)
-	assert.Equal(healthyPath, healthyOwnership[0].FilePath,
+	require.NoError(t, listErr)
+	require.Len(t, healthyOwnership, 1)
+	assert.Equal(t, healthyPath, healthyOwnership[0].FilePath,
 		"an independent completed scope must baseline its admitted source")
 }
 
 func TestReconcileWatchRootsJoinsProviderAndLaterProcessingFailures(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := openTestDB(t)
 	failedRoot := t.TempDir()
 	healthyRoot := t.TempDir()
 	healthyPath := filepath.Join(healthyRoot, "session.jsonl")
-	require.NoError(os.WriteFile(healthyPath, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(healthyPath, []byte("{}\n"), 0o600))
 	discoveryErr := errors.New("provider discovery failed")
 	laterErr := errors.New("reconciliation page failed")
 	failed := &failingDBBackedProvider{
@@ -685,7 +667,7 @@ func TestReconcileWatchRootsJoinsProviderAndLaterProcessingFailures(t *testing.T
 		}},
 		source: &healthySource,
 	}
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			"join-failed":  {failedRoot},
 			"join-healthy": {healthyRoot},
@@ -702,7 +684,7 @@ func TestReconcileWatchRootsJoinsProviderAndLaterProcessingFailures(t *testing.T
 	})
 	t.Cleanup(engine.Close)
 	engine.reconciliationSpoolFactory = func(path string) (reconciliationSpoolStore, error) {
-		spool, err := newReconciliationSpool(path)
+		spool, err := newReconciliationSpool(t.Context(), path)
 		if err != nil {
 			return nil, err
 		}
@@ -714,42 +696,39 @@ func TestReconcileWatchRootsJoinsProviderAndLaterProcessingFailures(t *testing.T
 
 	err := engine.ReconcileWatchRoots(t.Context(), nil, true)
 
-	require.ErrorIs(err, discoveryErr)
-	assert.ErrorIs(err, laterErr)
+	require.ErrorIs(t, err, discoveryErr)
+	require.ErrorIs(t, err, laterErr)
 	var retryErr reconciliationRetryRootError
-	require.ErrorAs(err, &retryErr)
-	assert.ElementsMatch([]string{failedRoot, healthyRoot},
+	require.ErrorAs(t, err, &retryErr)
+	assert.ElementsMatch(t, []string{failedRoot, healthyRoot},
 		retryErr.ReconciliationRetryRoots(),
 		"a later global processing failure must retry every uncommitted provider scope")
 }
 
 func TestReconciliationCandidateDoesNotHashStableClaudeSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := openTestDB(t)
 	root := t.TempDir()
 	path := filepath.Join(root, "stable-session.jsonl")
-	require.NoError(os.WriteFile(path, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
 	info, err := os.Stat(path)
-	require.NoError(err)
+	require.NoError(t, err)
 	size := info.Size()
 	mtime := info.ModTime().UnixNano()
 	hash := "stored-hash"
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "stable-session", Agent: string(parser.AgentClaude),
 		Project: "project", Machine: "local", FilePath: &path,
 		FileSize: &size, FileMtime: &mtime, FileHash: &hash,
 		DataVersion: db.CurrentDataVersion(),
 	}))
-	require.NoError(database.SetSessionDataVersion(
+	require.NoError(t, database.SetSessionDataVersion(t.Context(),
 		"stable-session", db.CurrentDataVersion(),
 	))
-	storedSize, storedMtime, stored := database.GetSessionFileInfo("stable-session")
-	require.True(stored)
-	assert.Equal(size, storedSize)
-	assert.Equal(mtime, storedMtime)
-	assert.Equal(db.CurrentDataVersion(), database.GetSessionDataVersion("stable-session"))
+	storedSize, storedMtime, stored := database.GetSessionFileInfo(t.Context(), "stable-session")
+	require.True(t, stored)
+	assert.Equal(t, size, storedSize)
+	assert.Equal(t, mtime, storedMtime)
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "stable-session"))
 	base := &directStreamingProvider{
 		Def: parser.AgentDef{Type: parser.AgentClaude, FileBased: true},
 	}
@@ -764,7 +743,7 @@ func TestReconciliationCandidateDoesNotHashStableClaudeSource(t *testing.T) {
 		provider, source, []string{root}, nil,
 	)
 
-	assert.True(admitted)
-	assert.Zero(provider.fingerprintCalls,
+	assert.True(t, admitted)
+	assert.Zero(t, provider.fingerprintCalls,
 		"duplicate preference must not hash every unchanged Claude transcript")
 }

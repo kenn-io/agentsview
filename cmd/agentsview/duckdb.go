@@ -391,7 +391,7 @@ func runDuckDBServe(appCfg config.Config, basePath string) {
 		BasePath:      basePath,
 		RequestedPort: appCfg.Port,
 	}
-	appCfg, err = prepareServeRuntimeConfig(appCfg, rtOpts)
+	appCfg, err = prepareServeRuntimeConfig(ctx, appCfg, rtOpts)
 	if err != nil {
 		fatal("duckdb serve: %v", err)
 	}
@@ -475,7 +475,7 @@ func openDuckDBServeStore(
 	}
 
 	applyClassifierConfig(appCfg)
-	store, err := duckdbsync.NewStoreFromConfig(duckCfg)
+	store, err := duckdbsync.NewStoreFromConfig(ctx, duckCfg)
 	if err != nil {
 		fatal("duckdb serve: %v", err)
 	}
@@ -686,7 +686,7 @@ func serveQuackOnce(
 		return quackServeSession{}, fmt.Errorf("statting duckdb mirror: %w", err)
 	}
 	duckdbsync.PrimeFileIdentity(info)
-	conn, err := duckdbsync.OpenReadOnly(duckCfg.Path)
+	conn, err := duckdbsync.OpenReadOnly(ctx, duckCfg.Path)
 	if err != nil {
 		return quackServeSession{}, err
 	}

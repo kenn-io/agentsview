@@ -43,9 +43,6 @@ func codebuffTestSession(
 }
 
 func TestParseCodebuffSession_BasicUserAndAIMessages(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[
 		{
 			"id": "user-1",
@@ -82,32 +79,29 @@ func TestParseCodebuffSession_BasicUserAndAIMessages(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, chatMeta)
 	sess, msgs, err := parseCodebuffSession(dir, "myproject", "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
-	assert.Equal(AgentCodebuff, sess.Agent)
-	assert.Equal("Codebuff", sess.AgentLabel)
-	assert.Contains(sess.ID, "codebuff:")
-	assert.Equal("myproject", sess.Project)
-	assert.Equal("/Users/dev/myproject", sess.Cwd)
-	assert.Equal("codebuff-chat-v1", sess.SourceVersion)
-	assert.Equal("Fix the login bug", sess.FirstMessage)
-	assert.Equal(2, sess.MessageCount)
-	assert.Equal(1, sess.UserMessageCount)
+	assert.Equal(t, AgentCodebuff, sess.Agent)
+	assert.Equal(t, "Codebuff", sess.AgentLabel)
+	assert.Contains(t, sess.ID, "codebuff:")
+	assert.Equal(t, "myproject", sess.Project)
+	assert.Equal(t, "/Users/dev/myproject", sess.Cwd)
+	assert.Equal(t, "codebuff-chat-v1", sess.SourceVersion)
+	assert.Equal(t, "Fix the login bug", sess.FirstMessage)
+	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
 	// PeakContextTokens is not set because contextTokenCount from
 	// run-state.json is the final per-step count, not the peak.
 
-	require.Len(msgs, 2)
-	assert.Equal(RoleUser, msgs[0].Role)
-	assert.Equal("Fix the login bug", msgs[0].Content)
-	assert.Equal(RoleAssistant, msgs[1].Role)
-	assert.Contains(msgs[1].Content, "I'll fix the login bug")
+	require.Len(t, msgs, 2)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "Fix the login bug", msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Contains(t, msgs[1].Content, "I'll fix the login bug")
 }
 
 func TestParseCodebuffSession_FreebuffClassification(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[
 		{
 			"id": "user-1",
@@ -126,20 +120,17 @@ func TestParseCodebuffSession_FreebuffClassification(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	sess, _, err := parseCodebuffSession(dir, "testproject", "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
 	// Freebuff sessions use AgentFreebuff for distinct filtering, while
 	// lifecycle operations are handled via the freebuff: prefix alias
 	// in AgentByPrefix.
-	assert.Equal(AgentFreebuff, sess.Agent)
-	assert.Equal("Freebuff", sess.AgentLabel)
+	assert.Equal(t, AgentFreebuff, sess.Agent)
+	assert.Equal(t, "Freebuff", sess.AgentLabel)
 }
 
 func TestParseCodebuffSession_Timestamps(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[
 		{
 			"id": "user-1",
@@ -164,18 +155,15 @@ func TestParseCodebuffSession_Timestamps(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	sess, _, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
-	assert.False(sess.StartedAt.IsZero())
-	assert.False(sess.EndedAt.IsZero())
-	assert.True(sess.EndedAt.After(sess.StartedAt) || sess.EndedAt.Equal(sess.StartedAt))
+	assert.False(t, sess.StartedAt.IsZero())
+	assert.False(t, sess.EndedAt.IsZero())
+	assert.True(t, sess.EndedAt.After(sess.StartedAt) || sess.EndedAt.Equal(sess.StartedAt))
 }
 
 func TestParseCodebuffSession_ToolCalls(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[
 		{
 			"id": "ai-1",
@@ -203,10 +191,10 @@ func TestParseCodebuffSession_ToolCalls(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	_, msgs, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// AI message with tool call + tool result = 2 messages.
-	require.GreaterOrEqual(len(msgs), 1)
+	require.GreaterOrEqual(t, len(msgs), 1)
 
 	var toolCallMsg *ParsedMessage
 	for i := range msgs {
@@ -215,19 +203,16 @@ func TestParseCodebuffSession_ToolCalls(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(toolCallMsg, "expected a message with tool use")
-	assert.Equal(RoleAssistant, toolCallMsg.Role)
-	require.Len(toolCallMsg.ToolCalls, 1)
-	assert.Equal("read_files", toolCallMsg.ToolCalls[0].ToolName)
-	assert.Equal("Read", toolCallMsg.ToolCalls[0].Category)
-	assert.Equal("tc-1", toolCallMsg.ToolCalls[0].ToolUseID)
-	assert.Contains(toolCallMsg.ToolCalls[0].InputJSON, "src/main.go")
+	require.NotNil(t, toolCallMsg, "expected a message with tool use")
+	assert.Equal(t, RoleAssistant, toolCallMsg.Role)
+	require.Len(t, toolCallMsg.ToolCalls, 1)
+	assert.Equal(t, "read_files", toolCallMsg.ToolCalls[0].ToolName)
+	assert.Equal(t, "Read", toolCallMsg.ToolCalls[0].Category)
+	assert.Equal(t, "tc-1", toolCallMsg.ToolCalls[0].ToolUseID)
+	assert.Contains(t, toolCallMsg.ToolCalls[0].InputJSON, "src/main.go")
 }
 
 func TestParseCodebuffSession_SubagentToolCall(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[
 		{
 			"id": "ai-1",
@@ -257,7 +242,7 @@ func TestParseCodebuffSession_SubagentToolCall(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	_, msgs, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var toolCallMsg *ParsedMessage
 	for i := range msgs {
@@ -266,29 +251,29 @@ func TestParseCodebuffSession_SubagentToolCall(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(toolCallMsg, "expected a message with tool use")
-	require.Len(toolCallMsg.ToolCalls, 1)
+	require.NotNil(t, toolCallMsg, "expected a message with tool use")
+	require.Len(t, toolCallMsg.ToolCalls, 1)
 
 	tc := toolCallMsg.ToolCalls[0]
-	assert.Equal("Task", tc.Category, "subagent calls should use Task category")
-	assert.Equal("basher", tc.ToolName)
-	assert.Equal("agent-1", tc.ToolUseID)
-	assert.Contains(tc.InputJSON, "basher")
-	assert.Contains(tc.InputJSON, "run tests")
+	assert.Equal(t, "Task", tc.Category, "subagent calls should use Task category")
+	assert.Equal(t, "basher", tc.ToolName)
+	assert.Equal(t, "agent-1", tc.ToolUseID)
+	assert.Contains(t, tc.InputJSON, "basher")
+	assert.Contains(t, tc.InputJSON, "run tests")
 	// The agent's lifecycle status must be carried in the tool-call input
 	// now that agent output is emitted as a linked ParsedToolResult; it
 	// used to render in the assistant text for the block. Assert on the
 	// decoded value, not a raw substring, so formatting changes to
 	// InputJSON cannot silently drop the field.
 	var input map[string]any
-	require.NoError(json.Unmarshal([]byte(tc.InputJSON), &input))
+	require.NoError(t, json.Unmarshal([]byte(tc.InputJSON), &input))
 	status, ok := input["status"]
-	require.True(ok,
+	require.True(t, ok,
 		"agent tool-call InputJSON must include the status field")
-	assert.Equal("complete", status,
+	assert.Equal(t, "complete", status,
 		"agent status must round-trip from the block's status field")
 	// SubagentSessionID intentionally unset.
-	assert.Empty(tc.SubagentSessionID)
+	assert.Empty(t, tc.SubagentSessionID)
 }
 
 // TestParseCodebuffSession_SubagentToolCallDefaultStatus pins the default
@@ -297,8 +282,6 @@ func TestParseCodebuffSession_SubagentToolCall(t *testing.T) {
 // status, it must default to "spawned" so the field stays present for
 // consumers that key off it.
 func TestParseCodebuffSession_SubagentToolCallDefaultStatus(t *testing.T) {
-	require := require.New(t)
-
 	chatMessages := `[
 		{
 			"id": "ai-1",
@@ -327,7 +310,7 @@ func TestParseCodebuffSession_SubagentToolCallDefaultStatus(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	_, msgs, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var toolCallMsg *ParsedMessage
 	for i := range msgs {
@@ -336,23 +319,20 @@ func TestParseCodebuffSession_SubagentToolCallDefaultStatus(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(toolCallMsg, "expected a message with tool use")
-	require.Len(toolCallMsg.ToolCalls, 1)
+	require.NotNil(t, toolCallMsg, "expected a message with tool use")
+	require.Len(t, toolCallMsg.ToolCalls, 1)
 
 	tc := toolCallMsg.ToolCalls[0]
 	var input map[string]any
-	require.NoError(json.Unmarshal([]byte(tc.InputJSON), &input))
+	require.NoError(t, json.Unmarshal([]byte(tc.InputJSON), &input))
 	status, ok := input["status"]
-	require.True(ok,
+	require.True(t, ok,
 		"agent tool-call InputJSON must always include the status field")
 	assert.Equal(t, "spawned", status,
 		"a missing block status must default to spawned")
 }
 
 func TestParseCodebuffSession_ThinkingBlocks(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[
 		{
 			"id": "ai-1",
@@ -383,7 +363,7 @@ func TestParseCodebuffSession_ThinkingBlocks(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	_, msgs, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var thinkingMsg *ParsedMessage
 	for i := range msgs {
@@ -392,17 +372,14 @@ func TestParseCodebuffSession_ThinkingBlocks(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(thinkingMsg, "expected a thinking message")
-	assert.Equal(RoleAssistant, thinkingMsg.Role)
-	assert.Contains(thinkingMsg.Content, "[Thinking]")
-	assert.Contains(thinkingMsg.Content, "Let me think about this approach.")
-	assert.Contains(thinkingMsg.ThinkingText, "Let me think about this approach.")
+	require.NotNil(t, thinkingMsg, "expected a thinking message")
+	assert.Equal(t, RoleAssistant, thinkingMsg.Role)
+	assert.Contains(t, thinkingMsg.Content, "[Thinking]")
+	assert.Contains(t, thinkingMsg.Content, "Let me think about this approach.")
+	assert.Contains(t, thinkingMsg.ThinkingText, "Let me think about this approach.")
 }
 
 func TestParseCodebuffSession_ModeDivider(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[
 		{
 			"id": "ai-1",
@@ -432,7 +409,7 @@ func TestParseCodebuffSession_ModeDivider(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	_, msgs, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var sysMsg *ParsedMessage
 	for i := range msgs {
@@ -441,15 +418,12 @@ func TestParseCodebuffSession_ModeDivider(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(sysMsg, "expected a system message from mode divider")
-	assert.Equal(RoleSystem, sysMsg.Role)
-	assert.Contains(sysMsg.Content, "[Mode: LITE]")
+	require.NotNil(t, sysMsg, "expected a system message from mode divider")
+	assert.Equal(t, RoleSystem, sysMsg.Role)
+	assert.Contains(t, sysMsg.Content, "[Mode: LITE]")
 }
 
 func TestParseCodebuffSession_EmptyMessages(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[]`
 	runState := `{
 		"sessionState": {
@@ -461,17 +435,14 @@ func TestParseCodebuffSession_EmptyMessages(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	sess, msgs, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
-	assert.Empty(msgs)
-	assert.Equal(0, sess.MessageCount)
+	assert.Empty(t, msgs)
+	assert.Equal(t, 0, sess.MessageCount)
 }
 
 func TestParseCodebuffSession_MissingRunState(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[
 		{
 			"id": "user-1",
@@ -483,12 +454,12 @@ func TestParseCodebuffSession_MissingRunState(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, "", "")
 	sess, _, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
-	assert.Equal(AgentCodebuff, sess.Agent)
-	assert.Empty(sess.Cwd)
-	assert.False(sess.HasPeakContextTokens)
+	assert.Equal(t, AgentCodebuff, sess.Agent)
+	assert.Empty(t, sess.Cwd)
+	assert.False(t, sess.HasPeakContextTokens)
 }
 
 func TestParseCodebuffSession_UsageEvent(t *testing.T) {
@@ -544,9 +515,6 @@ func TestParseCodebuffSession_UsageEventEmptyModel(t *testing.T) {
 }
 
 func TestParseCodebuffSessionFromChatMeta(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[]`
 	runState := `{
 		"sessionState": {
@@ -563,20 +531,20 @@ func TestParseCodebuffSessionFromChatMeta(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, chatMeta)
 	sess, _, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
 	// When transcript is empty, chat-meta counts are used as fallback.
-	assert.Equal(5, sess.MessageCount)
-	assert.Equal(1, sess.UserMessageCount)
-	assert.Equal("Fix the login bug", sess.FirstMessage)
+	assert.Equal(t, 5, sess.MessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "Fix the login bug", sess.FirstMessage)
 	// CountsAuthoritative must be set when chat-meta is the only count
 	// source. Without this, the sync engine's
 	// applySessionTokenTotalsFromMessages pass recomputes counts from
 	// the empty parsed-message slice and overwrites the meta totals
 	// with zero, hiding the session from any UI that filters on
 	// nonzero counts.
-	assert.True(sess.CountsAuthoritative,
+	assert.True(t, sess.CountsAuthoritative,
 		"counts from the chat-meta fallback must be authoritative "+
 			"so sync does not zero them out")
 }
@@ -620,9 +588,6 @@ func TestParseCodebuffSessionFromTranscriptLeavesCountsNonAuthoritative(
 func TestParseCodebuffSessionEmptyChatMetaLeavesCountsNonAuthoritative(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[]`
 	runState := `{
 		"sessionState": {
@@ -632,11 +597,11 @@ func TestParseCodebuffSessionEmptyChatMetaLeavesCountsNonAuthoritative(
 
 	dir := codebuffTestSession(t, chatMessages, runState, `{}`)
 	sess, _, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
-	assert.Equal(0, sess.MessageCount)
-	assert.False(sess.CountsAuthoritative,
+	assert.Equal(t, 0, sess.MessageCount)
+	assert.False(t, sess.CountsAuthoritative,
 		"empty transcript and empty meta must keep counts "+
 			"non-authoritative so the sync engine sees a real "+
 			"zero rather than silently skipping its recompute")
@@ -672,9 +637,6 @@ func TestParseCodebuffSession_ProjectFromCwd(t *testing.T) {
 }
 
 func TestParseCodebuffSession_FileInfo(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[
 		{
 			"id": "user-1",
@@ -693,18 +655,15 @@ func TestParseCodebuffSession_FileInfo(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	sess, _, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
-	assert.NotEmpty(sess.File.Path)
-	assert.Positive(sess.File.Size)
-	assert.NotZero(sess.File.Mtime)
+	assert.NotEmpty(t, sess.File.Path)
+	assert.Positive(t, sess.File.Size)
+	assert.NotZero(t, sess.File.Mtime)
 }
 
 func TestParseCodebuffSession_JoinedTextContent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[
 		{
 			"id": "ai-1",
@@ -735,11 +694,11 @@ func TestParseCodebuffSession_JoinedTextContent(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	_, msgs, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
-	require.Len(msgs, 1)
-	assert.Contains(msgs[0].Content, "First paragraph.")
-	assert.Contains(msgs[0].Content, "Second paragraph.")
+	require.Len(t, msgs, 1)
+	assert.Contains(t, msgs[0].Content, "First paragraph.")
+	assert.Contains(t, msgs[0].Content, "Second paragraph.")
 }
 
 func TestParseCodebuffSession_TimestampVariants(t *testing.T) {
@@ -864,8 +823,6 @@ func TestParseCodebuffToolCall_UnknownName(t *testing.T) {
 }
 
 func TestDiscoverCodebuffSessions(t *testing.T) {
-	assert := assert.New(t)
-
 	root := t.TempDir()
 
 	// Create two projects with sessions.
@@ -877,14 +834,14 @@ func TestDiscoverCodebuffSessions(t *testing.T) {
 	}
 
 	dirs := discoverCodebuffSessions(root)
-	assert.Len(dirs, 2)
+	assert.Len(t, dirs, 2)
 
 	projects := make(map[string]bool)
 	for _, d := range dirs {
 		projects[d.ProjectHint] = true
 	}
-	assert.True(projects["proj-a"])
-	assert.True(projects["proj-b"])
+	assert.True(t, projects["proj-a"])
+	assert.True(t, projects["proj-b"])
 }
 
 func TestDiscoverCodebuffSessions_SkipsNonDirs(t *testing.T) {
@@ -902,26 +859,21 @@ func TestCodebuffProjectFromPath(t *testing.T) {
 }
 
 func TestCodebuffProviderCapabilities(t *testing.T) {
-	assert := assert.New(t)
-
 	caps := codebuffProviderCapabilities()
-	assert.Equal(CapabilitySupported, caps.Content.FirstMessage)
-	assert.Equal(CapabilitySupported, caps.Content.SessionName)
-	assert.Equal(CapabilitySupported, caps.Content.Thinking)
-	assert.Equal(CapabilitySupported, caps.Content.ToolCalls)
-	assert.Equal(CapabilitySupported, caps.Content.ToolResults)
-	assert.Equal(CapabilityNotApplicable, caps.Content.Model,
+	assert.Equal(t, CapabilitySupported, caps.Content.FirstMessage)
+	assert.Equal(t, CapabilitySupported, caps.Content.SessionName)
+	assert.Equal(t, CapabilitySupported, caps.Content.Thinking)
+	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
+	assert.Equal(t, CapabilitySupported, caps.Content.ToolResults)
+	assert.Equal(t, CapabilityNotApplicable, caps.Content.Model,
 		"model is unknown (selected server-side, can change mid-session)")
-	assert.Equal(CapabilitySupported, caps.Content.AggregateUsageEvents)
-	assert.Equal(CapabilityNotApplicable, caps.Content.Relationships)
-	assert.Equal(CapabilityNotApplicable, caps.Content.TerminationStatus)
-	assert.Equal(CapabilityNotApplicable, caps.Content.MalformedLineCount)
+	assert.Equal(t, CapabilitySupported, caps.Content.AggregateUsageEvents)
+	assert.Equal(t, CapabilityNotApplicable, caps.Content.Relationships)
+	assert.Equal(t, CapabilityNotApplicable, caps.Content.TerminationStatus)
+	assert.Equal(t, CapabilityNotApplicable, caps.Content.MalformedLineCount)
 }
 
 func TestCodebuffSessionName_Truncation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	var longPrompt strings.Builder
 	for range 200 {
 		longPrompt.WriteString("x")
@@ -934,7 +886,7 @@ func TestCodebuffSessionName_Truncation(t *testing.T) {
 			"timestamp": "03:04 PM",
 		},
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	runState := `{
 		"sessionState": {
@@ -946,12 +898,12 @@ func TestCodebuffSessionName_Truncation(t *testing.T) {
 
 	dir := codebuffTestSession(t, string(chatMessages), runState, "")
 	sess, _, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
 	// Session name should be truncated to 80 chars with ellipsis.
-	assert.LessOrEqual(len(sess.SessionName), 80)
-	assert.Contains(sess.SessionName, "...")
+	assert.LessOrEqual(t, len(sess.SessionName), 80)
+	assert.Contains(t, sess.SessionName, "...")
 }
 
 func TestCodebuffSessionName_FallbackToProjectHint(t *testing.T) {
@@ -974,9 +926,6 @@ func TestCodebuffSessionName_FallbackToProjectHint(t *testing.T) {
 }
 
 func TestParseCodebuffSkills_Catalog(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	runState := `{
 		"sessionState": {
 			"mainAgentState": {"agentType": "base2-free-minimax-m3"},
@@ -998,19 +947,19 @@ func TestParseCodebuffSkills_Catalog(t *testing.T) {
 	}`
 	dir := codebuffTestSession(t, `[]`, runState, "")
 	rs, err := readCodebuffRunState(filepath.Join(dir, "run-state.json"))
-	require.NoError(err)
-	require.Len(rs.Skills, 2)
+	require.NoError(t, err)
+	require.Len(t, rs.Skills, 2)
 
 	byName := map[string]codebuffSkill{}
 	for _, s := range rs.Skills {
 		byName[s.Name] = s
 	}
-	assert.Equal("Compact the conversation into a handoff doc.",
+	assert.Equal(t, "Compact the conversation into a handoff doc.",
 		byName["handoff"].Description)
-	assert.Equal("/Users/dev/.skills/handoff/SKILL.md",
+	assert.Equal(t, "/Users/dev/.skills/handoff/SKILL.md",
 		byName["handoff"].FilePath)
-	assert.Contains(byName["handoff"].Content, "Write a handoff.")
-	assert.Equal("Laziest solution that works.",
+	assert.Contains(t, byName["handoff"].Content, "Write a handoff.")
+	assert.Equal(t, "Laziest solution that works.",
 		byName["ponytail"].Description)
 }
 
@@ -1020,9 +969,6 @@ func TestParseCodebuffSkills_Empty(t *testing.T) {
 }
 
 func TestCodebuffAttachSkillNames_FromInput(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[
 		{
 			"id": "ai-1",
@@ -1058,7 +1004,7 @@ func TestCodebuffAttachSkillNames_FromInput(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	_, msgs, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var toolMsg *ParsedMessage
 	for i := range msgs {
@@ -1067,18 +1013,16 @@ func TestCodebuffAttachSkillNames_FromInput(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(toolMsg)
-	require.Len(toolMsg.ToolCalls, 2)
+	require.NotNil(t, toolMsg)
+	require.Len(t, toolMsg.ToolCalls, 2)
 
-	assert.Equal("ponytail", toolMsg.ToolCalls[0].SkillName,
+	assert.Equal(t, "ponytail", toolMsg.ToolCalls[0].SkillName,
 		"tool call referencing a skill name should be attributed")
-	assert.Empty(toolMsg.ToolCalls[1].SkillName,
+	assert.Empty(t, toolMsg.ToolCalls[1].SkillName,
 		"unrelated tool call should not be attributed to a skill")
 }
 
 func TestCodebuffAttachSkillNames_ExplicitSkillTool(t *testing.T) {
-	require := require.New(t)
-
 	chatMessages := `[
 		{
 			"id": "ai-1",
@@ -1106,7 +1050,7 @@ func TestCodebuffAttachSkillNames_ExplicitSkillTool(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	_, msgs, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var toolMsg *ParsedMessage
 	for i := range msgs {
@@ -1115,15 +1059,12 @@ func TestCodebuffAttachSkillNames_ExplicitSkillTool(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(toolMsg)
-	require.Len(toolMsg.ToolCalls, 1)
+	require.NotNil(t, toolMsg)
+	require.Len(t, toolMsg.ToolCalls, 1)
 	assert.Equal(t, "handoff", toolMsg.ToolCalls[0].SkillName)
 }
 
 func TestCodebuffAttachSkillNames_NoFalsePositiveSubstring(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	// A skill named "go" should NOT match inputs containing "going" or
 	// "cargo" — the matching must use word boundaries, not substring.
 	chatMessages := `[
@@ -1161,7 +1102,7 @@ func TestCodebuffAttachSkillNames_NoFalsePositiveSubstring(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	_, msgs, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var toolMsg *ParsedMessage
 	for i := range msgs {
@@ -1170,18 +1111,16 @@ func TestCodebuffAttachSkillNames_NoFalsePositiveSubstring(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(toolMsg)
-	require.Len(toolMsg.ToolCalls, 2)
+	require.NotNil(t, toolMsg)
+	require.Len(t, toolMsg.ToolCalls, 2)
 
-	assert.Empty(toolMsg.ToolCalls[0].SkillName,
+	assert.Empty(t, toolMsg.ToolCalls[0].SkillName,
 		"'going' should not match skill 'go'")
-	assert.Empty(toolMsg.ToolCalls[1].SkillName,
+	assert.Empty(t, toolMsg.ToolCalls[1].SkillName,
 		"'cargo' should not match skill 'go'")
 }
 
 func TestCodebuffAttachSkillNames_WordBoundaryMatch(t *testing.T) {
-	require := require.New(t)
-
 	// A skill named "go" SHOULD match when it appears as a standalone
 	// word token in the input.
 	chatMessages := `[
@@ -1213,7 +1152,7 @@ func TestCodebuffAttachSkillNames_WordBoundaryMatch(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	_, msgs, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var toolMsg *ParsedMessage
 	for i := range msgs {
@@ -1222,8 +1161,8 @@ func TestCodebuffAttachSkillNames_WordBoundaryMatch(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(toolMsg)
-	require.Len(toolMsg.ToolCalls, 1)
+	require.NotNil(t, toolMsg)
+	require.Len(t, toolMsg.ToolCalls, 1)
 
 	assert.Equal(t, "go", toolMsg.ToolCalls[0].SkillName,
 		"'go build' should match skill 'go' as a standalone token")
@@ -1261,9 +1200,6 @@ func TestCodebuffToolCategories(t *testing.T) {
 }
 
 func TestParseCodebuffSession_ErrorVariant(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[
 		{
 			"id": "user-1",
@@ -1288,22 +1224,19 @@ func TestParseCodebuffSession_ErrorVariant(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	_, msgs, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// Should have user message + error system message.
-	require.Len(msgs, 2)
-	assert.Equal(RoleUser, msgs[0].Role)
-	assert.Equal("Fix the bug", msgs[0].Content)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "Fix the bug", msgs[0].Content)
 
-	assert.Equal(RoleSystem, msgs[1].Role)
-	assert.True(msgs[1].IsSystem)
-	assert.Contains(msgs[1].Content, "Rate limit exceeded")
+	assert.Equal(t, RoleSystem, msgs[1].Role)
+	assert.True(t, msgs[1].IsSystem)
+	assert.Contains(t, msgs[1].Content, "Rate limit exceeded")
 }
 
 func TestParseCodebuffSession_CreditsExtraction(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatMessages := `[
 		{
 			"id": "user-1",
@@ -1325,23 +1258,23 @@ func TestParseCodebuffSession_CreditsExtraction(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	sess, _, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
 	// Credits should be mapped to a Money cost in usage events.
 	// 15.5 credits × $0.01/credit = $0.155 = 155_000 microdollars.
-	require.Len(sess.UsageEvents, 1)
+	require.Len(t, sess.UsageEvents, 1)
 	evt := sess.UsageEvents[0]
-	require.NotNil(evt.Cost)
-	assert.Equal(int64(155_000), evt.Cost.Microdollars,
+	require.NotNil(t, evt.Cost)
+	assert.Equal(t, int64(155_000), evt.Cost.Microdollars,
 		"15.5 credits should map to 155_000 microdollars")
-	assert.Equal("reported", evt.CostStatus)
-	assert.Equal("session", evt.CostSource)
+	assert.Equal(t, "reported", evt.CostStatus)
+	assert.Equal(t, "session", evt.CostSource)
 	// Model must mirror rs.AgentType so the daily model breakdown
 	// buckets similar codebuff/freebuff sessions separately.
 	// Aggregator tests insert events directly, so only the parser
 	// path can regress Model attribution.
-	assert.Equal("base2-deepseek", evt.Model)
+	assert.Equal(t, "base2-deepseek", evt.Model)
 }
 
 func TestParseCodebuffSession_CreditsZero(t *testing.T) {
@@ -1551,8 +1484,6 @@ func TestAgentByPrefix_FreebuffAlias(t *testing.T) {
 // parser to drift back to the session directory's original date
 // for any time-only message that followed a real boundary.
 func TestParseCodebuffMixedFormatMidnightRollover(t *testing.T) {
-	require := require.New(t)
-
 	// Pin time.Local to UTC so the session-date parse and the
 	// time-only message reconstruction are deterministic regardless
 	// of the host TZ. t.Setenv only triggers a TZ reload on the next
@@ -1566,10 +1497,10 @@ func TestParseCodebuffMixedFormatMidnightRollover(t *testing.T) {
 
 	sessionID := "2026-07-15T22-00-00.000Z"
 	sessionDate := parseCodebuffSessionDate(sessionID)
-	require.Equal(2026, sessionDate.Year())
-	require.Equal(time.July, sessionDate.Month())
-	require.Equal(15, sessionDate.Day())
-	require.Equal(22, sessionDate.Hour())
+	require.Equal(t, 2026, sessionDate.Year())
+	require.Equal(t, time.July, sessionDate.Month())
+	require.Equal(t, 15, sessionDate.Day())
+	require.Equal(t, 22, sessionDate.Hour())
 
 	data := []byte(`[
 		{"id":"u1","variant":"user","content":"hello","timestamp":"2026-07-15T22:00:00Z"},
@@ -1580,36 +1511,36 @@ func TestParseCodebuffMixedFormatMidnightRollover(t *testing.T) {
 	]`)
 
 	msgs, _, _, err := parseCodebuffMessages(data, sessionDate)
-	require.NoError(err)
-	require.Len(msgs, 5)
+	require.NoError(t, err)
+	require.Len(t, msgs, 5)
 
 	// M1 — RFC3339 anchor; date must be 15, hour 22.
-	require.Equal(2026, msgs[0].Timestamp.Year())
-	require.Equal(time.July, msgs[0].Timestamp.Month())
-	require.Equal(15, msgs[0].Timestamp.Day())
-	require.Equal(22, msgs[0].Timestamp.Hour())
+	require.Equal(t, 2026, msgs[0].Timestamp.Year())
+	require.Equal(t, time.July, msgs[0].Timestamp.Month())
+	require.Equal(t, 15, msgs[0].Timestamp.Day())
+	require.Equal(t, 22, msgs[0].Timestamp.Hour())
 
 	// M2 — time-only on date 15; hour 23.
-	require.Equal(15, msgs[1].Timestamp.Day())
-	require.Equal(23, msgs[1].Timestamp.Hour())
+	require.Equal(t, 15, msgs[1].Timestamp.Day())
+	require.Equal(t, 23, msgs[1].Timestamp.Hour())
 
 	// M3 — time-only after midnight rollover; date 16, hour 0.
 	// Before the fix currentDate would still be 15 here and M3
 	// would land on 15 00:15 instead of 16 00:15.
-	require.Equal(16, msgs[2].Timestamp.Day(),
+	require.Equal(t, 16, msgs[2].Timestamp.Day(),
 		"time-only after a 23:xx anchor must advance to the next calendar date")
-	require.Equal(0, msgs[2].Timestamp.Hour())
+	require.Equal(t, 0, msgs[2].Timestamp.Hour())
 
 	// M4 — RFC3339 anchor that crosses a real midnight; date 17.
-	require.Equal(17, msgs[3].Timestamp.Day(),
+	require.Equal(t, 17, msgs[3].Timestamp.Day(),
 		"non-time-only timestamp must anchor currentDate to its local calendar date")
 
 	// M5 — time-only on date 17; hour 14. Before the fix
 	// currentDate could regress to 15 here because M4 only
 	// touched prevHour.
-	require.Equal(17, msgs[4].Timestamp.Day(),
+	require.Equal(t, 17, msgs[4].Timestamp.Day(),
 		"time-only after an RFC3339 anchor that crossed a date boundary must stay on the new date")
-	require.Equal(14, msgs[4].Timestamp.Hour())
+	require.Equal(t, 14, msgs[4].Timestamp.Hour())
 }
 
 // TestParseCodebuffMessages_FirstMessageMidnightRollover pins the
@@ -1621,9 +1552,6 @@ func TestParseCodebuffMixedFormatMidnightRollover(t *testing.T) {
 // so the first message could never roll over midnight and was stamped
 // July 16 00:01, skewing StartedAt.
 func TestParseCodebuffMessages_FirstMessageMidnightRollover(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	// Pin time.Local to a fixed UTC-7 zone so the session-date parse
 	// and the time-only reconstruction are deterministic regardless of
 	// the host TZ (same pinning approach as the mixed-format rollover
@@ -1633,8 +1561,8 @@ func TestParseCodebuffMessages_FirstMessageMidnightRollover(t *testing.T) {
 	time.Local = time.FixedZone("UTC-7", -7*3600) //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
 
 	sessionDate := parseCodebuffSessionDate("2026-07-17T06-58-00.000Z")
-	require.Equal(16, sessionDate.Day(), "06:58 UTC is 23:58 on July 16 in UTC-7")
-	require.Equal(23, sessionDate.Hour())
+	require.Equal(t, 16, sessionDate.Day(), "06:58 UTC is 23:58 on July 16 in UTC-7")
+	require.Equal(t, 23, sessionDate.Hour())
 
 	data := []byte(`[
 		{"id":"u1","variant":"user","content":"hello","timestamp":"12:01 AM"},
@@ -1642,15 +1570,15 @@ func TestParseCodebuffMessages_FirstMessageMidnightRollover(t *testing.T) {
 	]`)
 
 	msgs, startedAt, _, err := parseCodebuffMessages(data, sessionDate)
-	require.NoError(err)
-	require.Len(msgs, 2)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
 
-	assert.Equal(17, msgs[0].Timestamp.Day(),
+	assert.Equal(t, 17, msgs[0].Timestamp.Day(),
 		"first time-only message past local midnight must land on the next calendar day")
-	assert.Equal(0, msgs[0].Timestamp.Hour())
-	assert.Equal(1, msgs[0].Timestamp.Minute())
-	assert.Equal(17, msgs[1].Timestamp.Day())
-	assert.Equal(17, startedAt.Day(),
+	assert.Equal(t, 0, msgs[0].Timestamp.Hour())
+	assert.Equal(t, 1, msgs[0].Timestamp.Minute())
+	assert.Equal(t, 17, msgs[1].Timestamp.Day())
+	assert.Equal(t, 17, startedAt.Day(),
 		"StartedAt must not be skewed ~24h before the session directory timestamp")
 }
 
@@ -1695,9 +1623,6 @@ func TestCodebuffAttachSkillNames_DeterministicFallbackWinner(t *testing.T) {
 // of the first 77 runes plus "...", not a raw 77-byte slice ending in
 // half a rune.
 func TestParseCodebuffSession_SessionNameRuneSafeTruncation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	longPrompt := strings.Repeat("é", 100)
 	chatMessages := `[
 		{
@@ -1715,10 +1640,10 @@ func TestParseCodebuffSession_SessionNameRuneSafeTruncation(t *testing.T) {
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
 	sess, _, err := parseCodebuffSession(dir, "p", "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
-	assert.True(utf8.ValidString(sess.SessionName),
+	assert.True(t, utf8.ValidString(sess.SessionName),
 		"session name must remain valid UTF-8 after truncation")
-	assert.Equal(strings.Repeat("é", 77)+"...", sess.SessionName)
+	assert.Equal(t, strings.Repeat("é", 77)+"...", sess.SessionName)
 }

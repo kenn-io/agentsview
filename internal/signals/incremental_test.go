@@ -104,8 +104,6 @@ func fullMidTask(calls []ToolCallRow, boundaries []int) int {
 func TestIncrementalFoldParityRandomized(t *testing.T) {
 	for _, initialCalls := range []int{0, 5, 20, 320} {
 		t.Run(strconv.Itoa(initialCalls), func(t *testing.T) {
-			assert := assert.New(t)
-
 			rng := newTestRand(t, 20260813)
 			calls := make([]ToolCallRow, 0, initialCalls+300)
 			boundaries := []int{}
@@ -191,11 +189,11 @@ func TestIncrementalFoldParityRandomized(t *testing.T) {
 				midTaskDelta := got.MidTaskCompactions
 				got.MidTaskCompactions = 0
 				want.MidTaskCompactions = 0
-				assert.Equal(want, got, "step %d: tool health diverged", step)
+				assert.Equal(t, want, got, "step %d: tool health diverged", step)
 
 				midTask += midTaskDelta
 				wantMidTask := fullMidTask(calls, boundaries)
-				assert.Equal(wantMidTask, midTask, "step %d: mid-task diverged", step)
+				assert.Equal(t, wantMidTask, midTask, "step %d: mid-task diverged", step)
 
 				// The next round's row values are the maintained ones.
 				row = ToolHealthRow{
@@ -206,15 +204,15 @@ func TestIncrementalFoldParityRandomized(t *testing.T) {
 				state = nextState
 
 				// State invariants.
-				assert.LessOrEqual(len(state.Trailing), TrailingFactCount)
-				assert.Equal(len(calls), state.TotalCalls)
+				assert.LessOrEqual(t, len(state.Trailing), TrailingFactCount)
+				assert.Equal(t, len(calls), state.TotalCalls)
 				if len(state.Trailing) > 0 {
 					last := state.Trailing[len(state.Trailing)-1].CallPos
 					wantLast := CallPos{
 						MessageOrdinal: calls[len(calls)-1].MessageOrdinal,
 						CallIndex:      calls[len(calls)-1].CallIndex,
 					}
-					assert.Equal(wantLast, last, "step %d: window tail", step)
+					assert.Equal(t, wantLast, last, "step %d: window tail", step)
 				}
 			}
 		})
@@ -249,8 +247,6 @@ func TestIncrementalFoldRejectsOutOfWindowModification(t *testing.T) {
 
 // TestIncrementalStateRoundTrip checks JSON roundtrip and codec rejection.
 func TestIncrementalStateRoundTrip(t *testing.T) {
-	require := require.New(t)
-
 	rng := newTestRand(t, 11)
 	calls := make([]ToolCallRow, 0, 40)
 	for i := range 40 {
@@ -260,25 +256,22 @@ func TestIncrementalStateRoundTrip(t *testing.T) {
 		calls, []int{5, 20}, "assistant", "done", nil, nil, 12, 4000, 11,
 	)
 	blob, err := state.MarshalBinary()
-	require.NoError(err)
+	require.NoError(t, err)
 	var restored IncrementalState
-	require.NoError(restored.UnmarshalBinary(blob))
+	require.NoError(t, restored.UnmarshalBinary(blob))
 	assert.Equal(t, state, restored)
 
 	bad := append([]byte(nil), blob...)
-	require.Error((&IncrementalState{}).UnmarshalBinary(bad[:len(bad)/2]))
+	require.Error(t, (&IncrementalState{}).UnmarshalBinary(bad[:len(bad)/2]))
 	state.CodecVersion++
 	blob, err = state.MarshalBinary()
-	require.NoError(err)
-	require.Error((&IncrementalState{}).UnmarshalBinary(blob))
+	require.NoError(t, err)
+	require.Error(t, (&IncrementalState{}).UnmarshalBinary(blob))
 }
 
 // TestIncrementalFoldLongCrossingRun pins the failure-run latch across a
 // run far longer than the trailing window.
 func TestIncrementalFoldLongCrossingRun(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	// 100 identical failing Bash calls: one 100-long failure run.
 	calls := make([]ToolCallRow, 0, 100)
 	for i := range 100 {
@@ -308,10 +301,10 @@ func TestIncrementalFoldLongCrossingRun(t *testing.T) {
 			EventStatus:    "completed",
 		}}
 		next, got, ok := state.FoldToolHealth(appended, nil, row)
-		require.True(ok)
-		assert.Equal(100, got.ConsecutiveFailureMax, "step %d", step)
-		assert.Equal(100, got.FailureCount)
-		assert.Equal(0, got.FinalFailureStreak)
+		require.True(t, ok)
+		assert.Equal(t, 100, got.ConsecutiveFailureMax, "step %d", step)
+		assert.Equal(t, 100, got.FailureCount)
+		assert.Equal(t, 0, got.FinalFailureStreak)
 		row = ToolHealthRow{
 			FailureCount:   got.FailureCount,
 			RetryCount:     got.RetryCount,
@@ -328,9 +321,9 @@ func TestIncrementalFoldLongCrossingRun(t *testing.T) {
 		CommandClass:   "Bash:ls",
 	}}
 	_, got, ok := state.FoldToolHealth(appended, modified, row)
-	require.True(ok)
-	assert.Equal(100, got.ConsecutiveFailureMax)
-	assert.Equal(1, got.FinalFailureStreak)
+	require.True(t, ok)
+	assert.Equal(t, 100, got.ConsecutiveFailureMax)
+	assert.Equal(t, 1, got.FinalFailureStreak)
 }
 
 // TestIncrementalFoldRetryAcrossSeed pins retry-run maintenance across the
@@ -366,9 +359,6 @@ func TestIncrementalFoldRetryAcrossSeed(t *testing.T) {
 // streak for a run longer than the trailing window: the fold must carry
 // the pre-window run length forward instead of reporting the window size.
 func TestIncrementalFinalFailureStreakAcrossWindow(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	mk := func(ordinal int, fail bool) ToolCallRow {
 		status := "completed"
 		if fail {
@@ -395,11 +385,11 @@ func TestIncrementalFinalFailureStreakAcrossWindow(t *testing.T) {
 	// 35-fact trailing window size.
 	var next IncrementalState
 	_, got, ok := state.FoldToolHealth(nil, nil, row)
-	require.True(ok)
+	require.True(t, ok)
 	full := fullToolHealth(calls)
-	assert.Equal(full.FinalFailureStreak, got.FinalFailureStreak,
+	assert.Equal(t, full.FinalFailureStreak, got.FinalFailureStreak,
 		"final failure streak across the trailing window")
-	assert.Equal(full.ConsecutiveFailureMax, got.ConsecutiveFailureMax)
+	assert.Equal(t, full.ConsecutiveFailureMax, got.ConsecutiveFailureMax)
 
 	// Append a success and fold one call at a time: every fold must match
 	// the full recompute over the grown list.
@@ -407,12 +397,12 @@ func TestIncrementalFinalFailureStreakAcrossWindow(t *testing.T) {
 	for i := range appended {
 		full = fullToolHealth(append(slices.Clone(calls), appended[:i+1]...))
 		next, got, ok = state.FoldToolHealth(appended[i:i+1], nil, row)
-		require.True(ok, "append step %d", i)
-		assert.Equal(full.FinalFailureStreak, got.FinalFailureStreak,
+		require.True(t, ok, "append step %d", i)
+		assert.Equal(t, full.FinalFailureStreak, got.FinalFailureStreak,
 			"append step %d: final streak", i)
-		assert.Equal(full.ConsecutiveFailureMax, got.ConsecutiveFailureMax,
+		assert.Equal(t, full.ConsecutiveFailureMax, got.ConsecutiveFailureMax,
 			"append step %d: max streak", i)
-		assert.Equal(full.FailureCount, got.FailureCount,
+		assert.Equal(t, full.FailureCount, got.FailureCount,
 			"append step %d: failure count", i)
 		row = ToolHealthRow{FailureCount: got.FailureCount}
 		state = next
@@ -450,9 +440,6 @@ func TestIncrementalEditChurnOrdinalZero(t *testing.T) {
 // TestIncrementalFoldMidTaskAcrossSeed pins mid-task counting for a
 // boundary seeded with an open after-window.
 func TestIncrementalFoldMidTaskAcrossSeed(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	// Boundary at ordinal 10 with no calls after it; before-window has
 	// exec_command and edit_file names.
 	calls := make([]ToolCallRow, 0, 10)
@@ -471,7 +458,7 @@ func TestIncrementalFoldMidTaskAcrossSeed(t *testing.T) {
 	state := SeedIncrementalState(
 		calls, []int{10}, "", "", nil, nil, 0, 0, 0,
 	)
-	require.Len(state.PendingBoundaries, 1)
+	require.Len(t, state.PendingBoundaries, 1)
 	row := ToolHealthRow{}
 	// Appends after the boundary: exec_command then edit_file → overlap 2.
 	appended := []ToolCallRow{
@@ -485,15 +472,12 @@ func TestIncrementalFoldMidTaskAcrossSeed(t *testing.T) {
 		},
 	}
 	next, got, ok := state.FoldToolHealth(appended, nil, row)
-	require.True(ok)
-	assert.Equal(1, got.MidTaskCompactions)
-	assert.Empty(next.PendingBoundaries)
+	require.True(t, ok)
+	assert.Equal(t, 1, got.MidTaskCompactions)
+	assert.Empty(t, next.PendingBoundaries)
 }
 
 func TestFoldToolHealthRunawayMutableWindowHeals(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	calls := make([]ToolCallRow, 12)
 	for i := range calls {
 		calls[i] = ToolCallRow{
@@ -525,9 +509,9 @@ func TestFoldToolHealthRunawayMutableWindowHeals(t *testing.T) {
 	next, out, ok := state.FoldToolHealth(
 		nil, map[CallPos]ToolFact{pos(0): healthy(0)}, ToolHealthRow{},
 	)
-	require.True(ok)
-	assert.Equal(1, out.RunawayToolLoopCount)
-	assert.False(next.RunawayHistorical,
+	require.True(t, ok)
+	assert.Equal(t, 1, out.RunawayToolLoopCount)
+	assert.False(t, next.RunawayHistorical,
 		"a qualifying window inside the mutable trailing region must not latch")
 
 	// Heal all but one more failure: the window no longer qualifies, and
@@ -537,10 +521,10 @@ func TestFoldToolHealthRunawayMutableWindowHeals(t *testing.T) {
 		modified[pos(i)] = healthy(i)
 	}
 	next, out, ok = next.FoldToolHealth(nil, modified, ToolHealthRow{})
-	require.True(ok)
-	assert.Equal(0, out.RunawayToolLoopCount,
+	require.True(t, ok)
+	assert.Equal(t, 0, out.RunawayToolLoopCount,
 		"a healed trailing window must clear the runaway signal")
-	assert.False(next.RunawayHistorical)
+	assert.False(t, next.RunawayHistorical)
 }
 
 func TestFoldToolHealthRunawayHistoricalStaysLatched(t *testing.T) {
@@ -578,9 +562,6 @@ func TestFoldToolHealthRunawayHistoricalStaysLatched(t *testing.T) {
 }
 
 func TestSeedRunawayWindowCrossingRetainedBoundaryStaysHistorical(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	calls := make([]ToolCallRow, 47)
 	for i := range calls {
 		calls[i] = ToolCallRow{
@@ -605,7 +586,7 @@ func TestSeedRunawayWindowCrossingRetainedBoundaryStaysHistorical(t *testing.T) 
 	}
 
 	state := SeedIncrementalState(calls, nil, "", "", nil, nil, 0, 0, 0)
-	require.True(state.RunawayHistorical,
+	require.True(t, state.RunawayHistorical,
 		"an immutable runaway window crossing the retained boundary must latch")
 
 	appended := make([]ToolCallRow, 36)
@@ -619,15 +600,12 @@ func TestSeedRunawayWindowCrossingRetainedBoundaryStaysHistorical(t *testing.T) 
 		}
 	}
 	next, out, ok := state.FoldToolHealth(appended, nil, ToolHealthRow{})
-	require.True(ok)
-	assert.True(next.RunawayHistorical)
-	assert.Equal(1, out.RunawayToolLoopCount)
+	require.True(t, ok)
+	assert.True(t, next.RunawayHistorical)
+	assert.Equal(t, 1, out.RunawayToolLoopCount)
 }
 
 func TestFoldRunawayWindowCrossingNewRetainedBoundaryLatches(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	calls := make([]ToolCallRow, 35)
 	for i := range calls {
 		calls[i] = ToolCallRow{
@@ -649,7 +627,7 @@ func TestFoldRunawayWindowCrossingNewRetainedBoundaryLatches(t *testing.T) {
 		calls[i].EventStatus = "errored"
 	}
 	state := SeedIncrementalState(calls, nil, "", "", nil, nil, 0, 0, 0)
-	require.False(state.RunawayHistorical)
+	require.False(t, state.RunawayHistorical)
 
 	appendHealthy := func(start, count int) []ToolCallRow {
 		rows := make([]ToolCallRow, count)
@@ -671,37 +649,35 @@ func TestFoldRunawayWindowCrossingNewRetainedBoundaryLatches(t *testing.T) {
 	// before its left half is discarded.
 	firstAppend := appendHealthy(len(calls), 18)
 	next, out, ok := state.FoldToolHealth(firstAppend, nil, ToolHealthRow{})
-	require.True(ok)
-	assert.True(next.RunawayHistorical)
-	assert.Equal(1, out.RunawayToolLoopCount)
+	require.True(t, ok)
+	assert.True(t, next.RunawayHistorical)
+	assert.Equal(t, 1, out.RunawayToolLoopCount)
 
 	// Once the original window has completely left retained facts, later
 	// healthy appends must not erase the historical signal.
 	secondAppend := appendHealthy(len(calls)+len(firstAppend), 35)
 	final, out, ok := next.FoldToolHealth(secondAppend, nil, ToolHealthRow{})
-	require.True(ok)
-	assert.True(final.RunawayHistorical)
-	assert.Equal(1, out.RunawayToolLoopCount)
+	require.True(t, ok)
+	assert.True(t, final.RunawayHistorical)
+	assert.Equal(t, 1, out.RunawayToolLoopCount)
 }
 
 func TestIncrementalStateUnmarshalInitializesMutableMaps(t *testing.T) {
-	require := require.New(t)
-
 	var state IncrementalState
-	require.NoError(state.UnmarshalBinary([]byte(
+	require.NoError(t, state.UnmarshalBinary([]byte(
 		`{"codec_version":3,"total_calls":0}`,
 	)))
-	require.NotNil(state.EditLast)
-	require.NotNil(state.ModelCounts)
-	require.NotNil(state.ModelFirstSeen)
+	require.NotNil(t, state.EditLast)
+	require.NotNil(t, state.ModelCounts)
+	require.NotNil(t, state.ModelFirstSeen)
 
 	next, _, ok := state.FoldToolHealth([]ToolCallRow{{
 		Category:       "Edit",
 		InputJSON:      `{"file_path":"main.go"}`,
 		MessageOrdinal: 1,
 	}}, nil, ToolHealthRow{})
-	require.True(ok)
-	require.Contains(next.EditLast, "main.go",
+	require.True(t, ok)
+	require.Contains(t, next.EditLast, "main.go",
 		"the first edit append must not panic on a decoded empty map")
 }
 

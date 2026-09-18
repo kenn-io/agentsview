@@ -445,8 +445,8 @@ func allASCIIDigits(s string) bool {
 // output in lieu of running mount(8).
 var autofsMountSource = runMountCommand
 
-func runMountCommand() ([]byte, error) {
-	return exec.Command("/sbin/mount").Output()
+func runMountCommand(ctx context.Context) ([]byte, error) {
+	return exec.CommandContext(ctx, "/sbin/mount").Output()
 }
 
 // autofsPrefixes holds path prefixes that autofs is actively
@@ -466,16 +466,16 @@ func runMountCommand() ([]byte, error) {
 // /etc/auto_master directly) captures prefixes pulled in via
 // +auto_master directory-service includes, which never appear
 // in the local config file.
-var autofsPrefixes = detectAutofsPrefixes()
+var autofsPrefixes = detectAutofsPrefixes(context.Background())
 
 // detectAutofsPrefixes returns the autofs-managed path prefixes
 // reported by the running mount table. Non-darwin hosts and
 // exec failures both return nil.
-func detectAutofsPrefixes() []string {
+func detectAutofsPrefixes(ctx context.Context) []string {
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
-	data, err := autofsMountSource()
+	data, err := autofsMountSource(ctx)
 	if err != nil {
 		return nil
 	}

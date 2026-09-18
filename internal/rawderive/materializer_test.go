@@ -19,9 +19,6 @@ import (
 )
 
 func TestMaterializerReconstructsVerifiedReadOnlyTreeAndCleansUp(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	baseDir := t.TempDir()
 	first := []byte("first ")
@@ -47,39 +44,36 @@ func TestMaterializerReconstructsVerifiedReadOnlyTreeAndCleansUp(t *testing.T) {
 		BaseDir:       baseDir,
 		MaxTotalBytes: 1024,
 	}).Materialize(t.Context(), manifest)
-	require.NoError(err)
-	require.NotEmpty(materialized.Root())
-	assert.Equal([]rawsync.ObjectRef{firstRef, secondRef}, store.opened)
-	assert.Equal(identity.TenantID, store.tenantID)
+	require.NoError(t, err)
+	require.NotEmpty(t, materialized.Root())
+	assert.Equal(t, []rawsync.ObjectRef{firstRef, secondRef}, store.opened)
+	assert.Equal(t, identity.TenantID, store.tenantID)
 
 	path, err := materialized.EntryPath("nested/session.jsonl")
-	require.NoError(err)
+	require.NoError(t, err)
 	contents, err := os.ReadFile(path)
-	require.NoError(err)
-	assert.Equal(append(append([]byte(nil), first...), second...), contents)
+	require.NoError(t, err)
+	assert.Equal(t, append(append([]byte(nil), first...), second...), contents)
 	fileInfo, err := os.Stat(path)
-	require.NoError(err)
-	assert.Equal(os.FileMode(0), fileInfo.Mode().Perm()&0o222,
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0), fileInfo.Mode().Perm()&0o222,
 		"materialized files must not be writable")
 	dirInfo, err := os.Stat(filepath.Dir(path))
-	require.NoError(err)
-	assert.Equal(os.FileMode(0), dirInfo.Mode().Perm()&0o222,
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0), dirInfo.Mode().Perm()&0o222,
 		"materialized directories must not be writable")
 	for _, reader := range store.readers {
-		assert.True(reader.verified)
-		assert.True(reader.closed)
+		assert.True(t, reader.verified)
+		assert.True(t, reader.closed)
 	}
 
-	require.NoError(materialized.Cleanup())
+	require.NoError(t, materialized.Cleanup())
 	_, err = os.Stat(materialized.Root())
-	assert.ErrorIs(err, os.ErrNotExist)
-	require.NoError(materialized.Cleanup(), "cleanup must be idempotent")
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.NoError(t, materialized.Cleanup(), "cleanup must be idempotent")
 }
 
 func TestMaterializerRestoresSourceModTimeBeforeParsing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	baseDir := t.TempDir()
 	// Use 100 ns precision so the assertion is portable to Windows filesystems.
@@ -107,16 +101,16 @@ func TestMaterializerRestoresSourceModTimeBeforeParsing(t *testing.T) {
 	materialized, err := (Materializer{
 		Store: store, BaseDir: baseDir, MaxTotalBytes: 1024,
 	}).Materialize(t.Context(), manifest)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(materialized.Cleanup()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
 
 	sourcedInfo, err := os.Stat(materialized.entries["sourced.jsonl"])
-	require.NoError(err)
-	assert.True(sourcedInfo.ModTime().Equal(sourceModTime),
+	require.NoError(t, err)
+	assert.True(t, sourcedInfo.ModTime().Equal(sourceModTime),
 		"entries with a captured mod time must be restored to it, not the worker clock")
 	legacyInfo, err := os.Stat(materialized.entries["legacy.jsonl"])
-	require.NoError(err)
-	assert.True(legacyInfo.ModTime().Equal(manifest.Manifest.CapturedAt),
+	require.NoError(t, err)
+	assert.True(t, legacyInfo.ModTime().Equal(manifest.Manifest.CapturedAt),
 		"legacy entries without a captured mod time must be normalized to the capture time")
 }
 
@@ -175,7 +169,7 @@ func TestMaterializerEnforcesAggregateLimitBeforeOpeningObjects(t *testing.T) {
 	_, err := (Materializer{
 		Store: store, BaseDir: t.TempDir(), MaxTotalBytes: int64(len(data) - 1),
 	}).Materialize(t.Context(), manifest)
-	assert.ErrorIs(t, err, rawsync.ErrInvalid)
+	require.ErrorIs(t, err, rawsync.ErrInvalid)
 	assert.Empty(t, store.opened)
 }
 
@@ -189,25 +183,24 @@ func TestMaterializeObjectCopyObservesCancellationInBoundedChunks(t *testing.T) 
 		Path: "session.jsonl", Type: "file", Length: total,
 		Objects: []rawsync.ObjectRef{object},
 	}})
-	// The reader ignores the context on purpose: only the copy loop's own
-	// bounded-chunk observation may stop it.
+	// Cancel after the first chunk. Only the copy loop can stop further reads.
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	reader := &cancelingChunkReader{cancel: cancel, data: data, chunkSize: len(chunk)}
 	store := &materializerStore{
 		objects: map[rawsync.ObjectRef][]byte{object: data},
-		readerFactory: func(ctx context.Context, data []byte) io.Reader {
-			return &pacedReader{ctx: ctx, data: data, chunkSize: len(chunk), delay: 15 * time.Millisecond}
+		readerFactory: func(context.Context, []byte) io.Reader {
+			return reader
 		},
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Millisecond)
-	defer cancel()
-	started := time.Now()
 
 	_, err := (Materializer{
 		Store: store, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
 	}).Materialize(ctx, manifest)
 
-	require.ErrorIs(t, err, context.DeadlineExceeded,
+	require.ErrorIs(t, err, context.Canceled,
 		"a stalled object stream must stop materialization at a chunk boundary")
-	assert.Less(t, time.Since(started), 2*time.Second,
+	assert.Equal(t, len(chunk), reader.offset,
 		"cancellation must be observed between bounded copy chunks")
 }
 
@@ -241,27 +234,22 @@ func TestMaterializeTrailingProbeObservesCancellation(t *testing.T) {
 	assert.Less(t, time.Since(started), 2*time.Second)
 }
 
-// pacedReader yields fixed-size chunks after a delay and deliberately ignores
-// its context, so only explicit bounded-chunk context observation stops it.
-type pacedReader struct {
-	ctx       context.Context
+// cancelingChunkReader cancels after a chunk but leaves further reads possible.
+type cancelingChunkReader struct {
+	cancel    context.CancelFunc
 	data      []byte
 	chunkSize int
-	delay     time.Duration
 	offset    int
 }
 
-func (r *pacedReader) Read(p []byte) (int, error) {
-	if r.offset >= len(r.data) {
-		return 0, io.EOF
-	}
-	time.Sleep(r.delay)
+func (r *cancelingChunkReader) Read(p []byte) (int, error) {
 	if r.offset >= len(r.data) {
 		return 0, io.EOF
 	}
 	size := min(len(p), r.chunkSize, len(r.data)-r.offset)
 	n := copy(p, r.data[r.offset:r.offset+size])
 	r.offset += n
+	r.cancel()
 	return n, nil
 }
 
@@ -284,15 +272,12 @@ func (r *probeStallReader) Read(p []byte) (int, error) {
 }
 
 func TestMaterializerRejectsConflictingEntryPathsBeforeCreatingFiles(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	baseDir := t.TempDir()
 	data := []byte("session")
 	object := objectRefForBytes(t, data)
 	identity, err := rawsync.NewAuthIdentity("tenant-a", "device-a")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// Forge the exact envelope a binary without the path-collision check
 	// would have persisted: "a" is a file while "a/b" needs "a" as a
@@ -306,10 +291,14 @@ func TestMaterializerRejectsConflictingEntryPathsBeforeCreatingFiles(t *testing.
 		CapturedAt:       time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC),
 		Kind:             rawsync.ManifestSnapshot,
 		Entries: []rawsync.Entry{
-			{Path: "a", Type: "file", Length: int64(len(data)),
-				Objects: []rawsync.ObjectRef{object}},
-			{Path: "a/b", Type: "file", Length: int64(len(data)),
-				Objects: []rawsync.ObjectRef{object}},
+			{
+				Path: "a", Type: "file", Length: int64(len(data)),
+				Objects: []rawsync.ObjectRef{object},
+			},
+			{
+				Path: "a/b", Type: "file", Length: int64(len(data)),
+				Objects: []rawsync.ObjectRef{object},
+			},
 		},
 	}
 	canonicalJSON := []byte(fmt.Sprintf(
@@ -330,15 +319,15 @@ func TestMaterializerRejectsConflictingEntryPathsBeforeCreatingFiles(t *testing.
 		Store: store, BaseDir: baseDir, MaxTotalBytes: 1024,
 	}).Materialize(t.Context(), conflicted)
 
-	require.Error(err)
-	assert.ErrorIs(err, rawsync.ErrInvalid,
+	require.Error(t, err)
+	require.ErrorIs(t, err, rawsync.ErrInvalid,
 		"conflicting paths must fail validation, not filesystem materialization")
-	assert.Nil(materialized)
-	assert.Empty(store.opened,
+	assert.Nil(t, materialized)
+	assert.Empty(t, store.opened,
 		"conflicting manifests must be rejected before any object is opened")
 	entries, readErr := os.ReadDir(baseDir)
-	require.NoError(readErr)
-	assert.Empty(entries,
+	require.NoError(t, readErr)
+	assert.Empty(t, entries,
 		"no materialization tree may be created for conflicting paths")
 }
 
@@ -374,7 +363,7 @@ func TestMaterializeDelegatesInFlightCancellationToObjectStore(t *testing.T) {
 	select {
 	case <-copyStarted:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the materializer never started copying the object")
+		require.FailNow(t, "the materializer never started copying the object")
 	}
 	cancel()
 
@@ -383,14 +372,11 @@ func TestMaterializeDelegatesInFlightCancellationToObjectStore(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled,
 			"the materializer must pass attempt cancellation into the store-owned copy")
 	case <-time.After(5 * time.Second):
-		t.Fatal("the materialized copy never observed cancellation")
+		require.FailNow(t, "the materialized copy never observed cancellation")
 	}
 }
 
 func TestMaterializationCleanupIsRetryableAfterTransientFailure(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	root := t.TempDir()
 	transient := errors.New("transient removal failure")
@@ -409,18 +395,18 @@ func TestMaterializationCleanupIsRetryableAfterTransientFailure(t *testing.T) {
 
 	firstErr := materialized.Cleanup()
 
-	require.ErrorIs(firstErr, transient,
+	require.ErrorIs(t, firstErr, transient,
 		"a failed cleanup must stay reportable")
-	assert.NotContains(firstErr.Error(), root,
+	assert.NotContains(t, firstErr.Error(), root,
 		"cleanup errors must not expose the raw tree path")
 	_, statErr := os.Stat(root)
-	require.NoError(statErr, "a failed removal must leave the tree in place")
+	require.NoError(t, statErr, "a failed removal must leave the tree in place")
 
-	require.NoError(materialized.Cleanup(),
+	require.NoError(t, materialized.Cleanup(),
 		"a transient cleanup failure must be retryable, not latched")
 	_, statErr = os.Stat(root)
-	assert.ErrorIs(statErr, os.ErrNotExist)
-	require.NoError(materialized.Cleanup(), "successful cleanup stays idempotent")
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+	require.NoError(t, materialized.Cleanup(), "successful cleanup stays idempotent")
 }
 
 func TestMaterializeJoinsPartialCleanupFailureIntoOperationError(t *testing.T) {
@@ -443,7 +429,7 @@ func TestMaterializeJoinsPartialCleanupFailureIntoOperationError(t *testing.T) {
 	}).Materialize(t.Context(), manifest)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, cleanupFailure,
+	require.ErrorIs(t, err, cleanupFailure,
 		"partial-materialization cleanup failures must join the operation error")
 	assert.NotContains(t, err.Error(), "agentsview-raw",
 		"the joined error must not expose the raw tree path")

@@ -23,9 +23,18 @@ func seedWindowMessages(t *testing.T, d *DB, sessionID string) {
 	t.Helper()
 	insertSession(t, d, sessionID, "proj")
 	specs := []windowMsgSpec{
-		{0, "user"}, {1, "assistant"}, {2, "user"}, {3, "assistant"},
-		{4, "system"}, {5, "user"}, {6, "assistant"}, {7, "user"},
-		{8, "assistant"}, {9, "system"}, {10, "user"}, {11, "assistant"},
+		{0, "user"},
+		{1, "assistant"},
+		{2, "user"},
+		{3, "assistant"},
+		{4, "system"},
+		{5, "user"},
+		{6, "assistant"},
+		{7, "user"},
+		{8, "assistant"},
+		{9, "system"},
+		{10, "user"},
+		{11, "assistant"},
 	}
 	msgs := make([]Message, 0, len(specs))
 	for _, sp := range specs {

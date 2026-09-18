@@ -150,18 +150,15 @@ func TestParseSince_MonthArithmeticCrossesYearBoundary(t *testing.T) {
 // TestParseSince_AbsoluteDateUsesNowsLocation verifies the YYYY-MM-DD form
 // resolves to that date's midnight in now's location rather than always UTC.
 func TestParseSince_AbsoluteDateUsesNowsLocation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ny, err := time.LoadLocation("America/New_York")
-	require.NoError(err)
+	require.NoError(t, err)
 	now := time.Date(2026, 3, 15, 10, 0, 0, 0, ny)
 
 	got, err := ParseSince(now, "2026-01-01")
-	require.NoError(err)
+	require.NoError(t, err)
 	want := time.Date(2026, 1, 1, 0, 0, 0, 0, ny)
-	assert.True(want.Equal(got), "got %v, want %v", got, want)
-	assert.Equal(ny.String(), got.Location().String())
+	assert.True(t, want.Equal(got), "got %v, want %v", got, want)
+	assert.Equal(t, ny.String(), got.Location().String())
 }
 
 func TestParseSince_RejectsInvalidForms(t *testing.T) {

@@ -10,16 +10,14 @@ import (
 )
 
 func TestScanFindsAWSAccessKey(t *testing.T) {
-	assert := assert.New(t)
-
 	text := "export AWS_KEY=AKIA7QHWN2DKR4FYPLJM then continue"
 	got := Scan(text)
 	require.Len(t, got, 1)
 	m := got[0]
-	assert.Equal("aws-access-key", m.Rule)
-	assert.Equal(ConfidenceDefinite, m.Confidence)
-	assert.Equal("AKIA7QHWN2DKR4FYPLJM", text[m.Start:m.End])
-	assert.Equal(0, m.Index)
+	assert.Equal(t, "aws-access-key", m.Rule)
+	assert.Equal(t, ConfidenceDefinite, m.Confidence)
+	assert.Equal(t, "AKIA7QHWN2DKR4FYPLJM", text[m.Start:m.End])
+	assert.Equal(t, 0, m.Index)
 }
 
 func TestScanNoMatch(t *testing.T) {
@@ -27,14 +25,12 @@ func TestScanNoMatch(t *testing.T) {
 }
 
 func TestRedactMasksSecretButKeepsContext(t *testing.T) {
-	assert := assert.New(t)
-
 	text := "export AWS_KEY=AKIA7QHWN2DKR4FYPLJM then continue"
 	got := Redact(text)
-	assert.NotContains(got, "AKIA7QHWN2DKR4FYPLJM", "Redact leaked the full secret")
-	assert.True(strings.HasPrefix(got, "export AWS_KEY="), "Redact dropped surrounding context: %q", got)
-	assert.True(strings.HasSuffix(got, " then continue"), "Redact dropped trailing context: %q", got)
-	assert.Contains(got, "AKIA…PLJM", "Redact did not use the masked form")
+	assert.NotContains(t, got, "AKIA7QHWN2DKR4FYPLJM", "Redact leaked the full secret")
+	assert.True(t, strings.HasPrefix(got, "export AWS_KEY="), "Redact dropped surrounding context: %q", got)
+	assert.True(t, strings.HasSuffix(got, " then continue"), "Redact dropped trailing context: %q", got)
+	assert.Contains(t, got, "AKIA…PLJM", "Redact did not use the masked form")
 }
 
 func TestRedactNoMatchReturnsInput(t *testing.T) {
@@ -111,15 +107,13 @@ func TestRedactWindowMasksStraddlingGroupedSecret(t *testing.T) {
 // secret fully inside the window keeps its rule mask, surrounding context
 // survives, and a window with no secret is returned verbatim.
 func TestRedactWindowKeepsContextAndContainedSecrets(t *testing.T) {
-	assert := assert.New(t)
-
 	full := "the key is AKIA7QHWN2DKR4FYPLJM in config"
 	got := RedactWindow(full, 0, len(full))
-	assert.NotContains(got, "AKIA7QHWN2DKR4FYPLJM", "contained secret not masked")
-	assert.Contains(got, "the key is ", "context not preserved")
-	assert.Contains(got, " in config", "context not preserved")
+	assert.NotContains(t, got, "AKIA7QHWN2DKR4FYPLJM", "contained secret not masked")
+	assert.Contains(t, got, "the key is ", "context not preserved")
+	assert.Contains(t, got, " in config", "context not preserved")
 	clean := "just some ordinary prose with no secrets at all"
-	assert.Equal(clean, RedactWindow(clean, 0, len(clean)))
+	assert.Equal(t, clean, RedactWindow(clean, 0, len(clean)))
 }
 
 func TestRedactNeverLeaksKnownSecrets(t *testing.T) {
@@ -162,7 +156,7 @@ func TestScanRedactedNeverEqualsFullSecret(t *testing.T) {
 	for _, text := range samples {
 		matches := Scan(text)
 		if len(matches) == 0 {
-			t.Errorf("no matches for sample %q", text)
+			assert.Failf(t, "no matches", "sample %q", text)
 			continue
 		}
 		for _, m := range matches {
@@ -174,8 +168,6 @@ func TestScanRedactedNeverEqualsFullSecret(t *testing.T) {
 }
 
 func TestBasicAuthURLDetectsPasswordSpan(t *testing.T) {
-	assert := assert.New(t)
-
 	text := "db at postgres://admin:Sup3rSecretPw@db.example.com:5432/app"
 	var m *Match
 	for _, got := range Scan(text) {
@@ -184,13 +176,13 @@ func TestBasicAuthURLDetectsPasswordSpan(t *testing.T) {
 		}
 	}
 	require.NotNil(t, m, "expected a basic-auth-url candidate; got %+v", Scan(text))
-	assert.Equal("Sup3rSecretPw", text[m.Start:m.End])
-	assert.Equal(ConfidenceCandidate, m.Confidence)
+	assert.Equal(t, "Sup3rSecretPw", text[m.Start:m.End])
+	assert.Equal(t, ConfidenceCandidate, m.Confidence)
 	red := Redact(text)
 	// Assert the exact fully-masked form: no password character survives
 	// (this fails if the mask is loosened to reveal a suffix) while the
 	// surrounding URL context is preserved.
-	assert.Contains(red, "postgres://admin:…@db.example.com",
+	assert.Contains(t, red, "postgres://admin:…@db.example.com",
 		"Redact did not fully mask the password in context")
 }
 

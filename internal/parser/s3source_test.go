@@ -44,8 +44,6 @@ func TestS3MachineFromRoot(t *testing.T) {
 }
 
 func TestS3CredentialsIncludeSessionToken(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Setenv("AWS_ACCESS_KEY_ID", "access-key")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret-key")
 	t.Setenv("AWS_SESSION_TOKEN", "session-token")
@@ -53,9 +51,9 @@ func TestS3CredentialsIncludeSessionToken(t *testing.T) {
 	got, err := s3Credentials().GetWithContext(nil)
 
 	require.NoError(t, err)
-	assert.Equal("access-key", got.AccessKeyID)
-	assert.Equal("secret-key", got.SecretAccessKey)
-	assert.Equal("session-token", got.SessionToken)
+	assert.Equal(t, "access-key", got.AccessKeyID)
+	assert.Equal(t, "secret-key", got.SecretAccessKey)
+	assert.Equal(t, "session-token", got.SessionToken)
 }
 
 func TestS3ClientRejectsNonLoopbackHTTPEndpoint(t *testing.T) {
@@ -97,8 +95,6 @@ func TestS3ClientAllowsExplicitUnsafeHTTPEndpoint(t *testing.T) {
 // discovery over the .../<machine>/raw/<provider> layout is general-purpose and
 // not limited to the Claude/Codex configurations.
 func TestS3PrefixScanGeneralizesByScanner(t *testing.T) {
-	assert := assert.New(t)
-
 	oldList := listS3Objects
 	t.Cleanup(func() { listS3Objects = oldList })
 
@@ -122,19 +118,17 @@ func TestS3PrefixScanGeneralizesByScanner(t *testing.T) {
 	})
 
 	require.Len(t, got, 1)
-	assert.Equal(keepURI, got[0].Path)
-	assert.Equal(AgentQwen, got[0].Agent)
+	assert.Equal(t, keepURI, got[0].Path)
+	assert.Equal(t, AgentQwen, got[0].Agent)
 	// Machine is derived from the layout for an arbitrary provider segment.
-	assert.Equal("host", got[0].Machine)
-	assert.Equal("proj", got[0].Project)
-	assert.Equal(int64(7), got[0].SourceSize)
-	assert.Equal(mtime.UnixNano(), got[0].SourceMtime)
-	assert.Contains(got[0].SourceFingerprint, "keep")
+	assert.Equal(t, "host", got[0].Machine)
+	assert.Equal(t, "proj", got[0].Project)
+	assert.Equal(t, int64(7), got[0].SourceSize)
+	assert.Equal(t, mtime.UnixNano(), got[0].SourceMtime)
+	assert.Contains(t, got[0].SourceFingerprint, "keep")
 }
 
 func TestS3SourceRefFromDiscoveredFile(t *testing.T) {
-	assert := assert.New(t)
-
 	uri := "s3://bucket/laptop/raw/codex/sessions/2026/06/abc.jsonl"
 	file := DiscoveredFile{
 		Path:              uri,
@@ -152,18 +146,18 @@ func TestS3SourceRefFromDiscoveredFile(t *testing.T) {
 
 	// The s3 URI is the stable identity across every key field so dedup and
 	// fingerprinting agree on one source.
-	assert.Equal(AgentCodex, ref.Provider)
-	assert.Equal("s3://bucket/laptop/raw/codex", ref.ConfiguredRoot)
-	assert.Equal(uri, ref.Key)
-	assert.Equal(uri, ref.DisplayPath)
-	assert.Equal(uri, ref.FingerprintKey)
-	assert.Equal("proj", ref.ProjectHint)
+	assert.Equal(t, AgentCodex, ref.Provider)
+	assert.Equal(t, "s3://bucket/laptop/raw/codex", ref.ConfiguredRoot)
+	assert.Equal(t, uri, ref.Key)
+	assert.Equal(t, uri, ref.DisplayPath)
+	assert.Equal(t, uri, ref.FingerprintKey)
+	assert.Equal(t, "proj", ref.ProjectHint)
 
 	// The durable object metadata rides in the Opaque payload for the engine to
 	// thread back into the DiscoveredFile.
 	opaque, ok := ref.Opaque.(S3DiscoveredSource)
 	require.True(t, ok, "Opaque must be an S3DiscoveredSource")
-	assert.Equal(S3DiscoveredSource{
+	assert.Equal(t, S3DiscoveredSource{
 		URI:         uri,
 		Project:     "proj",
 		Machine:     "laptop",

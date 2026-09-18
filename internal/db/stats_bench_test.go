@@ -9,7 +9,7 @@ import (
 // The sidebar polls these totals even when no transcript is open.
 func BenchmarkGetStats(b *testing.B) {
 	d := testDB(b)
-	_, err := d.getWriter().Exec(`WITH RECURSIVE n(i) AS (
+	_, err := d.getWriter().Exec(b.Context(), `WITH RECURSIVE n(i) AS (
 		SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 10000
 		) INSERT INTO sessions (id, project, machine, agent, message_count,
 		user_message_count, started_at)

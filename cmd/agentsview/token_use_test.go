@@ -35,7 +35,7 @@ func upsertSession(
 	if startedAt != "" {
 		s.StartedAt = &startedAt
 	}
-	require.NoError(t, d.UpsertSession(s), "upsert %s", id)
+	require.NoError(t, d.UpsertSession(t.Context(), s), "upsert %s", id)
 }
 
 func TestResolveSessionID_PrefixedInput_NoEvidence_UnchangedNotKnown(t *testing.T) {
@@ -108,9 +108,6 @@ func TestResolveSessionID_Ambiguous_MostRecentWins(t *testing.T) {
 }
 
 func TestResolveSessionID_NotInDB_FoundOnDisk(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -119,17 +116,17 @@ func TestResolveSessionID_NotInDB_FoundOnDisk(t *testing.T) {
 	codexDir := filepath.Join(t.TempDir(), "codex-sessions")
 	bare := "33333333-3333-3333-3333-333333333333"
 	dayDir := filepath.Join(codexDir, "2026", "04", "17")
-	require.NoError(os.MkdirAll(dayDir, 0o755), "mkdir")
+	require.NoError(t, os.MkdirAll(dayDir, 0o755), "mkdir")
 	fname := "rollout-2026-04-17T10-00-00-" + bare + ".jsonl"
 	fpath := filepath.Join(dayDir, fname)
-	require.NoError(os.WriteFile(fpath, []byte("{}\n"), 0o644), "write")
+	require.NoError(t, os.WriteFile(fpath, []byte("{}\n"), 0o644), "write")
 
 	agentDirs := map[parser.AgentType][]string{
 		parser.AgentCodex: {codexDir},
 	}
 	got, known := resolveRawSessionID(ctx, d, agentDirs, bare)
-	assert.Equal("codex:"+bare, got, "disk probe")
-	assert.True(known, "disk probe found match")
+	assert.Equal(t, "codex:"+bare, got, "disk probe")
+	assert.True(t, known, "disk probe found match")
 }
 
 func TestResolveSessionID_NotFoundAnywhere_PassThrough(t *testing.T) {
@@ -225,9 +222,6 @@ func TestResolveSessionID_CanonicalKimiID_ResolvesWhenInDB(t *testing.T) {
 }
 
 func TestResolveSessionID_CanonicalCodexID_OnDiskNotInDB(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -237,9 +231,9 @@ func TestResolveSessionID_CanonicalCodexID_OnDiskNotInDB(t *testing.T) {
 	codexDir := filepath.Join(t.TempDir(), "codex-sessions")
 	uuid := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	dayDir := filepath.Join(codexDir, "2026", "04", "17")
-	require.NoError(os.MkdirAll(dayDir, 0o755), "mkdir")
+	require.NoError(t, os.MkdirAll(dayDir, 0o755), "mkdir")
 	fname := "rollout-2026-04-17T10-00-00-" + uuid + ".jsonl"
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(dayDir, fname), []byte("{}\n"), 0o644,
 	), "write")
 
@@ -248,14 +242,11 @@ func TestResolveSessionID_CanonicalCodexID_OnDiskNotInDB(t *testing.T) {
 	}
 	input := "codex:" + uuid
 	got, known := resolveRawSessionID(ctx, d, agentDirs, input)
-	assert.Equal(input, got, "canonical on disk")
-	assert.True(known, "canonical disk probe")
+	assert.Equal(t, input, got, "canonical on disk")
+	assert.True(t, known, "canonical disk probe")
 }
 
 func TestResolveSessionID_ProviderAuthoritativeCursorOnDiskNotInDB(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := newTestDB(t)
 	ctx := t.Context()
 
@@ -267,8 +258,8 @@ func TestResolveSessionID_ProviderAuthoritativeCursorOnDiskNotInDB(t *testing.T)
 		"agent-transcripts",
 		rawID+".jsonl",
 	)
-	require.NoError(os.MkdirAll(filepath.Dir(transcriptPath), 0o755))
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o755))
+	require.NoError(t, os.WriteFile(
 		transcriptPath,
 		[]byte(`{"role":"user","content":"hi"}`+"\n"),
 		0o644,
@@ -278,31 +269,28 @@ func TestResolveSessionID_ProviderAuthoritativeCursorOnDiskNotInDB(t *testing.T)
 		parser.AgentCursor: {cursorDir},
 	}
 	got, known := resolveRawSessionID(ctx, d, agentDirs, rawID)
-	assert.Equal("cursor:"+rawID, got,
+	assert.Equal(t, "cursor:"+rawID, got,
 		"provider FindSource should resolve unsynced raw cursor IDs")
-	assert.True(known, "provider disk probe")
+	assert.True(t, known, "provider disk probe")
 
 	got, known = resolveRawSessionID(ctx, d, agentDirs, "cursor:"+rawID)
-	assert.Equal("cursor:"+rawID, got,
+	assert.Equal(t, "cursor:"+rawID, got,
 		"canonical provider ID should resolve via provider FindSource")
-	assert.True(known, "canonical provider disk probe")
+	assert.True(t, known, "canonical provider disk probe")
 }
 
 func TestResolveSessionID_DevinCanonicalID_OnDiskNotInDB(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := newTestDB(t)
 	ctx := t.Context()
 
 	root := t.TempDir()
 	cliDir := filepath.Join(root, "cli")
 	transcriptsDir := filepath.Join(cliDir, "transcripts")
-	require.NoError(os.MkdirAll(transcriptsDir, 0o755))
+	require.NoError(t, os.MkdirAll(transcriptsDir, 0o755))
 	dbPath := filepath.Join(cliDir, "sessions.db")
 	devinDB, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(devinDB.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, devinDB.Close()) })
 	_, err = devinDB.ExecContext(ctx, `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
@@ -319,8 +307,8 @@ func TestResolveSessionID_DevinCanonicalID_OnDiskNotInDB(t *testing.T) {
 		VALUES
 			('session-123', 'Devin session', '/cwd/devin', 'devin-1', 1700000000000, 1700000001000, 0);
 	`)
-	require.NoError(err)
-	require.NoError(os.WriteFile(
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
 		filepath.Join(transcriptsDir, "session-123.json"),
 		[]byte(`{"messages":[]}`+"\n"),
 		0o644,
@@ -330,25 +318,22 @@ func TestResolveSessionID_DevinCanonicalID_OnDiskNotInDB(t *testing.T) {
 		parser.AgentDevin: {root},
 	}
 	got, known := resolveRawSessionID(ctx, d, agentDirs, "devin:session-123")
-	assert.Equal("devin:session-123", got)
-	assert.True(known,
+	assert.Equal(t, "devin:session-123", got)
+	assert.True(t, known,
 		"provider-backed Devin IDs should resolve via FindSource even though FileBased is false")
 }
 
 func TestResolveSessionID_GooseOnDiskNotInDB(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := newTestDB(t)
 	ctx := t.Context()
 
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "data", "sessions")
-	require.NoError(os.MkdirAll(sessionsDir, 0o755))
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
 	dbPath := filepath.Join(sessionsDir, parser.GooseDBName)
 	gooseDB, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(gooseDB.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, gooseDB.Close()) })
 	_, err = gooseDB.ExecContext(ctx, `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
@@ -370,19 +355,19 @@ func TestResolveSessionID_GooseOnDiskNotInDB(t *testing.T) {
 		INSERT INTO sessions (id, working_dir, created_at, updated_at)
 		VALUES ('session-123', '/cwd/goose', '2026-08-03 10:00:00', '2026-08-03 10:01:00');
 	`)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	agentDirs := map[parser.AgentType][]string{
 		parser.AgentGoose: {root},
 	}
 	got, known := resolveRawSessionID(ctx, d, agentDirs, "session-123")
-	assert.Equal("goose:session-123", got)
-	assert.True(known,
+	assert.Equal(t, "goose:session-123", got)
+	assert.True(t, known,
 		"provider-backed Goose raw IDs should resolve before archive sync")
 
 	got, known = resolveRawSessionID(ctx, d, agentDirs, "goose:session-123")
-	assert.Equal("goose:session-123", got)
-	assert.True(known,
+	assert.Equal(t, "goose:session-123", got)
+	assert.True(t, known,
 		"provider-backed Goose canonical IDs should resolve before archive sync")
 }
 
@@ -419,12 +404,12 @@ func TestResolveSessionID_UnderscoreID_NoFalseMatch(t *testing.T) {
 	// wins.
 	raw := "20260403_aaa"
 	decoy := "codex:20260403Xaaa"
-	real := "codex:" + raw
+	actualID := "codex:" + raw
 	upsertSession(t, d, decoy, "codex", "2026-04-16T10:00:00Z")
-	upsertSession(t, d, real, "codex", "2026-04-17T10:00:00Z")
+	upsertSession(t, d, actualID, "codex", "2026-04-17T10:00:00Z")
 
 	got, known := resolveRawSessionID(ctx, d, nil, raw)
-	assert.Equal(t, real, got, "underscore is literal")
+	assert.Equal(t, actualID, got, "underscore is literal")
 	assert.True(t, known)
 }
 

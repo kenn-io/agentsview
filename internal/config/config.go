@@ -140,6 +140,8 @@ var clickHouseConfigKeys = map[string]struct{}{
 }
 
 // DuckDBConfig holds DuckDB mirror and Quack connection settings.
+//
+//nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type DuckDBConfig struct {
 	Path          string `toml:"path" json:"path"`
 	URL           string `toml:"url" json:"url"`
@@ -677,6 +679,8 @@ func (a ArchiveContent) UsageOnly() bool {
 // (Port 0 means the ssh default of 22). HTTP remotes must set URL
 // and Token. A zero/empty Interval disables periodic remote
 // sync for this host.
+//
+//nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type RemoteHost struct {
 	Host      string          `toml:"host" json:"host"`
 	Transport RemoteTransport `toml:"transport,omitempty" json:"transport,omitempty"`
@@ -717,6 +721,8 @@ type sessionSourceConfig struct {
 }
 
 // Config holds all application configuration.
+//
+//nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type Config struct {
 	Host                 string                      `json:"host" toml:"host"`
 	Port                 int                         `json:"port" toml:"port"`
@@ -1080,17 +1086,17 @@ func Default() (Config, error) {
 	agentDirs := make(map[parser.AgentType][]string)
 	agentDirSource := make(map[parser.AgentType]dirSource)
 	for _, def := range parser.Registry {
-		dirs := make([]string, len(def.DefaultDirs))
+		dirs := make([]string, 0, len(def.DefaultDirs))
 		root := ""
 		if def.DefaultRootEnvVar != "" {
 			root = os.Getenv(def.DefaultRootEnvVar)
 		}
-		for i, rel := range def.DefaultDirs {
+		for _, rel := range def.DefaultDirs {
 			if root != "" {
-				dirs[i] = reRootDefaultDir(root, rel, def.DefaultRootDir)
+				dirs = append(dirs, reRootDefaultDir(root, rel, def.DefaultRootDir))
 				continue
 			}
-			dirs[i] = filepath.Join(home, rel)
+			dirs = append(dirs, filepath.Join(home, rel))
 		}
 		if def.Type == parser.AgentCodeBuddy && runtime.GOOS == "windows" {
 			if localAppData := os.Getenv("LOCALAPPDATA"); filepath.IsAbs(localAppData) {

@@ -27,19 +27,17 @@ func BenchmarkCodexStreamingDiscovery(b *testing.B) {
 }
 
 func TestCodexStreamingDiscoveryExcludesSymlinksAndDirectories(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	name := "rollout-2026-06-01T10-00-00-00000000-0000-4000-8000-000000000001.jsonl"
 	target := filepath.Join(root, name)
-	require.NoError(os.WriteFile(target, nil, 0o600))
-	require.NoError(os.Mkdir(filepath.Join(root, "rollout-directory.jsonl"), 0o700))
+	require.NoError(t, os.WriteFile(target, nil, 0o600))
+	require.NoError(t, os.Mkdir(filepath.Join(root, "rollout-directory.jsonl"), 0o700))
 	if err := os.Symlink(target, filepath.Join(root, "rollout-link.jsonl")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 	var paths []string
-	require.NoError(provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(s SourceRef) error { paths = append(paths, s.DisplayPath); return nil }))
-	require.Equal([]string{target}, paths)
+	require.NoError(t, provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(s SourceRef) error { paths = append(paths, s.DisplayPath); return nil }))
+	require.Equal(t, []string{target}, paths)
 }

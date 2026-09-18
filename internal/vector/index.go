@@ -426,7 +426,7 @@ func mirrorVersionMismatch(ctx context.Context, db *sql.DB, spec IndexSpec) (mis
 	err = db.QueryRowContext(ctx,
 		`SELECT value FROM `+spec.MetaTable+` WHERE key = ?`, mirrorSchemaVersionKey,
 	).Scan(&stamped)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return true, tables, nil
 	}
 	if err != nil {
@@ -639,7 +639,7 @@ var ErrGenerationNotFound = errors.New("generation not found")
 func (ix *Index) GenerationByID(ctx context.Context, id int64) (GenerationInfo, error) {
 	row := ix.db.QueryRowContext(ctx, ix.generationCoverageQuery()+` WHERE g.ordinal = ?`, id)
 	info, err := ix.scanGenerationInfo(ctx, row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return GenerationInfo{}, fmt.Errorf("generation %d: %w", id, ErrGenerationNotFound)
 	}
 	if err != nil {
@@ -702,7 +702,7 @@ func (ix *Index) scanGenerationInfo(ctx context.Context, src genInfoScanner) (Ge
 		&info.ID, &genKey, &info.Fingerprint, &info.Dimension, &info.State,
 		&info.Embedded, &info.Missing,
 	); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return GenerationInfo{}, err
 		}
 		return GenerationInfo{}, fmt.Errorf("scan generation: %w", err)

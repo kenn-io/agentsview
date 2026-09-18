@@ -18,11 +18,13 @@ import (
 	"go.kenn.io/agentsview/internal/pricing/catalog"
 )
 
-const fallbackVersionUnknown = "0"
-const litellmSnapshotPath = "snapshot/litellm_snapshot.json.gz"
-const maxFallbackSnapshotCompressedBytes = 1 << 20
-const maxFallbackSnapshotJSONBytes = 8 << 20
-const maxFallbackSnapshotModels = 100_000
+const (
+	fallbackVersionUnknown             = "0"
+	litellmSnapshotPath                = "snapshot/litellm_snapshot.json.gz"
+	maxFallbackSnapshotCompressedBytes = 1 << 20
+	maxFallbackSnapshotJSONBytes       = 8 << 20
+	maxFallbackSnapshotModels          = 100_000
+)
 
 var immutableFallbackSourceRefPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
@@ -38,7 +40,7 @@ type litellmFallbackSnapshot struct {
 }
 
 var (
-	fallbackPricingErr  error
+	errFallbackPricing  error
 	fallbackPricing     []ModelPricing
 	fallbackPricingOnce sync.Once
 )
@@ -67,8 +69,8 @@ func init() {
 // deterministic DB seeding.
 func FallbackPricing() []ModelPricing {
 	fallbackPricingOnce.Do(initFallbackPricing)
-	if fallbackPricingErr != nil {
-		panic(fallbackPricingErr)
+	if errFallbackPricing != nil {
+		panic(errFallbackPricing)
 	}
 
 	return cloneModelPricing(fallbackPricing)
@@ -77,11 +79,11 @@ func FallbackPricing() []ModelPricing {
 func initFallbackPricing() {
 	snapshot, err := decodeFallbackSnapshot()
 	if err != nil {
-		fallbackPricingErr = fmt.Errorf("loading liteLLM snapshot: %w", err)
+		errFallbackPricing = fmt.Errorf("loading liteLLM snapshot: %w", err)
 		FallbackVersion = fallbackVersionUnknown
 		SeedVersion = fallbackVersionUnknown
 		FallbackSourceRef = ""
-		log.Panicf("pricing: %v", fallbackPricingErr)
+		log.Panicf("pricing: %v", errFallbackPricing)
 	}
 
 	merged := append(

@@ -3,6 +3,8 @@ package signals
 import (
 	"fmt"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // BenchmarkCountDuplicatePromptsLargeSession measures the quality-signal
@@ -37,7 +39,7 @@ func BenchmarkCountDuplicatePromptsLargeSession(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		if repeats := countDuplicatePrompts(prompts); repeats != 0 {
-			b.Fatalf("fixture produced %d duplicate prompts", repeats)
+			require.Failf(b, "fixture produced duplicate prompts", "%d", repeats)
 		}
 	}
 }

@@ -131,8 +131,10 @@ func parityFixture() []parityFixtureSession {
 				// tokens. If any backend (notably DuckDB, which inlines its own
 				// usage CTE) failed to exclude it, that backend's totals would
 				// diverge and the deep-compare below would fail.
-				{role: "assistant", ts: parityDate + "T14:06:00Z",
-					model: "<synthetic>", outputTokens: 9999},
+				{
+					role: "assistant", ts: parityDate + "T14:06:00Z",
+					model: "<synthetic>", outputTokens: 9999,
+				},
 			},
 		},
 		{
@@ -146,16 +148,20 @@ func parityFixture() []parityFixtureSession {
 			id: "parity-d", project: "gamma", model: "model-x",
 			outputTokens: 500,
 			events: []parityEvent{
-				{role: "assistant", ts: parityDate + "T11:00:00Z",
-					claudeMessageID: "dup-m", claudeRequestID: "dup-r"},
+				{
+					role: "assistant", ts: parityDate + "T11:00:00Z",
+					claudeMessageID: "dup-m", claudeRequestID: "dup-r",
+				},
 			},
 		},
 		{
 			id: "parity-e", project: "gamma", model: "model-x",
 			outputTokens: 9000,
 			events: []parityEvent{
-				{role: "assistant", ts: parityDate + "T11:00:00.123Z",
-					claudeMessageID: "dup-m", claudeRequestID: "dup-r"},
+				{
+					role: "assistant", ts: parityDate + "T11:00:00.123Z",
+					claudeMessageID: "dup-m", claudeRequestID: "dup-r",
+				},
 			},
 		},
 		{
@@ -174,8 +180,10 @@ func parityFixture() []parityFixtureSession {
 			id: "parity-tool", project: "tools", model: "model-x",
 			events: []parityEvent{
 				{role: "user", ts: parityDate + "T15:00:00Z"},
-				{role: "assistant", ts: parityDate + "T15:01:00Z",
-					toolCompletedAt: parityDate + "T15:02:00Z"},
+				{
+					role: "assistant", ts: parityDate + "T15:01:00Z",
+					toolCompletedAt: parityDate + "T15:02:00Z",
+				},
 			},
 		},
 		{
@@ -184,8 +192,10 @@ func parityFixture() []parityFixtureSession {
 			id: "parity-tool-inline", project: "tools", model: "model-x",
 			events: []parityEvent{
 				{role: "user", ts: parityDate + "T15:10:00Z"},
-				{role: "assistant", ts: parityDate + "T15:11:00Z",
-					toolCompletedAt: parityDate + "T15:20:00Z"},
+				{
+					role: "assistant", ts: parityDate + "T15:11:00Z",
+					toolCompletedAt: parityDate + "T15:20:00Z",
+				},
 				{role: "assistant", ts: parityDate + "T15:21:00Z"},
 			},
 		},
@@ -195,8 +205,10 @@ func parityFixture() []parityFixtureSession {
 			// summary predates the terminal event, as real provider metadata can.
 			id: "parity-tool-boundary", project: "tools", model: "model-x",
 			events: []parityEvent{
-				{role: "assistant", ts: parityDate + "T23:59:00Z",
-					toolCompletedAt: "2026-06-15T00:01:00Z"},
+				{
+					role: "assistant", ts: parityDate + "T23:59:00Z",
+					toolCompletedAt: "2026-06-15T00:01:00Z",
+				},
 			},
 		},
 		{
@@ -228,8 +240,10 @@ func parityFixture() []parityFixtureSession {
 			id: "parity-fork-replay", project: "gamma", model: "model-x",
 			outputTokens: 7777, relationship: "fork", parent: "parity-d",
 			events: []parityEvent{
-				{role: "assistant", ts: parityDate + "T11:00:02Z",
-					claudeMessageID: "dup-m", claudeRequestID: "dup-r"},
+				{
+					role: "assistant", ts: parityDate + "T11:00:02Z",
+					claudeMessageID: "dup-m", claudeRequestID: "dup-r",
+				},
 			},
 		},
 		{
@@ -261,10 +275,14 @@ func seedParitySQLite(t *testing.T) *db.DB {
 	// Explicit pricing for both models so all three backends price the same
 	// token amounts identically (the syncs copy model_pricing to PG/DuckDB).
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{
-		{ModelPattern: "model-x", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
-			CacheCreationPerMTok: money.MustParseDollars("3.75"), CacheReadPerMTok: money.MustParseDollars("0.3")},
-		{ModelPattern: "model-y", InputPerMTok: money.MustParseDollars("1"), OutputPerMTok: money.MustParseDollars("5"),
-			CacheCreationPerMTok: money.MustParseDollars("1.25"), CacheReadPerMTok: money.MustParseDollars("0.1")},
+		{
+			ModelPattern: "model-x", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
+			CacheCreationPerMTok: money.MustParseDollars("3.75"), CacheReadPerMTok: money.MustParseDollars("0.3"),
+		},
+		{
+			ModelPattern: "model-y", InputPerMTok: money.MustParseDollars("1"), OutputPerMTok: money.MustParseDollars("5"),
+			CacheCreationPerMTok: money.MustParseDollars("1.25"), CacheReadPerMTok: money.MustParseDollars("0.1"),
+		},
 	}), "seeding pricing")
 
 	var writes []db.SessionBatchWrite
@@ -349,10 +367,14 @@ func paritySessionWrite(fs parityFixtureSession) db.SessionBatchWrite {
 				ToolUseID: fs.id + "-tool",
 				CallIndex: 0,
 				ResultEvents: []db.ToolResultEvent{
-					{ToolUseID: fs.id + "-tool", Source: "tool_execution",
-						Status: "started", Timestamp: ev.ts, EventIndex: 0},
-					{ToolUseID: fs.id + "-tool", Source: "tool_execution",
-						Status: "completed", Timestamp: ev.toolCompletedAt, EventIndex: 1},
+					{
+						ToolUseID: fs.id + "-tool", Source: "tool_execution",
+						Status: "started", Timestamp: ev.ts, EventIndex: 0,
+					},
+					{
+						ToolUseID: fs.id + "-tool", Source: "tool_execution",
+						Status: "completed", Timestamp: ev.toolCompletedAt, EventIndex: 1,
+					},
 				},
 			}}
 		}
@@ -515,24 +537,29 @@ func TestGetActivityReportParityAcrossBackends(t *testing.T) {
 		// A single past day -> minute (5m) buckets; carries the full fixture
 		// activity and the fixture-sanity assertions below.
 		{"day-minute", activity.QueryInput{
-			Preset: "day", Date: parityDate, Timezone: "UTC"}},
+			Preset: "day", Date: parityDate, Timezone: "UTC",
+		}},
 		// A 3-day range -> hourly buckets.
 		{"three-day-hourly", activity.QueryInput{
 			Preset: "custom", Timezone: "UTC",
-			From: "2026-06-12T00:00:00Z", To: "2026-06-15T00:00:00Z"}},
+			From: "2026-06-12T00:00:00Z", To: "2026-06-15T00:00:00Z",
+		}},
 		// A 30-day range -> daily calendar buckets.
 		{"thirty-day-daily", activity.QueryInput{
 			Preset: "custom", Timezone: "UTC",
-			From: "2026-05-16T00:00:00Z", To: "2026-06-15T00:00:00Z"}},
+			From: "2026-05-16T00:00:00Z", To: "2026-06-15T00:00:00Z",
+		}},
 		// A custom sub-day window that slices into the fixture's morning.
 		{"custom-subday", activity.QueryInput{
 			Preset: "custom", Timezone: "UTC",
-			From: parityDate + "T09:30:00Z", To: parityDate + "T15:00:00Z"}},
+			From: parityDate + "T09:30:00Z", To: parityDate + "T15:00:00Z",
+		}},
 		// A NY month spanning the March 8 2026 DST transition. The fixture has
 		// no March activity, so this asserts every backend produces identical
 		// empty aggregation over identical DST-aware calendar bucket boundaries.
 		{"dst-month-ny", activity.QueryInput{
-			Preset: "month", Date: "2026-03-14", Timezone: "America/New_York"}},
+			Preset: "month", Date: "2026-03-14", Timezone: "America/New_York",
+		}},
 	}
 
 	for _, tc := range cases {

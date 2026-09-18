@@ -12,24 +12,22 @@ import (
 )
 
 func TestUsageSessionCoveringIndexColumns(t *testing.T) {
-	require := require.New(t)
-
 	database := testDB(t)
 
-	rows, err := database.getReader().Query(
+	rows, err := database.getReader().Query(t.Context(),
 		`SELECT name FROM pragma_index_info('idx_messages_usage_session_covering')
 		 ORDER BY seqno`,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer rows.Close()
 
 	var got []string
 	for rows.Next() {
 		var name string
-		require.NoError(rows.Scan(&name))
+		require.NoError(t, rows.Scan(&name))
 		got = append(got, name)
 	}
-	require.NoError(rows.Err())
+	require.NoError(t, rows.Err())
 
 	want := []string{
 		"session_id", "ordinal", "timestamp", "role", "model",
@@ -39,15 +37,13 @@ func TestUsageSessionCoveringIndexColumns(t *testing.T) {
 }
 
 func TestUsageIndexesConcurrentRepair(t *testing.T) {
-	require := require.New(t)
-
 	database := testDB(t)
-	_, err := database.getWriter().Exec(`
+	_, err := database.getWriter().Exec(t.Context(), `
 		DROP INDEX idx_messages_usage_session_covering;
 		CREATE INDEX idx_messages_usage_session_covering
 		ON messages(session_id, ordinal, timestamp, model)
 		WHERE token_usage != '' AND model != '' AND model != '<synthetic>'`)
-	require.NoError(err)
+	require.NoError(t, err)
 	database.writer.Load().SetMaxOpenConns(2)
 	start := make(chan struct{})
 	errors := make(chan error, 2)
@@ -55,26 +51,27 @@ func TestUsageIndexesConcurrentRepair(t *testing.T) {
 	for range 2 {
 		wait.Go(func() {
 			<-start
-			errors <- ensureUsageIndexesLocked(database.getWriter())
+			errors <- ensureUsageIndexesLocked(t.Context(), database.getWriter())
 		})
 	}
 	close(start)
 	wait.Wait()
 	close(errors)
 	for err := range errors {
-		require.NoError(err)
+		require.NoError(t, err)
 	}
-	rows, err := database.getReader().Query(
+	rows, err := database.getReader().Query(t.Context(),
 		`SELECT name FROM pragma_index_info('idx_messages_usage_session_covering')
 		 ORDER BY seqno`)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer rows.Close()
 	var columns []string
 	for rows.Next() {
 		var column string
-		require.NoError(rows.Scan(&column))
+		require.NoError(t, rows.Scan(&column))
 		columns = append(columns, column)
 	}
+	require.NoError(t, rows.Err())
 	assert.Equal(t, usageSessionCoveringIndexColumns, columns)
 }
 
@@ -82,7 +79,7 @@ func TestUsageIndexesMigration(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 
-	d, err := Open(path)
+	d, err := Open(t.Context(), path)
 	requireNoError(t, err, "initial open")
 	insertSession(t, d, "s1", "proj")
 	d.Close()
@@ -118,7 +115,7 @@ func TestUsageIndexesMigration(t *testing.T) {
 	requireNoError(t, err, "recreate stale activity index")
 	conn.Close()
 
-	d, err = Open(path)
+	d, err = Open(t.Context(), path)
 	requireNoError(t, err, "reopen")
 	defer d.Close()
 
@@ -128,7 +125,7 @@ func TestUsageIndexesMigration(t *testing.T) {
 	requireIndexPresence(t, path, "idx_messages_usage_session_covering", 1)
 	requireIndexPresence(t, path, "idx_messages_usage_timestamp", 1)
 
-	rows, err := d.getReader().Query(
+	rows, err := d.getReader().Query(t.Context(),
 		`SELECT name FROM pragma_index_info('idx_messages_usage_session_covering')
 		 ORDER BY seqno`,
 	)
@@ -155,9 +152,6 @@ func TestUsageIndexesMigration(t *testing.T) {
 }
 
 func TestDropAndRebuildBulkImportIndexes(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := testDB(t)
 	usageIndexes := []string{
 		"idx_messages_usage_timestamp",
@@ -169,19 +163,19 @@ func TestDropAndRebuildBulkImportIndexes(t *testing.T) {
 	}
 	countIndex := func(name string) int {
 		var got int
-		require.NoError(database.getReader().QueryRow(
+		require.NoError(t, database.getReader().QueryRow(t.Context(),
 			`SELECT count(*) FROM sqlite_master
 			 WHERE type = 'index' AND name = ?`, name,
 		).Scan(&got), "query sqlite_master for %s", name)
 		return got
 	}
 	for _, name := range usageIndexes {
-		require.Equal(1, countIndex(name), "index %s before drop", name)
+		require.Equal(t, 1, countIndex(name), "index %s before drop", name)
 	}
 
-	require.NoError(database.DropBulkImportIndexes())
+	require.NoError(t, database.DropBulkImportIndexes(t.Context()))
 	for _, name := range usageIndexes {
-		assert.Equal(0, countIndex(name), "index %s after drop", name)
+		assert.Equal(t, 0, countIndex(name), "index %s after drop", name)
 	}
 
 	insertSession(t, database, "s1", "proj", func(s *Session) {
@@ -198,27 +192,27 @@ func TestDropAndRebuildBulkImportIndexes(t *testing.T) {
 		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
 	})
 
-	require.NoError(database.RebuildBulkImportIndexes())
+	require.NoError(t, database.RebuildBulkImportIndexes(t.Context()))
 	for _, name := range usageIndexes {
-		assert.Equal(1, countIndex(name), "index %s after rebuild", name)
+		assert.Equal(t, 1, countIndex(name), "index %s after rebuild", name)
 	}
 	assertUsageIndexColumns(t, database,
 		"idx_messages_usage_session_covering", usageSessionCoveringIndexColumns)
 
 	var indexed int
-	require.NoError(database.getReader().QueryRow(
+	require.NoError(t, database.getReader().QueryRow(t.Context(),
 		`SELECT count(*) FROM messages
 		 INDEXED BY idx_messages_usage_session_covering
 		 WHERE session_id = 's1'
 		   AND token_usage != '' AND model != '' AND model != '<synthetic>'`,
 	).Scan(&indexed), "count via rebuilt covering index")
-	assert.Equal(1, indexed,
+	assert.Equal(t, 1, indexed,
 		"row inserted while dropped must be served by the rebuilt index")
 }
 
 func assertUsageIndexColumns(t *testing.T, d *DB, index string, want []string) {
 	t.Helper()
-	rows, err := d.getReader().Query(
+	rows, err := d.getReader().Query(t.Context(),
 		`SELECT name FROM pragma_index_info(?) ORDER BY seqno`, index)
 	requireNoError(t, err, "read index columns")
 	defer rows.Close()

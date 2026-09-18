@@ -161,27 +161,47 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 	// Anchor the shared outcome so a bug that changes both paths in the
 	// same way cannot slip through the differential comparison.
 	assert.Equal(t, []identityRow{
-		{"proj", "m1", "/ambiguous-with-real", "", "",
-			"/ambiguous-with-real|"},
-		{"proj", "m1", "/ambiguous-with-real", "git@x:a.git", "origin",
-			"/ambiguous-with-real|git@x:a.git"},
+		{
+			"proj", "m1", "/ambiguous-with-real", "", "",
+			"/ambiguous-with-real|",
+		},
+		{
+			"proj", "m1", "/ambiguous-with-real", "git@x:a.git", "origin",
+			"/ambiguous-with-real|git@x:a.git",
+		},
 		{"proj", "m1", "/fallback-only", "", "", "/fallback-only|"},
-		{"proj", "m1", "/has-remote", "git@x:h.git", "origin",
-			"/has-remote|git@x:h.git"},
-		{"proj", "m1", "/mixed-fallback-first", "git@x:m2.git", "origin",
-			"/mixed-fallback-first|git@x:m2.git"},
-		{"proj", "m1", "/mixed-real-first", "git@x:m1.git", "origin",
-			"/mixed-real-first|git@x:m1.git"},
-		{"proj", "m1", "/preexisting-ambiguous", "", "",
-			"/preexisting-ambiguous|"},
-		{"proj", "m1", "/preexisting-ambiguous", "git@x:p.git", "origin",
-			"/preexisting-ambiguous|git@x:p.git"},
-		{"proj", "m1", "/preexisting-ambiguous-only", "", "",
-			"/preexisting-ambiguous-only|"},
-		{"proj", "m1", "/replaced-fallback", "git@x:r.git", "origin",
-			"/replaced-fallback|git@x:r.git"},
-		{"proj", "m1", "/updated", "git@x:u.git", "new-name",
-			"/updated|git@x:u.git"},
+		{
+			"proj", "m1", "/has-remote", "git@x:h.git", "origin",
+			"/has-remote|git@x:h.git",
+		},
+		{
+			"proj", "m1", "/mixed-fallback-first", "git@x:m2.git", "origin",
+			"/mixed-fallback-first|git@x:m2.git",
+		},
+		{
+			"proj", "m1", "/mixed-real-first", "git@x:m1.git", "origin",
+			"/mixed-real-first|git@x:m1.git",
+		},
+		{
+			"proj", "m1", "/preexisting-ambiguous", "", "",
+			"/preexisting-ambiguous|",
+		},
+		{
+			"proj", "m1", "/preexisting-ambiguous", "git@x:p.git", "origin",
+			"/preexisting-ambiguous|git@x:p.git",
+		},
+		{
+			"proj", "m1", "/preexisting-ambiguous-only", "", "",
+			"/preexisting-ambiguous-only|",
+		},
+		{
+			"proj", "m1", "/replaced-fallback", "git@x:r.git", "origin",
+			"/replaced-fallback|git@x:r.git",
+		},
+		{
+			"proj", "m1", "/updated", "git@x:u.git", "new-name",
+			"/updated|git@x:u.git",
+		},
 	}, batched)
 	var ambiguousResolution string
 	require.NoError(t, pg.QueryRowContext(ctx, `
@@ -246,7 +266,6 @@ func TestPGProjectIdentityAggregatesSourceArchives(t *testing.T) {
 	assert.NotEmpty(t, projects["missing"].ProjectKey)
 	assert.Contains(t, export.ProjectMapForWire(projects), projects["app"].ProjectKey)
 	assert.Contains(t, export.ProjectMapForWire(projects), projects["missing"].ProjectKey)
-
 }
 
 func TestPGListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) {

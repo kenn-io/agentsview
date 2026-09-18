@@ -36,21 +36,22 @@ func writeGroupedClaudeFixture(t *testing.T, root, name string) {
 // different agent, keeping them out of scoped tombstoning.
 func seedGroupedSubagentFixture(t *testing.T, database *db.DB) {
 	t.Helper()
+
 	fixturePath := filepath.Join(t.TempDir(), "fixture.jsonl")
 	size := int64(1)
 	mtime := int64(1)
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "grouped-parent", Agent: "zencoder", Project: "project",
 		Machine: "local", FilePath: &fixturePath, FileSize: &size,
 		FileMtime: &mtime, MessageCount: 1,
 	}))
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "grouped-child", Agent: "zencoder", Project: "project",
 		Machine: "local", FilePath: &fixturePath, FileSize: &size,
 		FileMtime: &mtime, MessageCount: 1,
 		RelationshipType: "continuation",
 	}))
-	require.NoError(t, database.InsertMessages([]db.Message{{
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
 		SessionID: "grouped-parent", Ordinal: 0, Role: "assistant",
 		Content: "spawning subagent", HasToolUse: true,
 		ToolCalls: []db.ToolCall{{
@@ -64,6 +65,7 @@ func requireGroupedChildParent(
 	t *testing.T, database *db.DB, wantLinked bool, msg string,
 ) {
 	t.Helper()
+
 	child, err := database.GetSession(t.Context(), "grouped-child")
 	require.NoError(t, err)
 	require.NotNil(t, child)
@@ -83,15 +85,12 @@ func requireGroupedChildParent(
 // and the grouped call must run that epilogue exactly once after every group,
 // so per-poll database work does not multiply with provider-group count.
 func TestReconcileProviderRootsGroupedRunsSharedEpilogueOnce(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := openTestDB(t)
 	rootA := filepath.Join(t.TempDir(), "claude-a")
 	rootB := filepath.Join(t.TempDir(), "claude-b")
 	writeGroupedClaudeFixture(t, rootA, "grouped-a")
 	writeGroupedClaudeFixture(t, rootB, "grouped-b")
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {rootA, rootB},
 		},
@@ -108,33 +107,33 @@ func TestReconcileProviderRootsGroupedRunsSharedEpilogueOnce(t *testing.T) {
 	deferredCtx := context.WithValue(
 		t.Context(), deferPassEpilogueContextKey{}, true,
 	)
-	require.NoError(engine.ReconcileProviderRoots(
+	require.NoError(t, engine.ReconcileProviderRoots(
 		deferredCtx, parser.AgentClaude, []string{rootA},
 	))
 	synced, err := database.GetSession(t.Context(), "grouped-a")
-	require.NoError(err)
-	require.NotNil(synced, "a deferred pass must still sync its scope")
-	skipped, err := database.LoadSkippedFiles()
-	require.NoError(err)
-	assert.Empty(skipped,
+	require.NoError(t, err)
+	require.NotNil(t, synced, "a deferred pass must still sync its scope")
+	skipped, err := database.LoadSkippedFiles(deferredCtx)
+	require.NoError(t, err)
+	assert.Empty(t, skipped,
 		"a deferred pass must not persist the archive-sized skip cache")
 	requireGroupedChildParent(t, database, false,
 		"a deferred pass must not run global subagent linking")
 
 	// The grouped call reconciles every group and then runs the shared
 	// epilogue once: both scopes synced, skip cache persisted, links set.
-	require.NoError(engine.ReconcileProviderRootsGrouped(t.Context(),
+	require.NoError(t, engine.ReconcileProviderRootsGrouped(t.Context(),
 		[]ProviderRootsGroup{
 			{Agent: parser.AgentClaude, Roots: []string{rootA}},
 			{Agent: parser.AgentClaude, Roots: []string{rootB}},
 		},
 	))
 	syncedB, err := database.GetSession(t.Context(), "grouped-b")
-	require.NoError(err)
-	require.NotNil(syncedB, "the grouped call must sync every group's scope")
-	skipped, err = database.LoadSkippedFiles()
-	require.NoError(err)
-	assert.NotEmpty(skipped,
+	require.NoError(t, err)
+	require.NotNil(t, syncedB, "the grouped call must sync every group's scope")
+	skipped, err = database.LoadSkippedFiles(deferredCtx)
+	require.NoError(t, err)
+	assert.NotEmpty(t, skipped,
 		"the grouped call must persist the skip cache after the last group")
 	requireGroupedChildParent(t, database, true,
 		"the grouped call must run subagent linking in the shared epilogue")
@@ -145,15 +144,12 @@ func TestReconcileProviderRootsGroupedRunsSharedEpilogueOnce(t *testing.T) {
 // eligible group must skip the archive-sized epilogue instead of blocking
 // shutdown on it, and must report the cancellation rather than succeed.
 func TestReconcileProviderRootsGroupedSkipsEpilogueOnCancellation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := openTestDB(t)
 	rootA := filepath.Join(t.TempDir(), "claude-a")
 	rootB := filepath.Join(t.TempDir(), "claude-b")
 	writeGroupedClaudeFixture(t, rootA, "grouped-a")
 	writeGroupedClaudeFixture(t, rootB, "grouped-b")
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {rootA, rootB},
 		},
@@ -183,15 +179,15 @@ func TestReconcileProviderRootsGroupedSkipsEpilogueOnCancellation(t *testing.T) 
 			{Agent: parser.AgentClaude, Roots: []string{rootB}},
 		},
 	)
-	require.Error(err, "a canceled batch must not report success")
-	assert.ErrorIs(err, context.Canceled)
+	require.Error(t, err, "a canceled batch must not report success")
+	require.ErrorIs(t, err, context.Canceled)
 
 	synced, err := database.GetSession(t.Context(), "grouped-a")
-	require.NoError(err)
-	require.NotNil(synced, "the group completed before cancellation must be synced")
-	skipped, err := database.LoadSkippedFiles()
-	require.NoError(err)
-	assert.Empty(skipped,
+	require.NoError(t, err)
+	require.NotNil(t, synced, "the group completed before cancellation must be synced")
+	skipped, err := database.LoadSkippedFiles(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, skipped,
 		"a canceled batch must not persist the archive-sized skip cache")
 	requireGroupedChildParent(t, database, false,
 		"a canceled batch must not run global subagent linking")
@@ -221,7 +217,7 @@ func TestGroupedReconcileContainerProbesDoNotScaleWithProviderGroups(t *testing.
 		require.NoError(t, os.WriteFile(
 			filepath.Join(openCodeDir, "opencode.db"), []byte("not a real db"), 0o644,
 		))
-		engine := NewEngine(openTestDB(t), EngineConfig{
+		engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentClaude:   claudeRoots,
 				parser.AgentOpenCode: {openCodeDir},
@@ -300,7 +296,7 @@ func TestInFamilyContainerCaptureBoundedByBatchRoots(t *testing.T) {
 				))
 				dirs = append(dirs, dir)
 			}
-			engine := NewEngine(openTestDB(t), EngineConfig{
+			engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentOpenCode: dirs,
 				},
@@ -367,13 +363,10 @@ func (s *tombstoneFailingSpool) ContainsSourceIdentity(
 // epilogue — otherwise a persistent tombstone failure would leave synced
 // subagents unlinked indefinitely.
 func TestReconcileProviderRootsGroupedRunsEpilogueDespiteTombstoneFailure(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := openTestDB(t)
 	rootA := filepath.Join(t.TempDir(), "claude-a")
 	writeGroupedClaudeFixture(t, rootA, "grouped-a")
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {rootA},
 		},
@@ -388,21 +381,21 @@ func TestReconcileProviderRootsGroupedRunsEpilogueDespiteTombstoneFailure(t *tes
 	missingPath := filepath.Join(rootA, "project", "vanished.jsonl")
 	size := int64(1)
 	mtime := int64(1)
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "vanished", Agent: string(parser.AgentClaude), Project: "project",
 		Machine: "local", FilePath: &missingPath, FileSize: &size,
 		FileMtime: &mtime,
 	}))
-	require.NoError(database.SetSessionDataVersion(
+	require.NoError(t, database.SetSessionDataVersion(t.Context(),
 		"vanished", db.CurrentDataVersion(),
 	))
 	raw, err := sql.Open("sqlite3", database.Path())
-	require.NoError(err)
-	t.Cleanup(func() { assert.NoError(raw.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, raw.Close()) })
 	_, err = raw.ExecContext(t.Context(), `INSERT INTO local_session_source_baselines
 		(session_id, machine, agent, file_path) VALUES (?,?,?,?)`,
 		"vanished", "local", string(parser.AgentClaude), missingPath)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	defaultFactory := engine.reconciliationSpoolFactory
 	engine.reconciliationSpoolFactory = func(path string) (reconciliationSpoolStore, error) {
@@ -418,15 +411,15 @@ func TestReconcileProviderRootsGroupedRunsEpilogueDespiteTombstoneFailure(t *tes
 			{Agent: parser.AgentClaude, Roots: []string{rootA}},
 		},
 	)
-	require.Error(err, "the tombstone failure must be reported")
-	assert.ErrorContains(err, "tombstone lookup unavailable")
+	require.Error(t, err, "the tombstone failure must be reported")
+	require.ErrorContains(t, err, "tombstone lookup unavailable")
 
 	synced, getErr := database.GetSession(t.Context(), "grouped-a")
-	require.NoError(getErr)
-	require.NotNil(synced, "page writes must commit before the tombstone failure")
-	skipped, loadErr := database.LoadSkippedFiles()
-	require.NoError(loadErr)
-	assert.NotEmpty(skipped,
+	require.NoError(t, getErr)
+	require.NotNil(t, synced, "page writes must commit before the tombstone failure")
+	skipped, loadErr := database.LoadSkippedFiles(t.Context())
+	require.NoError(t, loadErr)
+	assert.NotEmpty(t, skipped,
 		"a tombstone failure after committed writes must not skip skip-cache persistence")
 	requireGroupedChildParent(t, database, true,
 		"a tombstone failure after committed writes must not skip subagent linking")
@@ -437,15 +430,12 @@ func TestReconcileProviderRootsGroupedRunsEpilogueDespiteTombstoneFailure(t *tes
 // reconciling, the shared epilogue still runs for the groups that committed,
 // and the failure is reported with the provider it belongs to.
 func TestReconcileProviderRootsGroupedAttemptsEveryGroupAfterFailure(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := openTestDB(t)
 	rootA := filepath.Join(t.TempDir(), "claude-a")
 	rootB := filepath.Join(t.TempDir(), "claude-b")
 	writeGroupedClaudeFixture(t, rootA, "grouped-a")
 	writeGroupedClaudeFixture(t, rootB, "grouped-b")
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {rootA, rootB},
 		},
@@ -472,17 +462,17 @@ func TestReconcileProviderRootsGroupedAttemptsEveryGroupAfterFailure(t *testing.
 			{Agent: parser.AgentClaude, Roots: []string{rootB}},
 		},
 	)
-	require.Error(err, "the failing group's error must be reported")
-	assert.ErrorContains(err, "spool unavailable")
-	assert.ErrorContains(err, "claude",
+	require.Error(t, err, "the failing group's error must be reported")
+	require.ErrorContains(t, err, "spool unavailable")
+	require.ErrorContains(t, err, "claude",
 		"the joined error must name the failing group's provider")
 
 	syncedB, err := database.GetSession(t.Context(), "grouped-b")
-	require.NoError(err)
-	require.NotNil(syncedB,
+	require.NoError(t, err)
+	require.NotNil(t, syncedB,
 		"a later group must still reconcile after an earlier group fails")
-	skipped, err := database.LoadSkippedFiles()
-	require.NoError(err)
-	assert.NotEmpty(skipped,
+	skipped, err := database.LoadSkippedFiles(t.Context())
+	require.NoError(t, err)
+	assert.NotEmpty(t, skipped,
 		"the shared epilogue must still run for the groups that completed")
 }

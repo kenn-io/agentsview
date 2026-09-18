@@ -21,18 +21,15 @@ import (
 )
 
 func TestReconcileWatchRootsWindsurf300MembersUsesOneExactBoundedScan(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	const members = 300
 	root := filepath.Join(t.TempDir(), "Windsurf", "User")
 	workspaceDir := filepath.Join(root, "workspaceStorage", "workspace-hash")
-	require.NoError(os.MkdirAll(workspaceDir, 0o755))
+	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
 	manifest, err := json.Marshal(map[string]string{
 		"folder": "file:///work/demo", "padding": strings.Repeat("m", 1<<20),
 	})
-	require.NoError(err)
-	require.NoError(os.WriteFile(
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
 		filepath.Join(workspaceDir, "workspace.json"), manifest, 0o600,
 	))
 	dbPath := filepath.Join(workspaceDir, "state.vscdb")
@@ -57,10 +54,10 @@ func TestReconcileWatchRootsWindsurf300MembersUsesOneExactBoundedScan(t *testing
 		}
 	}
 	encoded, err := json.Marshal(payload)
-	require.NoError(err)
+	require.NoError(t, err)
 	writeSyncWindsurfStateDB(t, dbPath, string(encoded))
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentWindsurf: {root}},
 		Machine:   "local",
 	})
@@ -68,7 +65,7 @@ func TestReconcileWatchRootsWindsurf300MembersUsesOneExactBoundedScan(t *testing
 	t.Cleanup(engine.Close)
 
 	overlapTarget := min(4, engine.workerCount())
-	require.Equal(2, overlapTarget)
+	require.Equal(t, 2, overlapTarget)
 	probe := newRetainedOverlapProbe(parser.AgentWindsurf, overlapTarget)
 	ctx := parser.WithReconciliationRetainedMemberObserver(t.Context(), probe.observe)
 	done := make(chan error, 1)
@@ -76,34 +73,31 @@ func TestReconcileWatchRootsWindsurf300MembersUsesOneExactBoundedScan(t *testing
 		done <- engine.ReconcileWatchRoots(ctx, []string{root}, false)
 	}()
 	probe.waitAndRelease(t)
-	require.NoError(<-done)
+	require.NoError(t, <-done)
 
 	result := engine.LastReconciliationResult()
-	assert.True(result.Complete)
-	assert.Equal(1, result.Metrics.SharedContainerScans,
+	assert.True(t, result.Complete)
+	assert.Equal(t, 1, result.Metrics.SharedContainerScans,
 		"exact rehydration must not rescan the container per member")
-	assert.Equal(reconciliationPageSize, result.Metrics.MaxSpoolPageRows)
-	assert.Positive(result.Metrics.MaxProviderRetainedBytes)
-	assert.GreaterOrEqual(probe.maxActive.Load(), int32(overlapTarget))
-	assert.GreaterOrEqual(result.Metrics.MaxProviderRetainedBytes, probe.maxBytes.Load(),
+	assert.Equal(t, reconciliationPageSize, result.Metrics.MaxSpoolPageRows)
+	assert.Positive(t, result.Metrics.MaxProviderRetainedBytes)
+	assert.GreaterOrEqual(t, probe.maxActive.Load(), int32(overlapTarget))
+	assert.GreaterOrEqual(t, result.Metrics.MaxProviderRetainedBytes, probe.maxBytes.Load(),
 		"aggregate metric must include every concurrently retained worker member")
-	assert.GreaterOrEqual(result.Metrics.MaxProviderRetainedBytes, int64(len(manifest)),
+	assert.GreaterOrEqual(t, result.Metrics.MaxProviderRetainedBytes, int64(len(manifest)),
 		"workspace manifest must be charged for its discovery lifetime")
-	assert.Less(result.Metrics.MaxProviderRetainedBytes, int64(len(encoded))/2,
+	assert.Less(t, result.Metrics.MaxProviderRetainedBytes, int64(len(encoded))/2,
 		"concurrent provider retention must stay bounded by members, not the container")
 	stored, getErr := database.GetSession(t.Context(), "windsurf:session-299")
-	require.NoError(getErr)
-	require.NotNil(stored)
+	require.NoError(t, getErr)
+	require.NotNil(t, stored)
 }
 
 func TestReconcileWatchRootsWindsurfTombstonesDeletedVirtualMember(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := filepath.Join(t.TempDir(), "Windsurf", "User")
 	workspaceDir := filepath.Join(root, "workspaceStorage", "workspace-hash")
-	require.NoError(os.MkdirAll(workspaceDir, 0o755))
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
+	require.NoError(t, os.WriteFile(
 		filepath.Join(workspaceDir, "workspace.json"),
 		[]byte(`{"folder":"file:///work/demo"}`), 0o600,
 	))
@@ -112,35 +106,32 @@ func TestReconcileWatchRootsWindsurfTombstonesDeletedVirtualMember(t *testing.T)
 		"surviving-member", "deleted-member",
 	))
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentWindsurf: {root}},
 		Machine:   "local",
 	})
 	t.Cleanup(engine.Close)
-	require.Equal(2, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
 	updateSyncWindsurfStateDB(t, dbPath, windsurfTabsPayload(t, "surviving-member"))
 
-	require.NoError(engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
 
 	active, err := database.GetSession(t.Context(), "windsurf:deleted-member")
-	require.NoError(err)
-	assert.NotNil(active)
+	require.NoError(t, err)
+	assert.NotNil(t, active)
 	archived, err := database.GetSessionFull(t.Context(), "windsurf:deleted-member")
-	require.NoError(err)
+	require.NoError(t, err)
 	assertSourceMissingState(t, archived)
 	surviving, err := database.GetSession(t.Context(), "windsurf:surviving-member")
-	require.NoError(err)
-	assert.NotNil(surviving)
+	require.NoError(t, err)
+	assert.NotNil(t, surviving)
 }
 
 func TestSyncPathsWindsurfTombstonesRemovedVirtualMember(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := filepath.Join(t.TempDir(), "Windsurf", "User")
 	workspaceDir := filepath.Join(root, "workspaceStorage", "workspace-hash")
-	require.NoError(os.MkdirAll(workspaceDir, 0o755))
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
+	require.NoError(t, os.WriteFile(
 		filepath.Join(workspaceDir, "workspace.json"),
 		[]byte(`{"folder":"file:///work/demo"}`), 0o600,
 	))
@@ -149,28 +140,28 @@ func TestSyncPathsWindsurfTombstonesRemovedVirtualMember(t *testing.T) {
 		"surviving-member", "removed-member",
 	))
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentWindsurf: {root}},
 		Machine:   "local",
 	})
 	t.Cleanup(engine.Close)
-	require.Equal(2, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
 
 	// The container file still exists; only one member row is removed,
 	// exactly what the watcher sees after Windsurf deletes a conversation.
 	updateSyncWindsurfStateDB(t, dbPath, windsurfTabsPayload(t, "surviving-member"))
 
-	require.NoError(engine.SyncPathsContext(t.Context(), []string{dbPath}))
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{dbPath}))
 
 	active, err := database.GetSession(t.Context(), "windsurf:removed-member")
-	require.NoError(err)
-	assert.NotNil(active, "removed member must remain browsable")
+	require.NoError(t, err)
+	assert.NotNil(t, active, "removed member must remain browsable")
 	archived, err := database.GetSessionFull(t.Context(), "windsurf:removed-member")
-	require.NoError(err)
+	require.NoError(t, err)
 	assertSourceMissingState(t, archived)
 	surviving, err := database.GetSession(t.Context(), "windsurf:surviving-member")
-	require.NoError(err)
-	assert.NotNil(surviving)
+	require.NoError(t, err)
+	assert.NotNil(t, surviving)
 }
 
 func windsurfTabsPayload(t *testing.T, sessionIDs ...string) string {
@@ -248,7 +239,7 @@ func (probe *retainedOverlapProbe) waitAndRelease(t *testing.T) {
 		select {
 		case <-probe.arrived:
 		case <-time.After(30 * time.Second):
-			t.Fatal("timed out waiting for concurrent retained members")
+			require.FailNow(t, "timed out waiting for concurrent retained members")
 		}
 	}
 	close(probe.release)
@@ -279,16 +270,13 @@ func TestReconcileWatchRootsWindsurfDiskIndexFailuresStayIncomplete(t *testing.T
 		{name: "cleanup", inject: parser.WithDiscoveryDiskMapCleanupError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := filepath.Join(t.TempDir(), "Windsurf", "User")
 			workspaceDir := filepath.Join(root, "workspaceStorage", "workspace-hash")
-			require.NoError(os.MkdirAll(workspaceDir, 0o755))
+			require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
 			dbPath := filepath.Join(workspaceDir, "state.vscdb")
 			writeSyncWindsurfStateDB(t, dbPath, windsurfSyncPayload("fault-session", "reply"))
 			database := dbtest.OpenTestDB(t)
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentWindsurf: {root}},
 			})
 			defer engine.Close()
@@ -297,25 +285,22 @@ func TestReconcileWatchRootsWindsurfDiskIndexFailuresStayIncomplete(t *testing.T
 
 			err := engine.ReconcileWatchRoots(ctx, []string{root}, false)
 
-			require.ErrorIs(err, injected)
+			require.ErrorIs(t, err, injected)
 			result := engine.LastReconciliationResult()
-			assert.False(result.Complete)
-			assert.True(result.Aborted)
-			assert.Positive(result.ProviderFailures)
+			assert.False(t, result.Complete)
+			assert.True(t, result.Aborted)
+			assert.Positive(t, result.ProviderFailures)
 		})
 	}
 }
 
 func TestSourceMtimeWindsurfUsesProviderFingerprint(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := filepath.Join(t.TempDir(), "Windsurf", "User")
 	workspaceDir := filepath.Join(root, "workspaceStorage", "workspace-hash")
 	manifestPath := filepath.Join(workspaceDir, "workspace.json")
 	dbPath := filepath.Join(workspaceDir, "state.vscdb")
-	require.NoError(os.MkdirAll(workspaceDir, 0o755))
-	require.NoError(os.WriteFile(manifestPath, []byte(`{"folder":"file:///work/demo"}`), 0o644))
+	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
+	require.NoError(t, os.WriteFile(manifestPath, []byte(`{"folder":"file:///work/demo"}`), 0o644))
 	writeSyncWindsurfStateDB(t, dbPath, `{
 		"version": 1,
 		"sessionId": "mtime-session",
@@ -327,7 +312,7 @@ func TestSourceMtimeWindsurfUsesProviderFingerprint(t *testing.T) {
 		}]
 	}`)
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentWindsurf: {root},
 		},
@@ -336,17 +321,17 @@ func TestSourceMtimeWindsurfUsesProviderFingerprint(t *testing.T) {
 	defer engine.Close()
 
 	stats := engine.SyncAll(t.Context(), nil)
-	require.Equal(1, stats.Synced)
+	require.Equal(t, 1, stats.Synced)
 	virtualPath := dbPath + "#mtime-session"
-	assert.Equal(virtualPath, engine.FindSourceFile("windsurf:mtime-session"))
+	assert.Equal(t, virtualPath, engine.FindSourceFile(t.Context(), "windsurf:mtime-session"))
 	before := engine.SourceMtime(t.Context(), "windsurf:mtime-session")
-	require.NotZero(before)
+	require.NotZero(t, before)
 
 	future := time.Unix(0, before).Add(2 * time.Second)
-	require.NoError(os.Chtimes(manifestPath, future, future))
+	require.NoError(t, os.Chtimes(manifestPath, future, future))
 
 	after := engine.SourceMtime(t.Context(), "windsurf:mtime-session")
-	assert.Greater(after, before)
+	assert.Greater(t, after, before)
 }
 
 func TestProcessFileWindsurfSameMtimeHashChangeReparses(t *testing.T) {
@@ -359,19 +344,16 @@ func TestProcessFileWindsurfSameMtimeHashChangeReparses(t *testing.T) {
 		{name: "db freshness", freshSync: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := filepath.Join(t.TempDir(), "Windsurf", "User")
 			workspaceDir := filepath.Join(root, "workspaceStorage", "workspace-hash")
 			manifestPath := filepath.Join(workspaceDir, "workspace.json")
 			dbPath := filepath.Join(workspaceDir, "state.vscdb")
-			require.NoError(os.MkdirAll(workspaceDir, 0o755))
-			require.NoError(os.WriteFile(manifestPath, []byte(`{"folder":"file:///work/demo"}`), 0o644))
+			require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
+			require.NoError(t, os.WriteFile(manifestPath, []byte(`{"folder":"file:///work/demo"}`), 0o644))
 			writeSyncWindsurfStateDB(t, dbPath, windsurfSyncPayload("hash-session", "Alpha reply"))
 			virtualPath := dbPath + "#hash-session"
 			database := dbtest.OpenTestDB(t)
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentWindsurf: {root},
 				},
@@ -384,13 +366,13 @@ func TestProcessFileWindsurfSameMtimeHashChangeReparses(t *testing.T) {
 			)
 
 			infoBefore, err := os.Stat(dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			updateSyncWindsurfStateDB(t, dbPath, windsurfSyncPayload("hash-session", "Bravo reply"))
 			initialTime := time.Unix(0, initialMtime)
-			require.NoError(os.Chtimes(dbPath, initialTime, initialTime))
+			require.NoError(t, os.Chtimes(dbPath, initialTime, initialTime))
 			infoAfter, err := os.Stat(dbPath)
-			require.NoError(err)
-			require.Equal(infoBefore.Size(), infoAfter.Size(),
+			require.NoError(t, err)
+			require.Equal(t, infoBefore.Size(), infoAfter.Size(),
 				"test must keep size stable so hash is the only freshness signal")
 
 			if tt.seedCache {
@@ -407,7 +389,7 @@ func TestProcessFileWindsurfSameMtimeHashChangeReparses(t *testing.T) {
 			}
 			if tt.freshSync {
 				engine.Close()
-				engine = NewEngine(database, EngineConfig{
+				engine = NewEngine(t.Context(), database, EngineConfig{
 					AgentDirs: map[parser.AgentType][]string{
 						parser.AgentWindsurf: {root},
 					},
@@ -420,18 +402,19 @@ func TestProcessFileWindsurfSameMtimeHashChangeReparses(t *testing.T) {
 				Path:  virtualPath,
 				Agent: parser.AgentWindsurf,
 			})
-			require.NoError(second.err)
-			assert.False(second.skip)
-			require.Len(second.results, 1)
-			require.Len(second.results[0].Messages, 2)
-			assert.Equal("Bravo reply", second.results[0].Messages[1].Content)
-			assert.NotEqual(initialHash, second.results[0].Session.File.Hash)
+			require.NoError(t, second.err)
+			assert.False(t, second.skip)
+			require.Len(t, second.results, 1)
+			require.Len(t, second.results[0].Messages, 2)
+			assert.Equal(t, "Bravo reply", second.results[0].Messages[1].Content)
+			assert.NotEqual(t, initialHash, second.results[0].Session.File.Hash)
 		})
 	}
 }
 
 func writeSyncWindsurfStateDB(t *testing.T, dbPath, payload string) {
 	t.Helper()
+
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	defer conn.Close()
@@ -464,6 +447,7 @@ func syncInitialWindsurfSession(
 	sessionID string,
 ) (int64, string) {
 	t.Helper()
+
 	stats := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced)
 	sess, err := engine.db.GetSessionFull(

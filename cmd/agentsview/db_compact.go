@@ -86,7 +86,7 @@ func newDBCompactCommand() *cobra.Command {
 }
 
 func estimateDBCompact(ctx context.Context, cfg config.Config) (db.CompactEstimate, error) {
-	database, err := openReadOnlyDB(cfg)
+	database, err := openReadOnlyDB(ctx, cfg)
 	if err != nil {
 		return db.CompactEstimate{}, fmt.Errorf("opening archive for compaction estimate: %w", err)
 	}
@@ -189,7 +189,7 @@ func runDBCompactDirect(
 func requestDBCompact(
 	ctx context.Context, tr transport, authToken string, options db.CompactOptions,
 ) (db.CompactResult, error) {
-	api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return db.CompactResult{}, err
 	}

@@ -1153,7 +1153,7 @@ func (c *agyTokenCount) UnmarshalJSON(data []byte) error {
 	if err != nil || n < 0 {
 		// Negative counts are garbage too: emitting them would
 		// subtract from session and daily usage totals.
-		return nil
+		return nil //nolint:nilerr // Malformed optional token counts do not invalidate the transcript.
 	}
 	*c = agyTokenCount(n)
 	return nil

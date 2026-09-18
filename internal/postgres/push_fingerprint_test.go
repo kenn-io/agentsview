@@ -8,24 +8,21 @@ import (
 )
 
 func TestReadPushSessionMessageComparisonsNoSessions(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	comparisons, err := readPushSessionMessageComparisons(
 		t.Context(), nil, nil,
 	)
-	require.NoError(err)
-	require.NotNil(comparisons)
-	assert.Empty(comparisons.MessageAggregates)
-	assert.Empty(comparisons.MessageContentHash)
-	assert.Empty(comparisons.MessageRoleTime)
-	assert.Empty(comparisons.MessageFlags)
-	assert.Empty(comparisons.MessageSystemOrdinals)
-	assert.Empty(comparisons.MessageTokenFingerprint)
-	assert.Empty(comparisons.ToolCallAggregates)
-	assert.Empty(comparisons.ToolCallFingerprint)
-	assert.Empty(comparisons.ToolResultFingerprint)
-	assert.Empty(comparisons.UsageEventFingerprint)
+	require.NoError(t, err)
+	require.NotNil(t, comparisons)
+	assert.Empty(t, comparisons.MessageAggregates)
+	assert.Empty(t, comparisons.MessageContentHash)
+	assert.Empty(t, comparisons.MessageRoleTime)
+	assert.Empty(t, comparisons.MessageFlags)
+	assert.Empty(t, comparisons.MessageSystemOrdinals)
+	assert.Empty(t, comparisons.MessageTokenFingerprint)
+	assert.Empty(t, comparisons.ToolCallAggregates)
+	assert.Empty(t, comparisons.ToolCallFingerprint)
+	assert.Empty(t, comparisons.ToolResultFingerprint)
+	assert.Empty(t, comparisons.UsageEventFingerprint)
 }
 
 func TestShouldSkipSessionMessagesGuardsCountAndNilMaps(t *testing.T) {
@@ -56,12 +53,10 @@ func TestShouldSkipSessionMessagesGuardsCountAndNilMaps(t *testing.T) {
 }
 
 func TestComparisonAggregates(t *testing.T) {
-	assert := assert.New(t)
-
 	msgAgg, toolAgg, ok := comparisonAggregates("missing", nil)
-	assert.False(ok)
-	assert.Equal(pushMessageAggregate{}, msgAgg)
-	assert.Equal(pushToolCallAggregate{}, toolAgg)
+	assert.False(t, ok)
+	assert.Equal(t, pushMessageAggregate{}, msgAgg)
+	assert.Equal(t, pushToolCallAggregate{}, toolAgg)
 
 	comparisons := &pushMessageComparison{
 		MessageAggregates: map[string]pushMessageAggregate{
@@ -74,10 +69,10 @@ func TestComparisonAggregates(t *testing.T) {
 
 	msgAgg, toolAgg, ok = comparisonAggregates("sess", comparisons)
 	require.True(t, ok)
-	assert.Equal(pushMessageAggregate{
+	assert.Equal(t, pushMessageAggregate{
 		Count: 3, Sum: 9, Max: 5, Min: 1, SysFP: "0,2",
 	},
 		msgAgg,
 	)
-	assert.Equal(pushToolCallAggregate{Count: 2, Sum: 11}, toolAgg)
+	assert.Equal(t, pushToolCallAggregate{Count: 2, Sum: 11}, toolAgg)
 }

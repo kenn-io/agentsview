@@ -478,7 +478,7 @@ var httpRemoteCleanupRegistry = new(remotesync.CleanupRegistry)
 var errUnifiedRebuildAborted = sync.ErrUnifiedRebuildAborted
 
 type preparedHTTPRebuildCLI interface {
-	BorrowRebuildOptions() (sync.RebuildOptions, func(), error)
+	BorrowRebuildOptions(ctx context.Context) (sync.RebuildOptions, func(), error)
 	Close() error
 }
 
@@ -700,7 +700,7 @@ func runConfiguredLocalAndRemotes(
 				if prepared == nil {
 					return sync.RebuildOptions{}, nil, nil
 				}
-				options, release, err := prepared.BorrowRebuildOptions()
+				options, release, err := prepared.BorrowRebuildOptions(ctx)
 				if err != nil {
 					return sync.RebuildOptions{}, prepared, err
 				}
@@ -846,10 +846,10 @@ func primaryCoordinatorError(err error) error {
 			continue
 		}
 		{
-			var errCase0 *sync.RebuildContributorError
-			var errCase1 *remotesync.HostError
+			_, hasErrCase0 := errors.AsType[*sync.RebuildContributorError](err)
+			_, hasErrCase1 := errors.AsType[*remotesync.HostError](err)
 			switch {
-			case errors.As(err, &errCase0), errors.As(err, &errCase1):
+			case hasErrCase0, hasErrCase1:
 				return err
 			}
 		}
@@ -991,7 +991,7 @@ func coordinateLocalSync(
 
 	cleanResyncTemp(appCfg.DBPath)
 
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(ctx, database, sync.EngineConfig{
 		AgentDirs:               appCfg.AgentDirs,
 		SourceMachines:          appCfg.SourceMachines,
 		ProviderMetadata:        appCfg.ProviderMetadata,
@@ -1061,7 +1061,7 @@ func runDaemonSync(
 	full bool,
 	onProgress sync.ProgressFunc,
 ) (sync.SyncStats, error) {
-	api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return sync.SyncStats{}, err
 	}
@@ -1115,7 +1115,7 @@ func runDaemonRemoteSync(
 	includeLocal bool,
 	onProgress sync.ProgressFunc,
 ) ([]remoteHostFailure, error) {
-	api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return nil, err
 	}
@@ -1152,7 +1152,8 @@ func daemonRemoteSyncResult(
 ) ([]remoteHostFailure, error) {
 	failures := remoteFailuresFromResponse(out)
 	if out.ErrorData != nil && *out.ErrorData != "" {
-		if out.ErrorCode != nil && *out.ErrorCode == "unified_rebuild_aborted" {
+		if (out.ErrorCode != nil && *out.ErrorCode == "unified_rebuild_aborted") ||
+			(out.LocalStats != nil && out.LocalStats.Aborted != nil && *out.LocalStats.Aborted) {
 			return failures, sync.ErrUnifiedRebuildAborted
 		}
 		return failures, errors.New(*out.ErrorData)

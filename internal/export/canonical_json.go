@@ -59,8 +59,7 @@ func canonicalPricingRows(rows []EffectivePricingRow) map[string]any {
 		// pre-existing digest (a canonicalization-stability requirement,
 		// see docs/session-export.md versioning).
 		if row.Rates.CacheWrite1hPerMTok.Microdollars != 0 {
-			entry["cache_write_1h_per_mtok"] =
-				row.Rates.CacheWrite1hPerMTok.Microdollars
+			entry["cache_write_1h_per_mtok"] = row.Rates.CacheWrite1hPerMTok.Microdollars
 		}
 		out = append(out, entry)
 	}
@@ -87,8 +86,7 @@ func canonicalPricingBands(bands []PricingBand) []any {
 			"updated_at":           updatedAt,
 		}
 		if band.CacheWrite1hPerMTok.Microdollars != 0 {
-			entry["cache_write_1h_per_mtok"] =
-				band.CacheWrite1hPerMTok.Microdollars
+			entry["cache_write_1h_per_mtok"] = band.CacheWrite1hPerMTok.Microdollars
 		}
 		out = append(out, entry)
 	}

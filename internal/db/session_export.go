@@ -479,8 +479,7 @@ func (db *DB) exportSessionSummariesTx(
 				Machine: resultRows[i].Machine,
 			}
 		}
-		resultRows[i].ProjectReference =
-			export.ResolveProjectReferenceFromObservation(obs, archiveScope)
+		resultRows[i].ProjectReference = export.ResolveProjectReferenceFromObservation(obs, archiveScope)
 		reference := resultRows[i].ProjectReference
 		next := export.ProjectMapEntry{
 			DisplayLabel: reference.DisplayLabel,
@@ -969,8 +968,7 @@ func (db *DB) attachSessionExportUsage(
 			ClaudeRequestID:   r.claudeRequestID,
 		}
 	}
-	snapshotMask, snapshotAttribution, snapshotWebSearchRequests :=
-		activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
+	snapshotMask, snapshotAttribution, snapshotWebSearchRequests := activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
 	for i, r := range usageRows {
 		if !snapshotMask[i] {
 			continue
@@ -988,8 +986,7 @@ func (db *DB) attachSessionExportUsage(
 			}
 			a.seen[key] = struct{}{}
 		}
-		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok :=
-			sessionExportUsageTokens(r)
+		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok := sessionExportUsageTokens(r)
 		costRow := r
 		authoritative := r.costSource == CopilotReportedCostSource &&
 			r.cost.Valid
@@ -1277,18 +1274,18 @@ func (db *DB) decodeSessionExportCursor(
 	data, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
 		return sessionExportCursorPayload{},
-			fmt.Errorf("%w: invalid payload: %v", ErrInvalidCursor, err)
+			fmt.Errorf("%w: invalid payload: %w", ErrInvalidCursor, err)
 	}
 	var payload sessionExportCursorPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return sessionExportCursorPayload{},
-			fmt.Errorf("%w: invalid json: %v", ErrInvalidCursor, err)
+			fmt.Errorf("%w: invalid json: %w", ErrInvalidCursor, err)
 	}
 
 	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return sessionExportCursorPayload{},
-			fmt.Errorf("%w: invalid signature encoding: %v", ErrInvalidCursor, err)
+			fmt.Errorf("%w: invalid signature encoding: %w", ErrInvalidCursor, err)
 	}
 	db.cursorMu.RLock()
 	mac := hmac.New(sha256.New, db.cursorSecret)

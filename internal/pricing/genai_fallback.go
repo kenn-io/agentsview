@@ -34,7 +34,7 @@ type genAIFallbackSnapshot struct {
 
 var (
 	embeddedGenAIDocument     GenAIDocument
-	embeddedGenAIDocumentErr  error
+	errEmbeddedGenAIDocument  error
 	embeddedGenAIDocumentOnce sync.Once
 )
 
@@ -42,8 +42,8 @@ var (
 // the binary, parsed into the same runtime representation as a live refresh.
 func EmbeddedGenAIDocument() GenAIDocument {
 	embeddedGenAIDocumentOnce.Do(initEmbeddedGenAIDocument)
-	if embeddedGenAIDocumentErr != nil {
-		panic(embeddedGenAIDocumentErr)
+	if errEmbeddedGenAIDocument != nil {
+		panic(errEmbeddedGenAIDocument)
 	}
 	return embeddedGenAIDocument
 }
@@ -51,12 +51,12 @@ func EmbeddedGenAIDocument() GenAIDocument {
 func initEmbeddedGenAIDocument() {
 	snapshot, err := decodeGenAISnapshotFromFS(genAISnapshotFS)
 	if err != nil {
-		embeddedGenAIDocumentErr = fmt.Errorf(
+		errEmbeddedGenAIDocument = fmt.Errorf(
 			"loading GenAI Prices snapshot: %w", err,
 		)
 		return
 	}
-	embeddedGenAIDocument, embeddedGenAIDocumentErr = ParseGenAIDocument(
+	embeddedGenAIDocument, errEmbeddedGenAIDocument = ParseGenAIDocument(
 		snapshot.Data, snapshot.Version, snapshot.SourceRef,
 	)
 }

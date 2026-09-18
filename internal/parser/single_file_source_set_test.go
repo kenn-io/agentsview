@@ -53,13 +53,10 @@ func newShapeOnlyTestSingleFileSourceSet(root, livePath string) singleFileSource
 // falls through to raw-ID re-resolution to the live file. Without
 // RequireFreshSource the stored path is honored, preserving prior behavior.
 func TestSingleFileFindSourceRejectsStaleStoredPath(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	livePath := filepath.Join(root, "archive", "sess.jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(livePath), 0o755))
-	require.NoError(os.WriteFile(livePath, []byte("{}\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(livePath), 0o755))
+	require.NoError(t, os.WriteFile(livePath, []byte("{}\n"), 0o644))
 	stalePath := filepath.Join(root, "sessions", "sess.jsonl") // never created
 
 	s := newShapeOnlyTestSingleFileSourceSet(root, livePath)
@@ -70,9 +67,9 @@ func TestSingleFileFindSourceRejectsStaleStoredPath(t *testing.T) {
 		RawSessionID:       "sess",
 		RequireFreshSource: true,
 	})
-	require.NoError(err)
-	require.True(ok, "raw-ID re-resolution should still find the live file")
-	assert.Equal(livePath, src.DisplayPath,
+	require.NoError(t, err)
+	require.True(t, ok, "raw-ID re-resolution should still find the live file")
+	assert.Equal(t, livePath, src.DisplayPath,
 		"a stale stored path must re-resolve to the live file under RequireFreshSource")
 
 	src2, ok2, err := s.FindSource(t.Context(), FindSourceRequest{
@@ -80,16 +77,13 @@ func TestSingleFileFindSourceRejectsStaleStoredPath(t *testing.T) {
 		FingerprintKey: stalePath,
 		RawSessionID:   "sess",
 	})
-	require.NoError(err)
-	require.True(ok2)
-	assert.Equal(stalePath, src2.DisplayPath,
+	require.NoError(t, err)
+	require.True(t, ok2)
+	assert.Equal(t, stalePath, src2.DisplayPath,
 		"without RequireFreshSource the stored-path hint is honored unchanged")
 }
 
 func TestSingleFileWatchRootsDropsParserOnlyGlobs(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	want := WatchRoot{
 		Path:        filepath.Join(root, "sessions"),
@@ -123,13 +117,13 @@ func TestSingleFileWatchRootsDropsParserOnlyGlobs(t *testing.T) {
 	)
 
 	roots, err := set.WatchRoots(t.Context())
-	require.NoError(err)
-	assert.Equal([]WatchRoot{want}, roots)
+	require.NoError(t, err)
+	assert.Equal(t, []WatchRoot{want}, roots)
 
 	plan, err := set.WatchPlan(t.Context())
-	require.NoError(err)
-	require.Len(plan.Roots, 1)
-	assert.Equal([]string{"*.jsonl", "*.meta"}, plan.Roots[0].IncludeGlobs,
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Equal(t, []string{"*.jsonl", "*.meta"}, plan.Roots[0].IncludeGlobs,
 		"parser callers must retain the existing include globs")
-	assert.Equal([]string{"*.tmp"}, plan.Roots[0].ExcludeGlobs)
+	assert.Equal(t, []string{"*.tmp"}, plan.Roots[0].ExcludeGlobs)
 }

@@ -33,7 +33,7 @@ func ZedSQLiteSessionExists(ctx context.Context, dbPath, sessionID string) bool 
 		return false
 	}
 	defer db.Close()
-	shape, err := inspectZedSchema(context.Background(), db)
+	shape, err := inspectZedSchema(ctx, db)
 	if err != nil {
 		return false
 	}

@@ -13,31 +13,26 @@ import (
 )
 
 func TestKiloLegacySessionNameUTF8(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	taskDir := writeKiloLegacyFixture(t)
 	text := strings.Repeat("a", 76) + "\u65e5\u672c"
 	mustWriteJSON(t, filepath.Join(taskDir, "ui_messages.json"), []map[string]any{
 		{"ts": 1700000000000, "type": "say", "say": "text", "text": text},
 	})
 	sess, _, err := parseKiloLegacySession(taskDir, "project", "local")
-	require.NoError(err)
-	require.NotNil(sess)
-	assert.Equal(strings.Repeat("a", 76)+"...", sess.SessionName)
-	assert.Equal(text, sess.FirstMessage)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, strings.Repeat("a", 76)+"...", sess.SessionName)
+	assert.Equal(t, text, sess.FirstMessage)
 }
 
 func TestClaudePersistedToolResultUTF8(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	resultPath := filepath.Join(dir, "session", "tool-results", "large.txt")
-	require.NoError(os.MkdirAll(filepath.Dir(resultPath), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(resultPath), 0o755))
 	prefix := strings.Repeat("a", maxPersistedToolResultSize-1)
-	require.NoError(os.WriteFile(resultPath, []byte(prefix+"\u65e5"), 0o644))
+	require.NoError(t, os.WriteFile(resultPath, []byte(prefix+"\u65e5"), 0o644))
 	got, ok := readClaudePersistedToolResult(filepath.Join(dir, "session.jsonl"), resultPath)
-	require.True(ok)
+	require.True(t, ok)
 	assert.Equal(t, prefix+"\n\n[agentsview: persisted tool result truncated at 16 MiB]", got)
 }
 

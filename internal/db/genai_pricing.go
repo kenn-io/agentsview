@@ -36,10 +36,6 @@ func GenAIPricingDocumentsEqual(a, b *GenAIPricingDocument) bool {
 		bytes.Equal(a.Data, b.Data)
 }
 
-type genAIPricingQuerier interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
-
 // GetGenAIPricing returns the stored GenAI Prices document, or nil when the
 // archive has not been seeded yet.
 func (db *DB) GetGenAIPricing(
@@ -49,7 +45,7 @@ func (db *DB) GetGenAIPricing(
 }
 
 func getGenAIPricingFrom(
-	ctx context.Context, q genAIPricingQuerier,
+	ctx context.Context, q recallQueryRower,
 ) (*GenAIPricingDocument, error) {
 	var document GenAIPricingDocument
 	err := q.QueryRowContext(ctx, `

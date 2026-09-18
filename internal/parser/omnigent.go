@@ -85,21 +85,21 @@ const (
 	omnigentKindSubAgentName = "sub_agent"
 )
 
-// ErrOmnigentUnsupportedSchema is returned when a chat.db carries a schema this
+// OmnigentUnsupportedSchemaError is returned when a chat.db carries a schema this
 // parser cannot read (e.g. session metadata relocated to a separate physical
 // database). The sync layer treats it as a skip, not a hard failure.
-type ErrOmnigentUnsupportedSchema struct {
+type OmnigentUnsupportedSchemaError struct {
 	Reason string
 }
 
-func (e ErrOmnigentUnsupportedSchema) Error() string {
+func (e OmnigentUnsupportedSchemaError) Error() string {
 	return "omnigent: unsupported schema: " + e.Reason
 }
 
 // omnigentSchema captures the on-disk shape resolved by feature detection.
 // Session metadata always lives in omnigent_conversation_metadata: the
 // single-table generation that kept it on conversations is detected-
-// unsupported (ErrOmnigentUnsupportedSchema), not decoded.
+// unsupported (OmnigentUnsupportedSchemaError), not decoded.
 type omnigentSchema struct {
 	// intEnums is true when conversation_items.type is a SMALLINT code rather
 	// than a VARCHAR name.
@@ -182,7 +182,7 @@ func openOmnigentDB(dbPath string) (*sql.DB, error) {
 }
 
 // detectOmnigentSchema resolves the on-disk shape. It fails closed with
-// ErrOmnigentUnsupportedSchema when the database is not a recognizable omnigent
+// OmnigentUnsupportedSchemaError when the database is not a recognizable omnigent
 // store or when session metadata is not co-located in this file.
 func detectOmnigentSchema(ctx context.Context, conn *sql.DB) (omnigentSchema, error) {
 	for _, table := range []string{
@@ -194,7 +194,7 @@ func detectOmnigentSchema(ctx context.Context, conn *sql.DB) (omnigentSchema, er
 				"inspect omnigent table %s: %w", table, err)
 		}
 		if !exists {
-			return omnigentSchema{}, ErrOmnigentUnsupportedSchema{
+			return omnigentSchema{}, OmnigentUnsupportedSchemaError{
 				Reason: "missing core omnigent tables",
 			}
 		}
@@ -219,7 +219,7 @@ func detectOmnigentSchema(ctx context.Context, conn *sql.DB) (omnigentSchema, er
 		// conversations, no separate metadata table) or a split shape whose
 		// metadata lives in another physical database. Neither is
 		// recoverable from this file alone.
-		return omnigentSchema{}, ErrOmnigentUnsupportedSchema{
+		return omnigentSchema{}, OmnigentUnsupportedSchemaError{
 			Reason: "session metadata table not present in this database",
 		}
 	}
@@ -241,7 +241,7 @@ func detectOmnigentSchema(ctx context.Context, conn *sql.DB) (omnigentSchema, er
 		return omnigentSchema{}, fmt.Errorf("inspect omnigent item indexes: %w", err)
 	}
 	if itemIndex == "" {
-		return omnigentSchema{}, ErrOmnigentUnsupportedSchema{
+		return omnigentSchema{}, OmnigentUnsupportedSchemaError{
 			Reason: "missing bounded conversation item lookup index",
 		}
 	}
@@ -268,7 +268,7 @@ func detectOmnigentSchema(ctx context.Context, conn *sql.DB) (omnigentSchema, er
 		)
 	}
 	if name == "" {
-		return omnigentSchema{}, ErrOmnigentUnsupportedSchema{
+		return omnigentSchema{}, OmnigentUnsupportedSchemaError{
 			Reason: "missing bounded conversation change index",
 		}
 	}
@@ -362,6 +362,7 @@ func omnigentIndexWithPrefix(ctx context.Context,
 	if err != nil {
 		return "", err
 	}
+	defer rows.Close()
 	var names []string
 	for rows.Next() {
 		var (
@@ -387,27 +388,34 @@ func omnigentIndexWithPrefix(ctx context.Context,
 		return "", err
 	}
 	for _, name := range names {
-		indexRows, err := conn.QueryContext(ctx,
-			fmt.Sprintf("PRAGMA index_info(%q)", name),
-		)
-		if err != nil {
-			return "", err
-		}
-		columns := make([]string, 0, len(prefix))
-		for indexRows.Next() {
-			var seq, cid int
-			var column sql.NullString
-			if err := indexRows.Scan(&seq, &cid, &column); err != nil {
-				_ = indexRows.Close()
-				return "", err
+		columns, err := func() ([]string, error) {
+			indexRows, err := conn.QueryContext(ctx,
+				fmt.Sprintf("PRAGMA index_info(%q)", name),
+			)
+			if err != nil {
+				return nil, err
 			}
-			columns = append(columns, column.String)
-		}
-		if err := indexRows.Err(); err != nil {
-			_ = indexRows.Close()
-			return "", err
-		}
-		if err := indexRows.Close(); err != nil {
+			defer indexRows.Close()
+			columns := make([]string, 0, len(prefix))
+			for indexRows.Next() {
+				var seq, cid int
+				var column sql.NullString
+				if err := indexRows.Scan(&seq, &cid, &column); err != nil {
+					_ = indexRows.Close()
+					return nil, err
+				}
+				columns = append(columns, column.String)
+			}
+			if err := indexRows.Err(); err != nil {
+				_ = indexRows.Close()
+				return nil, err
+			}
+			if err := indexRows.Close(); err != nil {
+				return nil, err
+			}
+			return columns, nil
+		}()
+		if err != nil {
 			return "", err
 		}
 		if len(columns) >= len(prefix) &&
@@ -633,7 +641,7 @@ func ParseOmnigentDB(ctx context.Context, dbPath, machine string) ([]ParseResult
 		return nil, err
 	}
 	metas, err := listOmnigentConversationMetas(
-		context.Background(), conn, schema,
+		ctx, conn, schema,
 	)
 	if err != nil {
 		return nil, err
@@ -642,7 +650,7 @@ func ParseOmnigentDB(ctx context.Context, dbPath, machine string) ([]ParseResult
 	var results []ParseResult
 	for _, meta := range metas {
 		res, err := parseOmnigentConversationFromDB(
-			context.Background(), conn, schema, dbPath,
+			ctx, conn, schema, dbPath,
 			meta.member(), machine, dbInfo,
 		)
 		if err != nil {

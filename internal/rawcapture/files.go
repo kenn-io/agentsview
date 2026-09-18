@@ -18,6 +18,7 @@ import (
 )
 
 type fileOperations struct {
+	openRoot  func(*os.Root, string) (*os.File, error)
 	stat      func(string) (os.FileInfo, error)
 	rename    func(string, string) error
 	remove    func(string) error
@@ -152,7 +153,7 @@ func (s *capturePlanScope) MatchesRoots(plan parser.RawCapturePlan) bool {
 
 func defaultFileOperations() fileOperations {
 	return fileOperations{
-		stat: os.Stat, rename: os.Rename, remove: os.Remove,
+		openRoot: (*os.Root).Open, stat: os.Stat, rename: os.Rename, remove: os.Remove,
 		removeAll: os.RemoveAll, syncDir: syncDirectory,
 	}
 }

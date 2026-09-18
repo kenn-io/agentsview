@@ -14,9 +14,6 @@ import (
 // the tasks-directory enumeration: an unreadable task directory must
 // propagate, not be silently skipped as if its session were deleted.
 func TestRooCodeDiscoveryUnreadableTaskDirFails(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if runtime.GOOS == "windows" {
 		t.Skip("directory-permission read failures are not portable to Windows")
 	}
@@ -29,19 +26,19 @@ func TestRooCodeDiscoveryUnreadableTaskDirFails(t *testing.T) {
 	provider, ok := NewProvider(AgentRooCode, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	paths, err := rooCodeDiscoverPaths(t, provider)
-	require.NoError(err)
-	require.Equal([]string{historyPath}, paths)
+	require.NoError(t, err)
+	require.Equal(t, []string{historyPath}, paths)
 
-	require.NoError(os.Chmod(taskDir, 0o000))
-	t.Cleanup(func() { require.NoError(os.Chmod(taskDir, 0o755)) })
+	require.NoError(t, os.Chmod(taskDir, 0o000))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(taskDir, 0o755)) })
 	paths, err = rooCodeDiscoverPaths(t, provider)
-	require.Error(err,
+	require.Error(t, err,
 		"an unreadable task directory must not be skipped as a deleted session")
-	assert.ErrorIs(err, os.ErrPermission)
-	assert.Empty(paths)
+	require.ErrorIs(t, err, os.ErrPermission)
+	assert.Empty(t, paths)
 }
 
 func writeRooCodeDiscoveryTask(t *testing.T, root, taskID string) string {
@@ -74,9 +71,6 @@ func rooCodeDiscoverPaths(t *testing.T, provider Provider) ([]string, error) {
 // empty and the engine tombstoned every baselined RooCode session under it.
 // Traversal failures must propagate so the failed scope stays incomplete.
 func TestRooCodeDiscoveryUnreadableTasksDirFails(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if runtime.GOOS == "windows" {
 		t.Skip("directory-permission read failures are not portable to Windows")
 	}
@@ -91,26 +85,26 @@ func TestRooCodeDiscoveryUnreadableTasksDirFails(t *testing.T) {
 	provider, ok := NewProvider(AgentRooCode, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	paths, err := rooCodeDiscoverPaths(t, provider)
-	require.NoError(err)
-	require.Equal([]string{historyPath}, paths,
+	require.NoError(t, err)
+	require.Equal(t, []string{historyPath}, paths,
 		"a readable tasks directory must enumerate its sessions")
 
-	require.NoError(os.Chmod(tasksDir, 0o000))
+	require.NoError(t, os.Chmod(tasksDir, 0o000))
 	t.Cleanup(func() {
-		require.NoError(os.Chmod(tasksDir, 0o755))
+		require.NoError(t, os.Chmod(tasksDir, 0o755))
 	})
 
 	paths, err = rooCodeDiscoverPaths(t, provider)
-	require.Error(err,
+	require.Error(t, err,
 		"an unreadable tasks directory must not stream an authoritative empty discovery")
-	assert.ErrorIs(err, os.ErrPermission)
-	assert.Empty(paths)
+	require.ErrorIs(t, err, os.ErrPermission)
+	assert.Empty(t, paths)
 
 	_, err = provider.Discover(t.Context())
-	require.Error(err,
+	require.Error(t, err,
 		"an unreadable tasks directory must not collect an authoritative empty discovery")
 }
 
@@ -130,23 +124,21 @@ func TestRooCodeDiscoveryMissingTasksDirIsEmptyComplete(t *testing.T) {
 // Discovery skips non-directory entries, underscore-prefixed metadata
 // directories, and task directories without a history_item.json.
 func TestRooCodeDiscoverySkipsNonSessionEntries(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	historyPath := writeRooCodeDiscoveryTask(t, root, "task-1")
 	tasksDir := filepath.Join(root, "tasks")
-	require.NoError(os.MkdirAll(filepath.Join(tasksDir, "_index"), 0o755))
-	require.NoError(os.MkdirAll(filepath.Join(tasksDir, "no-history"), 0o755))
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.MkdirAll(filepath.Join(tasksDir, "_index"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(tasksDir, "no-history"), 0o755))
+	require.NoError(t, os.WriteFile(
 		filepath.Join(tasksDir, "stray.json"), []byte("{}"), 0o644,
 	))
 
 	provider, ok := NewProvider(AgentRooCode, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	paths, err := rooCodeDiscoverPaths(t, provider)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Equal(t, []string{historyPath}, paths)
 }

@@ -27,17 +27,15 @@ func TestDBBackedParsePropagatesCanceledContext(t *testing.T) {
 	cancel()
 
 	t.Run("forge", func(t *testing.T) {
-		assert := assert.New(t)
-
 		dbPath, seeder, db := newForgeTestDB(t)
 		defer db.Close()
 		seedForgeConversation(t, seeder)
 
 		sess, msgs, err := parseForgeSession(ctx, dbPath, "conv-001", "testmachine", false)
 		require.Error(t, err, "canceled context must abort forge parsing")
-		assert.ErrorIs(err, context.Canceled)
-		assert.Nil(sess)
-		assert.Empty(msgs)
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Nil(t, sess)
+		assert.Empty(t, msgs)
 	})
 
 	t.Run("piebald", func(t *testing.T) {
@@ -54,22 +52,20 @@ func TestDBBackedParsePropagatesCanceledContext(t *testing.T) {
 
 		results, err := parsePiebaldSessionResults(ctx, dbPath, "42", "testmachine", false)
 		require.Error(t, err, "canceled context must abort piebald parsing")
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.Empty(t, results)
 	})
 
 	t.Run("warp", func(t *testing.T) {
-		assert := assert.New(t)
-
 		dbPath, seeder, db := newWarpTestDB(t)
 		defer db.Close()
 		seedWarpConversation(t, seeder)
 
 		sess, msgs, err := parseWarpSession(ctx, dbPath, "conv-001", "testmachine", false)
 		require.Error(t, err, "canceled context must abort warp parsing")
-		assert.ErrorIs(err, context.Canceled)
-		assert.Nil(sess)
-		assert.Empty(msgs)
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Nil(t, sess)
+		assert.Empty(t, msgs)
 	})
 
 	t.Run("zcode", func(t *testing.T) {
@@ -84,7 +80,7 @@ func TestDBBackedParsePropagatesCanceledContext(t *testing.T) {
 
 		result, err := parseZCodeSession(ctx, fixture.DBPath, "session-ctx", "testmachine", false)
 		require.Error(t, err, "canceled context must abort zcode parsing")
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.Nil(t, result)
 	})
 
@@ -97,7 +93,7 @@ func TestDBBackedParsePropagatesCanceledContext(t *testing.T) {
 
 		result, err := parseGooseSession(ctx, fixture.dbPath, "child", "testmachine", false)
 		require.Error(t, err, "canceled context must abort goose parsing")
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.Nil(t, result)
 	})
 }
@@ -123,22 +119,20 @@ func TestZCodeMtimeQueryPropagatesCanceledContext(t *testing.T) {
 		cancel()
 		mtime, err := zcodeSessionFileMtime(canceled, fixture.DBPath, fixture.database, row)
 		require.Error(t, err, "canceled context must abort the zcode usage-mtime query")
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.Zero(t, mtime)
 	})
 
 	t.Run("missing usage table stays tolerated", func(t *testing.T) {
-		require := require.New(t)
-
 		_, err := fixture.database.ExecContext(t.Context(), `DROP TABLE model_usage`)
-		require.NoError(err)
+		require.NoError(t, err)
 		oldDBMtime := time.Date(2026, 7, 6, 13, 0, 0, 0, time.UTC)
-		require.NoError(os.Chtimes(fixture.DBPath, oldDBMtime, oldDBMtime))
+		require.NoError(t, os.Chtimes(fixture.DBPath, oldDBMtime, oldDBMtime))
 
 		mtime, err := zcodeSessionFileMtime(
 			t.Context(), fixture.DBPath, fixture.database, row,
 		)
-		require.NoError(err)
+		require.NoError(t, err)
 		assert.Equal(
 			t, int64(1783342860000000000), mtime,
 			"a missing model_usage table must not turn into an error",

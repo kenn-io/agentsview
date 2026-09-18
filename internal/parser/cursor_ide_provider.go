@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -178,7 +179,7 @@ func cursorIDESQLiteStateHash(dbPath string) (string, error) {
 	_, _ = fmt.Fprintf(h, "%d|%d|", id, volume)
 	header := make([]byte, 100)
 	n, err := io.ReadFull(f, header)
-	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
 		return "", fmt.Errorf("reading cursor IDE db header %s: %w", dbPath, err)
 	}
 	_, _ = h.Write(header[:n])
@@ -232,7 +233,7 @@ func cursorIDEBatchMemberPresent(ctx context.Context,
 	conn, err := openCursorIDEDB(container.Container)
 	if err == nil {
 		defer conn.Close()
-		ids, listErr := listCursorIDEComposerIDs(context.Background(), conn)
+		ids, listErr := listCursorIDEComposerIDs(ctx, conn)
 		err = listErr
 		for _, id := range ids {
 			existing[id] = struct{}{}

@@ -57,21 +57,18 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("selected model pairs user+assistant; other model yields none", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		scope, err := store.resolveAnalyticsMessageScope(
 			t.Context(), []string{sessionA, sessionB},
 			db.AnalyticsFilter{Model: model}, false)
-		require.NoError(err)
-		require.NotNil(scope)
+		require.NoError(t, err)
+		require.NotNil(t, scope)
 		stats := scope.StatsBySession()
 		sA, ok := stats[sessionA]
-		require.True(ok)
-		assert.Equal(1, sA.UserMessages)
-		assert.Equal(1, sA.AssistantMessages)
-		assert.Equal(2, sA.Messages)
-		assert.Zero(stats[sessionB].Messages, "non-selected model contributes nothing")
+		require.True(t, ok)
+		assert.Equal(t, 1, sA.UserMessages)
+		assert.Equal(t, 1, sA.AssistantMessages)
+		assert.Equal(t, 2, sA.Messages)
+		assert.Zero(t, stats[sessionB].Messages, "non-selected model contributes nothing")
 	})
 
 	t.Run("TimingBySession returns one entry per matched row", func(t *testing.T) {
@@ -102,30 +99,25 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("includeContent=false leaves content empty", func(t *testing.T) {
-		require := require.New(t)
-
 		scope, err := store.resolveAnalyticsMessageScope(
 			t.Context(), []string{sessionA}, db.AnalyticsFilter{Model: model}, false)
-		require.NoError(err)
-		require.NotNil(scope)
+		require.NoError(t, err)
+		require.NotNil(t, scope)
 		rows := scope.MessagesBySession()[sessionA]
-		require.Len(rows, 2)
+		require.Len(t, rows, 2)
 		for _, r := range rows {
 			assert.Empty(t, r.Content)
 		}
 	})
 
 	t.Run("includeContent=true populates content", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		scope, err := store.resolveAnalyticsMessageScope(
 			t.Context(), []string{sessionA}, db.AnalyticsFilter{Model: model}, true)
-		require.NoError(err)
-		require.NotNil(scope)
+		require.NoError(t, err)
+		require.NotNil(t, scope)
 		rows := scope.MessagesBySession()[sessionA]
-		require.Len(rows, 2)
-		assert.Equal("hello", rows[0].Content)
-		assert.Equal("world", rows[1].Content)
+		require.Len(t, rows, 2)
+		assert.Equal(t, "hello", rows[0].Content)
+		assert.Equal(t, "world", rows[1].Content)
 	})
 }

@@ -50,16 +50,14 @@ func TestRecomputeHeapBytesCountsLoadedText(t *testing.T) {
 }
 
 func TestBackfillSignalComputerReleasesAccumulatedHeap(t *testing.T) {
-	require := require.New(t)
-
 	fx := newEngineFixture(t)
 	ctx := t.Context()
 	const id = "s1"
-	require.NoError(fx.db.UpsertSession(db.Session{
+	require.NoError(t, fx.db.UpsertSession(ctx, db.Session{
 		ID: id, Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 1, UserMessageCount: 1,
 	}))
-	require.NoError(fx.db.ReplaceSessionMessages(id, []db.Message{{
+	require.NoError(t, fx.db.ReplaceSessionMessages(ctx, id, []db.Message{{
 		SessionID: id,
 		Ordinal:   0,
 		Role:      "user",
@@ -79,22 +77,20 @@ func TestBackfillSignalComputerReleasesAccumulatedHeap(t *testing.T) {
 	}
 
 	compute := fx.engine.BackfillSignalComputer()
-	require.NoError(compute(ctx, id))
+	require.NoError(t, compute(ctx, id))
 
 	assert.Equal(t, 1, calls)
 }
 
 func TestRecomputeSignalsDoesNotReleaseHeapDirectly(t *testing.T) {
-	require := require.New(t)
-
 	fx := newEngineFixture(t)
 	ctx := t.Context()
 	const id = "s1"
-	require.NoError(fx.db.UpsertSession(db.Session{
+	require.NoError(t, fx.db.UpsertSession(ctx, db.Session{
 		ID: id, Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 1, UserMessageCount: 1,
 	}))
-	require.NoError(fx.db.ReplaceSessionMessages(id, []db.Message{{
+	require.NoError(t, fx.db.ReplaceSessionMessages(ctx, id, []db.Message{{
 		SessionID: id,
 		Ordinal:   0,
 		Role:      "user",
@@ -113,32 +109,29 @@ func TestRecomputeSignalsDoesNotReleaseHeapDirectly(t *testing.T) {
 		calls++
 	}
 
-	require.NoError(fx.engine.RecomputeSignals(ctx, id))
+	require.NoError(t, fx.engine.RecomputeSignals(ctx, id))
 
 	assert.Zero(t, calls)
 }
 
 func TestBackfillSignalsRecomputesVersion2TerminalAPIErrorSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	fx := newEngineFixture(t)
 	ctx := t.Context()
 	const id = "api-stale"
 	endedAt := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
 
-	require.NoError(fx.db.UpsertSession(db.Session{
+	require.NoError(t, fx.db.UpsertSession(ctx, db.Session{
 		ID: id, Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 2, UserMessageCount: 1, EndedAt: &endedAt,
 	}))
-	require.NoError(fx.db.ReplaceSessionMessages(id, []db.Message{
+	require.NoError(t, fx.db.ReplaceSessionMessages(ctx, id, []db.Message{
 		{SessionID: id, Ordinal: 0, Role: "user", Content: "hello"},
 		{
 			SessionID: id, Ordinal: 1, Role: "assistant",
 			Content: "API Error: Unable to connect to API (ConnectionRefused)",
 		},
 	}))
-	require.NoError(fx.db.UpdateSessionSignals(id, db.SessionSignalUpdate{
+	require.NoError(t, fx.db.UpdateSessionSignals(ctx, id, db.SessionSignalUpdate{
 		Outcome:           "completed",
 		OutcomeConfidence: "medium",
 		QualitySignals: db.QualitySignals{
@@ -146,14 +139,14 @@ func TestBackfillSignalsRecomputesVersion2TerminalAPIErrorSession(t *testing.T) 
 		},
 	}))
 
-	require.NoError(fx.db.BackfillSignals(ctx, fx.engine.BackfillSignalComputer()))
+	require.NoError(t, fx.db.BackfillSignals(ctx, fx.engine.BackfillSignalComputer()))
 
 	sess, err := fx.db.GetSessionFull(ctx, id)
-	require.NoError(err)
-	require.NotNil(sess)
-	assert.Equal(db.CurrentQualitySignalVersion, sess.QualitySignalVersion)
-	assert.Equal("errored", sess.Outcome)
-	assert.Equal("medium", sess.OutcomeConfidence)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, db.CurrentQualitySignalVersion, sess.QualitySignalVersion)
+	assert.Equal(t, "errored", sess.Outcome)
+	assert.Equal(t, "medium", sess.OutcomeConfidence)
 }
 
 func TestRecomputeHeapReleaserSkipsSmallSessions(t *testing.T) {

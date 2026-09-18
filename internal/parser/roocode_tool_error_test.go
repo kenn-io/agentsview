@@ -11,12 +11,9 @@ import (
 )
 
 func TestParseRooCodeSessionMistakeLimitPairing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-mistake")
-	require.NoError(os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-mistake",
@@ -28,10 +25,10 @@ func TestParseRooCodeSessionMistakeLimitPairing(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(err)
-	require.NoError(os.WriteFile(
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Sequence: user task, command ask, mistake_limit_reached ask
@@ -57,34 +54,31 @@ func TestParseRooCodeSessionMistakeLimitPairing(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(err)
-	require.NoError(os.WriteFile(
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// user task + execute_command tool call = 2
-	assert.Equal(2, sess.MessageCount)
+	assert.Equal(t, 2, sess.MessageCount)
 
 	// Verify the tool call has an errored ResultEvent.
-	require.Len(msgs[1].ToolCalls, 1)
+	require.Len(t, msgs[1].ToolCalls, 1)
 	tc := msgs[1].ToolCalls[0]
-	assert.Equal("execute_command", tc.ToolName)
-	require.Len(tc.ResultEvents, 1)
-	assert.Equal("errored", tc.ResultEvents[0].Status)
-	assert.Equal("Too many mistakes, stopping", tc.ResultEvents[0].Content)
+	assert.Equal(t, "execute_command", tc.ToolName)
+	require.Len(t, tc.ResultEvents, 1)
+	assert.Equal(t, "errored", tc.ResultEvents[0].Status)
+	assert.Equal(t, "Too many mistakes, stopping", tc.ResultEvents[0].Content)
 }
 
 func TestParseRooCodeSessionAPIReqFailedPairing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-apifail")
-	require.NoError(os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-apifail",
@@ -96,10 +90,10 @@ func TestParseRooCodeSessionAPIReqFailedPairing(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(err)
-	require.NoError(os.WriteFile(
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Sequence: user task, MCP tool call, api_req_failed ask
@@ -125,26 +119,26 @@ func TestParseRooCodeSessionAPIReqFailedPairing(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(err)
-	require.NoError(os.WriteFile(
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// user task + MCP tool call = 2
-	assert.Equal(2, sess.MessageCount)
+	assert.Equal(t, 2, sess.MessageCount)
 
 	// Verify the MCP tool call has an errored ResultEvent.
-	require.Len(msgs[1].ToolCalls, 1)
+	require.Len(t, msgs[1].ToolCalls, 1)
 	tc := msgs[1].ToolCalls[0]
-	assert.Equal("brave-search", tc.ToolName)
-	assert.Equal("MCP", tc.Category)
-	require.Len(tc.ResultEvents, 1)
-	assert.Equal("errored", tc.ResultEvents[0].Status)
-	assert.Equal("API request failed: 401 Unauthorized", tc.ResultEvents[0].Content)
+	assert.Equal(t, "brave-search", tc.ToolName)
+	assert.Equal(t, "MCP", tc.Category)
+	require.Len(t, tc.ResultEvents, 1)
+	assert.Equal(t, "errored", tc.ResultEvents[0].Status)
+	assert.Equal(t, "API request failed: 401 Unauthorized", tc.ResultEvents[0].Content)
 }
 
 func TestRooCodeIsToolErrorEvent(t *testing.T) {
@@ -170,12 +164,9 @@ func TestRooCodeIsToolErrorEvent(t *testing.T) {
 }
 
 func TestParseRooCodeSessionErrorNotPairedToCompletedRead(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-err-completed")
-	require.NoError(os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-err-completed",
@@ -185,10 +176,10 @@ func TestParseRooCodeSessionErrorNotPairedToCompletedRead(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(err)
-	require.NoError(os.WriteFile(
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// The readFile call completes via its embedded content, so the
@@ -214,36 +205,33 @@ func TestParseRooCodeSessionErrorNotPairedToCompletedRead(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(err)
-	require.NoError(os.WriteFile(
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// user task + readFile + standalone error message = 3.
-	assert.Equal(3, sess.MessageCount)
+	assert.Equal(t, 3, sess.MessageCount)
 
 	// The completed readFile keeps exactly its embedded result.
-	require.Len(msgs[1].ToolCalls, 1)
+	require.Len(t, msgs[1].ToolCalls, 1)
 	tc := msgs[1].ToolCalls[0]
-	require.Len(tc.ResultEvents, 1)
-	assert.Equal("completed", tc.ResultEvents[0].Status)
+	require.Len(t, tc.ResultEvents, 1)
+	assert.Equal(t, "completed", tc.ResultEvents[0].Status)
 
 	// The error surfaces as a standalone system message.
-	assert.Equal(RoleSystem, msgs[2].Role)
-	assert.Equal("Unrelated provider error", msgs[2].Content)
+	assert.Equal(t, RoleSystem, msgs[2].Role)
+	assert.Equal(t, "Unrelated provider error", msgs[2].Content)
 }
 
 func TestParseRooCodeSessionErrorNotPairedAcrossNormalTurn(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-err-stale")
-	require.NoError(os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-err-stale",
@@ -253,10 +241,10 @@ func TestParseRooCodeSessionErrorNotPairedAcrossNormalTurn(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(err)
-	require.NoError(os.WriteFile(
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// A normal assistant message after the appliedDiff call ends
@@ -289,33 +277,30 @@ func TestParseRooCodeSessionErrorNotPairedAcrossNormalTurn(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(err)
-	require.NoError(os.WriteFile(
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// task + appliedDiff + assistant text + standalone error = 4.
-	assert.Equal(4, sess.MessageCount)
+	assert.Equal(t, 4, sess.MessageCount)
 
-	require.Len(msgs[1].ToolCalls, 1)
-	assert.Empty(msgs[1].ToolCalls[0].ResultEvents,
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Empty(t, msgs[1].ToolCalls[0].ResultEvents,
 		"error across a normal turn must not attach to the tool call")
 
-	assert.Equal(RoleSystem, msgs[3].Role)
-	assert.Equal("Stale diff error from a later attempt", msgs[3].Content)
+	assert.Equal(t, RoleSystem, msgs[3].Role)
+	assert.Equal(t, "Stale diff error from a later attempt", msgs[3].Content)
 }
 
 func TestParseRooCodeSessionErrorPairsMostRecentTool(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-err-recent")
-	require.NoError(os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-err-recent",
@@ -325,10 +310,10 @@ func TestParseRooCodeSessionErrorPairsMostRecentTool(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(err)
-	require.NoError(os.WriteFile(
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// A command is still pending (no output yet) when a later
@@ -361,26 +346,26 @@ func TestParseRooCodeSessionErrorPairsMostRecentTool(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(err)
-	require.NoError(os.WriteFile(
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// The pending command stays unresolved.
-	require.Len(msgs[1].ToolCalls, 1)
-	assert.Equal("execute_command", msgs[1].ToolCalls[0].ToolName)
-	assert.Empty(msgs[1].ToolCalls[0].ResultEvents,
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "execute_command", msgs[1].ToolCalls[0].ToolName)
+	assert.Empty(t, msgs[1].ToolCalls[0].ResultEvents,
 		"stale command must not absorb the later diff_error")
 
 	// The diff_error pairs with the most recent tool, appliedDiff.
-	require.Len(msgs[2].ToolCalls, 1)
+	require.Len(t, msgs[2].ToolCalls, 1)
 	tc := msgs[2].ToolCalls[0]
-	assert.Equal("appliedDiff", tc.ToolName)
-	require.Len(tc.ResultEvents, 1)
-	assert.Equal("errored", tc.ResultEvents[0].Status)
-	assert.Equal("Search block not found in file", tc.ResultEvents[0].Content)
+	assert.Equal(t, "appliedDiff", tc.ToolName)
+	require.Len(t, tc.ResultEvents, 1)
+	assert.Equal(t, "errored", tc.ResultEvents[0].Status)
+	assert.Equal(t, "Search block not found in file", tc.ResultEvents[0].Content)
 }

@@ -25,8 +25,6 @@ func TestMain(m *testing.M) {
 }
 
 func TestGenerateStreamWithOptions_OpenAIEndpoint(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Setenv("PATH", t.TempDir())
 	var got struct {
 		Model    string `json:"model"`
@@ -37,12 +35,12 @@ func TestGenerateStreamWithOptions_OpenAIEndpoint(t *testing.T) {
 		Stream bool `json:"stream"`
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(http.MethodPost, r.Method)
-		assert.Equal("/v1/chat/completions", r.URL.Path)
-		assert.Equal("tenant=local", r.URL.RawQuery)
-		assert.Equal("application/json", r.Header.Get("Content-Type"))
-		assert.Equal("Bearer test-key", r.Header.Get("Authorization"))
-		assert.NoError(json.UnmarshalRead(r.Body, &got))
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/v1/chat/completions", r.URL.Path)
+		assert.Equal(t, "tenant=local", r.URL.RawQuery)
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
+		assert.NoError(t, json.UnmarshalRead(r.Body, &got))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"model":"served-model","choices":[{"message":{"role":"assistant","content":"answer"}}]}`))
 	}))
@@ -52,14 +50,14 @@ func TestGenerateStreamWithOptions_OpenAIEndpoint(t *testing.T) {
 		Endpoint: &EndpointConfig{Endpoint: server.URL + "/v1?tenant=local", Model: "configured-model", APIKey: "test-key"},
 	})
 	require.NoError(t, err)
-	assert.Equal("configured-model", got.Model)
-	assert.Len(got.Messages, 1)
-	assert.Equal("user", got.Messages[0].Role)
-	assert.Equal("exact prompt", got.Messages[0].Content)
-	assert.False(got.Stream)
-	assert.Equal("answer", result.Content)
-	assert.Equal("openai", result.Agent)
-	assert.Equal("served-model", result.Model)
+	assert.Equal(t, "configured-model", got.Model)
+	assert.Len(t, got.Messages, 1)
+	assert.Equal(t, "user", got.Messages[0].Role)
+	assert.Equal(t, "exact prompt", got.Messages[0].Content)
+	assert.False(t, got.Stream)
+	assert.Equal(t, "answer", result.Content)
+	assert.Equal(t, "openai", result.Agent)
+	assert.Equal(t, "served-model", result.Model)
 }
 
 func TestOpenAIEndpoint_BearerAuth(t *testing.T) {
@@ -115,7 +113,7 @@ func TestOpenAIEndpoint_HonorsCancellation(t *testing.T) {
 		<-handlerDone
 		server.CloseClientConnections()
 	case <-time.After(time.Second):
-		t.Fatal("endpoint request did not honor cancellation")
+		require.Fail(t, "endpoint request did not honor cancellation")
 	}
 }
 

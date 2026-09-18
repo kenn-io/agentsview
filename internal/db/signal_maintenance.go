@@ -283,7 +283,7 @@ func (q signalTxQuery) TrailingToolCalls(
 		)
 	}
 	defer rows.Close()
-	var facts = make([]ToolCallSignalFact, 0)
+	facts := make([]ToolCallSignalFact, 0)
 	for rows.Next() {
 		var f ToolCallSignalFact
 		if err := rows.Scan(
@@ -440,9 +440,9 @@ func (q signalTxQuery) MessageTokenUsageUpdated(ordinal int) bool {
 // TranscriptRevision returns a session's stored transcript revision. The
 // incremental signal maintainer uses the pre-write value to verify the
 // persisted state token before folding a delta.
-func (db *DB) TranscriptRevision(sessionID string) (string, error) {
+func (db *DB) TranscriptRevision(ctx context.Context, sessionID string) (string, error) {
 	var rev string
-	if err := db.getReader().QueryRow(
+	if err := db.getReader().QueryRow(ctx,
 		`SELECT transcript_revision FROM sessions WHERE id = ?`,
 		sessionID,
 	).Scan(&rev); err != nil {
@@ -458,9 +458,9 @@ func (db *DB) TranscriptRevision(sessionID string) (string, error) {
 // verify the session was scanned at the current definite rules version
 // before folding a delta: the write transaction blanks the column when it
 // bumps the transcript revision, so only the pre-write value is meaningful.
-func (db *DB) SessionSecretsRulesVersion(sessionID string) (string, error) {
+func (db *DB) SessionSecretsRulesVersion(ctx context.Context, sessionID string) (string, error) {
 	var ver string
-	if err := db.getReader().QueryRow(
+	if err := db.getReader().QueryRow(ctx,
 		`SELECT secrets_rules_version FROM sessions WHERE id = ?`,
 		sessionID,
 	).Scan(&ver); err != nil {
@@ -473,11 +473,11 @@ func (db *DB) SessionSecretsRulesVersion(sessionID string) (string, error) {
 
 // GetSessionSignalState loads a session's compact signal state row.
 // ok=false means no row exists.
-func (db *DB) GetSessionSignalState(
+func (db *DB) GetSessionSignalState(ctx context.Context,
 	sessionID string,
 ) (SessionSignalState, bool, error) {
 	var st SessionSignalState
-	err := db.getReader().QueryRow(`
+	err := db.getReader().QueryRow(ctx, `
 		SELECT state, transcript_revision, signal_version
 		FROM session_signal_state WHERE session_id = ?`,
 		sessionID,
@@ -497,15 +497,15 @@ func (db *DB) GetSessionSignalState(
 // UpsertSessionSignalState stores or replaces a session's compact signal
 // state row. Full recompute paths call it after their signal columns
 // commit so later incremental deltas can fold.
-func (db *DB) UpsertSessionSignalState(st SessionSignalState) error {
+func (db *DB) UpsertSessionSignalState(ctx context.Context, st SessionSignalState) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning signal state tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := upsertSessionSignalStateTx(tx, st); err != nil {
+	if err := upsertSessionSignalStateTx(ctx, tx, st); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -516,7 +516,7 @@ func (db *DB) UpsertSessionSignalState(st SessionSignalState) error {
 // snapshot. An empty state omits incremental-state storage for providers that
 // do not consume it. It returns false without modifying any rows when a concurrent
 // writer changes either the transcript or metadata consumed by the recompute.
-func (db *DB) ReplaceSessionSignalsIfInputsMatch(
+func (db *DB) ReplaceSessionSignalsIfInputsMatch(ctx context.Context,
 	sessionID string,
 	expected SessionSignalInputSnapshot,
 	findings []SecretFinding,
@@ -525,12 +525,12 @@ func (db *DB) ReplaceSessionSignalsIfInputsMatch(
 ) (bool, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("beginning conditional signal recompute tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	matches, err := sessionSignalInputSnapshotMatchesTx(
+	matches, err := sessionSignalInputSnapshotMatchesTx(ctx,
 		tx, sessionID, expected,
 	)
 	if err != nil || !matches {
@@ -557,7 +557,7 @@ func (db *DB) ReplaceSessionSignalsIfInputsMatch(
 	if len(state.State) > 0 {
 		state.SessionID = sessionID
 		state.TranscriptRevision = expected.TranscriptRevision
-		if err := upsertSessionSignalStateTx(tx, state); err != nil {
+		if err := upsertSessionSignalStateTx(ctx, tx, state); err != nil {
 			return false, err
 		}
 	}
@@ -572,13 +572,13 @@ func (db *DB) ReplaceSessionSignalsIfInputsMatch(
 // ReplaceSessionSignalsIfRevision is retained for callers that only have a
 // transcript token. New full-recompute code should use
 // ReplaceSessionSignalsIfInputsMatch so metadata-only races are rejected too.
-func (db *DB) ReplaceSessionSignalsIfRevision(
+func (db *DB) ReplaceSessionSignalsIfRevision(ctx context.Context,
 	sessionID, expectedRevision string,
 	findings []SecretFinding,
 	update SessionSignalUpdate,
 	state SessionSignalState,
 ) (bool, error) {
-	sess, err := db.GetSessionFull(context.Background(), sessionID)
+	sess, err := db.GetSessionFull(ctx, sessionID)
 	if err != nil {
 		return false, err
 	}
@@ -590,12 +590,12 @@ func (db *DB) ReplaceSessionSignalsIfRevision(
 	if err != nil {
 		return false, err
 	}
-	return db.ReplaceSessionSignalsIfInputsMatch(
+	return db.ReplaceSessionSignalsIfInputsMatch(ctx,
 		sessionID, snapshot, findings, update, state,
 	)
 }
 
-func sessionSignalInputSnapshotMatchesTx(
+func sessionSignalInputSnapshotMatchesTx(ctx context.Context,
 	tx *sql.Tx, sessionID string,
 	expected SessionSignalInputSnapshot,
 ) (bool, error) {
@@ -607,7 +607,7 @@ func sessionSignalInputSnapshotMatchesTx(
 		peakTokens      int
 		hasPeak         int
 	)
-	err := tx.QueryRow(`
+	err := tx.QueryRowContext(ctx, `
 		SELECT transcript_revision, message_count, is_automated, ended_at,
 		       peak_context_tokens, has_peak_context_tokens
 		FROM sessions WHERE id = ?`, sessionID,
@@ -635,7 +635,7 @@ func sessionSignalInputSnapshotMatchesTx(
 	return current == expected, nil
 }
 
-func applySignalDeltaTx(
+func applySignalDeltaTx(ctx context.Context,
 	tx *sql.Tx, sessionID string, d SignalDelta,
 ) error {
 	// Remove stale findings by natural coordinates, counting definite
@@ -643,7 +643,7 @@ func applySignalDeltaTx(
 	deletedDefinite := 0
 	for _, key := range d.DeleteFindingKeys {
 		var n int
-		if err := tx.QueryRow(`
+		if err := tx.QueryRowContext(ctx, `
 			SELECT COUNT(*) FROM secret_findings
 			WHERE session_id = ? AND message_ordinal = ?
 			  AND COALESCE(call_index, -1) = ?
@@ -656,7 +656,7 @@ func applySignalDeltaTx(
 			)
 		}
 		deletedDefinite += n
-		if _, err := tx.Exec(`
+		if _, err := tx.ExecContext(ctx, `
 			DELETE FROM secret_findings
 			WHERE session_id = ? AND message_ordinal = ?
 			  AND COALESCE(call_index, -1) = ?
@@ -684,7 +684,7 @@ func applySignalDeltaTx(
 		if f.RulesVersion == "" {
 			f.RulesVersion = secrets.DefiniteRulesVersion()
 		}
-		res, err := tx.Exec(`
+		res, err := tx.ExecContext(ctx, `
 			INSERT INTO secret_findings (
 				session_id, rule_name, confidence,
 				location_kind, message_ordinal, call_index, event_index,
@@ -724,7 +724,7 @@ func applySignalDeltaTx(
 
 	// Adjust the leak count from the stored value.
 	var currentLeak int
-	if err := tx.QueryRow(
+	if err := tx.QueryRowContext(ctx,
 		`SELECT secret_leak_count FROM sessions WHERE id = ?`,
 		sessionID,
 	).Scan(&currentLeak); err != nil {
@@ -738,7 +738,7 @@ func applySignalDeltaTx(
 	if err := updateSessionSignalsTx(tx, sessionID, d.Update); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		UPDATE sessions
 		SET secret_leak_count = ?, secrets_rules_version = ?
 		WHERE id = ?`,
@@ -749,7 +749,7 @@ func applySignalDeltaTx(
 		)
 	}
 	if d.State != nil {
-		if err := upsertSessionSignalStateTx(tx, *d.State); err != nil {
+		if err := upsertSessionSignalStateTx(ctx, tx, *d.State); err != nil {
 			return err
 		}
 	}
@@ -763,13 +763,13 @@ func coalesceInt(p *int, fallback int) int {
 	return *p
 }
 
-func upsertSessionSignalStateTx(
+func upsertSessionSignalStateTx(ctx context.Context,
 	tx *sql.Tx, st SessionSignalState,
 ) error {
 	if st.UpdatedAt == "" {
 		st.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO session_signal_state (
 			session_id, state, transcript_revision, signal_version,
 			updated_at

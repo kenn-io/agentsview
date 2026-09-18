@@ -74,13 +74,13 @@ type Store struct {
 // the connection serves the old generation while fileInfo describes the
 // new one, so the watcher never sees a change and the Store serves stale
 // data until the next rebuild.
-func NewStore(path string) (*Store, error) {
+func NewStore(ctx context.Context, path string) (*Store, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("statting duckdb mirror %s: %w", path, err)
 	}
 	PrimeFileIdentity(info)
-	conn, err := OpenReadOnly(path)
+	conn, err := OpenReadOnly(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +142,8 @@ func (s *Store) queryContext(
 ) (*sql.Rows, error) {
 	s.handleMu.RLock()
 	defer s.handleMu.RUnlock()
-	return queryDuckDBContext(ctx, s.duck, s.connectionKind, s.quack, query, args...)
+	rows, err := queryDuckDBContext(ctx, s.duck, s.connectionKind, s.quack, query, args...)
+	return rows, err
 }
 
 // queryRowContext holds the read lock across the query start for the same
@@ -255,7 +256,7 @@ func (s *Store) RecordRecallQueryEvent(
 	return "", db.ErrReadOnly
 }
 
-func (s *Store) InsertRecallEntry(_ db.RecallEntry) (string, error) {
+func (s *Store) InsertRecallEntry(ctx context.Context, _ db.RecallEntry) (string, error) {
 	return "", db.ErrReadOnly
 }
 
@@ -756,12 +757,12 @@ func (s *Store) GetChildSessions(ctx context.Context, parentID string) ([]db.Ses
 	return scanSessionRows(rows)
 }
 
-func (s *Store) GetSessionVersion(id string) (int, int64, bool) {
+func (s *Store) GetSessionVersion(ctx context.Context, id string) (int, int64, bool) {
 	var count int
 	var fileMtime sql.NullInt64
 	var fileHash sql.NullString
 	var updated any
-	err := s.queryRowContext(context.Background(),
+	err := s.queryRowContext(ctx,
 		`SELECT message_count, file_mtime, file_hash,
 		        COALESCE(local_modified_at, ended_at, started_at, created_at)
 		 FROM sessions WHERE id = ?`,
@@ -926,7 +927,7 @@ func rootSessionWhere(excludeOneShot, excludeAutomated bool) string {
 	return filter
 }
 
-func (s *Store) HasFTS() bool { return true }
+func (s *Store) HasFTS(ctx context.Context) bool { return true }
 
 // HasSemantic returns false: the DuckDB store has no VectorSearcher seam
 // yet, so SearchContent rejects "semantic"/"hybrid" modes up front with

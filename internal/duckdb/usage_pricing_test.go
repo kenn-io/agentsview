@@ -21,13 +21,10 @@ import (
 // one SQL group (the price_model CASE keeps the eras in separate
 // groups before tokens are summed).
 func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local := newLocalDB(t)
 
-	require.NoError(local.UpsertModelPricing([]db.ModelPricing{
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{
 		{
 			ModelPattern:     "moonshot/kimi-k2.6",
 			InputPerMTok:     money.MustParseDollars("0.95"),
@@ -74,7 +71,7 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 		"2026-07-20T12:00:00.000Z", 2)
 	postSession.Agent = "kimi"
 
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
 		{
 			Session: preSession,
 			Messages: []db.Message{
@@ -98,12 +95,12 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 			ReplaceMessages: true,
 		},
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(createSchema(ctx, syncer.DB()))
+	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
 	got, err := store.GetDailyUsage(ctx, db.UsageFilter{
@@ -112,32 +109,29 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 		Timezone: "UTC",
 		Model:    "kimi-for-coding",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
-	require.Len(got.Daily, 2, "one entry per active day")
-	assert.Equal(money.MustParseDollars("3.02"), got.Daily[0].TotalCost,
+	require.Len(t, got.Daily, 2, "one entry per active day")
+	assert.Equal(t, money.MustParseDollars("3.02"), got.Daily[0].TotalCost,
 		"pre-cutoff day prices both rows at K2.6 rates")
-	assert.Equal(money.MustParseDollars("4.80"), got.Daily[1].TotalCost,
+	assert.Equal(t, money.MustParseDollars("4.80"), got.Daily[1].TotalCost,
 		"post-cutoff day prices at K3 rates")
 
-	require.NotNil(got.Pricing, "pricing block")
-	require.Contains(got.Pricing.Models, "kimi-for-coding")
+	require.NotNil(t, got.Pricing, "pricing block")
+	require.Contains(t, got.Pricing.Models, "kimi-for-coding")
 	resolutions := got.Pricing.Models["kimi-for-coding"].Resolutions
-	require.Len(resolutions, 2)
-	assert.Equal("kimi-k3", resolutions[0].PricedModel)
-	assert.Equal("moonshot/kimi-k2.6", resolutions[1].PricedModel)
-	assert.NotContains(got.Pricing.Models, "moonshot/kimi-k2.6")
-	assert.NotContains(got.Pricing.Models, "kimi-k3")
+	require.Len(t, resolutions, 2)
+	assert.Equal(t, "kimi-k3", resolutions[0].PricedModel)
+	assert.Equal(t, "moonshot/kimi-k2.6", resolutions[1].PricedModel)
+	assert.NotContains(t, got.Pricing.Models, "moonshot/kimi-k2.6")
+	assert.NotContains(t, got.Pricing.Models, "kimi-k3")
 }
 
 func TestDailyUsageKimiFixedK26AliasPricing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local := newLocalDB(t)
 
-	require.NoError(local.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern: "moonshot/kimi-k2.6",
 		InputPerMTok: money.MustParseDollars("0.95"),
 	}}), "UpsertModelPricing")
@@ -146,7 +140,7 @@ func TestDailyUsageKimiFixedK26AliasPricing(t *testing.T) {
 		"duck-kimi-k2d6", "alpha", "fixed K2.6 alias",
 		"2026-07-20T12:00:00.000Z", 1)
 	session.Agent = "kimi-work"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: session,
 		Messages: []db.Message{{
 			SessionID: "duck-kimi-k2d6",
@@ -160,12 +154,12 @@ func TestDailyUsageKimiFixedK26AliasPricing(t *testing.T) {
 		DataVersion:     1,
 		ReplaceMessages: true,
 	}})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(createSchema(ctx, syncer.DB()))
+	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
 	got, err := store.GetDailyUsage(ctx, db.UsageFilter{
@@ -174,18 +168,15 @@ func TestDailyUsageKimiFixedK26AliasPricing(t *testing.T) {
 		Timezone: "UTC",
 		Model:    "k2d6-agent",
 	})
-	require.NoError(err)
-	assert.Equal(money.MustParseDollars("0.95"), got.Totals.TotalCost)
-	require.NotNil(got.Pricing)
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("0.95"), got.Totals.TotalCost)
+	require.NotNil(t, got.Pricing)
 	resolutions := got.Pricing.Models["k2d6-agent"].Resolutions
-	require.Len(resolutions, 1)
-	assert.Equal("moonshot/kimi-k2.6", resolutions[0].PricedModel)
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, "moonshot/kimi-k2.6", resolutions[0].PricedModel)
 }
 
 func TestDailyUsageGPTReserveLunaPricing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local := newLocalDB(t)
 
@@ -202,7 +193,7 @@ func TestDailyUsageGPTReserveLunaPricing(t *testing.T) {
 			fixture.id, "alpha", "Luna Reserve",
 			"2026-09-05T12:00:00.000Z", 1)
 		session.Agent = "codex"
-		_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 			Session: session,
 			Messages: []db.Message{{
 				SessionID:  fixture.id,
@@ -215,13 +206,13 @@ func TestDailyUsageGPTReserveLunaPricing(t *testing.T) {
 			DataVersion:     1,
 			ReplaceMessages: true,
 		}})
-		require.NoError(err)
+		require.NoError(t, err)
 	}
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(createSchema(ctx, syncer.DB()))
+	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
 	luna, err := store.GetDailyUsage(ctx, db.UsageFilter{
@@ -230,9 +221,9 @@ func TestDailyUsageGPTReserveLunaPricing(t *testing.T) {
 		Timezone: "UTC",
 		Model:    pricingpkg.GPT56LunaCanonical,
 	})
-	require.NoError(err)
-	assert.NotZero(luna.Totals.TotalCost.Microdollars)
-	assert.Equal(1_000_000, luna.Totals.InputTokens)
+	require.NoError(t, err)
+	assert.NotZero(t, luna.Totals.TotalCost.Microdollars)
+	assert.Equal(t, 1_000_000, luna.Totals.InputTokens)
 
 	got, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From:     "2026-09-05",
@@ -240,27 +231,24 @@ func TestDailyUsageGPTReserveLunaPricing(t *testing.T) {
 		Timezone: "UTC",
 		Model:    pricingpkg.GPTReserveModelName,
 	})
-	require.NoError(err)
-	assert.Equal(1_000_000, got.Totals.InputTokens)
-	assert.Equal(luna.Totals.TotalCost, got.Totals.TotalCost)
-	require.NotNil(got.Pricing)
+	require.NoError(t, err)
+	assert.Equal(t, 1_000_000, got.Totals.InputTokens)
+	assert.Equal(t, luna.Totals.TotalCost, got.Totals.TotalCost)
+	require.NotNil(t, got.Pricing)
 	resolutions := got.Pricing.Models[pricingpkg.GPTReserveModelName].Resolutions
-	require.Len(resolutions, 1)
-	assert.Equal(pricingpkg.GPT56LunaCanonical, resolutions[0].PricedModel)
-	assert.NotContains(got.Pricing.Models, pricingpkg.GPT56LunaCanonical)
+	require.Len(t, resolutions, 1)
+	assert.Equal(t, pricingpkg.GPT56LunaCanonical, resolutions[0].PricedModel)
+	assert.NotContains(t, got.Pricing.Models, pricingpkg.GPT56LunaCanonical)
 }
 
 // TestSessionUsageKimiDateAliasPricing proves the per-row session
 // usage path (breakdown rows) applies the same date-based mapping as
 // the aggregate path.
 func TestSessionUsageKimiDateAliasPricing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local := newLocalDB(t)
 
-	require.NoError(local.UpsertModelPricing([]db.ModelPricing{
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{
 		{
 			ModelPattern:     "moonshot/kimi-k2.6",
 			InputPerMTok:     money.MustParseDollars("0.95"),
@@ -283,7 +271,7 @@ func TestSessionUsageKimiDateAliasPricing(t *testing.T) {
 		"2026-07-18T12:00:00.000Z", 2)
 	session.Agent = "kimi"
 
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: session,
 		Messages: []db.Message{
 			{
@@ -306,32 +294,29 @@ func TestSessionUsageKimiDateAliasPricing(t *testing.T) {
 		DataVersion:     1,
 		ReplaceMessages: true,
 	}})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(createSchema(ctx, syncer.DB()))
+	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
 	usage, err := store.GetSessionUsage(ctx, "duck-kimi-session", true)
-	require.NoError(err)
-	require.NotNil(usage)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
 
-	assert.True(usage.HasCost, "session must be priced")
-	assert.Equal(money.MustParseDollars("6.31"), usage.Cost,
+	assert.True(t, usage.HasCost, "session must be priced")
+	assert.Equal(t, money.MustParseDollars("6.31"), usage.Cost,
 		"session cost must sum the K2.6 and K3 eras")
-	require.Len(usage.Breakdown, 2, "one breakdown entry per row")
-	assert.Equal(money.MustParseDollars("1.51"), usage.Breakdown[0].Cost,
+	require.Len(t, usage.Breakdown, 2, "one breakdown entry per row")
+	assert.Equal(t, money.MustParseDollars("1.51"), usage.Breakdown[0].Cost,
 		"pre-cutoff breakdown row at K2.6 rates")
-	assert.Equal(money.MustParseDollars("4.80"), usage.Breakdown[1].Cost,
+	assert.Equal(t, money.MustParseDollars("4.80"), usage.Breakdown[1].Cost,
 		"post-cutoff breakdown row at K3 rates")
 }
 
 func TestSessionUsageKimiExactCustomAliasPricing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local := newLocalDB(t)
 	customPricing := map[string]config.CustomModelRate{
@@ -341,7 +326,7 @@ func TestSessionUsageKimiExactCustomAliasPricing(t *testing.T) {
 	}
 	local.SetCustomPricing(customPricing)
 
-	require.NoError(local.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern: "kimi-k3",
 		InputPerMTok: money.MustParseDollars("2"),
 	}}), "UpsertModelPricing")
@@ -350,7 +335,7 @@ func TestSessionUsageKimiExactCustomAliasPricing(t *testing.T) {
 		"duck-kimi-custom-alias", "alpha", "custom alias session",
 		"2026-07-20T12:00:00.000Z", 1)
 	session.Agent = "kimi"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: session,
 		Messages: []db.Message{{
 			SessionID: "duck-kimi-custom-alias",
@@ -364,31 +349,31 @@ func TestSessionUsageKimiExactCustomAliasPricing(t *testing.T) {
 		DataVersion:     1,
 		ReplaceMessages: true,
 	}})
-	require.NoError(err)
+	require.NoError(t, err)
 	want, err := local.GetSessionUsage(ctx, "duck-kimi-custom-alias", true)
-	require.NoError(err)
-	require.NotNil(want)
-	require.Len(want.Breakdown, 1)
-	assert.Equal(want.Cost, money.MustParseDollars("7"))
-	assert.Equal(want.Cost, want.Breakdown[0].Cost)
+	require.NoError(t, err)
+	require.NotNil(t, want)
+	require.Len(t, want.Breakdown, 1)
+	assert.Equal(t, want.Cost, money.MustParseDollars("7"))
+	assert.Equal(t, want.Cost, want.Breakdown[0].Cost)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(createSchema(ctx, syncer.DB()))
+	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 	store.SetCustomPricing(customPricing)
 
 	usage, err := store.GetSessionUsage(ctx, "duck-kimi-custom-alias", true)
-	require.NoError(err)
-	require.NotNil(usage)
-	assert.True(usage.HasCost)
-	assert.Equal(money.MustParseDollars("7"), usage.Cost,
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.True(t, usage.HasCost)
+	assert.Equal(t, money.MustParseDollars("7"), usage.Cost,
 		"session total must use the exact reported-model override")
-	assert.Equal(want.Cost, usage.Cost)
-	require.Len(usage.Breakdown, 1)
-	assert.True(usage.Breakdown[0].HasCost)
-	assert.Equal(want.Breakdown[0].Cost, usage.Breakdown[0].Cost,
+	assert.Equal(t, want.Cost, usage.Cost)
+	require.Len(t, usage.Breakdown, 1)
+	assert.True(t, usage.Breakdown[0].HasCost)
+	assert.Equal(t, want.Breakdown[0].Cost, usage.Breakdown[0].Cost,
 		"DuckDB breakdown must match SQLite's exact reported-model override")
 }
 
@@ -396,13 +381,10 @@ func TestSessionUsageKimiExactCustomAliasPricing(t *testing.T) {
 // session through the DuckDB mirror: the nested cache_creation TTL split
 // prices 1h writes at the 1h rate, matching Claude Code's total_cost_usd.
 func TestDailyUsageClaude1hCacheWritePricing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local := newLocalDB(t)
 
-	require.NoError(local.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:           "claude-fable-5",
 		InputPerMTok:           money.MustParseDollars("10.0"),
 		OutputPerMTok:          money.MustParseDollars("50.0"),
@@ -415,7 +397,7 @@ func TestDailyUsageClaude1hCacheWritePricing(t *testing.T) {
 		"duck-1h-cache", "alpha", "1h cache writes",
 		"2026-08-13T11:59:00.000Z", 1)
 	session.Agent = "claude"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: session,
 		Messages: []db.Message{
 			{
@@ -444,11 +426,11 @@ func TestDailyUsageClaude1hCacheWritePricing(t *testing.T) {
 		DataVersion:     1,
 		ReplaceMessages: true,
 	}})
-	require.NoError(err)
+	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(createSchema(ctx, syncer.DB()))
+	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
 	got, err := store.GetDailyUsage(ctx, db.UsageFilter{
@@ -456,37 +438,34 @@ func TestDailyUsageClaude1hCacheWritePricing(t *testing.T) {
 		To:       "2026-08-31",
 		Timezone: "UTC",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// 2x10 + 62x50 + 8989x20 + 15892x1 = $0.198792, plus
 	// 2x10 + 6x50 + 77x20 + 24881x1 = $0.026741: $0.225533 total,
 	// matching Claude Code's own total_cost_usd. The 5m-rate misprice
 	// would read $0.157539.
-	require.Len(got.Daily, 1)
-	assert.Equal(money.Money{Microdollars: 225_533},
+	require.Len(t, got.Daily, 1)
+	assert.Equal(t, money.Money{Microdollars: 225_533},
 		got.Daily[0].TotalCost)
 
 	usage, err := store.GetSessionUsage(ctx, "duck-1h-cache", false)
-	require.NoError(err)
-	assert.Equal(money.Money{Microdollars: 225_533}, usage.Cost,
+	require.NoError(t, err)
+	assert.Equal(t, money.Money{Microdollars: 225_533}, usage.Cost,
 		"per-session cost")
 }
 
 func TestDuckPositBillingPublicAPIReproduction(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	session := syncSession(
 		"duck-posit-billing", "posit", "Posit billing",
 		"2026-08-01T10:00:00Z", 1)
 	session.Agent = "posit-assistant"
 	local := newLocalDB(t)
-	require.NoError(local.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern: "duck-posit-model",
 		InputPerMTok: money.MustParseDollars("1"),
 	}}))
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: session,
 		Messages: []db.Message{{
 			SessionID: session.ID, Ordinal: 0, Role: "assistant",
@@ -496,29 +475,29 @@ func TestDuckPositBillingPublicAPIReproduction(t *testing.T) {
 		}},
 		DataVersion: 1, ReplaceMessages: true,
 	}})
-	require.NoError(err)
+	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(createSchema(ctx, syncer.DB()))
+	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 	usage, err := store.GetSessionUsage(ctx, session.ID, true)
-	require.NoError(err)
-	require.NotNil(usage)
-	assert.Equal(money.MustParseDollars("1.1"), usage.Cost)
-	assert.Equal("posit-assistant", usage.Agent)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, money.MustParseDollars("1.1"), usage.Cost)
+	assert.Equal(t, "posit-assistant", usage.Agent)
 
 	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From: "2026-08-01", To: "2026-08-01", Timezone: "UTC",
 	})
-	require.NoError(err)
-	assert.Equal(money.MustParseDollars("1.1"), daily.Totals.TotalCost)
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("1.1"), daily.Totals.TotalCost)
 
 	report, err := store.GetActivityReport(ctx,
 		db.AnalyticsFilter{Timezone: "UTC"},
 		duckDayQuery(t, "2026-08-01", "UTC"))
-	require.NoError(err)
-	assert.Equal(money.MustParseDollars("1.1"), report.Totals.Cost)
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("1.1"), report.Totals.Cost)
 }
 
 func TestPriceModelCasePreservesQualifiedBedrockModels(t *testing.T) {

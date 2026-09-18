@@ -324,7 +324,7 @@ func isSingleWordMatcher(matcher string) bool {
 	if matcher == "" {
 		return false
 	}
-	for i := 0; i < len(matcher); i++ {
+	for i := range len(matcher) {
 		if !isWordByte(matcher[i]) {
 			return false
 		}

@@ -56,7 +56,7 @@ func copyTestDBFile(t *testing.T, src, dst string, required bool) {
 
 func openReadOnlyTestDB(t *testing.T, path string) *DB {
 	t.Helper()
-	readonly, err := OpenReadOnly(path)
+	readonly, err := OpenReadOnly(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
 	return readonly
@@ -64,6 +64,7 @@ func openReadOnlyTestDB(t *testing.T, path string) *DB {
 
 func execRawSQLite(t *testing.T, path, query string, args ...any) {
 	t.Helper()
+
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	_, err = raw.ExecContext(t.Context(), query, args...)
@@ -77,7 +78,7 @@ func requireOpenReadOnlyFails(
 	contains string,
 ) {
 	t.Helper()
-	readonly, err := OpenReadOnly(path)
+	readonly, err := OpenReadOnly(t.Context(), path)
 	require.Error(t, err)
 	require.Nil(t, readonly)
 	assert.Contains(t, err.Error(), contains)
@@ -103,30 +104,27 @@ func testModelPricing(pattern string) ModelPricing {
 }
 
 func TestOpenReadOnlyExistingDBDoesNotWrite(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	path := createClosedTestDB(t, tempDBPath(t, "sessions.db"), func(d *DB) {
-		require.NoError(d.SetSyncState("read_only_probe", "before"))
+		require.NoError(t, d.SetSyncState(t.Context(), "read_only_probe", "before"))
 	})
 
 	before, err := os.Stat(path)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	readonly := openReadOnlyTestDB(t, path)
-	assert.True(readonly.ReadOnly())
+	assert.True(t, readonly.ReadOnly())
 
-	got, err := readonly.GetSyncState("read_only_probe")
-	require.NoError(err)
-	assert.Equal("before", got)
+	got, err := readonly.GetSyncState(t.Context(), "read_only_probe")
+	require.NoError(t, err)
+	assert.Equal(t, "before", got)
 
-	err = readonly.SetSyncState("read_only_probe", "after")
-	require.ErrorIs(err, ErrReadOnly)
+	err = readonly.SetSyncState(t.Context(), "read_only_probe", "after")
+	require.ErrorIs(t, err, ErrReadOnly)
 
 	after, err := os.Stat(path)
-	require.NoError(err)
-	assert.Equal(before.Size(), after.Size())
-	assert.Equal(before.ModTime(), after.ModTime())
+	require.NoError(t, err)
+	assert.Equal(t, before.Size(), after.Size())
+	assert.Equal(t, before.ModTime(), after.ModTime())
 }
 
 // TestOpenReadOnlyReaderRefusesWritesAtSQLiteLevel pins the read-only
@@ -153,33 +151,30 @@ func TestOpenReadOnlyReaderRefusesWritesAtSQLiteLevel(t *testing.T) {
 // writable and read-only opens must escape the path, and the read-only
 // reader must still refuse writes.
 func TestOpenPathWithSpecialCharacters(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := filepath.Join(t.TempDir(), "we%41rd dir")
-	require.NoError(os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 	path := filepath.Join(dir, "sessions.db")
 
-	rw, err := Open(path)
-	require.NoError(err,
+	rw, err := Open(t.Context(), path)
+	require.NoError(t, err,
 		"writable Open must succeed on a path with %% and space")
-	require.NoError(rw.SetSyncState("special_path_probe", "x"))
-	require.NoError(rw.Close())
+	require.NoError(t, rw.SetSyncState(t.Context(), "special_path_probe", "x"))
+	require.NoError(t, rw.Close())
 
 	_, err = os.Stat(path)
-	require.NoError(err,
+	require.NoError(t, err,
 		"the database file must exist at the literal path, not a decoded one")
 
 	readonly := openReadOnlyTestDB(t, path)
-	got, err := readonly.GetSyncState("special_path_probe")
-	require.NoError(err)
-	assert.Equal("x", got)
+	got, err := readonly.GetSyncState(t.Context(), "special_path_probe")
+	require.NoError(t, err)
+	assert.Equal(t, "x", got)
 
 	_, err = readonly.rawReader().ExecContext(t.Context(),
 		`INSERT INTO stats (key, value) VALUES ('ro_probe', 1)`)
-	require.Error(err,
+	require.Error(t, err,
 		"a read-only reader connection must refuse writes")
-	assert.Contains(err.Error(), "readonly",
+	assert.Contains(t, err.Error(), "readonly",
 		"the refusal must be SQLite's readonly-database error, got: %v", err)
 }
 
@@ -189,30 +184,27 @@ func TestOpenPathWithSpecialCharacters(t *testing.T) {
 // a mode=ro connection. The reader adopts the file's DELETE journal mode and
 // still refuses writes.
 func TestOpenReadOnlyNonWALJournalMode(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	path := createClosedTestDB(t, tempDBPath(t, "sessions.db"), func(d *DB) {
-		require.NoError(d.SetSyncState("journal_probe", "delete-mode"))
+		require.NoError(t, d.SetSyncState(t.Context(), "journal_probe", "delete-mode"))
 	})
 	execRawSQLite(t, path, "PRAGMA journal_mode=DELETE")
 	_, err := os.Stat(path + "-wal")
-	require.ErrorIs(err, os.ErrNotExist,
+	require.ErrorIs(t, err, os.ErrNotExist,
 		"test setup: DELETE journal mode must have removed the WAL file")
 
 	readonly := openReadOnlyTestDB(t, path)
-	assert.True(readonly.ReadOnly())
+	assert.True(t, readonly.ReadOnly())
 
-	got, err := readonly.GetSyncState("journal_probe")
-	require.NoError(err)
-	assert.Equal("delete-mode", got)
+	got, err := readonly.GetSyncState(t.Context(), "journal_probe")
+	require.NoError(t, err)
+	assert.Equal(t, "delete-mode", got)
 
-	require.ErrorIs(readonly.SetSyncState("journal_probe", "x"), ErrReadOnly)
+	require.ErrorIs(t, readonly.SetSyncState(t.Context(), "journal_probe", "x"), ErrReadOnly)
 	_, err = readonly.rawReader().ExecContext(t.Context(),
 		`INSERT INTO stats (key, value) VALUES ('ro_probe', 1)`)
-	require.Error(err,
+	require.Error(t, err,
 		"a read-only reader connection must refuse writes")
-	assert.Contains(err.Error(), "readonly",
+	assert.Contains(t, err.Error(), "readonly",
 		"the refusal must be SQLite's readonly-database error, got: %v", err)
 }
 
@@ -224,14 +216,14 @@ func TestOpenReadOnlyWriteMethodsReturnErrReadOnly(t *testing.T) {
 	readonly := openReadOnlyTestDB(t, path)
 
 	requireReadOnlyOp(t, "UpsertSession", func() error {
-		return readonly.UpsertSession(Session{ID: "s", Agent: "codex"})
+		return readonly.UpsertSession(t.Context(), Session{ID: "s", Agent: "codex"})
 	})
 	requireReadOnlyOp(t, "WriteSessionBatch", func() error {
 		_, err := readonly.WriteSessionBatch(nil)
 		return err
 	})
 	requireReadOnlyOp(t, "WriteSessionBatchAtomic", func() error {
-		_, err := readonly.WriteSessionBatchAtomic(nil)
+		_, err := readonly.WriteSessionBatchAtomic(t.Context(), nil)
 		return err
 	})
 	requireReadOnlyOp(t, "UpsertModelPricing nil", func() error {
@@ -241,32 +233,32 @@ func TestOpenReadOnlyWriteMethodsReturnErrReadOnly(t *testing.T) {
 		return readonly.UpsertModelPricing([]ModelPricing{pricing})
 	})
 	requireReadOnlyOp(t, "InsertMessages", func() error {
-		return readonly.InsertMessages(nil)
+		return readonly.InsertMessages(t.Context(), nil)
 	})
 	requireReadOnlyOp(t, "BulkStarSessions", func() error {
-		return readonly.BulkStarSessions(nil)
+		return readonly.BulkStarSessions(t.Context(), nil)
 	})
 	requireReadOnlyOp(t, "DeleteParserExcludedSessions", func() error {
-		_, err := readonly.DeleteParserExcludedSessions(nil)
+		_, err := readonly.DeleteParserExcludedSessions(t.Context(), nil)
 		return err
 	})
 	requireReadOnlyOp(t, "DeleteSessions", func() error {
-		_, err := readonly.DeleteSessions(nil)
+		_, err := readonly.DeleteSessions(t.Context(), nil)
 		return err
 	})
 	requireReadOnlyOp(t, "InsertMissingModelPricing", func() error {
-		return readonly.InsertMissingModelPricing([]ModelPricing{{
+		return readonly.InsertMissingModelPricing(t.Context(), []ModelPricing{{
 			ModelPattern: "x",
 		}})
 	})
 	requireReadOnlyOp(t, "ReplaceSkippedFiles", func() error {
-		return readonly.ReplaceSkippedFiles(map[string]int64{"x": 1})
+		return readonly.ReplaceSkippedFiles(t.Context(), map[string]int64{"x": 1})
 	})
 	requireReadOnlyOp(t, "ClearRemoteSkippedFiles", func() error {
-		return readonly.ClearRemoteSkippedFiles("remote-host")
+		return readonly.ClearRemoteSkippedFiles(t.Context(), "remote-host")
 	})
 	requireReadOnlyOp(t, "UpdateSessionIncremental", func() error {
-		return readonly.UpdateSessionIncremental("s", IncrementalSessionUpdate{})
+		return readonly.UpdateSessionIncremental(t.Context(), "s", IncrementalSessionUpdate{})
 	})
 	requireReadOnlyOp(t, "RecordRecallQueryEvent", func() error {
 		_, err := readonly.RecordRecallQueryEvent(
@@ -331,8 +323,10 @@ func TestReadOnlySchemaCompatibilityRejectsMissingReadColumn(t *testing.T) {
 		{"recall entry", "recall_entries", "uncertainty"},
 		{"recall evidence", "recall_evidence", "snippet"},
 		{"extract generation", "recall_extract_generations", "state"},
-		{"extract progress stamp", "recall_extract_progress",
-			"content_stamped_at"},
+		{
+			"extract progress stamp", "recall_extract_progress",
+			"content_stamped_at",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -377,16 +371,14 @@ func TestOpenReadOnlyRejectsMissingReadTable(t *testing.T) {
 }
 
 func TestReadOnlyRequiredSchemaDerivedFromSchemaDDL(t *testing.T) {
-	require := require.New(t)
-
-	required, err := readOnlyRequiredSchema()
-	require.NoError(err)
+	required, err := readOnlyRequiredSchema(t.Context())
+	require.NoError(t, err)
 
 	conn, err := sql.Open("sqlite3", ":memory:")
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(conn.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	_, err = conn.ExecContext(t.Context(), schemaSQL)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	want := make(map[string][]string, len(readOnlyRequiredTables))
 	for _, table := range readOnlyRequiredTables {
@@ -402,6 +394,7 @@ func readOnlyTableColumns(
 	table string,
 ) []string {
 	t.Helper()
+
 	rows, err := conn.QueryContext(t.Context(),
 		"SELECT name FROM pragma_table_info(?) ORDER BY cid", table,
 	)
@@ -434,7 +427,7 @@ func requireReadOnlySchemaCompatibilityFails(
 	contains string,
 ) {
 	t.Helper()
-	err := checkReadOnlySchemaCompatibility(conn)
+	err := checkReadOnlySchemaCompatibility(t.Context(), conn)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), contains)
 }
@@ -446,11 +439,11 @@ func TestOpenReadOnlyAllowsMissingFTSTable(t *testing.T) {
 	execRawSQLite(t, path, "DROP TRIGGER IF EXISTS messages_ad")
 	execRawSQLite(t, path, "DROP TABLE IF EXISTS messages_fts")
 
-	readonly, err := OpenReadOnly(path)
+	readonly, err := OpenReadOnly(t.Context(), path)
 	require.NoError(t, err)
 	require.NotNil(t, readonly)
 	defer readonly.Close()
-	assert.False(t, readonly.HasFTS())
+	assert.False(t, readonly.HasFTS(t.Context()))
 }
 
 func TestOpenReadOnlyCopyHelpersReturnErrReadOnly(t *testing.T) {
@@ -494,33 +487,29 @@ func TestOpenReadOnlyCopyHelpersReturnErrReadOnly(t *testing.T) {
 }
 
 func TestOpenReadOnlyMissingDBFailsWithoutCreatingFiles(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	path := filepath.Join(dir, "missing", "sessions.db")
 
-	readonly, err := OpenReadOnly(path)
-	require.Error(err)
-	require.Nil(readonly)
+	readonly, err := OpenReadOnly(t.Context(), path)
+	require.Error(t, err)
+	require.Nil(t, readonly)
 
 	_, statErr := os.Stat(path)
-	require.ErrorIs(statErr, os.ErrNotExist)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
 
 	_, statErr = os.Stat(filepath.Dir(path))
-	require.ErrorIs(statErr, os.ErrNotExist)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
 func TestOpenReadOnlyEmptyDBFailsWithoutMigrating(t *testing.T) {
-	require := require.New(t)
-
 	path := filepath.Join(t.TempDir(), "sessions.db")
-	require.NoError(os.WriteFile(path, nil, 0o644))
+	require.NoError(t, os.WriteFile(path, nil, 0o644))
 
-	readonly, err := OpenReadOnly(path)
-	require.Error(err)
-	require.Nil(readonly)
+	readonly, err := OpenReadOnly(t.Context(), path)
+	require.Error(t, err)
+	require.Nil(t, readonly)
 
 	info, statErr := os.Stat(path)
-	require.NoError(statErr)
+	require.NoError(t, statErr)
 	assert.Zero(t, info.Size())
 }

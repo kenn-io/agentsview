@@ -27,16 +27,14 @@ func sampleReport() activity.Report {
 }
 
 func TestSummarizeReport_Deterministic(t *testing.T) {
-	assert := assert.New(t)
-
 	r := sampleReport()
 	a := SummarizeReport(r, 10)
 	b := SummarizeReport(r, 10)
-	assert.Equal(a, b, "same report yields identical summary")
-	assert.Equal(3, a.PeakAgents)
-	assert.Equal("2026-06-16T10:00:00Z", a.PeakAt)
+	assert.Equal(t, a, b, "same report yields identical summary")
+	assert.Equal(t, 3, a.PeakAgents)
+	assert.Equal(t, "2026-06-16T10:00:00Z", a.PeakAt)
 	require.Len(t, a.TopProjects, 2)
-	assert.Equal("alpha", a.TopProjects[0].Key)
+	assert.Equal(t, "alpha", a.TopProjects[0].Key)
 }
 
 func TestSummarizeReport_TopNCap(t *testing.T) {

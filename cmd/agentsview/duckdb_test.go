@@ -145,7 +145,7 @@ func TestArchiveWriteBackendDuckDBPushPostsRemoteURLToDaemon(t *testing.T) {
 	ts := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
 		w http.ResponseWriter, r *http.Request,
 	) {
-		t.Fatal("daemon push route should not be called for a rejected remote target")
+		http.Error(w, "daemon push route should not be called for a rejected remote target", http.StatusInternalServerError)
 	})
 
 	backend := newDaemonArchiveWriteBackendForTest(
@@ -164,8 +164,6 @@ func TestArchiveWriteBackendDuckDBPushPostsRemoteURLToDaemon(t *testing.T) {
 }
 
 func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
-	assert := assert.New(t)
-
 	dataDir := t.TempDir()
 	mirrorPath := filepath.Join(t.TempDir(), "mirror.duckdb")
 	ctx, cancel := context.WithCancel(t.Context())
@@ -176,11 +174,15 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	) {
 		startupPushes++
 		var req apiclient.DaemonPushRequest
-		require.NoError(t, json.UnmarshalRead(r.Body, &req))
-		require.NotNil(t, req.Duckdb)
-		assert.Empty(req.Duckdb.Path,
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+			return
+		}
+		if !assert.NotNil(t, t, req.Duckdb) {
+			return
+		}
+		assert.Empty(t, req.Duckdb.Path,
 			"the CLI defers to the daemon's pinned mirror path")
-		assert.Equal(new(true), req.Automatic,
+		assert.Equal(t, new(true), req.Automatic,
 			"watch-mode daemon pushes must be marked automatic")
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
@@ -192,11 +194,15 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		resolvedPushes++
 		cancel()
 		var req apiclient.DaemonPushRequest
-		require.NoError(t, json.UnmarshalRead(r.Body, &req))
-		require.NotNil(t, req.Duckdb)
-		assert.Empty(req.Duckdb.Path,
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+			return
+		}
+		if !assert.NotNil(t, t, req.Duckdb) {
+			return
+		}
+		assert.Empty(t, req.Duckdb.Path,
 			"the CLI defers to the daemon's pinned mirror path")
-		assert.Equal(new(true), req.Automatic,
+		assert.Equal(t, new(true), req.Automatic,
 			"watch-mode daemon pushes must be marked automatic")
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
@@ -217,9 +223,9 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		time.Millisecond,
 	)
 	require.NoError(t, err)
-	assert.Equal(1, startupPushes)
-	assert.GreaterOrEqual(resolvedPushes, 1)
-	assert.NoFileExists(filepath.Join(dataDir, "sessions.db"))
+	assert.Equal(t, 1, startupPushes)
+	assert.GreaterOrEqual(t, resolvedPushes, 1)
+	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 
 // TestWriteDuckDBPushPlanDescribesLocalTarget verifies the printed plan
@@ -227,8 +233,6 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 // there is no remote Quack endpoint branch (and no remote secret) to
 // describe.
 func TestWriteDuckDBPushPlanDescribesLocalTarget(t *testing.T) {
-	assert := assert.New(t)
-
 	var out bytes.Buffer
 	duckCfg := config.DuckDBConfig{
 		Path:        "/data/agentsview.duckdb",
@@ -244,10 +248,10 @@ func TestWriteDuckDBPushPlanDescribesLocalTarget(t *testing.T) {
 	)
 
 	got := out.String()
-	assert.Contains(got, "DuckDB push target: local file /data/agentsview.duckdb")
-	assert.Contains(got, `machine "workstation"`)
-	assert.Contains(got, "mode full")
-	assert.Contains(got, "DuckDB push filters: include projects alpha, beta")
+	assert.Contains(t, got, "DuckDB push target: local file /data/agentsview.duckdb")
+	assert.Contains(t, got, `machine "workstation"`)
+	assert.Contains(t, got, "mode full")
+	assert.Contains(t, got, "DuckDB push filters: include projects alpha, beta")
 }
 
 func TestWriteDuckDBPushDiagnosticsIncludesAgentBreakdown(t *testing.T) {
@@ -415,11 +419,15 @@ func duckDBPushDaemonServerAt(
 	) {
 		assert.Equal(t, want.auth, r.Header.Get("Authorization"))
 		var req apiclient.DaemonPushRequest
-		require.NoError(t, json.UnmarshalRead(r.Body, &req))
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+			return
+		}
 		assert.Equal(t, want.full, req.Full)
 		assert.Equal(t, want.projects, req.Projects)
 		assert.Equal(t, want.excludeProjects, req.ExcludeProjects)
-		require.NotNil(t, req.Duckdb)
+		if !assert.NotNil(t, req.Duckdb) {
+			return
+		}
 		assert.Equal(t, want.path, req.Duckdb.Path)
 		assert.Equal(t, want.url, req.Duckdb.URL)
 		assert.Equal(t, new(want.token), req.Duckdb.Token)
@@ -456,19 +464,16 @@ func TestResolveQuackServeToken(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			token, err := resolveQuackServeToken(
 				tt.flagToken, tt.configured,
 			)
 			if tt.wantErr != "" {
-				require.Error(err)
-				assert.Contains(err.Error(), tt.wantErr)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
 				return
 			}
-			require.NoError(err)
-			assert.Equal(tt.wantToken, token)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantToken, token)
 		})
 	}
 }

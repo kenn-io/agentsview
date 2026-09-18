@@ -47,7 +47,7 @@ func (s *watchBatchTestSyncer) SyncPathsContext(_ context.Context, paths []strin
 	return s.pathErr
 }
 
-func (*watchBatchTestSyncer) HasActiveSessionSourceBelow(string, string) (bool, error) {
+func (*watchBatchTestSyncer) HasActiveSessionSourceBelow(context.Context, string, string) (bool, error) {
 	return false, nil
 }
 func (*watchBatchTestSyncer) ReconciliationRootsForAgent(string) []string { return nil }
@@ -62,9 +62,6 @@ func (s *watchBatchTestSyncer) ReconcileWatchRootsAfterLostEvents(context.Contex
 }
 
 func TestWatchBatchDeferOnlyCompositionAndRootScope(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	pathCause := errors.New("deferred path")
 	rootCause := errors.New("typed root")
 	pathPhase := watchBatchReconciliationError(&watchBatchTestError{
@@ -75,25 +72,25 @@ func TestWatchBatchDeferOnlyCompositionAndRootScope(t *testing.T) {
 	}, nil, []string{"successful", "failed"}, false, true)
 	err := composeWatchBatchErrors(pathPhase, rootPhase)
 	var retry interface{ WatchRetryBatch() WatchBatch }
-	require.ErrorAs(err, &retry)
-	assert.ErrorIs(err, pathCause)
-	assert.ErrorIs(err, rootCause)
-	assert.Equal(WatchBatch{
+	require.ErrorAs(t, err, &retry)
+	require.ErrorIs(t, err, pathCause)
+	require.ErrorIs(t, err, rootCause)
+	assert.Equal(t, WatchBatch{
 		Paths: []string{"path"}, ReconcileRoots: []string{"failed"}, LostEvents: true,
 	}, retry.WatchRetryBatch())
 	untyped := watchBatchReconciliationError(
 		errors.New("untyped root"), nil,
 		[]string{"successful", "failed"}, false, false,
 	)
-	require.ErrorAs(untyped, &retry)
-	assert.Equal([]string{"successful", "failed"}, retry.WatchRetryBatch().ReconcileRoots)
+	require.ErrorAs(t, untyped, &retry)
+	assert.Equal(t, []string{"successful", "failed"}, retry.WatchRetryBatch().ReconcileRoots)
 
 	full := composeWatchBatchErrors(
 		&watchBatchApplyError{cause: pathCause, retry: WatchBatch{Paths: []string{"path"}}},
 		&watchBatchApplyError{cause: rootCause, retry: WatchBatch{FullSync: true, LostEvents: true}},
 	)
-	require.ErrorAs(full, &retry)
-	assert.Equal(WatchBatch{FullSync: true, LostEvents: true}, retry.WatchRetryBatch())
+	require.ErrorAs(t, full, &retry)
+	assert.Equal(t, WatchBatch{FullSync: true, LostEvents: true}, retry.WatchRetryBatch())
 }
 
 func TestWatchBatchKeepsEmptyTypedRootScope(t *testing.T) {
@@ -108,9 +105,6 @@ func TestWatchBatchKeepsEmptyTypedRootScope(t *testing.T) {
 }
 
 func TestApplyWatchBatchRunsRootsOnlyForDeferOnlyPathErrors(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	pathCause := errors.New("deferred path")
 	root := t.TempDir()
 	syncer := &watchBatchTestSyncer{pathErr: &watchBatchTestError{
@@ -119,12 +113,12 @@ func TestApplyWatchBatchRunsRootsOnlyForDeferOnlyPathErrors(t *testing.T) {
 	err := ApplyWatchBatch(t.Context(), syncer, WatchBatch{
 		Paths: []string{filepath.Join(root, "changed")}, ReconcileRoots: []string{root},
 	}, nil)
-	require.Error(err)
-	assert.Equal(1, syncer.rootCalls)
+	require.Error(t, err)
+	assert.Equal(t, 1, syncer.rootCalls)
 	var retry interface{ WatchRetryBatch() WatchBatch }
-	require.ErrorAs(err, &retry)
-	assert.Equal([]string{filepath.Join(root, "deferred")}, retry.WatchRetryBatch().Paths)
-	assert.Empty(retry.WatchRetryBatch().ReconcileRoots)
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, []string{filepath.Join(root, "deferred")}, retry.WatchRetryBatch().Paths)
+	assert.Empty(t, retry.WatchRetryBatch().ReconcileRoots)
 
 	classification := errors.New("classification")
 	syncer = &watchBatchTestSyncer{pathErr: &watchBatchTestError{
@@ -133,17 +127,14 @@ func TestApplyWatchBatchRunsRootsOnlyForDeferOnlyPathErrors(t *testing.T) {
 	err = ApplyWatchBatch(t.Context(), syncer, WatchBatch{
 		Paths: []string{"changed"}, ReconcileRoots: []string{"root"},
 	}, nil)
-	require.Error(err)
-	assert.Zero(syncer.rootCalls)
-	require.ErrorAs(err, &retry)
-	assert.Equal(WatchBatch{Paths: []string{"changed"}, ReconcileRoots: []string{"root"}}, retry.WatchRetryBatch())
-	assert.ErrorIs(err, classification)
+	require.Error(t, err)
+	assert.Zero(t, syncer.rootCalls)
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, WatchBatch{Paths: []string{"changed"}, ReconcileRoots: []string{"root"}}, retry.WatchRetryBatch())
+	assert.ErrorIs(t, err, classification)
 }
 
 func TestApplyWatchBatchComposesDeferredPathAndRootFailure(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	pathCause := errors.New("deferred path")
 	rootCause := errors.New("root failure")
 	root := filepath.Join(t.TempDir(), "root")
@@ -156,13 +147,13 @@ func TestApplyWatchBatchComposesDeferredPathAndRootFailure(t *testing.T) {
 	err := ApplyWatchBatch(t.Context(), syncer, WatchBatch{
 		Paths: []string{"changed"}, ReconcileRoots: []string{root}, LostEvents: true,
 	}, nil)
-	require.Error(err)
-	assert.Equal(1, syncer.rootCalls)
-	assert.ErrorIs(err, pathCause)
-	assert.ErrorIs(err, rootCause)
+	require.Error(t, err)
+	assert.Equal(t, 1, syncer.rootCalls)
+	require.ErrorIs(t, err, pathCause)
+	require.ErrorIs(t, err, rootCause)
 	var retry interface{ WatchRetryBatch() WatchBatch }
-	require.ErrorAs(err, &retry)
-	assert.Equal(WatchBatch{
+	require.ErrorAs(t, err, &retry)
+	assert.Equal(t, WatchBatch{
 		Paths: []string{"deferred"}, ReconcileRoots: []string{"failed-root"}, LostEvents: true,
 	}, retry.WatchRetryBatch())
 }
@@ -204,9 +195,10 @@ func seedWatchBatchUnrelatedSessions(
 	t *testing.T, database *db.DB, count int, prefix string,
 ) {
 	t.Helper()
+
 	root := t.TempDir()
 	// These rows supply archive cardinality while changed-source ingestion stays real.
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
 		stmt, err := tx.PrepareContext(t.Context(), `INSERT INTO sessions (id, agent, project, machine, file_path, message_count, user_message_count) VALUES (?, 'claude', 'cold', 'local', ?, 1, 1)`)
 		if err != nil {
 			return err
@@ -223,45 +215,43 @@ func seedWatchBatchUnrelatedSessions(
 	}))
 
 	var stored int
-	require.NoError(t, database.Reader().QueryRow(
+	require.NoError(t, database.Reader().QueryRow(t.Context(),
 		"SELECT count(*) FROM sessions WHERE project = 'cold' AND agent = 'claude' AND machine = 'local' AND message_count = 1 AND user_message_count = 1 AND file_path IS NOT NULL",
 	).Scan(&stored))
 	require.Equal(t, count, stored)
 }
 
 func TestWatchBatchFixtureMatchesUpsertSession(t *testing.T) {
-	require := require.New(t)
-
 	database := openTestDB(t)
 	seedWatchBatchUnrelatedSessions(t, database, 3, "candidate-")
 	referencePath := filepath.Join(t.TempDir(), "reference.jsonl")
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "reference", Agent: "claude", Project: "cold", Machine: "local",
 		FilePath: &referencePath, MessageCount: 1, UserMessageCount: 1,
 	}))
 
 	var stored int
-	require.NoError(database.Reader().QueryRow(
+	require.NoError(t, database.Reader().QueryRow(t.Context(),
 		"SELECT count(*) FROM sessions WHERE project = 'cold' AND agent = 'claude' AND machine = 'local' AND message_count = 1 AND user_message_count = 1 AND file_path IS NOT NULL",
 	).Scan(&stored))
-	require.Equal(4, stored)
+	require.Equal(t, 4, stored)
 
 	read := func(id string) (map[string]any, string) {
-		rows, err := database.Reader().Query("SELECT * FROM sessions WHERE id = ?", id)
-		require.NoError(err)
+		rows, err := database.Reader().Query(t.Context(), "SELECT * FROM sessions WHERE id = ?", id)
+		require.NoError(t, err)
 		defer rows.Close()
 
 		columns, err := rows.Columns()
-		require.NoError(err)
-		require.True(rows.Next())
+		require.NoError(t, err)
+		require.True(t, rows.Next())
 		values := make([]any, len(columns))
 		pointers := make([]any, len(columns))
 		for i := range values {
 			pointers[i] = &values[i]
 		}
-		require.NoError(rows.Scan(pointers...))
-		require.False(rows.Next())
-		require.NoError(rows.Err())
+		require.NoError(t, rows.Scan(pointers...))
+		require.False(t, rows.Next())
+		require.NoError(t, rows.Err())
 
 		result := make(map[string]any, len(columns)-4)
 		var filePath string
@@ -269,17 +259,17 @@ func TestWatchBatchFixtureMatchesUpsertSession(t *testing.T) {
 			switch column {
 			case "id":
 				value, ok := values[i].(string)
-				require.True(ok, "id must be text")
-				require.Equal(id, value)
+				require.True(t, ok, "id must be text")
+				require.Equal(t, id, value)
 			case "file_path":
 				value, ok := values[i].(string)
-				require.True(ok, "file_path must be text")
+				require.True(t, ok, "file_path must be text")
 				filePath = value
 			case "created_at", "sync_marker":
 				value, ok := values[i].(string)
-				require.True(ok, "%s must be text", column)
+				require.True(t, ok, "%s must be text", column)
 				_, err := time.Parse(time.RFC3339Nano, value)
-				require.NoError(err, "%s must be RFC3339Nano", column)
+				require.NoError(t, err, "%s must be RFC3339Nano", column)
 			default:
 				result[column] = values[i]
 			}
@@ -293,17 +283,17 @@ func TestWatchBatchFixtureMatchesUpsertSession(t *testing.T) {
 	for i := range 3 {
 		id := fmt.Sprintf("candidate-%05d", i)
 		candidate, path := read(id)
-		require.Equal(reference, candidate)
-		require.Equal(fmt.Sprintf("%05d.jsonl", i), filepath.Base(path))
+		require.Equal(t, reference, candidate)
+		require.Equal(t, fmt.Sprintf("%05d.jsonl", i), filepath.Base(path))
 		root := filepath.Dir(path)
-		require.NotEmpty(root)
+		require.NotEmpty(t, root)
 		if commonRoot == "" {
 			commonRoot = root
 		} else {
-			require.Equal(commonRoot, root)
+			require.Equal(t, commonRoot, root)
 		}
 		_, duplicate := paths[path]
-		require.False(duplicate)
+		require.False(t, duplicate)
 		paths[path] = struct{}{}
 	}
 }
@@ -317,8 +307,6 @@ func TestSyncWatchBatchThenRunChangedPathCardinalityAndSerialization(t *testing.
 	var outcomes []outcome
 	for _, unrelated := range []int{1, 10_000} {
 		t.Run(fmt.Sprintf("unrelated-%d", unrelated), func(t *testing.T) {
-			require := require.New(t)
-
 			database, engine, provider, _, path := newChangedPathOutcomeEngine(
 				t, agent, func(path string) parser.ParseOutcome {
 					started := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
@@ -357,7 +345,7 @@ func TestSyncWatchBatchThenRunChangedPathCardinalityAndSerialization(t *testing.
 				)
 				firstDone <- err
 			}()
-			require.Eventually(func() bool {
+			require.Eventually(t, func() bool {
 				select {
 				case <-callbackEntered:
 					return true
@@ -372,12 +360,12 @@ func TestSyncWatchBatchThenRunChangedPathCardinalityAndSerialization(t *testing.
 			}()
 			select {
 			case err := <-secondDone:
-				require.Failf("concurrent sync entered callback critical section", "%v", err)
+				require.Failf(t, "concurrent sync entered callback critical section", "%v", err)
 			case <-time.After(25 * time.Millisecond):
 			}
 			close(releaseCallback)
-			require.NoError(<-firstDone)
-			require.NoError(<-secondDone)
+			require.NoError(t, <-firstDone)
+			require.NoError(t, <-secondDone)
 			outcomes = append(outcomes, outcome{
 				classifications: provider.changedPathCalls.Load(),
 				parses:          provider.parseCalls.Load(),
@@ -442,8 +430,6 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeReconciliationDiscoveryReturn
 	t *testing.T,
 ) {
 	synctest.Test(t, func(t *testing.T) {
-		require := require.New(t)
-
 		const agent parser.AgentType = "watch-batch-blocked-discovery"
 		root := t.TempDir()
 		started := make(chan struct{}, 1)
@@ -464,7 +450,7 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeReconciliationDiscoveryReturn
 			discoverStarted: started,
 			discoverRelease: release,
 		}
-		engine := NewEngine(openTestDB(t), EngineConfig{
+		engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 			AgentDirs:          map[parser.AgentType][]string{agent: {root}},
 			Machine:            "local",
 			ProgressStallAfter: time.Nanosecond,
@@ -487,7 +473,7 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeReconciliationDiscoveryReturn
 		select {
 		case <-started:
 		default:
-			require.FailNow("watch batch did not enter reconciliation discovery")
+			require.FailNow(t, "watch batch did not enter reconciliation discovery")
 		}
 
 		progress := requireStalledCurrentProgress(t, engine)
@@ -497,9 +483,9 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeReconciliationDiscoveryReturn
 		synctest.Wait()
 		select {
 		case err := <-done:
-			require.NoError(err)
+			require.NoError(t, err)
 		default:
-			require.FailNow("watch batch did not finish after discovery resumed")
+			require.FailNow(t, "watch batch did not finish after discovery resumed")
 		}
 	})
 }
@@ -508,12 +494,10 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeChangedPathParseReturns(
 	t *testing.T,
 ) {
 	synctest.Test(t, func(t *testing.T) {
-		require := require.New(t)
-
 		const agent parser.AgentType = "watch-batch-blocked-changed-path"
 		root := t.TempDir()
 		path := filepath.Join(root, "source.jsonl")
-		require.NoError(os.WriteFile(path, []byte("{}\n"), 0o600))
+		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
 		started := make(chan struct{}, 1)
 		release := make(chan struct{}, 1)
 		defer func() {
@@ -538,7 +522,7 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeChangedPathParseReturns(
 			parseRelease: release,
 			parseOutcome: parser.ParseOutcome{ResultSetComplete: true},
 		}
-		engine := NewEngine(openTestDB(t), EngineConfig{
+		engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 			AgentDirs:          map[parser.AgentType][]string{agent: {root}},
 			Machine:            "local",
 			ProgressStallAfter: time.Nanosecond,
@@ -561,7 +545,7 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeChangedPathParseReturns(
 		select {
 		case <-started:
 		default:
-			require.FailNow("watch batch did not enter changed-path parsing")
+			require.FailNow(t, "watch batch did not enter changed-path parsing")
 		}
 
 		progress := requireStalledCurrentProgress(t, engine)
@@ -571,9 +555,9 @@ func TestSyncWatchBatchThenRunReportsProgressBeforeChangedPathParseReturns(
 		synctest.Wait()
 		select {
 		case err := <-done:
-			require.NoError(err)
+			require.NoError(t, err)
 		default:
-			require.FailNow("watch batch did not finish after parsing resumed")
+			require.FailNow(t, "watch batch did not finish after parsing resumed")
 		}
 	})
 }
@@ -606,9 +590,6 @@ func TestApplyWatchBatchReportsProgressBeforeUnknownRenameStatReturns(
 	t *testing.T,
 ) {
 	synctest.Test(t, func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		const agent parser.AgentType = "watch-batch-blocked-rename-plan"
 		_, engine, _, _, path := newChangedPathOutcomeEngine(
 			t, agent, func(string) parser.ParseOutcome {
@@ -626,7 +607,7 @@ func TestApplyWatchBatchReportsProgressBeforeUnknownRenameStatReturns(
 		}()
 		realStat := engine.stat
 		engine.stat = func(got string) (os.FileInfo, error) {
-			assert.Equal(path, got)
+			assert.Equal(t, path, got)
 			started <- struct{}{}
 			<-release
 			return realStat(got)
@@ -644,24 +625,24 @@ func TestApplyWatchBatchReportsProgressBeforeUnknownRenameStatReturns(
 		select {
 		case <-started:
 		case err := <-done:
-			require.FailNow("watch batch bypassed the owned planning stat", "%v", err)
+			require.FailNow(t, "watch batch bypassed the owned planning stat", "%v", err)
 		default:
-			require.FailNow("watch batch did not enter rename planning stat")
+			require.FailNow(t, "watch batch did not enter rename planning stat")
 		}
 
 		progress := requireStalledCurrentProgress(t, engine)
-		assert.Equal(PhaseDiscovering, progress.Phase)
+		assert.Equal(t, PhaseDiscovering, progress.Phase)
 
 		release <- struct{}{}
 		synctest.Wait()
 		select {
 		case err := <-done:
-			require.NoError(err)
+			require.NoError(t, err)
 		default:
-			require.FailNow("watch batch did not finish after planning resumed")
+			require.FailNow(t, "watch batch did not finish after planning resumed")
 		}
 		_, active := engine.CurrentProgress()
-		assert.False(active)
+		assert.False(t, active)
 	})
 }
 

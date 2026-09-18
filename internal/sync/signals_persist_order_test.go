@@ -19,12 +19,10 @@ import (
 // CurrentQualitySignalVersion and remains a backfill candidate on the
 // next startup instead of silently keeping stale findings forever.
 func TestRecomputeSignalsFailedFindingsLeavesSessionStale(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "sessions.db")
 	d := dbtest.OpenTestDBAt(t, path)
-	engine := NewEngine(d, EngineConfig{
+	engine := NewEngine(ctx, d, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {t.TempDir()},
 		},
@@ -33,27 +31,27 @@ func TestRecomputeSignalsFailedFindingsLeavesSessionStale(t *testing.T) {
 	defer engine.Close()
 
 	const id = "s1"
-	require.NoError(d.UpsertSession(db.Session{
+	require.NoError(t, d.UpsertSession(ctx, db.Session{
 		ID: id, Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 1, UserMessageCount: 1,
 	}))
-	require.NoError(d.ReplaceSessionMessages(id, []db.Message{
+	require.NoError(t, d.ReplaceSessionMessages(ctx, id, []db.Message{
 		{SessionID: id, Ordinal: 0, Role: "user", Content: "hello"},
 	}))
 
 	// Break findings persistence only; signal columns still write.
 	raw, err := sql.Open("sqlite3", path)
-	require.NoError(err, "open raw connection")
+	require.NoError(t, err, "open raw connection")
 	defer raw.Close()
 	_, err = raw.ExecContext(ctx, "DROP TABLE secret_findings")
-	require.NoError(err, "drop findings table")
+	require.NoError(t, err, "drop findings table")
 
-	require.Error(engine.RecomputeSignals(ctx, id),
+	require.Error(t, engine.RecomputeSignals(ctx, id),
 		"recompute must fail when findings cannot persist")
 
 	sess, err := d.GetSessionFull(ctx, id)
-	require.NoError(err, "GetSessionFull")
-	require.NotNil(sess)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, sess)
 	assert.Less(t,
 		sess.QualitySignalVersion, db.CurrentQualitySignalVersion,
 		"failed compute must leave the session eligible for backfill retry")

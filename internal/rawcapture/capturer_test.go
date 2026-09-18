@@ -72,6 +72,7 @@ func captureFileProvider(
 	content string,
 ) (*captureTestProvider, parser.SourceRef, string) {
 	t.Helper()
+
 	root := t.TempDir()
 	path := filepath.Join(root, "project", "session.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
@@ -107,127 +108,115 @@ func captureFileProvider(
 }
 
 func TestCapturerPersistsStableGenerationWithoutParsing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, _ := captureFileProvider(t, "one\n")
 	capturer := New(store)
 
 	result, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
-	assert.Equal(StatusCaptured, result.Status)
-	assert.NotEmpty(result.CaptureID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, result.Status)
+	assert.NotEmpty(t, result.CaptureID)
 	queued, ok, err := store.NextGeneration(t.Context())
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(result.CaptureID, queued.CaptureID)
-	assert.Equal(source.Key, queued.Source.SourceKey)
-	require.Len(queued.Entries, 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, result.CaptureID, queued.CaptureID)
+	assert.Equal(t, source.Key, queued.Source.SourceKey)
+	require.Len(t, queued.Entries, 1)
 	entry := queued.Entries[0]
-	assert.Equal("project/session.jsonl", entry.Path)
-	assert.Equal(int64(4), entry.Length)
-	assert.NotEmpty(entry.FileIdentity)
-	assert.Equal("2c8b08da5ce60398e1f19af0e5dccc744df274b826abe585eaba68c525434806", entry.PrefixSHA256)
-	require.Len(entry.Objects, 1)
-	assert.Equal(entry.PrefixSHA256, entry.Objects[0].SHA256)
-	assert.Equal(int64(4), entry.Objects[0].Length)
+	assert.Equal(t, "project/session.jsonl", entry.Path)
+	assert.Equal(t, int64(4), entry.Length)
+	assert.NotEmpty(t, entry.FileIdentity)
+	assert.Equal(t, "2c8b08da5ce60398e1f19af0e5dccc744df274b826abe585eaba68c525434806", entry.PrefixSHA256)
+	require.Len(t, entry.Objects, 1)
+	assert.Equal(t, entry.PrefixSHA256, entry.Objects[0].SHA256)
+	assert.Equal(t, int64(4), entry.Objects[0].Length)
 	content, err := os.ReadFile(store.ObjectPath(entry.Objects[0]))
-	require.NoError(err)
-	assert.Equal([]byte("one\n"), content)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("one\n"), content)
 }
 
 func TestCapturerClaudeLineageParentGrowthReusesFork(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
-	require.NoError(os.MkdirAll(project, 0o700))
+	require.NoError(t, os.MkdirAll(project, 0o700))
 	parentPath := filepath.Join(project, "parent.jsonl")
 	forkPath := filepath.Join(project, "fork.jsonl")
-	require.NoError(os.WriteFile(parentPath, []byte(`{"type":"user","uuid":"u1","parentUuid":null,"message":{"content":"question"}}`+"\n"), 0o600))
-	require.NoError(os.WriteFile(forkPath, []byte(`{"type":"user","uuid":"u1","parentUuid":null,"sessionKind":"bg","message":{"content":"question"}}`+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(parentPath, []byte(`{"type":"user","uuid":"u1","parentUuid":null,"message":{"content":"question"}}`+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(forkPath, []byte(`{"type":"user","uuid":"u1","parentUuid":null,"sessionKind":"bg","message":{"content":"question"}}`+"\n"), 0o600))
 	provider, supported := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: []string{root}})
-	require.True(supported)
+	require.True(t, supported)
 	sources, err := provider.SourcesForChangedPath(t.Context(), parser.ChangedPathRequest{Path: forkPath})
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 	capturer := New(store)
 	first, err := capturer.Capture(t.Context(), provider, sources[0])
-	require.NoError(err)
+	require.NoError(t, err)
 	before, ok, err := store.CaptureBase(t.Context(), first.Source)
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 
-	require.NoError(appendFile(parentPath, `{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":"answer"}}`+"\n"))
+	require.NoError(t, appendFile(parentPath, `{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":"answer"}}`+"\n"))
 	second, err := capturer.Capture(t.Context(), provider, sources[0])
-	require.NoError(err)
-	assert.Equal(StatusCaptured, second.Status)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, second.Status)
 	after, ok, err := store.CaptureBase(t.Context(), first.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(after.Entries, 2)
-	assert.Equal(before.Entries[0].Objects, after.Entries[0].Objects)
-	require.Len(after.Entries[1].Objects, 2)
-	assert.Equal(before.Entries[1].Objects[0], after.Entries[1].Objects[0])
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, after.Entries, 2)
+	assert.Equal(t, before.Entries[0].Objects, after.Entries[0].Objects)
+	require.Len(t, after.Entries[1].Objects, 2)
+	assert.Equal(t, before.Entries[1].Objects[0], after.Entries[1].Objects[0])
 }
 
 func TestCapturerEvenerLineageParentGrowthReusesFork(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	root := t.TempDir()
 	sessions := filepath.Join(root, "sessions")
-	require.NoError(os.MkdirAll(sessions, 0o700))
+	require.NoError(t, os.MkdirAll(sessions, 0o700))
 	parentPath := filepath.Join(sessions, "parent.transcript.jsonl")
 	forkPath := filepath.Join(sessions, "fork.transcript.jsonl")
 	metaPath := filepath.Join(sessions, "fork.meta.json")
-	require.NoError(os.WriteFile(parentPath, []byte("parent prefix\n"), 0o600))
-	require.NoError(os.WriteFile(forkPath, []byte("fork transcript\n"), 0o600))
-	require.NoError(os.WriteFile(metaPath, []byte(`{"id":"fork","parent_session_id":"parent","divergence_turn":2}`), 0o600))
+	require.NoError(t, os.WriteFile(parentPath, []byte("parent prefix\n"), 0o600))
+	require.NoError(t, os.WriteFile(forkPath, []byte("fork transcript\n"), 0o600))
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{"id":"fork","parent_session_id":"parent","divergence_turn":2}`), 0o600))
 	provider, supported := parser.NewProvider(parser.AgentEvener, parser.ProviderConfig{Roots: []string{root}})
-	require.True(supported)
+	require.True(t, supported)
 	source, found, err := provider.FindSource(t.Context(), parser.FindSourceRequest{RawSessionID: "fork"})
-	require.NoError(err)
-	require.True(found)
+	require.NoError(t, err)
+	require.True(t, found)
 	capturer := New(store)
 	first, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
+	require.NoError(t, err)
 	before, ok, err := store.CaptureBase(t.Context(), first.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(before.Entries, 3)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, before.Entries, 3)
 
-	require.NoError(appendFile(parentPath, "parent suffix\n"))
+	require.NoError(t, appendFile(parentPath, "parent suffix\n"))
 	_, err = capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
+	require.NoError(t, err)
 	after, ok, err := store.CaptureBase(t.Context(), first.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(after.Entries, 3)
-	assert.Equal(before.Entries[1].Objects, after.Entries[1].Objects)
-	require.Len(after.Entries[2].Objects, 2)
-	assert.Equal(before.Entries[2].Objects[0], after.Entries[2].Objects[0])
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, after.Entries, 3)
+	assert.Equal(t, before.Entries[1].Objects, after.Entries[1].Objects)
+	require.Len(t, after.Entries[2].Objects, 2)
+	assert.Equal(t, before.Entries[2].Objects[0], after.Entries[2].Objects[0])
 
-	require.NoError(os.WriteFile(metaPath, []byte(`{"id":"fork","name":"Renamed","parent_session_id":"parent","divergence_turn":2}`), 0o600))
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{"id":"fork","name":"Renamed","parent_session_id":"parent","divergence_turn":2}`), 0o600))
 	_, err = capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
+	require.NoError(t, err)
 	renamed, ok, err := store.CaptureBase(t.Context(), first.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(renamed.Entries, 3)
-	require.Len(renamed.Entries[0].Objects, 1)
-	assert.NotEqual(after.Entries[0].Objects, renamed.Entries[0].Objects)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, renamed.Entries, 3)
+	require.Len(t, renamed.Entries[0].Objects, 1)
+	assert.NotEqual(t, after.Entries[0].Objects, renamed.Entries[0].Objects)
 }
 
 func TestConcurrentCapturesDoNotDiscardAnotherCaptureSharedObject(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	providerA, sourceA, _ := captureFileProvider(t, "shared\n")
 	providerB, sourceB, _ := captureFileProvider(t, "shared\n")
@@ -279,137 +268,128 @@ func TestConcurrentCapturesDoNotDiscardAnotherCaptureSharedObject(t *testing.T) 
 	case <-beforeCommitB:
 		close(releaseA)
 		first := <-outcomeA
-		require.Error(first.err)
+		require.Error(t, first.err)
 		close(releaseB)
 	case <-time.After(500 * time.Millisecond):
 		close(releaseA)
 		first := <-outcomeA
-		require.Error(first.err)
+		require.Error(t, first.err)
 		<-beforeCommitB
 		close(releaseB)
 	}
 
 	second := <-outcomeB
 
-	require.NoError(second.err)
-	assert.Equal(StatusCaptured, second.result.Status)
-	assert.FileExists(store.ObjectPath(ref))
+	require.NoError(t, second.err)
+	assert.Equal(t, StatusCaptured, second.result.Status)
+	assert.FileExists(t, store.ObjectPath(ref))
 }
 
 func TestCapturerReturnsUnchangedWithoutAnotherGeneration(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, _ := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	first, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	second, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
-	assert.Equal(StatusUnchanged, second.Status)
-	assert.Empty(second.CaptureID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusUnchanged, second.Status)
+	assert.Empty(t, second.CaptureID)
 	base, ok, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 		Provider:         source.Provider,
 		ConfiguredRootID: first.Source.ConfiguredRootID,
 		SourceKey:        source.Key,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(first.CaptureID, base.CaptureID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, first.CaptureID, base.CaptureID)
 }
 
 func TestCapturerReplacesPermanentFailureWhenSourceIsUnchanged(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
-	require.NoError(store.SetDevice(t.Context(), "device-a"))
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	first, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
-	require.NoError(appendFile(sourcePath, "two\n"))
+	require.NoError(t, err)
+	require.NoError(t, appendFile(sourcePath, "two\n"))
 	second, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, found, err := store.FinalizeNextManifest(t.Context(), "device-a")
-	require.NoError(err)
-	require.True(found)
-	require.NoError(store.RecordGenerationFailure(
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NoError(t, store.RecordGenerationFailure(
 		t.Context(), "device-a", first.CaptureID,
 		rawcheckpoint.GenerationFailurePermanent, time.Time{},
 	))
 
 	base, ok, err := store.CaptureBase(t.Context(), second.Source)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(second.CaptureID, base.CaptureID,
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, second.CaptureID, base.CaptureID,
 		"replacement must compare the newest rejected suffix content")
-	assert.True(base.PermanentlyRejected)
+	assert.True(t, base.PermanentlyRejected)
 	var rejectedRefs []rawsync.ObjectRef
 	for _, entry := range base.Entries {
 		rejectedRefs = append(rejectedRefs, entry.Objects...)
 	}
 
 	replacement, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
-	assert.Equal(StatusCaptured, replacement.Status)
-	assert.NotEqual(second.CaptureID, replacement.CaptureID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, replacement.Status)
+	assert.NotEqual(t, second.CaptureID, replacement.CaptureID)
 	manifest, found, err := store.FinalizeNextManifest(t.Context(), "device-a")
-	require.NoError(err)
-	require.True(found)
-	assert.Equal(replacement.CaptureID, manifest.CaptureID)
-	require.Len(manifest.Entries, 1)
-	assert.Len(manifest.Entries[0].Objects, 1,
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, replacement.CaptureID, manifest.CaptureID)
+	require.Len(t, manifest.Entries, 1)
+	assert.Len(t, manifest.Entries[0].Objects, 1,
 		"a source revision must replace the rejected generation with a full snapshot")
 	replacementRef := manifest.Entries[0].Objects[0]
 	for _, ref := range rejectedRefs {
 		if ref != replacementRef {
-			assert.NoFileExists(store.ObjectPath(ref))
+			assert.NoFileExists(t, store.ObjectPath(ref))
 		}
 	}
 	usage, err := store.OutboxUsage(t.Context())
-	require.NoError(err)
-	assert.Equal(replacementRef.Length+rawcheckpoint.CaptureMetadataCharge(1, 1),
+	require.NoError(t, err)
+	assert.Equal(t, replacementRef.Length+rawcheckpoint.CaptureMetadataCharge(1, 1),
 		usage.UsedBytes,
 	)
 	status, err := store.ClientStatus(t.Context())
-	require.NoError(err)
-	assert.Zero(status.PermanentFailures)
+	require.NoError(t, err)
+	assert.Zero(t, status.PermanentFailures)
 }
 
 func TestCapturerReplacesPermanentFailureWithinOneGenerationCapacity(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 2000)
-	require.NoError(store.SetDevice(t.Context(), "device-a"))
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	first, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, found, err := store.FinalizeNextManifest(t.Context(), "device-a")
-	require.NoError(err)
-	require.True(found)
-	require.NoError(store.RecordGenerationFailure(
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NoError(t, store.RecordGenerationFailure(
 		t.Context(), "device-a", first.CaptureID,
 		rawcheckpoint.GenerationFailurePermanent, time.Time{},
 	))
-	require.NoError(appendFile(sourcePath, "two\n"))
+	require.NoError(t, appendFile(sourcePath, "two\n"))
 
 	replacement, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
-	assert.Equal(StatusCaptured, replacement.Status)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, replacement.Status)
 	manifest, found, err := store.FinalizeNextManifest(t.Context(), "device-a")
-	require.NoError(err)
-	require.True(found)
-	assert.Equal(replacement.CaptureID, manifest.CaptureID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, replacement.CaptureID, manifest.CaptureID)
 	usage, err := store.OutboxUsage(t.Context())
-	require.NoError(err)
-	assert.LessOrEqual(usage.UsedBytes, int64(2000))
+	require.NoError(t, err)
+	assert.LessOrEqual(t, usage.UsedBytes, int64(2000))
 }
 
 func TestCapturerRejectsSameSizeMutationBeforeUnchangedDecision(t *testing.T) {
@@ -431,59 +411,50 @@ func TestCapturerRejectsSameSizeMutationBeforeUnchangedDecision(t *testing.T) {
 }
 
 func TestCapturerRejectsMutationWithoutPublishingGeneration(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	capturer.capturePhase = func(phase capturePhase, _ string) {
 		if phase == capturePhaseAfterRead {
-			require.NoError(os.WriteFile(sourcePath, []byte("changed\n"), 0o600))
+			require.NoError(t, os.WriteFile(sourcePath, []byte("changed\n"), 0o600))
 		}
 	}
 
 	_, err := capturer.Capture(t.Context(), provider, source)
 
-	require.ErrorIs(err, ErrSourceChanged)
+	require.ErrorIs(t, err, ErrSourceChanged)
 	_, ok, readErr := store.NextGeneration(t.Context())
-	require.NoError(readErr)
-	assert.False(ok)
+	require.NoError(t, readErr)
+	assert.False(t, ok)
 	usage, readErr := store.OutboxUsage(t.Context())
-	require.NoError(readErr)
-	assert.Zero(usage.UsedBytes)
-	assert.Zero(usage.ReservedBytes)
+	require.NoError(t, readErr)
+	assert.Zero(t, usage.UsedBytes)
+	assert.Zero(t, usage.ReservedBytes)
 }
 
 func TestCapturerRejectsGrowthAfterCapacityReservation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	capturer.capturePhase = func(phase capturePhase, _ string) {
 		if phase == capturePhaseBeforeRead {
-			require.NoError(appendFile(sourcePath, "two\n"))
+			require.NoError(t, appendFile(sourcePath, "two\n"))
 		}
 	}
 
 	_, err := capturer.Capture(t.Context(), provider, source)
 
-	require.ErrorIs(err, ErrSourceChanged)
+	require.ErrorIs(t, err, ErrSourceChanged)
 	_, ok, readErr := store.NextGeneration(t.Context())
-	require.NoError(readErr)
-	assert.False(ok)
+	require.NoError(t, readErr)
+	assert.False(t, ok)
 	usage, readErr := store.OutboxUsage(t.Context())
-	require.NoError(readErr)
-	assert.Zero(usage.UsedBytes)
-	assert.Zero(usage.ReservedBytes)
+	require.NoError(t, readErr)
+	assert.Zero(t, usage.UsedBytes)
+	assert.Zero(t, usage.ReservedBytes)
 }
 
 func TestCapturerReleasesReservationWhenObjectInstallFails(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, _ := captureFileProvider(t, "one\n")
 	capturer := New(store)
@@ -492,24 +463,21 @@ func TestCapturerReleasesReservationWhenObjectInstallFails(t *testing.T) {
 
 	_, err := capturer.Capture(t.Context(), provider, source)
 
-	require.ErrorIs(err, want)
+	require.ErrorIs(t, err, want)
 	usage, readErr := store.OutboxUsage(t.Context())
-	require.NoError(readErr)
-	assert.Zero(usage.UsedBytes)
-	assert.Zero(usage.ReservedBytes)
+	require.NoError(t, readErr)
+	assert.Zero(t, usage.UsedBytes)
+	assert.Zero(t, usage.ReservedBytes)
 	_, ok, readErr := store.NextGeneration(t.Context())
-	require.NoError(readErr)
-	assert.False(ok)
+	require.NoError(t, readErr)
+	assert.False(t, ok)
 }
 
 func TestCapturerRemovesEarlierObjectsWhenLaterInstallFails(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, transcript := captureFileProvider(t, "one\n")
 	companionPath := filepath.Join(filepath.Dir(transcript), "companion.json")
-	require.NoError(os.WriteFile(companionPath, []byte("companion\n"), 0o600))
+	require.NoError(t, os.WriteFile(companionPath, []byte("companion\n"), 0o600))
 	provider.plan.Entries = append(provider.plan.Entries, parser.RawCaptureEntry{
 		Path: "project/companion.json", LocalPath: companionPath,
 	})
@@ -525,58 +493,53 @@ func TestCapturerRemovesEarlierObjectsWhenLaterInstallFails(t *testing.T) {
 
 	_, err := capturer.Capture(t.Context(), provider, source)
 
-	require.ErrorContains(err, "second rename failed")
+	require.ErrorContains(t, err, "second rename failed")
 	firstRef := rawsync.ObjectRef{
 		SHA256: "2c8b08da5ce60398e1f19af0e5dccc744df274b826abe585eaba68c525434806",
 		Length: 4,
 	}
-	assert.NoFileExists(store.ObjectPath(firstRef))
+	assert.NoFileExists(t, store.ObjectPath(firstRef))
 	usage, readErr := store.OutboxUsage(t.Context())
-	require.NoError(readErr)
-	assert.Zero(usage.UsedBytes)
-	assert.Zero(usage.ReservedBytes)
+	require.NoError(t, readErr)
+	assert.Zero(t, usage.UsedBytes)
+	assert.Zero(t, usage.ReservedBytes)
 }
 
 func TestCapturerRejectsEarlierEntryMutationDuringLaterCapture(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, transcript := captureFileProvider(t, "one\n")
 	provider.plan.Entries[0].Path = "a-transcript.jsonl"
 	companionPath := filepath.Join(filepath.Dir(transcript), "b-companion.json")
-	require.NoError(os.WriteFile(companionPath, []byte("companion\n"), 0o600))
+	require.NoError(t, os.WriteFile(companionPath, []byte("companion\n"), 0o600))
 	provider.plan.Entries = append(provider.plan.Entries, parser.RawCaptureEntry{
 		Path: "b-companion.json", LocalPath: companionPath,
 	})
 	capturer := New(store)
 	capturer.capturePhase = func(phase capturePhase, path string) {
 		if phase == capturePhaseAfterRead && path == companionPath {
-			require.NoError(os.WriteFile(transcript, []byte("changed\n"), 0o600))
+			require.NoError(t, os.WriteFile(transcript, []byte("changed\n"), 0o600))
 		}
 	}
 
 	_, err := capturer.Capture(t.Context(), provider, source)
 
-	require.ErrorIs(err, ErrSourceChanged)
+	require.ErrorIs(t, err, ErrSourceChanged)
 	_, ok, readErr := store.NextGeneration(t.Context())
-	require.NoError(readErr)
-	assert.False(ok)
+	require.NoError(t, readErr)
+	assert.False(t, ok)
 	usage, readErr := store.OutboxUsage(t.Context())
-	require.NoError(readErr)
-	assert.Zero(usage.UsedBytes)
-	assert.Zero(usage.ReservedBytes)
+	require.NoError(t, readErr)
+	assert.Zero(t, usage.UsedBytes)
+	assert.Zero(t, usage.ReservedBytes)
 }
 
 func TestCapturerRejectsEntryThatEscapesRootAfterPlanValidation(t *testing.T) {
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, sourcePath := captureFileProvider(t, "safe\n")
 	projectDir := filepath.Dir(sourcePath)
 	originalDir := projectDir + "-original"
 	outsideDir := t.TempDir()
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(outsideDir, filepath.Base(sourcePath)), []byte("leak\n"), 0o600,
 	))
 	capturer := New(store)
@@ -585,7 +548,7 @@ func TestCapturerRejectsEntryThatEscapesRootAfterPlanValidation(t *testing.T) {
 	capturer.files.stat = func(path string) (os.FileInfo, error) {
 		if path == sourcePath && !swapped {
 			swapped = true
-			require.NoError(os.Rename(projectDir, originalDir))
+			require.NoError(t, os.Rename(projectDir, originalDir))
 			if err := os.Symlink(outsideDir, projectDir); err != nil {
 				t.Skipf("symlink unavailable: %v", err)
 			}
@@ -595,9 +558,9 @@ func TestCapturerRejectsEntryThatEscapesRootAfterPlanValidation(t *testing.T) {
 
 	_, err := capturer.Capture(t.Context(), provider, source)
 
-	require.ErrorIs(err, ErrSourceChanged)
+	require.ErrorIs(t, err, ErrSourceChanged)
 	_, ok, readErr := store.NextGeneration(t.Context())
-	require.NoError(readErr)
+	require.NoError(t, readErr)
 	assert.False(t, ok)
 }
 
@@ -625,20 +588,18 @@ func TestCapturerRejectsCompanionAddedDuringCapture(t *testing.T) {
 }
 
 func TestCapturerRejectsCompanionAddedBeforeUnchangedDecision(t *testing.T) {
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	first, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
+	require.NoError(t, err)
 	companionPath := filepath.Join(filepath.Dir(sourcePath), "session_index.jsonl")
 	originalStat := capturer.files.stat
 	added := false
 	capturer.files.stat = func(path string) (os.FileInfo, error) {
 		if path == sourcePath && !added {
 			added = true
-			require.NoError(os.WriteFile(companionPath, []byte("index\n"), 0o600))
+			require.NoError(t, os.WriteFile(companionPath, []byte("index\n"), 0o600))
 			provider.plan.Entries = append(provider.plan.Entries, parser.RawCaptureEntry{
 				Path: "project/session_index.jsonl", LocalPath: companionPath,
 			})
@@ -648,20 +609,18 @@ func TestCapturerRejectsCompanionAddedBeforeUnchangedDecision(t *testing.T) {
 
 	_, err = capturer.Capture(t.Context(), provider, source)
 
-	require.ErrorIs(err, ErrSourceChanged)
+	require.ErrorIs(t, err, ErrSourceChanged)
 	base, ok, readErr := store.CaptureBase(t.Context(), first.Source)
-	require.NoError(readErr)
-	require.True(ok)
+	require.NoError(t, readErr)
+	require.True(t, ok)
 	assert.Equal(t, first.CaptureID, base.CaptureID)
 }
 
 func TestCapturerRetainsReservationWhenFailedObjectCleanupFails(t *testing.T) {
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, transcript := captureFileProvider(t, "one\n")
 	companionPath := filepath.Join(filepath.Dir(transcript), "companion.json")
-	require.NoError(os.WriteFile(companionPath, []byte("companion\n"), 0o600))
+	require.NoError(t, os.WriteFile(companionPath, []byte("companion\n"), 0o600))
 	provider.plan.Entries = append(provider.plan.Entries, parser.RawCaptureEntry{
 		Path: "project/companion.json", LocalPath: companionPath,
 	})
@@ -681,16 +640,13 @@ func TestCapturerRetainsReservationWhenFailedObjectCleanupFails(t *testing.T) {
 
 	_, err := capturer.Capture(t.Context(), provider, source)
 
-	require.ErrorIs(err, wantCleanup)
+	require.ErrorIs(t, err, wantCleanup)
 	usage, readErr := store.OutboxUsage(t.Context())
-	require.NoError(readErr)
+	require.NoError(t, readErr)
 	assert.Positive(t, usage.ReservedBytes)
 }
 
 func TestCapturerDiscardsRenamedObjectWhenDirectorySyncFails(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, _ := captureFileProvider(t, "one\n")
 	capturer := New(store)
@@ -708,24 +664,22 @@ func TestCapturerDiscardsRenamedObjectWhenDirectorySyncFails(t *testing.T) {
 	capturer.discardObjects = func(_ context.Context, refs []rawsync.ObjectRef) error {
 		discarded = append(discarded, refs...)
 		for _, ref := range refs {
-			require.NoError(os.Remove(store.ObjectPath(ref)))
+			require.NoError(t, os.Remove(store.ObjectPath(ref)))
 		}
 		return nil
 	}
 
 	_, err := capturer.Capture(t.Context(), provider, source)
 
-	require.ErrorContains(err, "sync object directory")
-	require.Len(discarded, 1)
-	assert.NoFileExists(store.ObjectPath(discarded[0]))
+	require.ErrorContains(t, err, "sync object directory")
+	require.Len(t, discarded, 1)
+	assert.NoFileExists(t, store.ObjectPath(discarded[0]))
 	usage, readErr := store.OutboxUsage(t.Context())
-	require.NoError(readErr)
-	assert.Zero(usage.ReservedBytes)
+	require.NoError(t, readErr)
+	assert.Zero(t, usage.ReservedBytes)
 }
 
 func TestCapturerSyncsEveryObjectDirectoryEntryBeforeCommit(t *testing.T) {
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, _ := captureFileProvider(t, "one\n")
 	capturer := New(store)
@@ -737,11 +691,11 @@ func TestCapturerSyncsEveryObjectDirectoryEntryBeforeCommit(t *testing.T) {
 
 	result, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
+	require.NoError(t, err)
 	base, ok, err := store.CaptureBase(t.Context(), result.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(base.Entries, 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, base.Entries, 1)
 	objectDir := filepath.Dir(store.ObjectPath(base.Entries[0].Objects[0]))
 	shaDir := filepath.Dir(objectDir)
 	objectsDir := filepath.Dir(shaDir)
@@ -768,9 +722,6 @@ func TestCapturerRetainsReservationWhenTemporaryCleanupFails(t *testing.T) {
 }
 
 func TestCapturerHonorsCancellation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, _ := captureFileProvider(t, "one\n")
 	ctx, cancel := context.WithCancel(t.Context())
@@ -778,41 +729,38 @@ func TestCapturerHonorsCancellation(t *testing.T) {
 
 	_, err := New(store).Capture(ctx, provider, source)
 
-	require.ErrorIs(err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	usage, readErr := store.OutboxUsage(t.Context())
-	require.NoError(readErr)
-	assert.Zero(usage.UsedBytes)
-	assert.Zero(usage.ReservedBytes)
+	require.NoError(t, readErr)
+	assert.Zero(t, usage.UsedBytes)
+	assert.Zero(t, usage.ReservedBytes)
 }
 
 func TestCapturerSnapshotsSQLiteWithOnlineBackup(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "live.db")
 	db, err := sql.Open(sqliteSnapshotDriverName, dbPath)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(db.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	db.SetMaxOpenConns(2)
 	_, err = db.ExecContext(t.Context(), `PRAGMA journal_mode=WAL`)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `PRAGMA wal_autocheckpoint=0`)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `CREATE TABLE items (value TEXT NOT NULL)`)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `INSERT INTO items (value) VALUES ('committed')`)
-	require.NoError(err)
+	require.NoError(t, err)
 	requestedModTime := time.Date(2024, time.January, 2, 3, 4, 5, 678_000_000, time.UTC)
-	require.NoError(os.Chtimes(dbPath, requestedModTime, requestedModTime))
+	require.NoError(t, os.Chtimes(dbPath, requestedModTime, requestedModTime))
 	sourceInfo, err := os.Stat(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	tx, err := db.BeginTx(t.Context(), nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = tx.Rollback() })
 	_, err = tx.ExecContext(t.Context(), `INSERT INTO items (value) VALUES ('uncommitted')`)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	provider := &captureTestProvider{
 		Def: parser.AgentDef{Type: parser.AgentForge},
@@ -837,48 +785,45 @@ func TestCapturerSnapshotsSQLiteWithOnlineBackup(t *testing.T) {
 
 	result, err := New(store).Capture(t.Context(), provider, source)
 
-	require.NoError(err)
-	assert.Equal(StatusCaptured, result.Status)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, result.Status)
 	generation, ok, err := store.NextGeneration(t.Context())
-	require.NoError(err)
-	require.True(ok)
-	require.Len(generation.Entries, 1)
-	assert.Equal("live.db", generation.Entries[0].Path)
-	assert.Equal(sourceInfo.ModTime().UnixNano(), generation.Entries[0].ModTimeNS)
-	require.Len(generation.Entries[0].Objects, 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, generation.Entries, 1)
+	assert.Equal(t, "live.db", generation.Entries[0].Path)
+	assert.Equal(t, sourceInfo.ModTime().UnixNano(), generation.Entries[0].ModTimeNS)
+	require.Len(t, generation.Entries[0].Objects, 1)
 	snapshot, err := sql.Open(
 		sqliteSnapshotDriverName, store.ObjectPath(generation.Entries[0].Objects[0]),
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer snapshot.Close()
 	var values string
 	err = snapshot.QueryRowContext(t.Context(), `SELECT group_concat(value, ',') FROM items`).Scan(&values)
-	require.NoError(err)
-	assert.Equal("committed", values)
+	require.NoError(t, err)
+	assert.Equal(t, "committed", values)
 	temporary, err := os.ReadDir(store.CaptureTempDir())
-	require.NoError(err)
-	assert.Empty(temporary)
+	require.NoError(t, err)
+	assert.Empty(t, temporary)
 
 	unchanged, err := New(store).Capture(t.Context(), provider, source)
-	require.NoError(err)
-	assert.Equal(StatusUnchanged, unchanged.Status)
-	require.NoError(tx.Rollback())
+	require.NoError(t, err)
+	assert.Equal(t, StatusUnchanged, unchanged.Status)
+	require.NoError(t, tx.Rollback())
 	_, err = db.ExecContext(t.Context(), `INSERT INTO items (value) VALUES ('later')`)
-	require.NoError(err)
+	require.NoError(t, err)
 	changed, err := New(store).Capture(t.Context(), provider, source)
-	require.NoError(err)
-	assert.Equal(StatusCaptured, changed.Status)
-	assert.NotEqual(result.CaptureID, changed.CaptureID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, changed.Status)
+	assert.NotEqual(t, result.CaptureID, changed.CaptureID)
 	base, ok, err := store.CaptureBase(t.Context(), changed.Source)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(changed.CaptureID, base.CaptureID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, changed.CaptureID, base.CaptureID)
 }
 
 func TestCapturerRejectsSQLiteSymlinkSwapAfterPlanValidation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "live.db")
@@ -906,7 +851,7 @@ func TestCapturerRejectsSQLiteSymlinkSwapAfterPlanValidation(t *testing.T) {
 		}
 		swapped = true
 		relocated := path + ".validated"
-		require.NoError(os.Rename(path, relocated))
+		require.NoError(t, os.Rename(path, relocated))
 		if err := os.Symlink(outOfRootPath, path); err != nil {
 			t.Skipf("symlink unavailable: %v", err)
 		}
@@ -914,31 +859,28 @@ func TestCapturerRejectsSQLiteSymlinkSwapAfterPlanValidation(t *testing.T) {
 
 	_, err := capturer.Capture(t.Context(), provider, source)
 
-	require.True(swapped)
-	require.ErrorIs(err, ErrSourceChanged)
+	require.True(t, swapped)
+	require.ErrorIs(t, err, ErrSourceChanged)
 	_, ok, readErr := store.NextGeneration(t.Context())
-	require.NoError(readErr)
-	assert.False(ok)
+	require.NoError(t, readErr)
+	assert.False(t, ok)
 	usage, readErr := store.OutboxUsage(t.Context())
-	require.NoError(readErr)
-	assert.Zero(usage.UsedBytes)
-	assert.Zero(usage.ReservedBytes)
+	require.NoError(t, readErr)
+	assert.Zero(t, usage.UsedBytes)
+	assert.Zero(t, usage.ReservedBytes)
 }
 
 func TestCapturerReservesSQLiteSnapshotCapacityBeforeBackup(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 2048)
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "live.db")
 	db, err := sql.Open(sqliteSnapshotDriverName, dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `CREATE TABLE items (value BLOB NOT NULL)`)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `INSERT INTO items (value) VALUES (zeroblob(16384))`)
-	require.NoError(err)
-	require.NoError(db.Close())
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
 	provider := &captureTestProvider{
 		Def: parser.AgentDef{Type: parser.AgentForge},
 		Caps: parser.Capabilities{RawCapture: parser.RawCaptureCapabilities{
@@ -961,18 +903,15 @@ func TestCapturerReservesSQLiteSnapshotCapacityBeforeBackup(t *testing.T) {
 
 	result, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
-	assert.Equal(StatusDegraded, result.Status)
-	assert.False(backupStarted)
+	require.NoError(t, err)
+	assert.Equal(t, StatusDegraded, result.Status)
+	assert.False(t, backupStarted)
 	temporary, err := os.ReadDir(store.CaptureTempDir())
-	require.NoError(err)
-	assert.Empty(temporary)
+	require.NoError(t, err)
+	assert.Empty(t, temporary)
 }
 
 func TestCapturerKeepsCommittedSQLiteCaptureWhenSnapshotCleanupFails(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "live.db")
@@ -997,16 +936,17 @@ func TestCapturerKeepsCommittedSQLiteCaptureWhenSnapshotCleanupFails(t *testing.
 		parser.SourceRef{Provider: parser.AgentForge, Key: "live.db"},
 	)
 
-	require.NoError(err)
-	assert.Equal(StatusCaptured, result.Status)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, result.Status)
 	generation, ok, err := store.NextGeneration(t.Context())
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(result.CaptureID, generation.CaptureID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, result.CaptureID, generation.CaptureID)
 }
 
 func writeSQLiteCaptureTestDB(t *testing.T, path, value string) {
 	t.Helper()
+
 	database, err := sql.Open(sqliteSnapshotDriverName, path)
 	require.NoError(t, err)
 	_, err = database.ExecContext(t.Context(), `CREATE TABLE items (value TEXT NOT NULL)`)
@@ -1017,277 +957,249 @@ func writeSQLiteCaptureTestDB(t *testing.T, path, value string) {
 }
 
 func TestCapturerStoresOnlySuffixObjectForVerifiedAppend(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	first, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
-	require.NoError(appendFile(sourcePath, "two\n"))
+	require.NoError(t, err)
+	require.NoError(t, appendFile(sourcePath, "two\n"))
 
 	second, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
-	assert.Equal(StatusCaptured, second.Status)
-	assert.NotEqual(first.CaptureID, second.CaptureID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, second.Status)
+	assert.NotEqual(t, first.CaptureID, second.CaptureID)
 	base, ok, err := store.CaptureBase(t.Context(), second.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(base.Entries, 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, base.Entries, 1)
 	entry := base.Entries[0]
-	assert.Equal(int64(8), entry.Length)
-	assert.Equal("c3f9c8c283a2b1f2f1896f27a01cbe3cddc0c9d93f752e4639035a0f5b36f6e8", entry.PrefixSHA256)
-	require.Len(entry.Objects, 2)
-	assert.Equal("2c8b08da5ce60398e1f19af0e5dccc744df274b826abe585eaba68c525434806", entry.Objects[0].SHA256)
-	assert.Equal(int64(4), entry.Objects[0].Length)
-	assert.Equal("27dd8ed44a83ff94d557f9fd0412ed5a8cbca69ea04922d88c01184a07300a5a", entry.Objects[1].SHA256)
-	assert.Equal(int64(4), entry.Objects[1].Length)
+	assert.Equal(t, int64(8), entry.Length)
+	assert.Equal(t, "c3f9c8c283a2b1f2f1896f27a01cbe3cddc0c9d93f752e4639035a0f5b36f6e8", entry.PrefixSHA256)
+	require.Len(t, entry.Objects, 2)
+	assert.Equal(t, "2c8b08da5ce60398e1f19af0e5dccc744df274b826abe585eaba68c525434806", entry.Objects[0].SHA256)
+	assert.Equal(t, int64(4), entry.Objects[0].Length)
+	assert.Equal(t, "27dd8ed44a83ff94d557f9fd0412ed5a8cbca69ea04922d88c01184a07300a5a", entry.Objects[1].SHA256)
+	assert.Equal(t, int64(4), entry.Objects[1].Length)
 	suffix, err := os.ReadFile(store.ObjectPath(entry.Objects[1]))
-	require.NoError(err)
-	assert.Equal([]byte("two\n"), suffix)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("two\n"), suffix)
 }
 
 func TestCapturerRefreshesReusedCompanionMetadataForAppend(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, transcriptPath := captureFileProvider(t, "one\n")
 	companionPath := filepath.Join(filepath.Dir(transcriptPath), "session_index.jsonl")
-	require.NoError(os.WriteFile(companionPath, []byte("index\n"), 0o600))
+	require.NoError(t, os.WriteFile(companionPath, []byte("index\n"), 0o600))
 	provider.plan.Entries = append(provider.plan.Entries, parser.RawCaptureEntry{
 		Path: "project/session_index.jsonl", LocalPath: companionPath,
 	})
 	capturer := New(store)
 	_, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
+	require.NoError(t, err)
 	initialInfo, err := os.Stat(companionPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	touchedAt := initialInfo.ModTime().Add(time.Hour)
-	require.NoError(os.Chtimes(companionPath, touchedAt, touchedAt))
+	require.NoError(t, os.Chtimes(companionPath, touchedAt, touchedAt))
 	currentInfo, err := os.Stat(companionPath)
-	require.NoError(err)
-	require.NotEqual(initialInfo.ModTime(), currentInfo.ModTime())
-	require.NoError(appendFile(transcriptPath, "two\n"))
+	require.NoError(t, err)
+	require.NotEqual(t, initialInfo.ModTime(), currentInfo.ModTime())
+	require.NoError(t, appendFile(transcriptPath, "two\n"))
 
 	result, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
-	assert.Equal(StatusCaptured, result.Status)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, result.Status)
 	base, ok, err := store.CaptureBase(t.Context(), result.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(base.Entries, 2)
-	assert.Equal(currentInfo.ModTime().UnixNano(), base.Entries[1].ModTimeNS)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, base.Entries, 2)
+	assert.Equal(t, currentInfo.ModTime().UnixNano(), base.Entries[1].ModTimeNS)
 }
 
 func TestCapturerAppendsFromAcknowledgedBaseAfterLocalObjectGC(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
-	require.NoError(store.SetDevice(t.Context(), "device-a"))
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	first, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 	commit := rawsync.CommitResult{
 		ManifestID: strings.Repeat("a", 64),
 		Receipt:    strings.Repeat("b", 64),
 		Generation: 1,
 		Created:    true,
 	}
-	require.NoError(store.BindFinalizedCommit(
+	require.NoError(t, store.BindFinalizedCommit(
 		t.Context(), "device-a", first.CaptureID, commit,
 	))
 	_, err = store.AcknowledgeGeneration(t.Context(), "device-a", first.CaptureID, commit)
-	require.NoError(err)
+	require.NoError(t, err)
 	firstRef := rawsync.ObjectRef{
 		SHA256: "2c8b08da5ce60398e1f19af0e5dccc744df274b826abe585eaba68c525434806",
 		Length: 4,
 	}
-	assert.NoFileExists(store.ObjectPath(firstRef))
-	require.NoError(appendFile(sourcePath, "two\n"))
+	assert.NoFileExists(t, store.ObjectPath(firstRef))
+	require.NoError(t, appendFile(sourcePath, "two\n"))
 
 	second, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
-	assert.Equal(StatusCaptured, second.Status)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, second.Status)
 	base, ok, err := store.CaptureBase(t.Context(), second.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(base.Entries, 1)
-	assert.Equal([]rawsync.ObjectRef{
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, base.Entries, 1)
+	assert.Equal(t, []rawsync.ObjectRef{
 		firstRef,
 		{SHA256: "27dd8ed44a83ff94d557f9fd0412ed5a8cbca69ea04922d88c01184a07300a5a", Length: 4},
 	}, base.Entries[0].Objects)
 }
 
 func TestCapturerFallsBackToFullObjectAfterTruncation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, sourcePath := captureFileProvider(t, "one\ntwo\n")
 	capturer := New(store)
 	_, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
-	require.NoError(os.WriteFile(sourcePath, []byte("x\n"), 0o600))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(sourcePath, []byte("x\n"), 0o600))
 
 	result, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
+	require.NoError(t, err)
 	base, ok, err := store.CaptureBase(t.Context(), result.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(base.Entries, 1)
-	require.Len(base.Entries[0].Objects, 1)
-	assert.Equal("73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac", base.Entries[0].Objects[0].SHA256)
-	assert.Equal(int64(2), base.Entries[0].Objects[0].Length)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, base.Entries, 1)
+	require.Len(t, base.Entries[0].Objects, 1)
+	assert.Equal(t, "73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac", base.Entries[0].Objects[0].SHA256)
+	assert.Equal(t, int64(2), base.Entries[0].Objects[0].Length)
 }
 
 func TestCapturerFallsBackToFullObjectAfterSameSizeRewrite(t *testing.T) {
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	_, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
-	require.NoError(os.WriteFile(sourcePath, []byte("two\n"), 0o600))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(sourcePath, []byte("two\n"), 0o600))
 
 	result, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
+	require.NoError(t, err)
 	base, ok, err := store.CaptureBase(t.Context(), result.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(base.Entries, 1)
-	require.Len(base.Entries[0].Objects, 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, base.Entries, 1)
+	require.Len(t, base.Entries[0].Objects, 1)
 	assert.Equal(t, "27dd8ed44a83ff94d557f9fd0412ed5a8cbca69ea04922d88c01184a07300a5a", base.Entries[0].Objects[0].SHA256)
 }
 
 func TestCapturerFallsBackWhenEarlyPrefixWasRewrittenBeforeAppend(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 2<<20)
 	initial := bytes.Repeat([]byte("a"), 128<<10)
 	provider, source, sourcePath := captureFileProvider(t, string(initial))
 	capturer := New(store)
 	_, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
+	require.NoError(t, err)
 	file, err := os.OpenFile(sourcePath, os.O_WRONLY, 0)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = file.WriteAt([]byte("b"), 0)
-	require.NoError(err)
-	require.NoError(file.Close())
-	require.NoError(appendFile(sourcePath, "tail\n"))
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	require.NoError(t, appendFile(sourcePath, "tail\n"))
 
 	result, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
+	require.NoError(t, err)
 	base, ok, err := store.CaptureBase(t.Context(), result.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(base.Entries, 1)
-	assert.Len(base.Entries[0].Objects, 1,
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, base.Entries, 1)
+	assert.Len(t, base.Entries[0].Objects, 1,
 		"a prefix rewrite outside the old 64 KiB boundary must force replacement")
-	assert.Equal(int64(len(initial)+5), base.Entries[0].Objects[0].Length)
+	assert.Equal(t, int64(len(initial)+5), base.Entries[0].Objects[0].Length)
 }
 
 func TestCapturerFallsBackWhenSamePathWasReplacedBeforeAppend(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	_, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
-	require.NoError(os.Rename(sourcePath, sourcePath+".old"))
-	require.NoError(os.WriteFile(sourcePath, []byte("one\ntwo\n"), 0o600))
+	require.NoError(t, err)
+	require.NoError(t, os.Rename(sourcePath, sourcePath+".old"))
+	require.NoError(t, os.WriteFile(sourcePath, []byte("one\ntwo\n"), 0o600))
 
 	result, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
+	require.NoError(t, err)
 	base, ok, err := store.CaptureBase(t.Context(), result.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(base.Entries, 1)
-	assert.Len(base.Entries[0].Objects, 1)
-	assert.Equal(int64(8), base.Entries[0].Objects[0].Length)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, base.Entries, 1)
+	assert.Len(t, base.Entries[0].Objects, 1)
+	assert.Equal(t, int64(8), base.Entries[0].Objects[0].Length)
 }
 
 func TestCapturerReplacesWholeSourceWhenCompanionChanges(t *testing.T) {
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, transcript := captureFileProvider(t, "one\n")
 	indexPath := filepath.Join(filepath.Dir(filepath.Dir(transcript)), "index.jsonl")
-	require.NoError(os.WriteFile(indexPath, []byte("index\n"), 0o600))
+	require.NoError(t, os.WriteFile(indexPath, []byte("index\n"), 0o600))
 	provider.plan.Entries = append(provider.plan.Entries, parser.RawCaptureEntry{
 		Path:      "index.jsonl",
 		LocalPath: indexPath,
 	})
 	capturer := New(store)
 	_, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
-	require.NoError(os.WriteFile(indexPath, []byte("index two\n"), 0o600))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(indexPath, []byte("index two\n"), 0o600))
 
 	result, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
+	require.NoError(t, err)
 	base, ok, err := store.CaptureBase(t.Context(), result.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(base.Entries, 2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, base.Entries, 2)
 	for _, entry := range base.Entries {
 		assert.Len(t, entry.Objects, 1)
 	}
 }
 
 func TestCapturerDegradesBeforeInstallingSuffixWhenMetadataDoesNotFit(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 3847)
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	first, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
-	require.NoError(appendFile(sourcePath, "two\n"))
+	require.NoError(t, err)
+	require.NoError(t, appendFile(sourcePath, "two\n"))
 
 	result, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
-	assert.Equal(StatusDegraded, result.Status)
+	require.NoError(t, err)
+	assert.Equal(t, StatusDegraded, result.Status)
 	base, ok, err := store.CaptureBase(t.Context(), first.Source)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(first.CaptureID, base.CaptureID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, first.CaptureID, base.CaptureID)
 	suffixRef := rawsync.ObjectRef{
 		SHA256: "27dd8ed44a83ff94d557f9fd0412ed5a8cbca69ea04922d88c01184a07300a5a",
 		Length: 4,
 	}
-	assert.NoFileExists(store.ObjectPath(suffixRef))
+	assert.NoFileExists(t, store.ObjectPath(suffixRef))
 }
 
 func TestSuccessfulSourceDoesNotClearAnotherSourceCoverageGap(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 2000)
 	root := t.TempDir()
 	largePath := filepath.Join(root, "large.jsonl")
 	smallPath := filepath.Join(root, "small.jsonl")
-	require.NoError(os.WriteFile(largePath, bytes.Repeat([]byte("x"), 1000), 0o600))
-	require.NoError(os.WriteFile(smallPath, []byte("x"), 0o600))
+	require.NoError(t, os.WriteFile(largePath, bytes.Repeat([]byte("x"), 1000), 0o600))
+	require.NoError(t, os.WriteFile(smallPath, []byte("x"), 0o600))
 	newProvider := func(sourceKey, path string) *captureTestProvider {
 		return &captureTestProvider{
 			Def: parser.AgentDef{Type: parser.AgentClaude},
@@ -1309,34 +1221,31 @@ func TestSuccessfulSourceDoesNotClearAnotherSourceCoverageGap(t *testing.T) {
 	degraded, err := New(store).Capture(
 		t.Context(), newProvider("large", largePath), largeSource,
 	)
-	require.NoError(err)
-	require.Equal(StatusDegraded, degraded.Status)
+	require.NoError(t, err)
+	require.Equal(t, StatusDegraded, degraded.Status)
 	captured, err := New(store).Capture(
 		t.Context(), newProvider("small", smallPath), smallSource,
 	)
-	require.NoError(err)
-	require.Equal(StatusCaptured, captured.Status)
+	require.NoError(t, err)
+	require.Equal(t, StatusCaptured, captured.Status)
 
 	coverage, ok, err := store.Coverage(
 		t.Context(), parser.AgentClaude, degraded.Source.ConfiguredRootID,
 	)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(rawcheckpoint.CoverageDegraded, coverage.State)
-	assert.Equal("outbox_full", coverage.Reason)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, rawcheckpoint.CoverageDegraded, coverage.State)
+	assert.Equal(t, "outbox_full", coverage.Reason)
 }
 
 func TestUnchangedSourcesClearOnlyTheirOwnCoverageFailures(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	const maxBytes = int64(1 << 20)
 	store, _ := openCapturerTestStore(t, maxBytes)
 	root := t.TempDir()
 	firstPath := filepath.Join(root, "first.jsonl")
 	secondPath := filepath.Join(root, "second.jsonl")
-	require.NoError(os.WriteFile(firstPath, []byte("first\n"), 0o600))
-	require.NoError(os.WriteFile(secondPath, []byte("second\n"), 0o600))
+	require.NoError(t, os.WriteFile(firstPath, []byte("first\n"), 0o600))
+	require.NoError(t, os.WriteFile(secondPath, []byte("second\n"), 0o600))
 	newProvider := func(sourceKey, path string) *captureTestProvider {
 		return &captureTestProvider{
 			Def: parser.AgentDef{Type: parser.AgentClaude},
@@ -1357,129 +1266,121 @@ func TestUnchangedSourcesClearOnlyTheirOwnCoverageFailures(t *testing.T) {
 	firstSource := parser.SourceRef{Provider: parser.AgentClaude, Key: "first"}
 	secondSource := parser.SourceRef{Provider: parser.AgentClaude, Key: "second"}
 	first, err := New(store).Capture(t.Context(), firstProvider, firstSource)
-	require.NoError(err)
+	require.NoError(t, err)
 	second, err := New(store).Capture(t.Context(), secondProvider, secondSource)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = store.ReserveSourceCapture(t.Context(), first.Source, maxBytes)
-	require.ErrorIs(err, rawcheckpoint.ErrOutboxFull)
+	require.ErrorIs(t, err, rawcheckpoint.ErrOutboxFull)
 	_, err = store.ReserveSourceCapture(t.Context(), second.Source, maxBytes)
-	require.ErrorIs(err, rawcheckpoint.ErrOutboxFull)
+	require.ErrorIs(t, err, rawcheckpoint.ErrOutboxFull)
 
 	firstRetry, err := New(store).Capture(t.Context(), firstProvider, firstSource)
 
-	require.NoError(err)
-	require.Equal(StatusUnchanged, firstRetry.Status)
+	require.NoError(t, err)
+	require.Equal(t, StatusUnchanged, firstRetry.Status)
 	coverage, ok, err := store.Coverage(
 		t.Context(), parser.AgentClaude, first.Source.ConfiguredRootID,
 	)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(rawcheckpoint.CoverageDegraded, coverage.State)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, rawcheckpoint.CoverageDegraded, coverage.State)
 
 	secondRetry, err := New(store).Capture(t.Context(), secondProvider, secondSource)
 
-	require.NoError(err)
-	require.Equal(StatusUnchanged, secondRetry.Status)
+	require.NoError(t, err)
+	require.Equal(t, StatusUnchanged, secondRetry.Status)
 	coverage, ok, err = store.Coverage(
 		t.Context(), parser.AgentClaude, second.Source.ConfiguredRootID,
 	)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(rawcheckpoint.CoverageComplete, coverage.State)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, rawcheckpoint.CoverageComplete, coverage.State)
 }
 
 func TestCapturerReservesOnlyVerifiedSuffixForAcknowledgedLargeSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	baseDir := t.TempDir()
 	checkpointPath := filepath.Join(baseDir, "checkpoint.db")
 	spoolDir := filepath.Join(baseDir, "spool")
 	store, err := rawcheckpoint.OpenWithOptions(t.Context(), checkpointPath,
 		rawcheckpoint.Options{SpoolDir: spoolDir, MaxOutboxBytes: 1 << 20})
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(store.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	provider, source, sourcePath := captureFileProvider(t, strings.Repeat("x", 4096))
 	first, err := New(store).Capture(t.Context(), provider, source)
-	require.NoError(err)
-	require.NoError(store.SetDevice(t.Context(), "device-a"))
+	require.NoError(t, err)
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
 	manifest, ok, err := store.FinalizeNextManifest(t.Context(), "device-a")
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 	commit := rawsync.CommitResult{
 		ManifestID: strings.Repeat("a", 64), Receipt: strings.Repeat("b", 64),
 		Generation: 1, Created: true,
 	}
-	require.NoError(store.BindFinalizedCommit(
+	require.NoError(t, store.BindFinalizedCommit(
 		t.Context(), "device-a", manifest.CaptureID, commit,
 	))
 	_, err = store.AcknowledgeGeneration(t.Context(), "device-a", manifest.CaptureID, commit)
-	require.NoError(err)
-	require.NoError(store.Close())
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
 	store, err = rawcheckpoint.OpenWithOptions(t.Context(), checkpointPath,
 		rawcheckpoint.Options{SpoolDir: spoolDir, MaxOutboxBytes: 2049})
-	require.NoError(err)
-	require.NoError(appendFile(sourcePath, "y"))
+	require.NoError(t, err)
+	require.NoError(t, appendFile(sourcePath, "y"))
 
 	result, err := New(store).Capture(t.Context(), provider, source)
 
-	require.NoError(err)
-	assert.Equal(StatusCaptured, result.Status)
-	assert.NotEqual(first.CaptureID, result.CaptureID)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, result.Status)
+	assert.NotEqual(t, first.CaptureID, result.CaptureID)
 	usage, err := store.OutboxUsage(t.Context())
-	require.NoError(err)
-	assert.Equal(int64(2049), usage.UsedBytes)
-	assert.Zero(usage.ReservedBytes)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2049), usage.UsedBytes)
+	assert.Zero(t, usage.ReservedBytes)
 }
 
 func TestCapturerRequiresFullReservationAfterAppendVerificationFallsBack(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	const maxBytes = int64(1 << 20)
 	store, _ := openCapturerTestStore(t, maxBytes)
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	first, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
+	require.NoError(t, err)
 	usage, err := store.OutboxUsage(t.Context())
-	require.NoError(err)
+	require.NoError(t, err)
 	const provisionalBytes = int64(1792)
 	_, err = store.ReserveCapture(
 		t.Context(), first.Source.ConfiguredRootID,
 		maxBytes-usage.UsedBytes-provisionalBytes,
 	)
-	require.NoError(err)
-	require.NoError(os.WriteFile(sourcePath, []byte("two\n"), 0o600))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(sourcePath, []byte("two\n"), 0o600))
 
 	result, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
-	assert.Equal(StatusDegraded, result.Status)
+	require.NoError(t, err)
+	assert.Equal(t, StatusDegraded, result.Status)
 	base, ok, err := store.CaptureBase(t.Context(), first.Source)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(first.CaptureID, base.CaptureID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, first.CaptureID, base.CaptureID)
 }
 
 func TestCapturerDoesNotReturnDegradedStatusWithCleanupError(t *testing.T) {
-	require := require.New(t)
-
 	const maxBytes = int64(1 << 20)
 	store, _ := openCapturerTestStore(t, maxBytes)
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	first, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
+	require.NoError(t, err)
 	usage, err := store.OutboxUsage(t.Context())
-	require.NoError(err)
+	require.NoError(t, err)
 	const provisionalBytes = int64(1792)
 	_, err = store.ReserveCapture(
 		t.Context(), first.Source.ConfiguredRootID,
 		maxBytes-usage.UsedBytes-provisionalBytes,
 	)
-	require.NoError(err)
-	require.NoError(os.WriteFile(sourcePath, []byte("two\n"), 0o600))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(sourcePath, []byte("two\n"), 0o600))
 	cleanupErr := errors.New("injected cleanup failure")
 	capturer.discardObjects = func(context.Context, []rawsync.ObjectRef) error {
 		return cleanupErr
@@ -1487,13 +1388,11 @@ func TestCapturerDoesNotReturnDegradedStatusWithCleanupError(t *testing.T) {
 
 	result, err := capturer.Capture(t.Context(), provider, source)
 
-	require.ErrorIs(err, cleanupErr)
+	require.ErrorIs(t, err, cleanupErr)
 	assert.Empty(t, result)
 }
 
 func TestCapturerPreservesAndSanitizesObservationIOErrors(t *testing.T) {
-	assert := assert.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
@@ -1508,23 +1407,20 @@ func TestCapturerPreservesAndSanitizesObservationIOErrors(t *testing.T) {
 
 	require.ErrorIs(t, err, syscall.EIO)
 	require.NotErrorIs(t, err, ErrSourceChanged)
-	assert.NotContains(err.Error(), sourcePath)
-	assert.Contains(err.Error(), `project/session.jsonl`)
+	assert.NotContains(t, err.Error(), sourcePath)
+	assert.Contains(t, err.Error(), `project/session.jsonl`)
 }
 
 func TestAssessCaptureSanitizesOpenFileErrors(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	path := filepath.Join(t.TempDir(), "session.jsonl")
-	require.NoError(os.WriteFile(path, []byte("one\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("one\n"), 0o600))
 	file, err := os.Open(path)
-	require.NoError(err)
+	require.NoError(t, err)
 	info, err := file.Stat()
-	require.NoError(err)
+	require.NoError(t, err)
 	identity := stableFileIdentity(file, info)
-	require.NotEmpty(identity)
-	require.NoError(file.Close())
+	require.NotEmpty(t, identity)
+	require.NoError(t, file.Close())
 	observed := []observedCaptureEntry{{
 		planned: parser.RawCaptureEntry{Path: "session.jsonl", Appendable: true},
 		file:    file, info: info, identity: identity,
@@ -1536,83 +1432,74 @@ func TestAssessCaptureSanitizesOpenFileErrors(t *testing.T) {
 
 	_, err = (&Capturer{}).assessCapture(t.Context(), observed, info.Size(), base, true)
 
-	require.Error(err)
-	assert.NotContains(err.Error(), path)
-	assert.Contains(err.Error(), `session.jsonl`)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), path)
+	assert.Contains(t, err.Error(), `session.jsonl`)
 }
 
 func TestCapturerRejectsMutationDuringSuffixRead(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	first, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
-	require.NoError(appendFile(sourcePath, "two\n"))
+	require.NoError(t, err)
+	require.NoError(t, appendFile(sourcePath, "two\n"))
 	capturer.capturePhase = func(phase capturePhase, _ string) {
 		if phase == capturePhaseAfterRead {
-			require.NoError(appendFile(sourcePath, "three\n"))
+			require.NoError(t, appendFile(sourcePath, "three\n"))
 		}
 	}
 
 	_, err = capturer.Capture(t.Context(), provider, source)
 
-	require.ErrorIs(err, ErrSourceChanged)
+	require.ErrorIs(t, err, ErrSourceChanged)
 	base, ok, readErr := store.CaptureBase(t.Context(), first.Source)
-	require.NoError(readErr)
-	require.True(ok)
-	assert.Equal(first.CaptureID, base.CaptureID)
+	require.NoError(t, readErr)
+	require.True(t, ok)
+	assert.Equal(t, first.CaptureID, base.CaptureID)
 	usage, readErr := store.OutboxUsage(t.Context())
-	require.NoError(readErr)
-	assert.Zero(usage.ReservedBytes)
+	require.NoError(t, readErr)
+	assert.Zero(t, usage.ReservedBytes)
 }
 
 func TestCapturerRollsOverBeforeProspectiveObjectLimit(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	capturer.manifestLimits = rawsync.DefaultManifestLimits()
 	capturer.manifestLimits.MaxObjects = 2
 	_, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
-	require.NoError(appendFile(sourcePath, "two\n"))
+	require.NoError(t, err)
+	require.NoError(t, appendFile(sourcePath, "two\n"))
 	second, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
+	require.NoError(t, err)
 	secondBase, ok, err := store.CaptureBase(t.Context(), second.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(secondBase.Entries, 1)
-	assert.Len(secondBase.Entries[0].Objects, 2)
-	require.NoError(appendFile(sourcePath, "three\n"))
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, secondBase.Entries, 1)
+	assert.Len(t, secondBase.Entries[0].Objects, 2)
+	require.NoError(t, appendFile(sourcePath, "three\n"))
 
 	result, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
+	require.NoError(t, err)
 	base, ok, err := store.CaptureBase(t.Context(), result.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(base.Entries, 1)
-	assert.Len(base.Entries[0].Objects, 1)
-	assert.Equal(int64(14), base.Entries[0].Objects[0].Length)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, base.Entries, 1)
+	assert.Len(t, base.Entries[0].Objects, 1)
+	assert.Equal(t, int64(14), base.Entries[0].Objects[0].Length)
 }
 
 func TestCapturerRollsOverBeforeProspectiveCanonicalLimit(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, sourcePath := captureFileProvider(t, "one\n")
 	capturer := New(store)
 	first, err := capturer.Capture(t.Context(), provider, source)
-	require.NoError(err)
+	require.NoError(t, err)
 	base, ok, err := store.CaptureBase(t.Context(), first.Source)
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 	fullEntry := cloneCapturedEntry(base.Entries[0])
 	fullEntry.Length = 8
 	fullEntry.Objects = []rawsync.ObjectRef{placeholderObjectRef(0, 8)}
@@ -1624,21 +1511,21 @@ func TestCapturerRollsOverBeforeProspectiveCanonicalLimit(t *testing.T) {
 	limits.MaxCanonicalBytes = uploadCanonicalBytes(
 		t, first.Source, []rawcheckpoint.CapturedEntry{fullEntry},
 	) + len(".999999999")
-	require.Greater(uploadCanonicalBytes(t, first.Source, []rawcheckpoint.CapturedEntry{appendEntry}),
+	require.Greater(t, uploadCanonicalBytes(t, first.Source, []rawcheckpoint.CapturedEntry{appendEntry}),
 		limits.MaxCanonicalBytes,
 	)
 	capturer.manifestLimits = limits
-	require.NoError(appendFile(sourcePath, "two\n"))
+	require.NoError(t, appendFile(sourcePath, "two\n"))
 
 	result, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
+	require.NoError(t, err)
 	base, ok, err = store.CaptureBase(t.Context(), result.Source)
-	require.NoError(err)
-	require.True(ok)
-	require.Len(base.Entries, 1)
-	assert.Len(base.Entries[0].Objects, 1)
-	assert.Equal(int64(8), base.Entries[0].Objects[0].Length)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, base.Entries, 1)
+	assert.Len(t, base.Entries[0].Objects, 1)
+	assert.Equal(t, int64(8), base.Entries[0].Objects[0].Length)
 }
 
 func TestCapturerRejectsFullReplacementOutsideManifestLimits(t *testing.T) {
@@ -1700,19 +1587,16 @@ func appendFile(path, content string) error {
 }
 
 func TestCapturerReadsEntriesUnderSidecarRoots(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store, _ := openCapturerTestStore(t, 1<<20)
 	provider, source, _ := captureFileProvider(t, "one\n")
 	sidecar := t.TempDir()
 	sidecarIndex := filepath.Join(sidecar, "session_index.jsonl")
-	require.NoError(os.WriteFile(sidecarIndex, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(sidecarIndex, []byte("{}\n"), 0o600))
 	var err error
 	sidecar, err = filepath.EvalSymlinks(sidecar)
-	require.NoError(err)
+	require.NoError(t, err)
 	sidecarIndex, err = filepath.EvalSymlinks(sidecarIndex)
-	require.NoError(err)
+	require.NoError(t, err)
 	provider.plan.SidecarRoots = []string{sidecar}
 	provider.plan.Entries = append(provider.plan.Entries, parser.RawCaptureEntry{
 		Path:      "alias-homes/1/session_index.jsonl",
@@ -1722,16 +1606,16 @@ func TestCapturerReadsEntriesUnderSidecarRoots(t *testing.T) {
 
 	result, err := capturer.Capture(t.Context(), provider, source)
 
-	require.NoError(err)
-	assert.Equal(StatusCaptured, result.Status)
+	require.NoError(t, err)
+	assert.Equal(t, StatusCaptured, result.Status)
 	queued, ok, err := store.NextGeneration(t.Context())
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 	paths := make([]string, 0, len(queued.Entries))
 	for _, entry := range queued.Entries {
 		paths = append(paths, entry.Path)
 	}
-	assert.ElementsMatch([]string{
+	assert.ElementsMatch(t, []string{
 		"project/session.jsonl", "alias-homes/1/session_index.jsonl",
 	}, paths)
 }
@@ -1750,4 +1634,25 @@ func TestCapturerRejectsSidecarEntryWithoutDeclaredRoot(t *testing.T) {
 	_, err := capturer.Capture(t.Context(), provider, source)
 
 	require.Error(t, err)
+}
+
+func TestCapturerRejectsEscapeBetweenRootedStatAndOpen(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 1<<20)
+	provider, source, sourcePath := captureFileProvider(t, "safe\n")
+	projectDir := filepath.Dir(sourcePath)
+	outsideDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outsideDir, filepath.Base(sourcePath)), []byte("outside\n"), 0o600))
+	capturer := New(store)
+	capturer.files.openRoot = func(root *os.Root, relative string) (*os.File, error) {
+		require.NoError(t, os.Rename(projectDir, projectDir+"-original"))
+		if err := os.Symlink(outsideDir, projectDir); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		return root.Open(relative)
+	}
+	_, err := capturer.Capture(t.Context(), provider, source)
+	require.ErrorIs(t, err, ErrSourceChanged)
+	_, found, err := store.NextGeneration(t.Context())
+	require.NoError(t, err)
+	assert.False(t, found)
 }

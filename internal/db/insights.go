@@ -99,14 +99,14 @@ func (db *DB) InsightGenerationAvailable() bool {
 }
 
 // InsertInsight inserts an insight and returns its ID.
-func (db *DB) InsertInsight(s Insight) (int64, error) {
+func (db *DB) InsertInsight(ctx context.Context, s Insight) (int64, error) {
 	if err := db.requireDerivedTextStorage("insights"); err != nil {
 		return 0, err
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	res, err := db.getWriter().Exec(`
+	res, err := db.getWriter().Exec(ctx, `
 		INSERT INTO insights (
 			type, date_from, date_to, project,
 			agent, model, prompt, content,
@@ -282,10 +282,10 @@ func (db *DB) CopyInsightsFrom(sourcePath string) error {
 }
 
 // DeleteInsight removes an insight by ID.
-func (db *DB) DeleteInsight(id int64) error {
+func (db *DB) DeleteInsight(ctx context.Context, id int64) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(
+	_, err := db.getWriter().Exec(ctx,
 		"DELETE FROM insights WHERE id = ?", id,
 	)
 	return err

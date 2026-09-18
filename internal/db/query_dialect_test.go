@@ -205,18 +205,16 @@ func TestBuildSessionFilterSQLRendersIncludeChildrenCTE(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			got, args := BuildSessionFilterSQL(filter, tt.dialect)
 			normalized := normalizeSQL(got)
-			assert.Contains(normalized, "WITH RECURSIVE tree(id) AS")
-			assert.Contains(normalized, "JOIN tree t ON s.parent_session_id = t.id")
-			assert.Contains(normalized, "id IN (WITH RECURSIVE tree(id) AS")
-			assert.Contains(normalized,
+			assert.Contains(t, normalized, "WITH RECURSIVE tree(id) AS")
+			assert.Contains(t, normalized, "JOIN tree t ON s.parent_session_id = t.id")
+			assert.Contains(t, normalized, "id IN (WITH RECURSIVE tree(id) AS")
+			assert.Contains(t, normalized,
 				"NOT (root_session.relationship_type IN ('subagent', 'fork', 'continuation'))")
-			assert.NotContains(normalized,
+			assert.NotContains(t, normalized,
 				"relationship_type NOT IN ('subagent', 'fork') AND id IN")
-			assert.Equal(tt.wantArgs, args)
+			assert.Equal(t, tt.wantArgs, args)
 		})
 	}
 }
@@ -388,17 +386,15 @@ func TestQueryDialectPredicatesKeepUserValuesParameterized(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			b := NewQueryBuilder(tt.dialect, 0)
 			like := b.ContainsPredicate("body", userPattern)
 			regex := b.RegexPredicate("body", userRegex)
 
-			assert.Equal(normalizeSQL(tt.wantLike), normalizeSQL(like))
-			assert.Equal(normalizeSQL(tt.wantRegex), normalizeSQL(regex))
-			assert.Equal(tt.wantArgs, b.Args())
-			assert.NotContains(like, userPattern)
-			assert.NotContains(regex, userRegex)
+			assert.Equal(t, normalizeSQL(tt.wantLike), normalizeSQL(like))
+			assert.Equal(t, normalizeSQL(tt.wantRegex), normalizeSQL(regex))
+			assert.Equal(t, tt.wantArgs, b.Args())
+			assert.NotContains(t, like, userPattern)
+			assert.NotContains(t, regex, userRegex)
 		})
 	}
 }

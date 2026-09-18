@@ -81,13 +81,17 @@ func TestSelfParentNeverPersists(t *testing.T) {
 		{
 			name: "UpsertSession",
 			write: func(t *testing.T, d *DB) string {
-				require.NoError(t, d.UpsertSession(selfParented("upsert-self")))
+				t.Helper()
+
+				require.NoError(t, d.UpsertSession(t.Context(), selfParented("upsert-self")))
 				return "upsert-self"
 			},
 		},
 		{
 			name: "WriteSessionBatch",
 			write: func(t *testing.T, d *DB) string {
+				t.Helper()
+
 				_, err := d.WriteSessionBatch([]SessionBatchWrite{{
 					Session:  selfParented("batch-self"),
 					Messages: []Message{spawnEdgeTo("batch-self", "batch-self", "self")},
@@ -99,6 +103,8 @@ func TestSelfParentNeverPersists(t *testing.T) {
 		{
 			name: "ApplyArtifactImportedSession",
 			write: func(t *testing.T, d *DB) string {
+				t.Helper()
+
 				gid := origin + "~import-self"
 				result, err := d.ApplyArtifactImportedSession(
 					t.Context(),
@@ -120,16 +126,13 @@ func TestSelfParentNeverPersists(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			d := testDB(t)
 			id := tc.write(t, d)
 			s, err := d.GetSession(t.Context(), id)
-			require.NoError(err)
-			require.NotNil(s)
-			assert.Nil(s.ParentSessionID)
-			assert.Equal("subagent", s.RelationshipType)
+			require.NoError(t, err)
+			require.NotNil(t, s)
+			assert.Nil(t, s.ParentSessionID)
+			assert.Equal(t, "subagent", s.RelationshipType)
 		})
 	}
 }

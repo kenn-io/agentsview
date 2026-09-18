@@ -16,15 +16,12 @@ import (
 func TestRawRequestLeavesArchiveAndErrorBodiesUnread(t *testing.T) {
 	for _, status := range []int{http.StatusOK, http.StatusBadRequest} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			release := make(chan struct{})
 			var once sync.Once
 			finish := func() { once.Do(func() { close(release) }) }
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				assert.Equal(http.MethodPost, r.Method)
-				assert.Equal("/api/v1/remote-sync/archive", r.URL.Path)
+				assert.Equal(t, http.MethodPost, r.Method)
+				assert.Equal(t, "/api/v1/remote-sync/archive", r.URL.Path)
 				w.Header().Set("Content-Type", "application/x-tar")
 				w.WriteHeader(status)
 				_, _ = io.WriteString(w, "first")
@@ -40,18 +37,18 @@ func TestRawRequestLeavesArchiveAndErrorBodiesUnread(t *testing.T) {
 				_, err := client.PostAPIV1RemoteSyncArchiveWithResponse(ctx, &PostAPIV1RemoteSyncArchiveRequestOptions{})
 				return err
 			})
-			require.NoError(err)
-			require.NotNil(response)
+			require.NoError(t, err)
+			require.NotNil(t, response)
 			defer response.Body.Close()
-			assert.Equal(status, response.StatusCode)
+			assert.Equal(t, status, response.StatusCode)
 			first := make([]byte, 5)
 			_, err = io.ReadFull(response.Body, first)
-			require.NoError(err)
-			assert.Equal("first", string(first))
+			require.NoError(t, err)
+			assert.Equal(t, "first", string(first))
 			finish()
 			rest, err := io.ReadAll(response.Body)
-			require.NoError(err)
-			assert.Equal("last", string(rest))
+			require.NoError(t, err)
+			assert.Equal(t, "last", string(rest))
 		})
 	}
 }

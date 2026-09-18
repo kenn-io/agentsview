@@ -25,21 +25,18 @@ func TestPprofDisabledByDefault(t *testing.T) {
 }
 
 func TestPprofEnabledServesProfiles(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setupWithServerOpts(
 		t, []server.Option{server.WithPprof(true)},
 	)
 
 	w := te.get(t, "/debug/pprof/cmdline")
-	require.Equal(http.StatusOK, w.Code)
-	assert.Equal("text/plain; charset=utf-8",
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "text/plain; charset=utf-8",
 		w.Header().Get("Content-Type"))
 
 	w = te.get(t, "/debug/pprof/heap?debug=1")
-	require.Equal(http.StatusOK, w.Code)
-	assert.Contains(w.Body.String(), "heap profile:",
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "heap profile:",
 		"named profiles should be served via the pprof index")
 }
 

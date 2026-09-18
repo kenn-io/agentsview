@@ -1,6 +1,7 @@
 package remotesync
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -38,7 +39,7 @@ type Manifest struct {
 // the full-archive flow. Verbatim file-scoped agents (RooCode) are
 // listed by their curated files instead of a raw walk — the manifest
 // never advertises settings or caches under their directory roots.
-func BuildManifest(targets TargetSet) (Manifest, error) {
+func BuildManifest(ctx context.Context, targets TargetSet) (Manifest, error) {
 	if targets.HasSanitizedFileScopedAgents() {
 		return Manifest{}, errors.New("manifest not supported for sanitized file-scoped agents")
 	}
@@ -115,7 +116,7 @@ func BuildManifest(targets TargetSet) (Manifest, error) {
 		if forbidden.within(stateDB) {
 			continue
 		}
-		size, modTime, exists := sqliteSnapshotIdentity(stateDB)
+		size, modTime, exists := sqliteSnapshotIdentity(ctx, stateDB)
 		if exists {
 			m.Files = append(m.Files, ManifestEntry{
 				Path: stateDB, Size: size, MtimeNS: modTime.UnixNano(),

@@ -570,12 +570,12 @@ func (db *DB) CopyModelPricingFrom(sourcePath string) error {
 // exist without clobbering richer LiteLLM rows a running server may
 // have written. Unlike UpsertModelPricing (ON CONFLICT DO UPDATE),
 // this is non-destructive (ON CONFLICT DO NOTHING).
-func (db *DB) InsertMissingModelPricing(
+func (db *DB) InsertMissingModelPricing(ctx context.Context,
 	prices []ModelPricing,
 ) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	existing, err := db.listModelPricing(context.Background())
+	existing, err := db.listModelPricing(ctx)
 	if err != nil {
 		return fmt.Errorf("listing current pricing before insert: %w", err)
 	}
@@ -594,7 +594,7 @@ func (db *DB) InsertMissingModelPricing(
 		return nil
 	}
 
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning pricing insert: %w", err)
 	}
@@ -603,14 +603,14 @@ func (db *DB) InsertMissingModelPricing(
 	for i := 0; i < len(prices); i += pricingWriteBatch {
 		end := min(i+pricingWriteBatch, len(prices))
 		query, args := sqlitePricingInsertMissingStatement(prices[i:end])
-		if _, err := tx.Exec(query, args...); err != nil {
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 			return fmt.Errorf(
 				"inserting pricing batch starting at %d: %w",
 				i, err,
 			)
 		}
 	}
-	if err := replaceModelPricingBands(context.Background(), tx, prices); err != nil {
+	if err := replaceModelPricingBands(ctx, tx, prices); err != nil {
 		return err
 	}
 	return tx.Commit()

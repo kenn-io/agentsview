@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -37,13 +38,15 @@ func BenchmarkCodexQuietAppendSignals15000(b *testing.B) {
 }
 
 func benchCodexQuietAppendSignals(b *testing.B, turns int) {
+	b.Helper()
+
 	routeBenchLogs(b)
 	ctx := b.Context()
 	root, path, uuid := writeCodexSignalBenchmarkTranscript(b, turns)
 
-	database, err := db.Open(filepath.Join(b.TempDir(), "bench.db"))
+	database, err := db.Open(ctx, filepath.Join(b.TempDir(), "bench.db"))
 	require.NoError(b, err)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(ctx, database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -52,7 +55,7 @@ func benchCodexQuietAppendSignals(b *testing.B, turns int) {
 	b.Cleanup(func() {
 		engine.Close()
 		if err := database.Close(); err != nil {
-			b.Errorf("close bench db: %v", err)
+			assert.Failf(b, "test failed", "close bench db: %v", err)
 		}
 	})
 	first := engine.SyncAll(ctx, nil)
@@ -96,11 +99,11 @@ func benchCodexQuietAppendSignals(b *testing.B, turns int) {
 	b.ResetTimer()
 	for i := range b.N {
 		if _, err := f.WriteString(lines[i]); err != nil {
-			b.Fatalf("append: %v", err)
+			require.FailNowf(b, "test failed", "append: %v", err)
 		}
 		stats := engine.SyncAll(ctx, nil)
 		if stats.Failed != 0 || stats.Synced != 1 {
-			b.Fatalf("sync failed for appended output: %+v", stats)
+			require.FailNowf(b, "test failed", "sync failed for appended output: %+v", stats)
 		}
 	}
 	b.StopTimer()
@@ -130,9 +133,9 @@ func BenchmarkCodexColdFullSync(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		database, err := db.Open(filepath.Join(b.TempDir(), "bench.db"))
+		database, err := db.Open(ctx, filepath.Join(b.TempDir(), "bench.db"))
 		require.NoError(b, err)
-		engine := NewEngine(database, EngineConfig{
+		engine := NewEngine(ctx, database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentCodex: {root},
 			},
@@ -140,11 +143,11 @@ func BenchmarkCodexColdFullSync(b *testing.B) {
 		})
 		stats := engine.SyncAll(ctx, nil)
 		if stats.Failed != 0 || stats.Synced != 1 {
-			b.Fatalf("cold full sync failed: %+v", stats)
+			require.FailNowf(b, "test failed", "cold full sync failed: %+v", stats)
 		}
 		engine.Close()
 		if err := database.Close(); err != nil {
-			b.Fatalf("close bench db: %v", err)
+			require.FailNowf(b, "test failed", "close bench db: %v", err)
 		}
 	}
 }
@@ -163,11 +166,11 @@ func codexSignalBenchmarkTS(i int) string {
 // `turns` prior user/assistant turns plus an unanswered call_0, so each
 // appended iteration can emit a call plus the previous call's late output.
 func writeCodexSignalBenchmarkTranscript(
-	b testing.TB, turns int,
+	tb testing.TB, turns int,
 ) (root, path, uuid string) {
-	b.Helper()
+	tb.Helper()
 	uuid = codexSignalBenchmarkUUID
-	root = filepath.Join(b.TempDir(), "sessions")
+	root = filepath.Join(tb.TempDir(), "sessions")
 	path = filepath.Join(
 		root,
 		"2026",
@@ -175,7 +178,7 @@ func writeCodexSignalBenchmarkTranscript(
 		"10",
 		"rollout-2026-07-10T07-12-15-"+uuid+".jsonl",
 	)
-	require.NoError(b, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(tb, os.MkdirAll(filepath.Dir(path), 0o755))
 
 	fixture := testjsonl.NewSessionBuilder().
 		AddCodexMeta(
@@ -224,6 +227,6 @@ func writeCodexSignalBenchmarkTranscript(
 		codexSignalBenchmarkTS(0),
 	))
 	prefix := fixture.String()
-	require.NoError(b, os.WriteFile(path, []byte(prefix), 0o644))
+	require.NoError(tb, os.WriteFile(path, []byte(prefix), 0o644))
 	return root, path, uuid
 }

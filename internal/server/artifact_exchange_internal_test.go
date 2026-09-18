@@ -24,15 +24,13 @@ func TestArtifactExchangeRouteRequiresRunner(t *testing.T) {
 		http.MethodPost, "/api/v1/artifacts/exchange", nil,
 	)
 
-	_, pattern := srv.mux.Handler(req)
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
 
-	assert.Equal(t, "/", pattern)
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 }
 
 func TestArtifactExchangeAcceptsAuthenticatedLoopbackRequest(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	target := filepath.Join(t.TempDir(), "archive")
 	var got ArtifactExchangeRequest
 	srv := testArtifactExchangeServer(t, func(
@@ -52,16 +50,16 @@ func TestArtifactExchangeAcceptsAuthenticatedLoopbackRequest(t *testing.T) {
 		artifactExchangeBody(t, target, true),
 	)
 
-	require.Equal(http.StatusOK, rec.Code, rec.Body.String())
-	assert.Equal(ArtifactExchangeRequest{
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, ArtifactExchangeRequest{
 		Target: target,
 		Full:   true,
 	}, got)
 	var result artifact.SyncResult
-	require.NoError(json.Unmarshal(rec.Body.Bytes(), &result))
-	assert.Equal("node-a1b2c3", result.Origin)
-	assert.Equal(2, result.ExportedSessions)
-	assert.Equal(4, result.PublishedArtifacts)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+	assert.Equal(t, "node-a1b2c3", result.Origin)
+	assert.Equal(t, 2, result.ExportedSessions)
+	assert.Equal(t, 4, result.PublishedArtifacts)
 }
 
 func TestArtifactExchangeRejectsNonLoopbackBeforeRunner(t *testing.T) {
@@ -210,8 +208,6 @@ func TestArtifactExchangeAcceptsLocalhostHost(t *testing.T) {
 }
 
 func TestArtifactExchangeRunnerErrorIsRedacted(t *testing.T) {
-	assert := assert.New(t)
-
 	privateTarget := filepath.Join(t.TempDir(), "private", "archive")
 	srv := testArtifactExchangeServer(t, func(
 		context.Context,
@@ -227,10 +223,10 @@ func TestArtifactExchangeRunnerErrorIsRedacted(t *testing.T) {
 		artifactExchangeBody(t, privateTarget, false),
 	)
 
-	assert.Equal(http.StatusBadGateway, rec.Code)
-	assert.Equal("artifact exchange failed\n", rec.Body.String())
-	assert.NotContains(rec.Body.String(), privateTarget)
-	assert.NotContains(rec.Body.String(), "permission denied")
+	assert.Equal(t, http.StatusBadGateway, rec.Code)
+	assert.Equal(t, "artifact exchange failed\n", rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), privateTarget)
+	assert.NotContains(t, rec.Body.String(), "permission denied")
 }
 
 func TestArtifactExchangePropagatesRequestCancellation(t *testing.T) {

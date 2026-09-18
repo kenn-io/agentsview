@@ -9,58 +9,53 @@ import (
 )
 
 func TestDefaultS3ProviderSessionIDAndTempPath(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	p := DefaultS3Provider{
 		Agent:      AgentCursor,
 		IDPrefix:   "cursor:",
 		Extensions: []string{".jsonl", ".txt"},
 	}
 
-	assert.Equal("cursor:abc", p.S3SessionID(
+	assert.Equal(t, "cursor:abc", p.S3SessionID(
 		"s3://bucket/laptop/raw/cursor/demo-proj/abc.jsonl",
 	))
-	assert.Equal("cursor:abc", p.S3SessionID(
+	assert.Equal(t, "cursor:abc", p.S3SessionID(
 		"s3://bucket/laptop/raw/cursor/demo-proj/abc.txt",
 	))
-	assert.Empty(p.S3SessionID("s3://bucket/laptop/raw/cursor/demo-proj/"))
+	assert.Empty(t, p.S3SessionID("s3://bucket/laptop/raw/cursor/demo-proj/"))
 
 	got, err := p.S3TempRelPath(
 		"s3://bucket/laptop/raw/cursor/demo-proj/abc.jsonl",
 	)
-	require.NoError(err)
-	assert.Equal(filepath.Join("demo-proj", "abc.jsonl"), got)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join("demo-proj", "abc.jsonl"), got)
 
 	got, err = p.S3TempRelPath(
 		"s3://bucket/laptop/raw/cursor/demo-proj/agent-transcripts/abc/subagents/def.jsonl",
 	)
-	require.NoError(err)
-	assert.Equal(filepath.Join("demo-proj", "agent-transcripts", "abc", "subagents", "def.jsonl"),
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join("demo-proj", "agent-transcripts", "abc", "subagents", "def.jsonl"),
 		got, "the materialized layout must keep the parent directory the parse derives the link from")
 
 	_, err = p.S3TempRelPath(
 		"s3://bucket/laptop/raw/cursor/demo-proj/../abc.jsonl",
 	)
-	require.Error(err)
-	assert.Contains(err.Error(), "unsafe s3 object name")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsafe s3 object name")
 }
 
 func TestDefaultS3ProviderScannerKeepAndProject(t *testing.T) {
-	assert := assert.New(t)
-
 	scan := DefaultS3Provider{
 		Agent:      AgentCursor,
 		Extensions: []string{".jsonl", ".txt"},
 	}.S3Scanner()
 
-	assert.Equal(AgentCursor, scan.Agent)
-	assert.True(scan.Keep("demo-proj/abc.jsonl", []string{"demo-proj", "abc.jsonl"}))
-	assert.True(scan.Keep("demo-proj/abc.txt", []string{"demo-proj", "abc.txt"}))
-	assert.False(scan.Keep("demo-proj/notes.md", []string{"demo-proj", "notes.md"}))
-	assert.False(scan.Keep("abc.jsonl", []string{"abc.jsonl"}))
-	assert.Equal("demo-proj", scan.Project("demo-proj/abc.jsonl", []string{"demo-proj", "abc.jsonl"}))
-	assert.Nil(scan.Sidecars)
+	assert.Equal(t, AgentCursor, scan.Agent)
+	assert.True(t, scan.Keep("demo-proj/abc.jsonl", []string{"demo-proj", "abc.jsonl"}))
+	assert.True(t, scan.Keep("demo-proj/abc.txt", []string{"demo-proj", "abc.txt"}))
+	assert.False(t, scan.Keep("demo-proj/notes.md", []string{"demo-proj", "notes.md"}))
+	assert.False(t, scan.Keep("abc.jsonl", []string{"abc.jsonl"}))
+	assert.Equal(t, "demo-proj", scan.Project("demo-proj/abc.jsonl", []string{"demo-proj", "abc.jsonl"}))
+	assert.Nil(t, scan.Sidecars)
 }
 
 func TestDefaultS3ProviderStatSessionUsesPlainObjectStat(t *testing.T) {
@@ -79,34 +74,28 @@ func TestDefaultS3ProviderStatSessionUsesPlainObjectStat(t *testing.T) {
 }
 
 func TestAgentSupportsS3Discovery(t *testing.T) {
-	assert := assert.New(t)
-
-	assert.True(AgentSupportsS3Discovery(AgentClaude))
-	assert.True(AgentSupportsS3Discovery(AgentCodex))
-	assert.True(AgentSupportsS3Discovery(AgentCursor))
-	assert.False(AgentSupportsS3Discovery(AgentTraeX))
-	assert.False(AgentSupportsS3Discovery(AgentGrok))
-	assert.False(AgentSupportsS3Discovery(AgentType("not-an-agent")))
+	assert.True(t, AgentSupportsS3Discovery(AgentClaude))
+	assert.True(t, AgentSupportsS3Discovery(AgentCodex))
+	assert.True(t, AgentSupportsS3Discovery(AgentCursor))
+	assert.False(t, AgentSupportsS3Discovery(AgentTraeX))
+	assert.False(t, AgentSupportsS3Discovery(AgentGrok))
+	assert.False(t, AgentSupportsS3Discovery(AgentType("not-an-agent")))
 }
 
 func TestS3ProviderForRequiresS3DiscoveryCapability(t *testing.T) {
-	assert := assert.New(t)
-
 	provider, ok := S3ProviderFor(AgentTraeX)
-	assert.False(ok)
-	assert.Nil(provider)
+	assert.False(t, ok)
+	assert.Nil(t, provider)
 
 	provider, ok = S3ProviderFor(AgentCursor)
 	require.True(t, ok)
-	assert.NotNil(provider)
+	assert.NotNil(t, provider)
 }
 
 func TestS3ProviderForCachedLookupDoesNotAllocate(t *testing.T) {
-	require := require.New(t)
-
 	provider, ok := S3ProviderFor(AgentCursor)
-	require.True(ok)
-	require.NotNil(provider)
+	require.True(t, ok)
+	require.NotNil(t, provider)
 
 	var cached S3Provider
 	var found bool
@@ -114,7 +103,7 @@ func TestS3ProviderForCachedLookupDoesNotAllocate(t *testing.T) {
 		cached, found = S3ProviderFor(AgentCursor)
 	})
 
-	require.True(found)
-	require.NotNil(cached)
+	require.True(t, found)
+	require.NotNil(t, cached)
 	assert.Zero(t, allocs)
 }

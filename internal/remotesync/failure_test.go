@@ -173,15 +173,13 @@ func TestFailureSummary(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			got := FailureSummary(tt.err)
-			assert.Equal(tt.want, got)
-			assert.NotContains(got, "tailnet.ts.net",
+			assert.Equal(t, tt.want, got)
+			assert.NotContains(t, got, "tailnet.ts.net",
 				"summaries must not leak the remote URL")
-			assert.NotContains(got, "abc123",
+			assert.NotContains(t, got, "abc123",
 				"summaries must not leak response bodies")
-			assert.NotContains(got, "secret-token",
+			assert.NotContains(t, got, "secret-token",
 				"summaries must not leak raw error text")
 		})
 	}

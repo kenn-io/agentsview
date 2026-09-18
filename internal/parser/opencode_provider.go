@@ -847,8 +847,7 @@ func (s openCodeFormatSourceSet) SourceForReconciliation(
 			if dbPath, sessionID, sqlite := s.spec.parseVirtual(sourcePath); sqlite &&
 				s.containerListsWatermarkOnly != nil &&
 				s.containerListsWatermarkOnly(dbPath) {
-				watermark, composite, found, err :=
-					openCodeSQLiteSessionWatermarkOnly(ctx, dbPath, sessionID)
+				watermark, composite, found, err := openCodeSQLiteSessionWatermarkOnly(ctx, dbPath, sessionID)
 				if err != nil {
 					return SourceRef{}, false, err
 				}
@@ -1103,8 +1102,7 @@ func (s openCodeFormatSourceSet) Fingerprint(
 		// empty, and an empty hash is treated as no constraint by the
 		// freshness gate — so a deletion-only change would pass unnoticed on
 		// every non-discovery path.
-		lookupMtime, lookupDigest, lookupComposite, err :=
-			s.sourceMtimeWithComposite(ctx, path)
+		lookupMtime, lookupDigest, lookupComposite, err := s.sourceMtimeWithComposite(ctx, path)
 		if err != nil {
 			return SourceFingerprint{}, err
 		}

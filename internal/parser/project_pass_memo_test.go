@@ -114,7 +114,6 @@ func TestProjectRootMemoConcurrentFill(t *testing.T) {
 	}
 	t.Logf("concurrent fills=1; underlying calls baseline=%d concurrent=%d; project=%s",
 		baselineCalls, calls.Load(), results[0])
-
 }
 
 func TestProjectRootMemoAbsentContextValue(t *testing.T) {
@@ -183,8 +182,6 @@ func TestProjectRootMemoStandaloneRefreshes(t *testing.T) {
 
 func TestProjectRootMemoProviderRoutes(t *testing.T) {
 	t.Run("OpenCode storage", func(t *testing.T) {
-		require := require.New(t)
-
 		root, cwd := projectRootMemoProviderFixture(t)
 		sessionPath := filepath.Join(
 			root, "storage", "session", "global", "session.json",
@@ -209,12 +206,12 @@ func TestProjectRootMemoProviderRoutes(t *testing.T) {
 		})
 
 		provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
-		require.True(ok)
+		require.True(t, ok)
 		sources, err := provider.Discover(t.Context())
-		require.NoError(err)
-		require.Len(sources, 1)
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
 		fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
-		require.NoError(err)
+		require.NoError(t, err)
 		assertProjectRootMemoProviderRoute(t, provider, ParseRequest{
 			Source: sources[0], Fingerprint: fingerprint,
 		})
@@ -274,6 +271,7 @@ func assertProjectRootMemoProviderRoute(
 	t *testing.T, provider Provider, req ParseRequest,
 ) {
 	t.Helper()
+
 	origStat, origLstat := osStat, osLstat
 	defer func() { osStat, osLstat = origStat, origLstat }()
 	var calls atomic.Int64

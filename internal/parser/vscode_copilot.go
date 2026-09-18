@@ -777,6 +777,8 @@ func reconstructJSONLWithLimit(path string, hardRecordLimit int) ([]byte, error)
 					jsonlSet(state, keys, []any{})
 				}
 				continue
+			case vscodeCopilotDestinationOutside, vscodeCopilotDestinationExactResultDetails:
+				// Decode retained values before applying their projection.
 			}
 			var val any
 			if err := json.Unmarshal(op.V, &val); err != nil {

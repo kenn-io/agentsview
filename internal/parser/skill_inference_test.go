@@ -21,6 +21,8 @@ func TestHostedSkillInferenceKeepsNamesLexical(t *testing.T) {
 		parse func(*testing.T, context.Context, string) string
 	}{
 		{"claude", func(t *testing.T, ctx context.Context, path string) string {
+			t.Helper()
+
 			_, _, _, _, calls, _ := ExtractTextContent(ctx, gjson.Parse(
 				`[{"type":"tool_use","id":"call-1","name":"Read","input":{"file_path":`+strconv.Quote(path)+`}}]`,
 			))
@@ -28,6 +30,8 @@ func TestHostedSkillInferenceKeepsNamesLexical(t *testing.T) {
 			return calls[0].SkillName
 		}},
 		{"goose", func(t *testing.T, ctx context.Context, path string) string {
+			t.Helper()
+
 			call, ok := gooseParseToolCall(ctx, gjson.Parse(
 				`{"id":"call-1","toolCall":{"status":"success","value":{"name":"Read","arguments":{"file_path":`+strconv.Quote(path)+`}}}}`,
 			))
@@ -35,6 +39,8 @@ func TestHostedSkillInferenceKeepsNamesLexical(t *testing.T) {
 			return call.SkillName
 		}},
 		{"zcode", func(t *testing.T, ctx context.Context, path string) string {
+			t.Helper()
+
 			call, ok := zcodeParseToolCall(ctx, gjson.Parse(
 				`{"id":"call-1","name":"Read","input":{"file_path":`+strconv.Quote(path)+`}}`,
 			))
@@ -489,7 +495,6 @@ func TestParseCodexSessionInfersSkillName(t *testing.T) {
 }
 
 func TestParseCodexSessionInfersSkillNameFromSessionCwd(t *testing.T) {
-
 	path := writeTestSkill(t, "index", "data-analytics:index")
 	cwd := filepath.Dir(filepath.Dir(filepath.Dir(path)))
 	content := testjsonl.JoinJSONL(
@@ -508,8 +513,6 @@ func TestParseCodexSessionInfersSkillNameFromSessionCwd(t *testing.T) {
 }
 
 func TestParseCodexSessionFromInfersSkillNameFromSeededCwd(t *testing.T) {
-	require := require.New(t)
-
 	path := writeTestSkill(t, "index", "data-analytics:index")
 	cwd := filepath.Dir(filepath.Dir(filepath.Dir(path)))
 
@@ -519,10 +522,10 @@ func TestParseCodexSessionFromInfersSkillNameFromSeededCwd(t *testing.T) {
 	)
 	file := createTestFile(t, "incremental-skill.jsonl", initial)
 	_, msgs, err := parseCodexTestSession(t, file, "local", false)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	info, err := os.Stat(file)
-	require.NoError(err)
+	require.NoError(t, err)
 	offset := info.Size()
 
 	appended := testjsonl.CodexFunctionCallArgsJSON(
@@ -530,15 +533,15 @@ func TestParseCodexSessionFromInfersSkillNameFromSeededCwd(t *testing.T) {
 			"cmd": "sed -n '1,220p' skills/index/SKILL.md",
 		}, tsLateS5)
 	f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = f.WriteString(appended)
-	require.NoError(err)
-	require.NoError(f.Close())
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 
 	newMsgs, _, _, err := parseCodexTestSessionFrom(t, file, offset, len(msgs), false)
-	require.NoError(err)
-	require.Len(newMsgs, 1)
-	require.Len(newMsgs[0].ToolCalls, 1)
+	require.NoError(t, err)
+	require.Len(t, newMsgs, 1)
+	require.Len(t, newMsgs[0].ToolCalls, 1)
 	assert.Equal(t, "data-analytics:index", newMsgs[0].ToolCalls[0].SkillName)
 }
 
@@ -722,8 +725,10 @@ func TestExpandSkillHome(t *testing.T) {
 		want string
 	}{
 		{"bare tilde", "~", home},
-		{"tilde slash", "~/.claude/skills/foo/SKILL.md",
-			filepath.Join(home, ".claude/skills/foo/SKILL.md")},
+		{
+			"tilde slash", "~/.claude/skills/foo/SKILL.md",
+			filepath.Join(home, ".claude/skills/foo/SKILL.md"),
+		},
 		{"absolute unchanged", "/abs/SKILL.md", "/abs/SKILL.md"},
 		{"relative unchanged", "skills/foo/SKILL.md", "skills/foo/SKILL.md"},
 		{"tilde user not expanded", "~bob/SKILL.md", "~bob/SKILL.md"},
@@ -750,15 +755,23 @@ func TestResolveSkillPath(t *testing.T) {
 		wantReadable bool
 	}{
 		{"absolute", absSkillPath, "", absSkillPath, true},
-		{"tilde expands", "~/s/SKILL.md", "",
-			filepath.Join(home, "s/SKILL.md"), true},
-		{"relative joined to base", relativeSkillPath, baseDir,
-			filepath.Join(baseDir, relativeSkillPath), true},
+		{
+			"tilde expands", "~/s/SKILL.md", "",
+			filepath.Join(home, "s/SKILL.md"), true,
+		},
+		{
+			"relative joined to base", relativeSkillPath, baseDir,
+			filepath.Join(baseDir, relativeSkillPath), true,
+		},
 		{"relative no base", relativeSkillPath, "", relativeSkillPath, false},
-		{"relative with relative base", relativeSkillPath, "rel",
-			relativeSkillPath, false},
-		{"tilde base expands", relativeSkillPath, "~/repo",
-			filepath.Join(home, "repo", relativeSkillPath), true},
+		{
+			"relative with relative base", relativeSkillPath, "rel",
+			relativeSkillPath, false,
+		},
+		{
+			"tilde base expands", relativeSkillPath, "~/repo",
+			filepath.Join(home, "repo", relativeSkillPath), true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

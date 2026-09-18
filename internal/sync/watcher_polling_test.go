@@ -17,9 +17,6 @@ import (
 // generic empty-agent OnCoverageDegraded fallback is NOT called. Calling
 // OnCoverageDegraded in addition would bypass per-agent probe gates.
 func TestWatcherStartFailureSuppressesFallbackWhenPollingOwnershipSet(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	backend := newFakeWatchBackend()
 	backend.startErr = errors.New("backend start failed")
 
@@ -41,7 +38,7 @@ func TestWatcherStartFailureSuppressesFallbackWhenPollingOwnershipSet(t *testing
 			},
 		},
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// Register roots so rootAgents is populated and the start-failure path
 	// has something to emit.
@@ -53,26 +50,26 @@ func TestWatcherStartFailureSuppressesFallbackWhenPollingOwnershipSet(t *testing
 	}}, 100)
 
 	startErr := w.Start()
-	require.Error(startErr, "Start must return an error when backend fails")
+	require.Error(t, startErr, "Start must return an error when backend fails")
 
 	// OnCoverageDegraded must not be called; OnPollingRequired is the
 	// authoritative coverage path when it is set.
-	assert.False(degradedCalled,
+	assert.False(t, degradedCalled,
 		"OnCoverageDegraded must not be called when OnPollingRequired is set")
 
 	// Named obligations must be emitted for all registered roots.
-	require.Len(emitted, 1,
+	require.Len(t, emitted, 1,
 		"one obligation must be emitted per registered root on start failure")
 	ob := emitted[0]
-	assert.Equal("startfailure:"+filepath.Clean("/gemini"), ob.Key,
+	assert.Equal(t, "startfailure:"+filepath.Clean("/gemini"), ob.Key,
 		"obligation key must use startfailure: prefix to avoid colliding with caller obligations")
-	assert.Equal(filepath.Clean("/gemini"), ob.Probe,
+	assert.Equal(t, filepath.Clean("/gemini"), ob.Probe,
 		"probe must be the registered root path")
-	require.Len(ob.Scopes, 1,
+	require.Len(t, ob.Scopes, 1,
 		"obligation must carry one scope per named agent")
-	assert.Equal("gemini", ob.Scopes[0].Agent,
+	assert.Equal(t, "gemini", ob.Scopes[0].Agent,
 		"scope must carry the provider agent identity from rootAgents")
-	assert.NotEqual(ob.Scopes[0].Agent, "",
+	assert.NotEmpty(t, ob.Scopes[0].Agent,
 		"named-agent root must not produce an empty-agent scope")
 }
 
@@ -90,9 +87,6 @@ func TestWatcherStartFailureSuppressesFallbackWhenPollingOwnershipSet(t *testing
 // physical path leaves the configured dir with no authoritative polling
 // coverage.
 func TestWatcherStartFailureEmitsNamedObligationForCleanRoot(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	backend := newFakeWatchBackend()
 	backend.startErr = errors.New("backend start failed")
 
@@ -108,7 +102,7 @@ func TestWatcherStartFailureEmitsNamedObligationForCleanRoot(t *testing.T) {
 			},
 		},
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	w.RegisterRoots([]WatchRoot{{
 		Path:      "/claude",
@@ -118,16 +112,16 @@ func TestWatcherStartFailureEmitsNamedObligationForCleanRoot(t *testing.T) {
 	}}, 100)
 
 	startErr := w.Start()
-	require.Error(startErr)
+	require.Error(t, startErr)
 
-	require.Len(emitted, 1,
+	require.Len(t, emitted, 1,
 		"start failure must emit one obligation for the cleanly-registered root")
 	ob := emitted[0]
-	assert.Equal(filepath.Clean("/claude"), ob.Probe)
+	assert.Equal(t, filepath.Clean("/claude"), ob.Probe)
 	hasClaudeAgent := slices.ContainsFunc(ob.Scopes, func(s PollingScope) bool {
 		return s.Agent == "claude"
 	})
-	assert.True(hasClaudeAgent,
+	assert.True(t, hasClaudeAgent,
 		"obligation must carry the provider's agent identity")
 	// The scope Root must be the configured SyncDir, not the physical watch path.
 	// Physical path /claude and configured dir /claude-dir do not overlap in
@@ -141,8 +135,8 @@ func TestWatcherStartFailureEmitsNamedObligationForCleanRoot(t *testing.T) {
 		}
 		return PollingScope{}, false
 	}()
-	require.True(found, "claude agent scope must be present")
-	assert.Equal(filepath.Clean("/claude-dir"), filepath.Clean(claudeScope.Root),
+	require.True(t, found, "claude agent scope must be present")
+	assert.Equal(t, filepath.Clean("/claude-dir"), filepath.Clean(claudeScope.Root),
 		"scope Root must be the configured SyncDir (/claude-dir), not the physical watch path (/claude)")
 }
 
@@ -151,8 +145,6 @@ func TestWatcherStartFailureEmitsNamedObligationForCleanRoot(t *testing.T) {
 // empty agent string), the start-failure path still emits an obligation
 // covering it with an empty-agent scope so that root is never silently dropped.
 func TestWatcherStartFailureEmitsEmptyAgentScopeForNoAgentRoot(t *testing.T) {
-	require := require.New(t)
-
 	backend := newFakeWatchBackend()
 	backend.startErr = errors.New("backend start failed")
 
@@ -168,7 +160,7 @@ func TestWatcherStartFailureEmitsEmptyAgentScopeForNoAgentRoot(t *testing.T) {
 			},
 		},
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// Register with no scopes so rootScopes[path] = [] (no named agents).
 	w.RegisterRoots([]WatchRoot{{
@@ -178,12 +170,12 @@ func TestWatcherStartFailureEmitsEmptyAgentScopeForNoAgentRoot(t *testing.T) {
 	}}, 100)
 
 	startErr := w.Start()
-	require.Error(startErr)
+	require.Error(t, startErr)
 
-	require.Len(emitted, 1,
+	require.Len(t, emitted, 1,
 		"start failure must emit an obligation even for a root with no named agents")
 	ob := emitted[0]
-	require.Len(ob.Scopes, 1,
+	require.Len(t, ob.Scopes, 1,
 		"absent-agent root must still emit one empty-agent scope for coverage")
 	assert.Empty(t, ob.Scopes[0].Agent,
 		"scope must use empty agent when rootScopes has no named agents for the root")
@@ -196,8 +188,6 @@ func TestWatcherStartFailureEmitsEmptyAgentScopeForNoAgentRoot(t *testing.T) {
 // authoritatively reconcile a scope whose nested root is missing, tombstoning
 // every session beneath it.
 func TestWatcherStartFailureNoEmptyAgentForNamedRoot(t *testing.T) {
-	require := require.New(t)
-
 	backend := newFakeWatchBackend()
 	backend.startErr = errors.New("backend start failed")
 
@@ -213,7 +203,7 @@ func TestWatcherStartFailureNoEmptyAgentForNamedRoot(t *testing.T) {
 			},
 		},
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	w.RegisterRoots([]WatchRoot{{
 		Path:      "/gemini",
@@ -223,9 +213,9 @@ func TestWatcherStartFailureNoEmptyAgentForNamedRoot(t *testing.T) {
 	}}, 100)
 
 	startErr := w.Start()
-	require.Error(startErr)
+	require.Error(t, startErr)
 
-	require.NotEmpty(emitted,
+	require.NotEmpty(t, emitted,
 		"start failure must emit at least one obligation for the named-agent root")
 	for _, ob := range emitted {
 		for _, scope := range ob.Scopes {
@@ -243,9 +233,6 @@ func TestWatcherStartFailureNoEmptyAgentForNamedRoot(t *testing.T) {
 // RegisterRoots only stored named agents in rootAgents, discarding empty-agent
 // scopes entirely, so /legacy-dir was silently dropped.
 func TestWatcherStartFailureMixedScopesBothDirsAreCovered(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	backend := newFakeWatchBackend()
 	backend.startErr = errors.New("backend start failed")
 
@@ -261,7 +248,7 @@ func TestWatcherStartFailureMixedScopesBothDirsAreCovered(t *testing.T) {
 			},
 		},
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	w.RegisterRoots([]WatchRoot{{
 		Path:      "/watch",
@@ -274,9 +261,9 @@ func TestWatcherStartFailureMixedScopesBothDirsAreCovered(t *testing.T) {
 	}}, 100)
 
 	startErr := w.Start()
-	require.Error(startErr)
+	require.Error(t, startErr)
 
-	require.Len(emitted, 1, "one obligation per physical root")
+	require.Len(t, emitted, 1, "one obligation per physical root")
 	ob := emitted[0]
 
 	// Both configured dirs must appear in the emitted scopes.
@@ -289,10 +276,10 @@ func TestWatcherStartFailureMixedScopesBothDirsAreCovered(t *testing.T) {
 			legacyRoot = s.Root
 		}
 	}
-	assert.Equal(filepath.Clean("/gemini-dir"), filepath.Clean(geminiRoot),
+	assert.Equal(t, filepath.Clean("/gemini-dir"), filepath.Clean(geminiRoot),
 		"gemini scope Root must be the configured SyncDir /gemini-dir, not the physical path")
-	assert.NotEmpty(legacyRoot,
+	assert.NotEmpty(t, legacyRoot,
 		"empty-agent scope must not be dropped when a named agent coexists on the same root")
-	assert.Equal(filepath.Clean("/legacy-dir"), filepath.Clean(legacyRoot),
+	assert.Equal(t, filepath.Clean("/legacy-dir"), filepath.Clean(legacyRoot),
 		"empty-agent scope Root must be the configured SyncDir /legacy-dir")
 }

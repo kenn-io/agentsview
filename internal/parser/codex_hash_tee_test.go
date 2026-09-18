@@ -18,11 +18,9 @@ import (
 // whole payload's hash while the anchor digest equals the trailing
 // window's hash — including the ring wrap boundary.
 func TestCodexHashAnchorTeeWrapAndDigest(t *testing.T) {
-	require := require.New(t)
-
 	payload := make([]byte, 300<<10)
 	_, err := rand.Read(payload)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	tee := newCodexHashAnchorTee(bytes.NewReader(payload))
 	buf := make([]byte, 64<<10)
@@ -31,17 +29,17 @@ func TestCodexHashAnchorTeeWrapAndDigest(t *testing.T) {
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		require.NoError(err)
+		require.NoError(t, err)
 	}
 
 	state, err := tee.HashState()
-	require.NoError(err)
+	require.NoError(t, err)
 	h := sha256.New()
-	require.NoError(h.(encoding.BinaryUnmarshaler).UnmarshalBinary(state))
-	require.Equal(*(*[32]byte)(h.Sum(nil)), sha256.Sum256(payload))
+	require.NoError(t, h.(encoding.BinaryUnmarshaler).UnmarshalBinary(state))
+	require.Equal(t, *(*[32]byte)(h.Sum(nil)), sha256.Sum256(payload))
 
 	wantAnchor := sha256.Sum256(payload[len(payload)-codexCheckpointAnchorSize:])
-	require.Equal(hex.EncodeToString(wantAnchor[:]), tee.AnchorDigest())
+	require.Equal(t, hex.EncodeToString(wantAnchor[:]), tee.AnchorDigest())
 }
 
 // TestCodexHashAnchorTeeSmallPayload pins the sub-window behavior: a

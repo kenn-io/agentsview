@@ -50,24 +50,21 @@ func parseCortexSessionForTest(
 }
 
 func TestParseCortexSession_Basic(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	content := minimalCortexSession(cortexTestUUID)
 	path := createTestFile(t, cortexTestUUID+".json", content)
 
 	sess, msgs, err := parseCortexSessionForTest(t, path, "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
 	assertSessionMeta(t, sess,
 		"cortex:"+cortexTestUUID, "project", AgentCortex,
 	)
-	assert.Equal("Hello Cortex", sess.FirstMessage)
+	assert.Equal(t, "Hello Cortex", sess.FirstMessage)
 	assertMessageCount(t, sess.MessageCount, 2)
-	assert.Equal(1, sess.UserMessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
 
-	require.Len(msgs, 2)
+	require.Len(t, msgs, 2)
 	assertMessage(t, msgs[0], RoleUser, "Hello Cortex")
 	assertMessage(t, msgs[1], RoleAssistant, "Hi there!")
 }
@@ -83,9 +80,6 @@ func TestParseCortexSession_EmptySessionID(t *testing.T) {
 }
 
 func TestParseCortexSession_SkipsInternalBlocks(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	content := `{
 	"session_id": "` + cortexTestUUID + `",
 	"working_directory": "/tmp",
@@ -111,18 +105,15 @@ func TestParseCortexSession_SkipsInternalBlocks(t *testing.T) {
 
 	path := createTestFile(t, cortexTestUUID+".json", content)
 	sess, msgs, err := parseCortexSessionForTest(t, path, "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
-	require.Len(msgs, 2)
-	assert.Equal("Real question", msgs[0].Content)
-	assert.Equal("Answer", msgs[1].Content)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "Real question", msgs[0].Content)
+	assert.Equal(t, "Answer", msgs[1].Content)
 }
 
 func TestParseCortexSession_ToolUse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	content := `{
 	"session_id": "` + cortexTestUUID + `",
 	"working_directory": "/tmp",
@@ -159,29 +150,27 @@ func TestParseCortexSession_ToolUse(t *testing.T) {
 
 	path := createTestFile(t, cortexTestUUID+".json", content)
 	sess, msgs, err := parseCortexSessionForTest(t, path, "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
 	assertMessageCount(t, sess.MessageCount, 3)
-	assert.Equal(1, sess.UserMessageCount)
-	assert.Equal("Read main.go", sess.FirstMessage)
-	require.Len(msgs, 3)
-	assert.True(msgs[1].HasToolUse)
-	require.Len(msgs[1].ToolCalls, 1)
-	assert.Equal("read", msgs[1].ToolCalls[0].ToolName)
-	assert.Contains(msgs[1].Content, "/tmp/main.go")
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "Read main.go", sess.FirstMessage)
+	require.Len(t, msgs, 3)
+	assert.True(t, msgs[1].HasToolUse)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "read", msgs[1].ToolCalls[0].ToolName)
+	assert.Contains(t, msgs[1].Content, "/tmp/main.go")
 
 	// Tool result message carries ContentLength > 0.
-	assert.Equal(SourceSubtypeToolResult, msgs[2].SourceSubtype)
-	require.Len(msgs[2].ToolResults, 1)
-	assert.Equal("tu1", msgs[2].ToolResults[0].ToolUseID)
-	assert.Greater(msgs[2].ToolResults[0].ContentLength, 0,
+	assert.Equal(t, SourceSubtypeToolResult, msgs[2].SourceSubtype)
+	require.Len(t, msgs[2].ToolResults, 1)
+	assert.Equal(t, "tu1", msgs[2].ToolResults[0].ToolUseID)
+	assert.Positive(t, msgs[2].ToolResults[0].ContentLength,
 		"tool result ContentLength must be populated")
 }
 
 func TestParseCortexSession_SplitHistoryJSONL(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	uuid := cortexTestUUID
 
@@ -193,7 +182,7 @@ func TestParseCortexSession_SplitHistoryJSONL(t *testing.T) {
 	"last_updated": "2024-06-01T10:05:00Z"
 }`
 	metaPath := filepath.Join(dir, uuid+".json")
-	require.NoError(os.WriteFile(metaPath, []byte(meta), 0o644))
+	require.NoError(t, os.WriteFile(metaPath, []byte(meta), 0o644))
 
 	// Companion JSONL file.
 	lines := strings.Join([]string{
@@ -201,21 +190,19 @@ func TestParseCortexSession_SplitHistoryJSONL(t *testing.T) {
 		`{"role":"assistant","id":"m2","content":[{"type":"text","text":"Got it"}]}`,
 	}, "\n")
 	histPath := filepath.Join(dir, uuid+".history.jsonl")
-	require.NoError(os.WriteFile(histPath, []byte(lines), 0o644))
+	require.NoError(t, os.WriteFile(histPath, []byte(lines), 0o644))
 
 	sess, msgs, err := parseCortexSessionForTest(t, metaPath, "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
 	assertMessageCount(t, sess.MessageCount, 2)
-	require.Len(msgs, 2)
+	require.Len(t, msgs, 2)
 	assertMessage(t, msgs[0], RoleUser, "Hello from JSONL")
 	assertMessage(t, msgs[1], RoleAssistant, "Got it")
 }
 
 func TestParseCortexSession_SplitHistoryReadError(t *testing.T) {
-	require := require.New(t)
-
 	if runtime.GOOS == "windows" {
 		t.Skip("chmod 0o000 does not prevent reads on Windows")
 	}
@@ -230,23 +217,20 @@ func TestParseCortexSession_SplitHistoryReadError(t *testing.T) {
 	"last_updated": "2024-06-01T10:05:00Z"
 }`
 	metaPath := filepath.Join(dir, uuid+".json")
-	require.NoError(os.WriteFile(metaPath, []byte(meta), 0o644))
+	require.NoError(t, os.WriteFile(metaPath, []byte(meta), 0o644))
 
 	// Create the history file but make it unreadable.
 	histPath := filepath.Join(dir, uuid+".history.jsonl")
-	require.NoError(os.WriteFile(histPath, []byte("{}"), 0o644))
-	require.NoError(os.Chmod(histPath, 0o000))
+	require.NoError(t, os.WriteFile(histPath, []byte("{}"), 0o644))
+	require.NoError(t, os.Chmod(histPath, 0o000))
 	t.Cleanup(func() { os.Chmod(histPath, 0o644) })
 
 	_, _, err := parseCortexSessionForTest(t, metaPath, "local")
-	require.Error(err, "non-ENOENT read error should propagate")
+	require.Error(t, err, "non-ENOENT read error should propagate")
 	assert.Contains(t, err.Error(), "read history")
 }
 
 func TestParseCortexSession_SplitHistoryMissing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 	uuid := cortexTestUUID
 
@@ -258,17 +242,15 @@ func TestParseCortexSession_SplitHistoryMissing(t *testing.T) {
 	"last_updated": "2024-06-01T10:05:00Z"
 }`
 	metaPath := filepath.Join(dir, uuid+".json")
-	require.NoError(os.WriteFile(metaPath, []byte(meta), 0o644))
+	require.NoError(t, os.WriteFile(metaPath, []byte(meta), 0o644))
 
 	sess, msgs, err := parseCortexSessionForTest(t, metaPath, "local")
-	require.NoError(err)
-	assert.Nil(sess, "missing JSONL should silently skip")
-	assert.Nil(msgs)
+	require.NoError(t, err)
+	assert.Nil(t, sess, "missing JSONL should silently skip")
+	assert.Nil(t, msgs)
 }
 
 func TestParseCortexSession_FirstUserTurnSystemOnly(t *testing.T) {
-	require := require.New(t)
-
 	content := `{
 	"session_id": "` + cortexTestUUID + `",
 	"working_directory": "/tmp",
@@ -294,12 +276,12 @@ func TestParseCortexSession_FirstUserTurnSystemOnly(t *testing.T) {
 
 	path := createTestFile(t, cortexTestUUID+".json", content)
 	sess, msgs, err := parseCortexSessionForTest(t, path, "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
 	// First system-only turn skipped.
 	assertMessageCount(t, sess.MessageCount, 2)
-	require.Len(msgs, 2)
+	require.Len(t, msgs, 2)
 	assert.Equal(t, "Real prompt", sess.FirstMessage)
 	assertMessage(t, msgs[0], RoleUser, "Real prompt")
 }
@@ -330,8 +312,6 @@ func TestIsCortexBackupFile(t *testing.T) {
 }
 
 func TestDiscoverCortexSessions(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	uuid2 := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
@@ -340,7 +320,7 @@ func TestDiscoverCortexSessions(t *testing.T) {
 		cortexTestUUID + ".json",
 		uuid2 + ".json",
 	} {
-		require.NoError(os.WriteFile(
+		require.NoError(t, os.WriteFile(
 			filepath.Join(dir, name), []byte("{}"), 0o644))
 	}
 	// Files that should be skipped.
@@ -349,15 +329,15 @@ func TestDiscoverCortexSessions(t *testing.T) {
 		cortexTestUUID + ".history.jsonl",
 		"readme.txt",
 	} {
-		require.NoError(os.WriteFile(
+		require.NoError(t, os.WriteFile(
 			filepath.Join(dir, name), []byte(""), 0o644))
 	}
 
 	provider, ok := NewProvider(AgentCortex, ProviderConfig{Roots: []string{dir}})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 2)
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
 	assert.Equal(t, []string{
 		filepath.Join(dir, cortexTestUUID+".json"),
 		filepath.Join(dir, uuid2+".json"),
@@ -393,24 +373,21 @@ func TestFindCortexSourceFile(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			provider, ok := NewProvider(AgentCortex, ProviderConfig{
 				Roots: []string{tt.dir},
 			})
-			require.True(ok)
+			require.True(t, ok)
 			source, ok, err := provider.FindSource(
 				t.Context(),
 				FindSourceRequest{RawSessionID: tt.sessionID},
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 			if tt.want == "" {
-				assert.False(ok)
+				assert.False(t, ok)
 				return
 			}
-			require.True(ok)
-			assert.Equal(tt.want, source.DisplayPath)
+			require.True(t, ok)
+			assert.Equal(t, tt.want, source.DisplayPath)
 		})
 	}
 }

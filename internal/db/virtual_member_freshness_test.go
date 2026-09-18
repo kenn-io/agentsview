@@ -19,8 +19,8 @@ func seedVirtualMemberRow(
 	if hash != "" {
 		session.FileHash = &hash
 	}
-	require.NoError(t, d.UpsertSession(session))
-	require.NoError(t, d.SetSessionDataVersion(id, version))
+	require.NoError(t, d.UpsertSession(t.Context(), session))
+	require.NoError(t, d.SetSessionDataVersion(t.Context(), id, version))
 }
 
 // TestListVirtualContainerMemberFreshnessPagePagesCompleteFolds pins the
@@ -32,9 +32,6 @@ func seedVirtualMemberRow(
 func TestListVirtualContainerMemberFreshnessPagePagesCompleteFolds(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	const container = "/data/opencode.db"
 	// Member "a" is stored twice: the newer row carries the hash the fold
@@ -44,50 +41,50 @@ func TestListVirtualContainerMemberFreshnessPagePagesCompleteFolds(
 	seedVirtualMemberRow(t, d, "b", container+"#b", 150, 5, "")
 	seedVirtualMemberRow(t, d, "c", container+"#c", 300, 5, "")
 	seedVirtualMemberRow(t, d, "outside", "/data/other.db#x", 400, 5, "")
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(t.Context(),
 		`UPDATE sessions SET
 			source_missing_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		 WHERE id = 'b'`,
 	)
-	require.NoError(err, "mark member b source-missing")
+	require.NoError(t, err, "mark member b source-missing")
 
 	page, done, err := d.ListVirtualContainerMemberFreshnessPage(
 		t.Context(), container, "", 1,
 	)
-	require.NoError(err)
-	assert.False(done, "a full page must not report exhaustion")
-	require.Len(page, 1)
-	assert.Equal(container+"#a", page[0].Path)
-	assert.Equal(int64(200), page[0].MTimeNS,
+	require.NoError(t, err)
+	assert.False(t, done, "a full page must not report exhaustion")
+	require.Len(t, page, 1)
+	assert.Equal(t, container+"#a", page[0].Path)
+	assert.Equal(t, int64(200), page[0].MTimeNS,
 		"the fold surfaces the newest row's mtime")
-	assert.Equal("new-hash", page[0].Hash,
+	assert.Equal(t, "new-hash", page[0].Hash,
 		"the hash rides the newest-mtime row")
-	assert.Equal(2, page[0].DataVersion,
+	assert.Equal(t, 2, page[0].DataVersion,
 		"the minimum stored data version survives the fold")
 
 	page, done, err = d.ListVirtualContainerMemberFreshnessPage(
 		t.Context(), container, page[0].Path, 1,
 	)
-	require.NoError(err)
-	assert.False(done)
-	require.Len(page, 1)
-	assert.Equal(container+"#c", page[0].Path,
+	require.NoError(t, err)
+	assert.False(t, done)
+	require.Len(t, page, 1)
+	assert.Equal(t, container+"#c", page[0].Path,
 		"the source-missing member must never surface")
 
 	page, done, err = d.ListVirtualContainerMemberFreshnessPage(
 		t.Context(), container, page[0].Path, 1,
 	)
-	require.NoError(err)
-	assert.True(done, "an empty page reports exhaustion")
-	assert.Empty(page)
+	require.NoError(t, err)
+	assert.True(t, done, "an empty page reports exhaustion")
+	assert.Empty(t, page)
 
 	page, done, err = d.ListVirtualContainerMemberFreshnessPage(
 		t.Context(), container, "", 10,
 	)
-	require.NoError(err)
-	assert.True(done, "a short page reports exhaustion")
-	require.Len(page, 2,
+	require.NoError(t, err)
+	assert.True(t, done, "a short page reports exhaustion")
+	require.Len(t, page, 2,
 		"one call over a large limit folds the whole membership")
-	assert.Equal(container+"#a", page[0].Path)
-	assert.Equal(container+"#c", page[1].Path)
+	assert.Equal(t, container+"#a", page[0].Path)
+	assert.Equal(t, container+"#c", page[1].Path)
 }

@@ -10,7 +10,6 @@ import (
 	"log"
 	"sort"
 	"strconv"
-
 	"sync"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -47,7 +46,7 @@ func (s *scopedSyncStateStore) scopedKey(key string) string {
 	return key + ":" + s.scope
 }
 
-func (s *scopedSyncStateStore) ensureMigration() error {
+func (s *scopedSyncStateStore) ensureMigration(ctx context.Context) error {
 	if s.scope == "" || !s.migrateLegacy {
 		return nil
 	}
@@ -58,7 +57,7 @@ func (s *scopedSyncStateStore) ensureMigration() error {
 			lastPushTargetFingerprintKey,
 		} {
 			scopedKey := s.scopedKey(key)
-			scopedValue, err := s.base.GetSyncState(scopedKey)
+			scopedValue, err := s.base.GetSyncState(ctx, scopedKey)
 			if err != nil {
 				s.migrateErr = fmt.Errorf(
 					"reading %s during PG sync-state migration: %w",
@@ -66,7 +65,7 @@ func (s *scopedSyncStateStore) ensureMigration() error {
 				)
 				return
 			}
-			legacyValue, err := s.base.GetSyncState(key)
+			legacyValue, err := s.base.GetSyncState(ctx, key)
 			if err != nil {
 				s.migrateErr = fmt.Errorf(
 					"reading legacy %s during PG sync-state migration: %w",
@@ -78,7 +77,7 @@ func (s *scopedSyncStateStore) ensureMigration() error {
 				continue
 			}
 			if scopedValue == "" {
-				if err := s.base.SetSyncState(
+				if err := s.base.SetSyncState(ctx,
 					scopedKey, legacyValue,
 				); err != nil {
 					s.migrateErr = fmt.Errorf(
@@ -88,7 +87,7 @@ func (s *scopedSyncStateStore) ensureMigration() error {
 					return
 				}
 			}
-			if err := s.base.SetSyncState(key, ""); err != nil {
+			if err := s.base.SetSyncState(ctx, key, ""); err != nil {
 				s.migrateErr = fmt.Errorf(
 					"clearing legacy %s during PG sync-state migration: %w",
 					key, err,
@@ -100,29 +99,29 @@ func (s *scopedSyncStateStore) ensureMigration() error {
 	return s.migrateErr
 }
 
-func (s *scopedSyncStateStore) GetSyncState(key string) (string, error) {
-	if err := s.ensureMigration(); err != nil {
+func (s *scopedSyncStateStore) GetSyncState(ctx context.Context, key string) (string, error) {
+	if err := s.ensureMigration(ctx); err != nil {
 		return "", err
 	}
-	return s.base.GetSyncState(s.scopedKey(key))
+	return s.base.GetSyncState(ctx, s.scopedKey(key))
 }
 
-func (s *scopedSyncStateStore) SetSyncState(
+func (s *scopedSyncStateStore) SetSyncState(ctx context.Context,
 	key, value string,
 ) error {
-	if err := s.ensureMigration(); err != nil {
+	if err := s.ensureMigration(ctx); err != nil {
 		return err
 	}
-	return s.base.SetSyncState(s.scopedKey(key), value)
+	return s.base.SetSyncState(ctx, s.scopedKey(key), value)
 }
 
-func (s *scopedSyncStateStore) GetOrCreateSyncState(
+func (s *scopedSyncStateStore) GetOrCreateSyncState(ctx context.Context,
 	key, defaultValue string,
 ) (string, error) {
-	if err := s.ensureMigration(); err != nil {
+	if err := s.ensureMigration(ctx); err != nil {
 		return "", err
 	}
-	return s.base.GetOrCreateSyncState(
+	return s.base.GetOrCreateSyncState(ctx,
 		s.scopedKey(key), defaultValue,
 	)
 }
@@ -455,7 +454,7 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 func (s *Sync) Status(
 	ctx context.Context,
 ) (SyncStatus, error) {
-	lastPush, err := ReadLastPushAt(
+	lastPush, err := ReadLastPushAt(ctx,
 		s.local, s.syncStateTarget, nil, nil,
 		s.migrateLegacySyncState,
 	)
@@ -542,7 +541,7 @@ func readStatus(
 	}, nil
 }
 
-func ReadLastPushAt(
+func ReadLastPushAt(ctx context.Context,
 	local SyncStateStore,
 	target string,
 	projects, excludeProjects []string,
@@ -553,14 +552,14 @@ func ReadLastPushAt(
 	}
 	scope := pushSyncStateScope(target, projects, excludeProjects)
 	if scope == "" {
-		return local.GetSyncState("last_push_at")
+		return local.GetSyncState(ctx, "last_push_at")
 	}
 	store := newScopedSyncStateStore(
 		local,
 		scope,
 		false,
 	)
-	lastPush, err := store.GetSyncState("last_push_at")
+	lastPush, err := store.GetSyncState(ctx, "last_push_at")
 	if err != nil {
 		return "", err
 	}
@@ -569,7 +568,7 @@ func ReadLastPushAt(
 		hasProjectFilter(projects, excludeProjects) {
 		return lastPush, nil
 	}
-	return local.GetSyncState("last_push_at")
+	return local.GetSyncState(ctx, "last_push_at")
 }
 
 // SyncStatus holds summary information about the sync state.

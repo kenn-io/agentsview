@@ -27,9 +27,9 @@ func (e *Engine) SyncSessionWithSubagentsContext(
 	if def, ok := parser.AgentByPrefix(sessionID); ok {
 		parentAgent = def.Type
 	}
-	sourcePath := e.db.GetSessionFilePath(sessionID)
+	sourcePath := e.db.GetSessionFilePath(ctx, sessionID)
 	if sourcePath == "" {
-		sourcePath = e.FindSourceFile(sessionID)
+		sourcePath = e.FindSourceFile(ctx, sessionID)
 	}
 	paths := subagentTranscriptPaths(sourcePath)
 	if len(paths) == 0 {

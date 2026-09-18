@@ -90,11 +90,11 @@ func kiroSQLiteDBPathChecked(dir string) (string, error) {
 	}
 	resolvedDir, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		return "", nil
+		return "", nil //nolint:nilerr // Unresolvable optional companion paths provide no metadata hint.
 	}
 	resolvedPath, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return "", nil
+		return "", nil //nolint:nilerr // Unresolvable optional companion paths provide no metadata hint.
 	}
 	if _, ok := relUnder(resolvedDir, resolvedPath); !ok {
 		return "", nil

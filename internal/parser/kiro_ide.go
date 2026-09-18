@@ -140,7 +140,7 @@ func parseKiroIDENewFormat(
 
 	var sess kiroIDENewSession
 	if err := json.Unmarshal(data, &sess); err != nil {
-		return nil, nil, nil
+		return nil, nil, nil //nolint:nilerr // Malformed provider records are skipped without discarding other sessions.
 	}
 
 	if len(sess.History) == 0 {
@@ -324,7 +324,7 @@ func parseKiroIDEChatFormat(
 
 	var chat kiroIDEChat
 	if err := json.Unmarshal(data, &chat); err != nil {
-		return nil, nil, nil // malformed, skip
+		return nil, nil, nil //nolint:nilerr // Malformed provider records are skipped without discarding other sessions.
 	}
 
 	if len(chat.Chat) == 0 {

@@ -23,18 +23,15 @@ const summaryEvent = "event: summary\n" +
 	"\"definite_findings\":2,\"candidate_findings\":1}\n\n"
 
 func TestParseScanStream_SummaryReturned(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	sum, err := parseScanStream(scanTestStream(t, strings.NewReader(summaryEvent)), nil)
-	require.NoError(err)
-	require.NotNil(sum)
-	assert.Equal(2, sum.Scanned)
-	assert.Equal(1, sum.WithSecrets)
-	assert.Equal(3, sum.TotalFindings)
-	assert.Equal(2, sum.DefiniteFindings)
-	assert.Equal(1, sum.CandidateFindings)
+	require.NoError(t, err)
+	require.NotNil(t, sum)
+	assert.Equal(t, 2, sum.Scanned)
+	assert.Equal(t, 1, sum.WithSecrets)
+	assert.Equal(t, 3, sum.TotalFindings)
+	assert.Equal(t, 2, sum.DefiniteFindings)
+	assert.Equal(t, 1, sum.CandidateFindings)
 }
 
 func TestParseScanStream_NoSummaryIsError(t *testing.T) {

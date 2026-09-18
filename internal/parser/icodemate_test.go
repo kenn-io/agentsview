@@ -13,9 +13,6 @@ import (
 // OpenCode-format provider, which parses the storage session and relabels
 // it onto the icodemate: ID prefix.
 func TestIcodemateProviderParseRelabelsOpenCodeSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionPath := filepath.Join(
 		root, "storage", "session_diff", "global", "ses_icode.json",
@@ -57,41 +54,39 @@ func TestIcodemateProviderParseRelabelsOpenCodeSession(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "testmachine",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0],
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 
 	sess := outcome.Results[0].Result.Session
 	msgs := outcome.Results[0].Result.Messages
-	require.Len(msgs, 1)
+	require.Len(t, msgs, 1)
 
-	assert.Equal("icodemate:ses_icode", sess.ID)
-	assert.Equal("icodemate:ses_parent", sess.ParentSessionID)
-	assert.Equal(AgentIcodemate, sess.Agent)
-	assert.Equal("icodeapp", sess.Project)
-	assert.Equal("Hello from IcodeMate", msgs[0].Content)
+	assert.Equal(t, "icodemate:ses_icode", sess.ID)
+	assert.Equal(t, "icodemate:ses_parent", sess.ParentSessionID)
+	assert.Equal(t, AgentIcodemate, sess.Agent)
+	assert.Equal(t, "icodeapp", sess.Project)
+	assert.Equal(t, "Hello from IcodeMate", msgs[0].Content)
 }
 
 func TestParseIcodemateSQLiteVirtualPath(t *testing.T) {
-	assert := assert.New(t)
-
 	wantDBPath := filepath.Join(t.TempDir(), "icodemate.db")
 	virtual := wantDBPath + "#ses_icode"
 	dbPath, sessionID, ok := ParseIcodemateSQLiteVirtualPath(virtual)
 	require.True(t, ok)
-	assert.Equal(wantDBPath, dbPath)
-	assert.Equal("ses_icode", sessionID)
+	assert.Equal(t, wantDBPath, dbPath)
+	assert.Equal(t, "ses_icode", sessionID)
 
 	_, _, ok = ParseIcodemateSQLiteVirtualPath(
 		filepath.Join(t.TempDir(), "opencode.db") + "#ses_icode",
 	)
-	assert.False(ok)
+	assert.False(t, ok)
 }

@@ -1,39 +1,42 @@
 package extract
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestResolveProfileMatchesModelName(t *testing.T) {
 	profile, err := ResolveProfile("", "qwen3.6-27b-mtp")
 	if err != nil {
-		t.Fatalf("ResolveProfile: %v", err)
+		require.FailNowf(t, "test failed", "ResolveProfile: %v", err)
 	}
 	if profile.Name != "qwen" {
-		t.Fatalf("profile = %q, want qwen", profile.Name)
+		require.FailNowf(t, "test failed", "profile = %q, want qwen", profile.Name)
 	}
 	body, ok := profile.Request.ExtraBody["chat_template_kwargs"]
 	if !ok {
-		t.Fatal("qwen profile must carry chat_template_kwargs")
+		require.FailNow(t, "qwen profile must carry chat_template_kwargs")
 	}
 	kwargs, ok := body.(map[string]any)
 	if !ok || kwargs["enable_thinking"] != false {
-		t.Fatalf("qwen profile must disable thinking, got %v", body)
+		require.FailNowf(t, "test failed", "qwen profile must disable thinking, got %v", body)
 	}
 }
 
 func TestResolveProfileFallsBackToBase(t *testing.T) {
 	profile, err := ResolveProfile("", "some-foundation-model")
 	if err != nil {
-		t.Fatalf("ResolveProfile: %v", err)
+		require.FailNowf(t, "test failed", "ResolveProfile: %v", err)
 	}
 	if profile.Name != "base" {
-		t.Fatalf("profile = %q, want base", profile.Name)
+		require.FailNowf(t, "test failed", "profile = %q, want base", profile.Name)
 	}
 	if profile.Request.MaxTokens <= 0 {
-		t.Fatalf("base profile MaxTokens = %d, must be a working default",
+		require.FailNowf(t, "test failed", "base profile MaxTokens = %d, must be a working default",
 			profile.Request.MaxTokens)
 	}
 }
@@ -41,10 +44,10 @@ func TestResolveProfileFallsBackToBase(t *testing.T) {
 func TestResolveProfileExplicitWinsAndUnknownErrors(t *testing.T) {
 	profile, err := ResolveProfile("base", "qwen3.6-27b-mtp")
 	if err != nil || profile.Name != "base" {
-		t.Fatalf("explicit base: profile=%v err=%v", profile.Name, err)
+		require.FailNowf(t, "test failed", "explicit base: profile=%v err=%v", profile.Name, err)
 	}
 	if _, err := ResolveProfile("nonexistent", "m"); err == nil {
-		t.Fatal("unknown explicit profile must error")
+		require.FailNow(t, "unknown explicit profile must error")
 	}
 }
 
@@ -54,11 +57,11 @@ func TestResolveProfileCopiesAreIsolated(t *testing.T) {
 	// registry and corrupt later resolutions.
 	first, err := ResolveProfile("", "qwen3.6-27b-mtp")
 	if err != nil {
-		t.Fatalf("ResolveProfile: %v", err)
+		require.FailNowf(t, "test failed", "ResolveProfile: %v", err)
 	}
 	kwargs, ok := first.Request.ExtraBody["chat_template_kwargs"].(map[string]any)
 	if !ok {
-		t.Fatal("qwen profile must carry chat_template_kwargs")
+		require.FailNow(t, "qwen profile must carry chat_template_kwargs")
 	}
 	kwargs["enable_thinking"] = true
 	first.Request.ExtraBody["injected"] = "x"
@@ -66,32 +69,32 @@ func TestResolveProfileCopiesAreIsolated(t *testing.T) {
 
 	second, err := ResolveProfile("", "qwen3.6-27b-mtp")
 	if err != nil {
-		t.Fatalf("ResolveProfile after mutation: %v", err)
+		require.FailNowf(t, "test failed", "ResolveProfile after mutation: %v", err)
 	}
 	if second.Name != "qwen" {
-		t.Fatalf("profile = %q, prefix mutation must not leak into registry",
+		require.FailNowf(t, "test failed", "profile = %q, prefix mutation must not leak into registry",
 			second.Name)
 	}
 	if _, ok := second.Request.ExtraBody["injected"]; ok {
-		t.Fatal("top-level extra-body mutation leaked into registry")
+		require.FailNow(t, "top-level extra-body mutation leaked into registry")
 	}
 	secondKwargs := second.Request.ExtraBody["chat_template_kwargs"].(map[string]any)
 	if secondKwargs["enable_thinking"] != false {
-		t.Fatal("nested extra-body mutation leaked into registry")
+		require.FailNow(t, "nested extra-body mutation leaked into registry")
 	}
 }
 
 func TestPromptsForMergesProfileAndOverrides(t *testing.T) {
 	base, err := ResolveProfile("base", "m")
 	if err != nil {
-		t.Fatalf("ResolveProfile: %v", err)
+		require.FailNowf(t, "test failed", "ResolveProfile: %v", err)
 	}
 	prompts := PromptsFor(base, map[PromptRole]string{RoleIntent: "override"})
 	if prompts[RoleIntent] != "override" {
-		t.Fatalf("override must win, got %q", prompts[RoleIntent])
+		require.FailNowf(t, "test failed", "override must win, got %q", prompts[RoleIntent])
 	}
 	if prompts[RoleAction] == "" {
-		t.Fatal("unoverridden roles keep the base prompt")
+		require.FailNow(t, "unoverridden roles keep the base prompt")
 	}
 }
 
@@ -100,17 +103,17 @@ func TestLoadPromptOverridesReadsRoleFiles(t *testing.T) {
 	if err := os.WriteFile(
 		filepath.Join(dir, "intent.txt"), []byte("custom intent\n"), 0o644,
 	); err != nil {
-		t.Fatal(err)
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	overrides, err := LoadPromptOverrides(dir)
 	if err != nil {
-		t.Fatalf("LoadPromptOverrides: %v", err)
+		require.FailNowf(t, "test failed", "LoadPromptOverrides: %v", err)
 	}
 	if overrides[RoleIntent] != "custom intent" {
-		t.Fatalf("intent override = %q", overrides[RoleIntent])
+		require.FailNowf(t, "test failed", "intent override = %q", overrides[RoleIntent])
 	}
 	if _, ok := overrides[RoleAction]; ok {
-		t.Fatal("absent files must not produce overrides")
+		require.FailNow(t, "absent files must not produce overrides")
 	}
 }
 
@@ -122,35 +125,35 @@ func TestFingerprintIsStableAndSensitive(t *testing.T) {
 
 	a, err := Fingerprint(id, seg, prompts, shape)
 	if err != nil {
-		t.Fatalf("Fingerprint: %v", err)
+		require.FailNowf(t, "test failed", "Fingerprint: %v", err)
 	}
 	b, err := Fingerprint(id, seg, prompts, shape)
 	if err != nil {
-		t.Fatalf("Fingerprint: %v", err)
+		require.FailNowf(t, "test failed", "Fingerprint: %v", err)
 	}
 	if a != b {
-		t.Fatalf("fingerprint not stable: %s vs %s", a, b)
+		require.FailNowf(t, "test failed", "fingerprint not stable: %s vs %s", a, b)
 	}
 
 	changedModel, _ := Fingerprint(
 		ModelIdentity{Model: "model-y"}, seg, prompts, shape,
 	)
 	if changedModel == a {
-		t.Fatal("model change must change the fingerprint")
+		require.FailNow(t, "model change must change the fingerprint")
 	}
 	changedDeployment, _ := Fingerprint(
 		ModelIdentity{Model: "model-x", Deployment: "gpu-b"},
 		seg, prompts, shape,
 	)
 	if changedDeployment == a {
-		t.Fatal("deployment label change must change the fingerprint: two " +
+		require.FailNow(t, "deployment label change must change the fingerprint: two "+
 			"deployments can serve different weights under one model name")
 	}
 	changedSeg, _ := Fingerprint(
 		id, TurnsV1{MaxWindowChars: 40000}, prompts, shape,
 	)
 	if changedSeg == a {
-		t.Fatal("segmenter parameter change must change the fingerprint")
+		require.FailNow(t, "segmenter parameter change must change the fingerprint")
 	}
 	changedPrompt, _ := Fingerprint(
 		id, seg,
@@ -159,13 +162,13 @@ func TestFingerprintIsStableAndSensitive(t *testing.T) {
 		shape,
 	)
 	if changedPrompt == a {
-		t.Fatal("prompt change must change the fingerprint")
+		require.FailNow(t, "prompt change must change the fingerprint")
 	}
 	changedTokens, _ := Fingerprint(
 		id, seg, prompts, RequestShape{Temperature: 0, MaxTokens: 512},
 	)
 	if changedTokens == a {
-		t.Fatal("max_tokens change must change the fingerprint")
+		require.FailNow(t, "max_tokens change must change the fingerprint")
 	}
 }
 
@@ -173,7 +176,7 @@ func mustProfile(t *testing.T, name string) Profile {
 	t.Helper()
 	profile, err := ResolveProfile(name, "")
 	if err != nil {
-		t.Fatalf("ResolveProfile(%s): %v", name, err)
+		require.FailNowf(t, "test failed", "ResolveProfile(%s): %v", name, err)
 	}
 	return profile
 }

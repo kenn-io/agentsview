@@ -332,8 +332,7 @@ func parseKiloLegacySession(
 		parsedMessages, totalOutputTok, totalInputTok, peakContextTok,
 			totalCost, hasCost, totalRequests, requestsWithCost,
 			provider, minTS, maxTS,
-			totalCacheReads, totalCacheWrites, parseErr =
-			parseKiloLegacyMessages(msgsBytes, apiModels)
+			totalCacheReads, totalCacheWrites, parseErr = parseKiloLegacyMessages(msgsBytes, apiModels)
 		if parseErr != nil {
 			return nil, nil, fmt.Errorf(
 				"parsing ui_messages.json: %w", parseErr,
@@ -596,8 +595,7 @@ func parseKiloLegacyMessages(
 		// accounting for peak context and aggregate totals.
 		if kiloIsMetadataSay(msg.Say) {
 			if msg.Say == "api_req_started" && msg.Text != "" {
-				ctx, in, out, cost, costPresent, prov, cr, cw, valid :=
-					kiloExtractAPIRequestStats(msg.Text)
+				ctx, in, out, cost, costPresent, prov, cr, cw, valid := kiloExtractAPIRequestStats(msg.Text)
 				if ctx > peakContext {
 					peakContext = ctx
 				}

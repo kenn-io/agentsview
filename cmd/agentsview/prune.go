@@ -93,14 +93,14 @@ type Pruner struct {
 }
 
 // Prune finds matching sessions and deletes them.
-func (p *Pruner) Prune(cfg PruneConfig) error {
+func (p *Pruner) Prune(ctx context.Context, cfg PruneConfig) error {
 	if !cfg.Filter.HasFilters() {
 		return errors.New("at least one filter is required " +
 			"(refusing to prune all sessions)",
 		)
 	}
 
-	candidates, err := p.DB.FindPruneCandidates(cfg.Filter)
+	candidates, err := p.DB.FindPruneCandidates(ctx, cfg.Filter)
 	if err != nil {
 		return fmt.Errorf("finding candidates: %w", err)
 	}
@@ -133,7 +133,7 @@ func (p *Pruner) Prune(cfg PruneConfig) error {
 		ids[i] = s.ID
 	}
 
-	deleted, err := p.DB.DeleteSessions(ids)
+	deleted, err := p.DB.DeleteSessions(ctx, ids)
 	if err != nil {
 		return fmt.Errorf("deleting sessions: %w", err)
 	}
@@ -233,7 +233,7 @@ func formatBytes(b int64) string {
 	}
 }
 
-func runPrune(cfg PruneConfig) {
+func runPrune(ctx context.Context, cfg PruneConfig) {
 	if cfg.Filter.MaxMessages != nil && *cfg.Filter.MaxMessages < 0 {
 		fatal("max-messages must be >= 0")
 	}
@@ -246,18 +246,19 @@ func runPrune(cfg PruneConfig) {
 		log.Fatalf("loading config: %v", err)
 	}
 
-	database, writeLock, err := openWriteDB(context.Background(), appCfg)
+	database, writeLock, err := openWriteDB(ctx, appCfg)
 	if err != nil {
 		log.Fatalf("opening database: %v", err)
 	}
-	defer closeWriteDB(database, writeLock)
 
 	pruner := &Pruner{
 		DB:  database,
 		Out: os.Stdout,
 		In:  os.Stdin,
 	}
-	if err := pruner.Prune(cfg); err != nil {
+	err = pruner.Prune(ctx, cfg)
+	closeWriteDB(database, writeLock)
+	if err != nil {
 		log.Fatalf("prune: %v", err)
 	}
 }

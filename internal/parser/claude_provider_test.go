@@ -17,9 +17,6 @@ import (
 )
 
 func TestClaudeProviderSourceMethods(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	projectDir := "-Users-dev-code-demo"
 	sessionID := "session-main"
@@ -46,73 +43,73 @@ func TestClaudeProviderSourceMethods(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	plan, err := provider.WatchPlan(t.Context())
-	require.NoError(err)
-	require.Len(plan.Roots, 1)
-	assert.Equal(root, plan.Roots[0].Path)
-	assert.True(plan.Roots[0].Recursive)
-	assert.Equal([]string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Equal(t, root, plan.Roots[0].Path)
+	assert.True(t, plan.Roots[0].Recursive)
+	assert.Equal(t, []string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 2)
-	assert.ElementsMatch([]string{sourcePath, subagentPath}, []string{
+	require.NoError(t, err)
+	require.Len(t, discovered, 2)
+	assert.ElementsMatch(t, []string{sourcePath, subagentPath}, []string{
 		discovered[0].DisplayPath,
 		discovered[1].DisplayPath,
 	})
 	for _, source := range discovered {
-		assert.Equal(AgentClaude, source.Provider)
-		assert.Equal(projectDir, source.ProjectHint)
+		assert.Equal(t, AgentClaude, source.Provider)
+		assert.Equal(t, projectDir, source.ProjectHint)
 	}
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "remote~" + sessionID,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(sourcePath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, found.DisplayPath)
 
 	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "agent-worker",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(subagentPath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, subagentPath, found.DisplayPath)
 
 	fingerprint, err := provider.Fingerprint(t.Context(), found)
-	require.NoError(err)
-	assert.Equal(subagentPath, fingerprint.Key)
-	assert.Positive(fingerprint.Size)
-	assert.Positive(fingerprint.MTimeNS)
-	assert.NotEmpty(fingerprint.Hash)
+	require.NoError(t, err)
+	assert.Equal(t, subagentPath, fingerprint.Key)
+	assert.Positive(t, fingerprint.Size)
+	assert.Positive(t, fingerprint.MTimeNS)
+	assert.NotEmpty(t, fingerprint.Hash)
 
 	changed, err := provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: subagentPath, EventKind: "write", WatchRoot: root},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(subagentPath, changed[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, subagentPath, changed[0].DisplayPath)
 
-	require.NoError(os.Remove(sourcePath))
+	require.NoError(t, os.Remove(sourcePath))
 	changed, err = provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(sourcePath, changed[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 
-	require.NoError(os.Remove(subagentPath))
+	require.NoError(t, os.Remove(subagentPath))
 	changed, err = provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: subagentPath, EventKind: "rename", WatchRoot: root},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(subagentPath, changed[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, subagentPath, changed[0].DisplayPath)
 
 	ignored, err := provider.SourcesForChangedPath(
 		t.Context(),
@@ -122,8 +119,8 @@ func TestClaudeProviderSourceMethods(t *testing.T) {
 			WatchRoot: root,
 		},
 	)
-	require.NoError(err)
-	assert.Empty(ignored)
+	require.NoError(t, err)
+	assert.Empty(t, ignored)
 }
 
 func TestClaudeFullParseHonorsContextBetweenLines(t *testing.T) {
@@ -139,9 +136,6 @@ func TestClaudeFullParseHonorsContextBetweenLines(t *testing.T) {
 }
 
 func TestClaudeProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	targetRoot := t.TempDir()
 	projectDir := "-Users-dev-code-demo"
@@ -175,26 +169,26 @@ func TestClaudeProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 2)
-	assert.ElementsMatch([]string{sourcePath, subagentPath}, sourceDisplayPaths(discovered))
+	require.NoError(t, err)
+	require.Len(t, discovered, 2)
+	assert.ElementsMatch(t, []string{sourcePath, subagentPath}, sourceDisplayPaths(discovered))
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: sessionID,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(sourcePath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, found.DisplayPath)
 
 	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "agent-linked",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(subagentPath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, subagentPath, found.DisplayPath)
 }
 
 // A followed project-directory symlink whose target cannot be resolved must
@@ -222,38 +216,32 @@ func TestClaudeProviderStreamingDiscoveryPropagatesProjectSymlinkErrors(t *testi
 	}
 
 	t.Run("dangling project symlink", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		root := t.TempDir()
 		writeSourceFile(t, healthyPath(root), claudeProviderFixture("hello claude"))
 		target := filepath.Join(t.TempDir(), "linked-project")
-		require.NoError(os.MkdirAll(target, 0o755))
+		require.NoError(t, os.MkdirAll(target, 0o755))
 		link := filepath.Join(root, "linked")
 		if err := os.Symlink(target, link); err != nil {
 			t.Skipf("symlink not supported: %v", err)
 		}
-		require.NoError(os.RemoveAll(target))
+		require.NoError(t, os.RemoveAll(target))
 
 		yielded, err := discoverEach(t, root)
 
-		require.Error(err)
-		assert.ErrorIs(err, os.ErrNotExist)
+		require.Error(t, err)
+		require.ErrorIs(t, err, os.ErrNotExist)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 		// The walker records the failure and continues with healthy siblings.
-		assert.Equal([]string{healthyPath(root)}, yielded)
+		assert.Equal(t, []string{healthyPath(root)}, yielded)
 
-		require.NoError(os.Remove(link))
+		require.NoError(t, os.Remove(link))
 		yielded, err = discoverEach(t, root)
-		require.NoError(err)
-		assert.Equal([]string{healthyPath(root)}, yielded)
+		require.NoError(t, err)
+		assert.Equal(t, []string{healthyPath(root)}, yielded)
 	})
 
 	t.Run("unstatable project symlink target", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		if runtime.GOOS == "windows" {
 			t.Skip("directory read permissions are not enforced on Windows")
 		}
@@ -264,40 +252,37 @@ func TestClaudeProviderStreamingDiscoveryPropagatesProjectSymlinkErrors(t *testi
 		writeSourceFile(t, healthyPath(root), claudeProviderFixture("hello claude"))
 		targetParent := t.TempDir()
 		target := filepath.Join(targetParent, "linked-project")
-		require.NoError(os.MkdirAll(target, 0o755))
+		require.NoError(t, os.MkdirAll(target, 0o755))
 		if err := os.Symlink(target, filepath.Join(root, "linked")); err != nil {
 			t.Skipf("symlink not supported: %v", err)
 		}
-		require.NoError(os.Chmod(targetParent, 0o000))
+		require.NoError(t, os.Chmod(targetParent, 0o000))
 		t.Cleanup(func() { _ = os.Chmod(targetParent, 0o755) })
 
 		yielded, err := discoverEach(t, root)
 
-		require.Error(err)
-		assert.ErrorIs(err, os.ErrPermission)
+		require.Error(t, err)
+		require.ErrorIs(t, err, os.ErrPermission)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(err, &incomplete)
-		assert.Equal([]string{healthyPath(root)}, yielded)
+		require.ErrorAs(t, err, &incomplete)
+		assert.Equal(t, []string{healthyPath(root)}, yielded)
 
-		require.NoError(os.Chmod(targetParent, 0o755))
+		require.NoError(t, os.Chmod(targetParent, 0o755))
 		yielded, err = discoverEach(t, root)
-		require.NoError(err)
-		assert.Equal([]string{healthyPath(root)}, yielded)
+		require.NoError(t, err)
+		assert.Equal(t, []string{healthyPath(root)}, yielded)
 	})
 }
 
 func TestClaudeRawCaptureRootReplacementIsIncomplete(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	base := t.TempDir()
 	root := filepath.Join(base, "sessions")
-	require.NoError(os.Mkdir(root, 0o700))
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(t, os.WriteFile(
 		filepath.Join(root, "ignored.txt"), nil, 0o600,
 	))
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 	paused := make(chan struct{})
 	resume := make(chan struct{})
 	progressCalls := 0
@@ -320,21 +305,19 @@ func TestClaudeRawCaptureRootReplacementIsIncomplete(t *testing.T) {
 	}()
 
 	<-paused
-	require.NoError(os.Rename(root, root+"-old"))
-	require.NoError(os.Mkdir(root, 0o700))
+	require.NoError(t, os.Rename(root, root+"-old"))
+	require.NoError(t, os.Mkdir(root, 0o700))
 	close(resume)
 	result := <-resultCh
 
-	require.Error(result.err)
-	assert.ErrorIs(result.err, errStreamingDirectoryChanged)
+	require.Error(t, result.err)
+	require.ErrorIs(t, result.err, errStreamingDirectoryChanged)
 	var incomplete DiscoveryIncompleteError
-	assert.ErrorAs(result.err, &incomplete)
-	assert.False(result.discovery.Complete)
+	require.ErrorAs(t, result.err, &incomplete)
+	assert.False(t, result.discovery.Complete)
 }
 
 func TestClaudeProviderStreamingDiscoveryStopsAfterYieldError(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	for _, project := range []string{"-Users-dev-code-one", "-Users-dev-code-two"} {
 		writeSourceFile(
@@ -343,9 +326,9 @@ func TestClaudeProviderStreamingDiscoveryStopsAfterYieldError(t *testing.T) {
 		)
 	}
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 	discoverer, ok := provider.(StreamingDiscoverer)
-	require.True(ok)
+	require.True(t, ok)
 
 	stop := errors.New("stop discovery")
 	calls := 0
@@ -353,14 +336,11 @@ func TestClaudeProviderStreamingDiscoveryStopsAfterYieldError(t *testing.T) {
 		calls++
 		return stop
 	})
-	require.ErrorIs(err, stop)
+	require.ErrorIs(t, err, stop)
 	assert.Equal(t, 1, calls)
 }
 
 func TestClaudeProviderParse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	projectDir := "-Users-dev-code-demo"
 	sessionID := "session-main"
@@ -371,29 +351,29 @@ func TestClaudeProviderParse(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: SourceFingerprint{Key: sourcePath, Hash: "abc123"},
 	})
-	require.NoError(err)
-	require.True(outcome.ResultSetComplete)
-	require.False(outcome.ForceReplace)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.True(t, outcome.ResultSetComplete)
+	require.False(t, outcome.ForceReplace)
+	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0]
-	assert.Equal(DataVersionCurrent, result.DataVersion)
-	assert.Equal(sessionID, result.Result.Session.ID)
-	assert.Equal(AgentClaude, result.Result.Session.Agent)
-	assert.Equal("demo", result.Result.Session.Project)
-	assert.Equal("devbox", result.Result.Session.Machine)
-	assert.Equal(sourcePath, result.Result.Session.File.Path)
-	assert.Equal("abc123", result.Result.Session.File.Hash)
-	assert.Equal("parse question", result.Result.Session.FirstMessage)
-	assert.Len(result.Result.Messages, 2)
+	assert.Equal(t, DataVersionCurrent, result.DataVersion)
+	assert.Equal(t, sessionID, result.Result.Session.ID)
+	assert.Equal(t, AgentClaude, result.Result.Session.Agent)
+	assert.Equal(t, "demo", result.Result.Session.Project)
+	assert.Equal(t, "devbox", result.Result.Session.Machine)
+	assert.Equal(t, sourcePath, result.Result.Session.File.Path)
+	assert.Equal(t, "abc123", result.Result.Session.File.Hash)
+	assert.Equal(t, "parse question", result.Result.Session.FirstMessage)
+	assert.Len(t, result.Result.Messages, 2)
 }
 
 func TestClaudeProviderParseAdoptsAITitle(t *testing.T) {
@@ -412,9 +392,6 @@ func TestClaudeProviderParseAdoptsAITitle(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			path := filepath.Join(root, "project", "session.jsonl")
 			lines := append([]string{
@@ -423,23 +400,21 @@ func TestClaudeProviderParseAdoptsAITitle(t *testing.T) {
 			}, tt.extra...)
 			writeSourceFile(t, path, strings.Join(lines, "\n")+"\n")
 			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}, Machine: "devbox"})
-			require.True(ok)
+			require.True(t, ok)
 			sources, err := provider.Discover(t.Context())
-			require.NoError(err)
-			require.Len(sources, 1)
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
 			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
-			require.NoError(err)
-			require.Len(outcome.Results, 1)
-			assert.Equal(tt.want, outcome.Results[0].Result.Session.SessionName)
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			assert.Equal(t, tt.want, outcome.Results[0].Result.Session.SessionName)
 			t.Logf("SessionName=%q", outcome.Results[0].Result.Session.SessionName)
-			assert.Equal("First question", outcome.Results[0].Result.Session.FirstMessage)
-			require.Len(outcome.Results[0].Result.Messages, 2)
-			assert.Equal("Answer", outcome.Results[0].Result.Messages[1].Content)
+			assert.Equal(t, "First question", outcome.Results[0].Result.Session.FirstMessage)
+			require.Len(t, outcome.Results[0].Result.Messages, 2)
+			assert.Equal(t, "Answer", outcome.Results[0].Result.Messages[1].Content)
 		})
 	}
 	t.Run("fork title fans out", func(t *testing.T) {
-		require := require.New(t)
-
 		root := t.TempDir()
 		path := filepath.Join(root, "project", "fork.jsonl")
 		lines := []string{buildMetadataLine(map[string]any{
@@ -466,13 +441,13 @@ func TestClaudeProviderParseAdoptsAITitle(t *testing.T) {
 		lines = append(lines, `{"type":"ai-title","aiTitle":"Fork title"}`)
 		writeSourceFile(t, path, strings.Join(lines, "\n")+"\n")
 		provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
-		require.True(ok)
+		require.True(t, ok)
 		sources, err := provider.Discover(t.Context())
-		require.NoError(err)
-		require.Len(sources, 1)
+		require.NoError(t, err)
+		require.Len(t, sources, 1)
 		outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
-		require.NoError(err)
-		require.Len(outcome.Results, 2)
+		require.NoError(t, err)
+		require.Len(t, outcome.Results, 2)
 		for _, result := range outcome.Results {
 			assert.Equal(t, "Fork title", result.Result.Session.SessionName)
 		}
@@ -480,20 +455,17 @@ func TestClaudeProviderParseAdoptsAITitle(t *testing.T) {
 }
 
 func TestClaudeProviderUploadAndTitleBoundaries(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	path := filepath.Join(t.TempDir(), "upload.jsonl")
 	writeSourceFile(t, path, strings.Join([]string{
 		`{"type":"ai-title","aiTitle":"Uploaded title"}`,
 		`{"type":"user","sessionId":"upload-session","isSidechain":false,"message":{"content":"Uploaded question"}}`,
 	}, "\n")+"\n")
 	results, err := parseClaudeSession(path, "uploaded-project", "devbox")
-	require.NoError(err)
-	require.Len(results, 1)
-	assert.Empty(results[0].Session.SessionName)
-	assert.Equal("uploaded-project", results[0].Session.Project)
-	assert.Equal("Uploaded question", results[0].Session.FirstMessage)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Empty(t, results[0].Session.SessionName)
+	assert.Equal(t, "uploaded-project", results[0].Session.Project)
+	assert.Equal(t, "Uploaded question", results[0].Session.FirstMessage)
 }
 
 func TestClaudeProviderIncrementalAITitleEscalation(t *testing.T) {
@@ -589,40 +561,37 @@ func TestClaudeProviderIncrementalAITitleEscalation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			path := filepath.Join(root, "project", "incremental.jsonl")
 			initial := claudeProviderFixture("First question")
 			writeSourceFile(t, path, initial)
 			info, err := os.Stat(path)
-			require.NoError(err)
+			require.NoError(t, err)
 			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = f.WriteString(tt.appended + "\n")
-			require.NoError(err)
-			require.NoError(f.Close())
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
 			current, err := os.Stat(path)
-			require.NoError(err)
+			require.NoError(t, err)
 			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
-			require.True(ok)
+			require.True(t, ok)
 			source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "incremental"})
-			require.NoError(err)
-			require.True(ok)
+			require.NoError(t, err)
+			require.True(t, ok)
 			outcome, status, err := provider.ParseIncremental(t.Context(), IncrementalRequest{
 				Source: source, Fingerprint: SourceFingerprint{Key: path, Size: current.Size()},
 				SessionID: "incremental", Offset: info.Size(), StartOrdinal: 2,
 				StoredSessionName: tt.storedName,
 			})
-			require.NoError(err)
-			assert.Equal(tt.wantStatus, status)
-			assert.Equal(tt.wantForce, outcome.ForceReplace)
-			assert.Equal(tt.wantConsumed, outcome.ConsumedBytes)
-			assert.Len(outcome.Messages, tt.wantMessages)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantStatus, status)
+			assert.Equal(t, tt.wantForce, outcome.ForceReplace)
+			assert.Equal(t, tt.wantConsumed, outcome.ConsumedBytes)
+			assert.Len(t, outcome.Messages, tt.wantMessages)
 			if tt.wantContent != "" {
-				require.Len(outcome.Messages, 1)
-				assert.Equal(tt.wantContent, outcome.Messages[0].Content)
+				require.Len(t, outcome.Messages, 1)
+				assert.Equal(t, tt.wantContent, outcome.Messages[0].Content)
 			}
 			t.Logf("appended=%s status=%s force_replace=%t consumed=%d messages=%d", tt.appended, statusName(status), outcome.ForceReplace, outcome.ConsumedBytes, len(outcome.Messages))
 		})
@@ -630,9 +599,6 @@ func TestClaudeProviderIncrementalAITitleEscalation(t *testing.T) {
 }
 
 func TestClaudeProviderParseResolvesPersistedToolResultsThroughStoredPathResolver(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	projectDir := "demo-project"
 	sessionID := "session-persisted"
@@ -640,9 +606,9 @@ func TestClaudeProviderParseResolvesPersistedToolResultsThroughStoredPathResolve
 	resultPath := filepath.Join(
 		root, projectDir, sessionID, "tool-results", "r1.txt",
 	)
-	require.NoError(os.MkdirAll(filepath.Dir(resultPath), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(resultPath), 0o755))
 	fullOutput := "resolved full output line 1\nresolved full output line 2\n"
-	require.NoError(os.WriteFile(resultPath, []byte(fullOutput), 0o644))
+	require.NoError(t, os.WriteFile(resultPath, []byte(fullOutput), 0o644))
 	// The transcript references the companion through a canonical stored
 	// spelling that no longer matches the on-disk layout; only the caller's
 	// StoredPathResolver can map it back to the physical companion file.
@@ -660,10 +626,10 @@ func TestClaudeProviderParseResolvesPersistedToolResultsThroughStoredPathResolve
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
@@ -677,51 +643,48 @@ func TestClaudeProviderParseResolvesPersistedToolResultsThroughStoredPathResolve
 		},
 	})
 
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 	messages := outcome.Results[0].Result.Messages
-	require.Len(messages, 3)
+	require.Len(t, messages, 3)
 	toolResults := messages[2].ToolResults
-	require.Len(toolResults, 1)
-	assert.Equal(len(fullOutput), toolResults[0].ContentLength)
-	assert.Equal(fullOutput, DecodeContent(toolResults[0].ContentRaw),
+	require.Len(t, toolResults, 1)
+	assert.Equal(t, len(fullOutput), toolResults[0].ContentLength)
+	assert.Equal(t, fullOutput, DecodeContent(toolResults[0].ContentRaw),
 		"a stored persisted-output path must resolve through ParseRequest.StoredPathResolver")
 }
 
 func TestClaudePlanRawCaptureCarriesLineageSiblingInputs(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "demo-project")
-	require.NoError(os.MkdirAll(projectDir, 0o755))
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
 	origPath := filepath.Join(projectDir, "orig-1111.jsonl")
 	forkPath := filepath.Join(projectDir, "fork-2222.jsonl")
 	unrelatedPath := filepath.Join(projectDir, "unrelated-3333.jsonl")
-	require.NoError(os.WriteFile(origPath, []byte(lineageOriginalContent()), 0o644))
-	require.NoError(os.WriteFile(forkPath, []byte(lineageForkContent()), 0o644))
+	require.NoError(t, os.WriteFile(origPath, []byte(lineageOriginalContent()), 0o644))
+	require.NoError(t, os.WriteFile(forkPath, []byte(lineageForkContent()), 0o644))
 	unrelated := strings.Join([]string{
 		lineageUserLine("z1", "", "2026-02-01T10:00:00Z", "unrelated-3333", "", "other root"),
 		lineageAssistantLine("z2", "z1", "2026-02-01T10:00:05Z", "unrelated-3333", "", "msg_z", "other answer", 3),
 	}, "\n") + "\n"
-	require.NoError(os.WriteFile(unrelatedPath, []byte(unrelated), 0o644))
+	require.NoError(t, os.WriteFile(unrelatedPath, []byte(unrelated), 0o644))
 	subagentDir := filepath.Join(projectDir, "fork-2222", "subagents", "agent-4444")
-	require.NoError(os.MkdirAll(subagentDir, 0o755))
+	require.NoError(t, os.MkdirAll(subagentDir, 0o755))
 	subagentPath := filepath.Join(subagentDir, "agent-4444.jsonl")
-	require.NoError(os.WriteFile(subagentPath, []byte(lineageForkContent()), 0o644))
+	require.NoError(t, os.WriteFile(subagentPath, []byte(lineageForkContent()), 0o644))
 
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 4)
+	require.NoError(t, err)
+	require.Len(t, sources, 4)
 	findSource := func(suffix string) SourceRef {
 		for _, source := range sources {
 			if strings.HasSuffix(source.Key, suffix) {
 				return source
 			}
 		}
-		t.Fatalf("source %s not discovered", suffix)
+		require.FailNowf(t, "test failed", "source %s not discovered", suffix)
 		return SourceRef{}
 	}
 
@@ -729,22 +692,22 @@ func TestClaudePlanRawCaptureCarriesLineageSiblingInputs(t *testing.T) {
 	// the original transcript as an appendable lineage input: the original
 	// can keep growing independently of the fork.
 	forkPlan, supported, err := ResolveRawCapturePlan(t.Context(), provider, findSource("fork-2222.jsonl"))
-	require.NoError(err)
-	require.True(supported)
-	require.Len(forkPlan.Entries, 2)
-	assert.Equal("demo-project/fork-2222.jsonl", forkPlan.Entries[0].Path)
-	assert.True(forkPlan.Entries[0].Appendable)
-	assert.Equal("demo-project/orig-1111.jsonl", forkPlan.Entries[1].Path)
-	assert.True(forkPlan.Entries[1].Appendable,
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Len(t, forkPlan.Entries, 2)
+	assert.Equal(t, "demo-project/fork-2222.jsonl", forkPlan.Entries[0].Path)
+	assert.True(t, forkPlan.Entries[0].Appendable)
+	assert.Equal(t, "demo-project/orig-1111.jsonl", forkPlan.Entries[1].Path)
+	assert.True(t, forkPlan.Entries[1].Appendable,
 		"sibling lineage inputs can grow independently of the fork")
 	// Windows temp roots can surface the same physical file under both 8.3
 	// and expanded path spellings, so compare file identity, not strings.
 	assertSameFile := func(want, got string) {
 		wantInfo, err := os.Stat(want)
-		require.NoError(err)
+		require.NoError(t, err)
 		gotInfo, err := os.Stat(got)
-		require.NoError(err)
-		assert.True(os.SameFile(wantInfo, gotInfo),
+		require.NoError(t, err)
+		assert.True(t, os.SameFile(wantInfo, gotInfo),
 			"expected LocalPath %q to refer to %q", got, want)
 	}
 	assertSameFile(forkPath, forkPlan.Entries[0].LocalPath)
@@ -754,24 +717,21 @@ func TestClaudePlanRawCaptureCarriesLineageSiblingInputs(t *testing.T) {
 	// siblings; the unrelated-root transcript and subagent transcripts never
 	// participate in lineage either.
 	origPlan, supported, err := ResolveRawCapturePlan(t.Context(), provider, findSource("orig-1111.jsonl"))
-	require.NoError(err)
-	require.True(supported)
-	require.Len(origPlan.Entries, 1)
-	assert.Equal("demo-project/orig-1111.jsonl", origPlan.Entries[0].Path)
-	assert.True(origPlan.Entries[0].Appendable)
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Len(t, origPlan.Entries, 1)
+	assert.Equal(t, "demo-project/orig-1111.jsonl", origPlan.Entries[0].Path)
+	assert.True(t, origPlan.Entries[0].Appendable)
 
 	subagentPlan, supported, err := ResolveRawCapturePlan(
 		t.Context(), provider, findSource("agent-4444.jsonl"))
-	require.NoError(err)
-	require.True(supported)
-	require.Len(subagentPlan.Entries, 1)
-	assert.True(subagentPlan.Entries[0].Appendable)
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Len(t, subagentPlan.Entries, 1)
+	assert.True(t, subagentPlan.Entries[0].Appendable)
 }
 
 func TestClaudeProviderParseIncremental(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "-Users-dev-code-demo", "inc.jsonl")
 	initial := testjsonl.JoinJSONL(
@@ -780,30 +740,30 @@ func TestClaudeProviderParseIncremental(t *testing.T) {
 	)
 	writeSourceFile(t, sourcePath, initial)
 	info, err := os.Stat(sourcePath)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	appended := testjsonl.JoinJSONL(
 		testjsonl.ClaudeUserJSON("follow up", tsEarlyS5),
 		testjsonl.ClaudeAssistantJSON("got it", tsLate),
 	)
 	f, err := os.OpenFile(sourcePath, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = f.WriteString(appended)
-	require.NoError(err)
-	require.NoError(f.Close())
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 	currentInfo, err := os.Stat(sourcePath)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "inc",
 	})
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	outcome, status, err := provider.ParseIncremental(
 		t.Context(),
@@ -815,23 +775,20 @@ func TestClaudeProviderParseIncremental(t *testing.T) {
 			StartOrdinal: 2,
 		},
 	)
-	require.NoError(err)
-	assert.Equal(IncrementalApplied, status)
-	assert.Equal("inc", outcome.SessionID)
-	assert.Equal(int64(len(appended)), outcome.ConsumedBytes)
-	require.Len(outcome.Messages, 2)
-	assert.Equal(2, outcome.Messages[0].Ordinal)
-	assert.Equal(RoleUser, outcome.Messages[0].Role)
-	assert.Contains(outcome.Messages[0].Content, "follow up")
-	assert.Equal(3, outcome.Messages[1].Ordinal)
-	assert.Equal(RoleAssistant, outcome.Messages[1].Role)
-	assert.Contains(outcome.Messages[1].Content, "got it")
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalApplied, status)
+	assert.Equal(t, "inc", outcome.SessionID)
+	assert.Equal(t, int64(len(appended)), outcome.ConsumedBytes)
+	require.Len(t, outcome.Messages, 2)
+	assert.Equal(t, 2, outcome.Messages[0].Ordinal)
+	assert.Equal(t, RoleUser, outcome.Messages[0].Role)
+	assert.Contains(t, outcome.Messages[0].Content, "follow up")
+	assert.Equal(t, 3, outcome.Messages[1].Ordinal)
+	assert.Equal(t, RoleAssistant, outcome.Messages[1].Role)
+	assert.Contains(t, outcome.Messages[1].Content, "got it")
 }
 
 func TestClaudeProviderParseIncrementalWebSearchResultNeedsFullParse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath := filepath.Join(
 		root, "-Users-dev-code-demo", "inc-web-search.jsonl")
@@ -854,21 +811,21 @@ func TestClaudeProviderParseIncrementalWebSearchResultNeedsFullParse(t *testing.
 			`"toolUseResult":{"query":"q","searchCount":1}}`,
 	)
 	f, err := os.OpenFile(sourcePath, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = f.WriteString(appended)
-	require.NoError(err)
-	require.NoError(f.Close())
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "inc-web-search",
 	})
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	outcome, status, err := provider.ParseIncremental(
 		t.Context(),
@@ -884,16 +841,13 @@ func TestClaudeProviderParseIncrementalWebSearchResultNeedsFullParse(t *testing.
 			LastEntryUUID: "a1",
 		},
 	)
-	require.NoError(err)
-	assert.Equal(IncrementalNeedsFullParse, status)
-	assert.True(outcome.ForceReplace,
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalNeedsFullParse, status)
+	assert.True(t, outcome.ForceReplace,
 		"the stored assistant row must be rewritten with the billed search")
 }
 
 func TestClaudeProviderParseIncrementalPreservesLinkWithoutMessage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "-Users-dev-code-demo", "inc-link-only.jsonl")
 	initial := claudeProviderFixture("hello world")
@@ -901,21 +855,21 @@ func TestClaudeProviderParseIncrementalPreservesLinkWithoutMessage(t *testing.T)
 
 	appended := `{"type":"user","isMeta":true,"timestamp":"2024-01-01T10:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_link_only","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"linkonly"}}` + "\n"
 	f, err := os.OpenFile(sourcePath, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = f.WriteString(appended)
-	require.NoError(err)
-	require.NoError(f.Close())
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "inc-link-only",
 	})
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	outcome, status, err := provider.ParseIncremental(
 		t.Context(),
@@ -930,20 +884,17 @@ func TestClaudeProviderParseIncrementalPreservesLinkWithoutMessage(t *testing.T)
 			StartOrdinal: 2,
 		},
 	)
-	require.NoError(err)
-	assert.Equal(IncrementalApplied, status)
-	assert.Empty(outcome.Messages)
-	assert.Equal(int64(len(appended)), outcome.ConsumedBytes)
-	assert.Equal([]ClaudeSubagentLink{{
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalApplied, status)
+	assert.Empty(t, outcome.Messages)
+	assert.Equal(t, int64(len(appended)), outcome.ConsumedBytes)
+	assert.Equal(t, []ClaudeSubagentLink{{
 		ToolUseID:         "toolu_link_only",
 		SubagentSessionID: "agent-linkonly",
 	}}, outcome.SubagentLinks)
 }
 
 func TestClaudeProviderParseIncrementalTruncatedNeedsFullParse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "-Users-dev-code-demo", "truncated.jsonl")
 	initial := claudeProviderFixture("hello world")
@@ -953,12 +904,12 @@ func TestClaudeProviderParseIncrementalTruncatedNeedsFullParse(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "truncated",
 	})
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	outcome, status, err := provider.ParseIncremental(
 		t.Context(),
@@ -969,15 +920,12 @@ func TestClaudeProviderParseIncrementalTruncatedNeedsFullParse(t *testing.T) {
 			Offset:      int64(len(initial)),
 		},
 	)
-	require.NoError(err)
-	assert.Equal(IncrementalNeedsFullParse, status)
-	assert.True(outcome.ForceReplace)
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalNeedsFullParse, status)
+	assert.True(t, outcome.ForceReplace)
 }
 
 func TestClaudeProviderParseIncrementalEmptyTruncationNeedsFullParse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "-Users-dev-code-demo", "empty-truncated.jsonl")
 	initial := claudeProviderFixture("hello world")
@@ -987,12 +935,12 @@ func TestClaudeProviderParseIncrementalEmptyTruncationNeedsFullParse(t *testing.
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "empty-truncated",
 	})
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	outcome, status, err := provider.ParseIncremental(
 		t.Context(),
@@ -1003,9 +951,9 @@ func TestClaudeProviderParseIncrementalEmptyTruncationNeedsFullParse(t *testing.
 			Offset:      int64(len(initial)),
 		},
 	)
-	require.NoError(err)
-	assert.Equal(IncrementalNeedsFullParse, status)
-	assert.True(outcome.ForceReplace)
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalNeedsFullParse, status)
+	assert.True(t, outcome.ForceReplace)
 }
 
 func claudeProviderFixture(firstMessage string) string {

@@ -645,26 +645,19 @@ func (s *Server) routes() {
 	s.registerTypedAPIRoutes()
 
 	if s.pprofEnabled {
-		s.handleHTTP(&huma.Operation{Path: "/debug/pprof/", Hidden: true}, httppprof.Index)
-		s.handleHTTP(&huma.Operation{Path: "/debug/pprof/cmdline", Hidden: true}, httppprof.Cmdline)
-		s.handleHTTP(&huma.Operation{Path: "/debug/pprof/profile", Hidden: true}, httppprof.Profile)
-		s.handleHTTP(&huma.Operation{Path: "/debug/pprof/symbol", Hidden: true}, httppprof.Symbol)
-		s.handleHTTP(&huma.Operation{Path: "/debug/pprof/trace", Hidden: true}, httppprof.Trace)
+		s.handleHTTP(&huma.Operation{Method: http.MethodGet, Path: "/debug/pprof/", Hidden: true}, httppprof.Index)
+		s.handleHTTP(&huma.Operation{Method: http.MethodGet, Path: "/debug/pprof/cmdline", Hidden: true}, httppprof.Cmdline)
+		s.handleHTTP(&huma.Operation{Method: http.MethodGet, Path: "/debug/pprof/profile", Hidden: true}, httppprof.Profile)
+		s.handleHTTP(&huma.Operation{Method: http.MethodGet, Path: "/debug/pprof/symbol", Hidden: true}, httppprof.Symbol)
+		s.handleHTTP(&huma.Operation{Method: http.MethodPost, Path: "/debug/pprof/symbol", Hidden: true}, httppprof.Symbol)
+		s.handleHTTP(&huma.Operation{Method: http.MethodGet, Path: "/debug/pprof/trace", Hidden: true}, httppprof.Trace)
 	}
 
 	s.registerEvalIngestRoutes()
 
-	if s.artifactExchangeRunner != nil {
-		s.handleHTTP(
-			s.api.OpenAPI().Paths["/api/v1/artifacts/exchange"].Post,
-			s.handleArtifactExchange,
-		)
-	}
-	s.registerStartupProbeRoute()
-
 	// SPA fallback: serve embedded frontend
 	// Do not use timeout handler for static assets to avoid buffering.
-	s.handleHTTP(&huma.Operation{Path: "/", Hidden: true}, s.handleSPA)
+	s.handleHTTP(&huma.Operation{Method: http.MethodGet, Path: "/", Hidden: true}, s.handleSPA)
 }
 
 func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
@@ -1314,26 +1307,26 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // FindAvailablePort finds an available port starting from the given port,
 // binding to the specified host. It returns an error instead of reusing an
 // occupied port when the candidate range is exhausted.
-func FindAvailablePort(host string, start int) (int, error) {
-	return findAvailablePort(host, start, selectEphemeralPort)
+func FindAvailablePort(ctx context.Context, host string, start int) (int, error) {
+	return findAvailablePort(ctx, host, start, selectEphemeralPort)
 }
 
-func findAvailablePort(
+func findAvailablePort(ctx context.Context,
 	host string,
 	start int,
-	selectEphemeral func(string) (int, error),
+	selectEphemeral func(context.Context, string) (int, error),
 ) (int, error) {
 	if start == 0 {
 		if !isWildcardListenHost(host) {
-			return selectEphemeral(host)
+			return selectEphemeral(ctx, host)
 		}
-		probes := listenProbes(host)
+		probes := listenProbes(ctx, host)
 		for range 100 {
-			port, err := selectEphemeral(host)
+			port, err := selectEphemeral(ctx, host)
 			if err != nil {
 				return 0, err
 			}
-			if listenProbesFree(probes, port) {
+			if listenProbesFree(ctx, probes, port) {
 				return port, nil
 			}
 		}
@@ -1342,10 +1335,10 @@ func findAvailablePort(
 		)
 	}
 
-	probes := listenProbes(host)
+	probes := listenProbes(ctx, host)
 	last := min(start+99, 65535)
 	for port := start; port <= last; port++ {
-		if listenProbesFree(probes, port) {
+		if listenProbesFree(ctx, probes, port) {
 			return port, nil
 		}
 	}
@@ -1354,9 +1347,9 @@ func findAvailablePort(
 	)
 }
 
-func selectEphemeralPort(host string) (int, error) {
+func selectEphemeralPort(ctx context.Context, host string) (int, error) {
 	addr := net.JoinHostPort(host, "0")
-	ln, err := net.Listen("tcp", addr)
+	ln, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
 	if err != nil {
 		return 0, fmt.Errorf("select ephemeral port on %s: %w", host, err)
 	}
@@ -1383,7 +1376,7 @@ func isWildcardListenHost(host string) bool {
 // other (observed on macOS), handing out a port the server cannot fully
 // claim. A family that cannot bind at all (for example IPv6-disabled
 // hosts) is excluded from the check rather than treated as occupied.
-func listenProbes(host string) []listenProbe {
+func listenProbes(ctx context.Context, host string) []listenProbe {
 	if !isWildcardListenHost(host) {
 		return []listenProbe{{network: "tcp", host: host}}
 	}
@@ -1392,7 +1385,7 @@ func listenProbes(host string) []listenProbe {
 		{network: "tcp4", host: "0.0.0.0"},
 		{network: "tcp6", host: "::"},
 	} {
-		ln, err := net.Listen(probe.network, net.JoinHostPort(probe.host, "0"))
+		ln, err := (&net.ListenConfig{}).Listen(ctx, probe.network, net.JoinHostPort(probe.host, "0"))
 		if err != nil {
 			continue
 		}
@@ -1405,10 +1398,10 @@ func listenProbes(host string) []listenProbe {
 	return probes
 }
 
-func listenProbesFree(probes []listenProbe, port int) bool {
+func listenProbesFree(ctx context.Context, probes []listenProbe, port int) bool {
 	for _, probe := range probes {
 		addr := net.JoinHostPort(probe.host, strconv.Itoa(port))
-		ln, err := net.Listen(probe.network, addr)
+		ln, err := (&net.ListenConfig{}).Listen(ctx, probe.network, addr)
 		if err != nil {
 			return false
 		}
@@ -1530,7 +1523,7 @@ func isAllowedBindAllOrigin(origin string, port int, allowedIPs map[string]bool)
 		return false
 	}
 	gotPort := u.Port()
-	portOK := false
+	var portOK bool
 	if port == 80 {
 		portOK = gotPort == "" || gotPort == "80"
 	} else {

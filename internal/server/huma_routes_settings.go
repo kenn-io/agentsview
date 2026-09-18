@@ -352,7 +352,7 @@ func (s *Server) humaApplyWorktreeMappings(
 	if in.Body.Machine != nil && strings.TrimSpace(*in.Body.Machine) != "" {
 		machine = strings.TrimSpace(*in.Body.Machine)
 	}
-	result, err := s.syncEngineForLocal(localDB).ApplyWorktreeProjectMappings(ctx, machine)
+	result, err := s.syncEngineForLocal(ctx, localDB).ApplyWorktreeProjectMappings(ctx, machine)
 	if err != nil {
 		return nil, internalError("apply worktree mappings", err)
 	}
@@ -405,7 +405,7 @@ func (s *Server) humaReclassifyWorktreeProject(
 	if err != nil {
 		return nil, humaWorktreeReclassificationError(err)
 	}
-	mapping, result, err := s.syncEngineForLocal(localDB).ApplyWorktreeReclassification(
+	mapping, result, err := s.syncEngineForLocal(ctx, localDB).ApplyWorktreeReclassification(
 		ctx, draft, in.Body.MappingToken, current.ExistingMappingID,
 	)
 	if err != nil {
@@ -424,7 +424,7 @@ func (s *Server) humaAssignSessionProject(
 	if err != nil {
 		return nil, err
 	}
-	assignment, err := s.syncEngineForLocal(localDB).AssignSessionProject(
+	assignment, err := s.syncEngineForLocal(ctx, localDB).AssignSessionProject(
 		ctx, in.SessionID, in.Body.Project,
 	)
 	if err != nil {
@@ -448,7 +448,7 @@ func (s *Server) humaClearSessionProjectAssignment(
 	if err != nil {
 		return nil, err
 	}
-	cleared, err := s.syncEngineForLocal(localDB).ClearSessionProjectAssignment(
+	cleared, err := s.syncEngineForLocal(ctx, localDB).ClearSessionProjectAssignment(
 		ctx, in.SessionID,
 	)
 	if err != nil {

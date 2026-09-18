@@ -479,16 +479,14 @@ func TestMacroCodexStagedParseMemoryGates(t *testing.T) {
 				func(verdicts map[string]bool) (
 					db.SessionSignalUpdate, []db.SecretFinding, error,
 				) {
-					update, findings :=
-						computeSignalsAndSecretsWithContentFailures(
-							row, dbMsgs, verdicts,
-						)
+					update, findings := computeSignalsAndSecretsWithContentFailures(
+						row, dbMsgs, verdicts,
+					)
 					combined := append(
 						append([]db.SecretFinding(nil), findings...),
 						staged.Findings(row.ID, positions)...,
 					)
-					update.SecretLeakCount =
-						definiteFindingCount(combined)
+					update.SecretLeakCount = definiteFindingCount(combined)
 					return update, combined, nil
 				},
 			))
@@ -637,10 +635,9 @@ func TestMacroCodexStaged64MBLine(t *testing.T) {
 		func(verdicts map[string]bool) (
 			db.SessionSignalUpdate, []db.SecretFinding, error,
 		) {
-			update, findings :=
-				computeSignalsAndSecretsWithContentFailures(
-					row, dbMsgs, verdicts,
-				)
+			update, findings := computeSignalsAndSecretsWithContentFailures(
+				row, dbMsgs, verdicts,
+			)
 			combined := append(
 				append([]db.SecretFinding(nil), findings...),
 				staged.Findings(row.ID, positions)...,

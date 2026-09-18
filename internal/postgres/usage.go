@@ -1166,8 +1166,7 @@ func pgDailyUsageAmounts(
 	cost, savings money.Money,
 	err error,
 ) {
-	inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok :=
-		pgDailyUsageRowTokens(r)
+	inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok := pgDailyUsageRowTokens(r)
 	cacheCr1hTok := pgUsageRowCacheCreation1hTokens(
 		r.usageSource, r.tokenJSON, cacheCrTok)
 
@@ -1271,11 +1270,10 @@ func pgDailyUsageRowTokens(
 		cacheRdTok = pgTokenJSONCount(usage, "cache_read_input_tokens")
 		reasoningTok = pgTokenJSONCount(usage, "reasoning_tokens")
 	} else {
-		inputTok, outputTok, cacheCrTok, cacheRdTok =
-			pgUsageEventRowTokens(
-				r.usageSource,
-				r.inputTokens, r.outputTokens,
-				r.cacheCreationInputTokens, r.cacheReadInputTokens)
+		inputTok, outputTok, cacheCrTok, cacheRdTok = pgUsageEventRowTokens(
+			r.usageSource,
+			r.inputTokens, r.outputTokens,
+			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 	return
 }
@@ -1622,8 +1620,7 @@ func (s *Store) GetSessionUsage(
 			ClaudeRequestID: r.claudeRequestID,
 		}
 	}
-	snapshotMask, _, snapshotWebSearchRequests :=
-		activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
+	snapshotMask, _, snapshotWebSearchRequests := activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
 	deduplicatedOutputTokens := 0
 	seen := make(map[pgUsageDedupToken]struct{})
 	for i, r := range usageRows {
@@ -1648,9 +1645,8 @@ func (s *Store) GetSessionUsage(
 			authoritativeCost = &v
 			costRow.cost = sql.NullInt64{}
 		}
-		c, priced, contributes, priceErr :=
-			pgSessionRowCostWithWebSearchRequests(
-				costRow, snapshotWebSearchRequests[i], rateResolver)
+		c, priced, contributes, priceErr := pgSessionRowCostWithWebSearchRequests(
+			costRow, snapshotWebSearchRequests[i], rateResolver)
 		if priceErr != nil {
 			return nil, priceErr
 		}
@@ -1825,8 +1821,7 @@ func (s *Store) GetDailyUsage(
 			projectLabels[r.project] = struct{}{}
 		}
 
-		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings, priceErr :=
-			pgDailyUsageAmounts(r, rateResolver)
+		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings, priceErr := pgDailyUsageAmounts(r, rateResolver)
 		if priceErr != nil {
 			return db.DailyUsageResult{}, priceErr
 		}
@@ -2388,8 +2383,7 @@ func (s *Store) GetTopSessionsByCost(
 			seen[key] = struct{}{}
 		}
 
-		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, _, priceErr :=
-			pgDailyUsageAmounts(r, rateResolver)
+		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, _, priceErr := pgDailyUsageAmounts(r, rateResolver)
 		if priceErr != nil {
 			return nil, priceErr
 		}

@@ -682,7 +682,7 @@ func (s *Server) humaOpenSession(
 		return nil, apiError(http.StatusBadRequest,
 			fmt.Sprintf("opener %q not found", in.Body.OpenerID))
 	}
-	if err := launchOpener(*opener, projectDir); err != nil {
+	if err := launchOpener(ctx, *opener, projectDir); err != nil {
 		return nil, apiError(http.StatusInternalServerError, "failed to launch")
 	}
 	return &jsonOutput[openSessionResponse]{
@@ -754,7 +754,7 @@ func (s *Server) humaRenameSession(
 	if displayName != nil && *displayName == "" {
 		displayName = nil
 	}
-	if err := s.db.RenameSession(in.ID, displayName); err != nil {
+	if err := s.db.RenameSession(ctx, in.ID, displayName); err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
 		}
@@ -782,7 +782,7 @@ func (s *Server) humaDeleteSession(
 	if session == nil {
 		return nil, apiError(http.StatusNotFound, "session not found")
 	}
-	if err := s.db.SoftDeleteSession(in.ID); err != nil {
+	if err := s.db.SoftDeleteSession(ctx, in.ID); err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
 		}
@@ -806,14 +806,13 @@ func (s *Server) notifySessionMutation() {
 	}
 }
 
-func (s *Server) humaBatchDeleteSessions(
-	_ context.Context,
+func (s *Server) humaBatchDeleteSessions(ctx context.Context,
 	in *batchDeleteInput,
 ) (*noContentOutput, error) {
 	if len(in.Body.SessionIDs) == 0 {
 		return &noContentOutput{Status: http.StatusNoContent}, nil
 	}
-	if _, err := s.db.SoftDeleteSessions(in.Body.SessionIDs); err != nil {
+	if _, err := s.db.SoftDeleteSessions(ctx, in.Body.SessionIDs); err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
 		}
@@ -823,11 +822,10 @@ func (s *Server) humaBatchDeleteSessions(
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }
 
-func (s *Server) humaRestoreSession(
-	_ context.Context,
+func (s *Server) humaRestoreSession(ctx context.Context,
 	in *idPathInput,
 ) (*noContentOutput, error) {
-	n, err := s.db.RestoreSession(in.ID)
+	n, err := s.db.RestoreSession(ctx, in.ID)
 	if err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
@@ -841,11 +839,10 @@ func (s *Server) humaRestoreSession(
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }
 
-func (s *Server) humaPermanentDeleteSession(
-	_ context.Context,
+func (s *Server) humaPermanentDeleteSession(ctx context.Context,
 	in *idPathInput,
 ) (*noContentOutput, error) {
-	n, err := s.db.DeleteSessionIfTrashed(in.ID)
+	n, err := s.db.DeleteSessionIfTrashed(ctx, in.ID)
 	if err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
@@ -870,11 +867,10 @@ func (s *Server) humaListTrash(
 	return &jsonOutput[trashResponse]{Body: trashResponse{Sessions: sessions}}, nil
 }
 
-func (s *Server) humaEmptyTrash(
-	_ context.Context,
+func (s *Server) humaEmptyTrash(ctx context.Context,
 	_ *emptyInput,
 ) (*jsonOutput[emptyTrashResponse], error) {
-	count, err := s.db.EmptyTrash()
+	count, err := s.db.EmptyTrash(ctx)
 	if err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
@@ -980,7 +976,7 @@ func (s *Server) humaWatchSession(
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
 			writeHumaJSON(hctx, http.StatusInternalServerError,
-				apiErrorResponse{Message: "streaming not supported"})
+				apiResponseError{Message: "streaming not supported"})
 			return
 		}
 		streamCtx := hctx.Context()
@@ -1029,7 +1025,7 @@ func (s *Server) humaEvents(
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
 			writeHumaJSON(hctx, http.StatusInternalServerError,
-				apiErrorResponse{Message: "streaming not supported"})
+				apiResponseError{Message: "streaming not supported"})
 			return
 		}
 		sub, unsub := s.broadcaster.Subscribe()
@@ -1128,7 +1124,7 @@ func (s *Server) humaUploadSession(
 	}
 	var commitErr error
 	var uploadCommit committedUpload
-	_, err = s.db.WriteSessionBatchAtomic(writes, func() error {
+	_, err = s.db.WriteSessionBatchAtomic(ctx, writes, func() error {
 		uploadCommit, commitErr = commitUpload(upload)
 		return commitErr
 	})
@@ -1197,13 +1193,13 @@ func (s *Server) humaResumeSession(
 	if host != "" && (!req.CommandOnly || req.FromOrdinal != nil) {
 		return nil, apiError(http.StatusBadRequest, "cannot resume remote session")
 	}
-	tmpl, ok := resumeAgents[string(session.Agent)]
+	tmpl, ok := resumeAgents[session.Agent]
 	if !ok {
 		return nil, apiError(http.StatusBadRequest,
 			fmt.Sprintf("agent %q does not support resume", session.Agent))
 	}
 	if req.FromOrdinal != nil {
-		if string(session.Agent) != "claude" {
+		if session.Agent != "claude" {
 			return nil, apiError(http.StatusBadRequest,
 				"message-point fork is only available for Claude sessions")
 		}
@@ -1274,7 +1270,7 @@ func (s *Server) humaResumeSession(
 		detectCwd := launchDir
 		if termCfg.Mode == string(terminalModeAuto) {
 			detectCwd = resumeLaunchCwd(
-				string(session.Agent), "auto", runtime.GOOS, launchDir,
+				session.Agent, "auto", runtime.GOOS, launchDir,
 			)
 		}
 		termBin, termArgs, termName, termErr := detectTerminal(
@@ -1291,7 +1287,11 @@ func (s *Server) humaResumeSession(
 				},
 			}, nil
 		}
-		proc := exec.CommandContext(ctx, termBin, termArgs...)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		// A resumed terminal belongs to the user and outlives this request.
+		proc := exec.CommandContext(context.WithoutCancel(ctx), termBin, termArgs...)
 		proc.Stdout = nil
 		proc.Stderr = nil
 		proc.Stdin = nil
@@ -1319,14 +1319,14 @@ func (s *Server) humaResumeSession(
 			},
 		}, nil
 	}
-	prefix := string(session.Agent) + ":"
+	prefix := session.Agent + ":"
 	rawID = strings.TrimPrefix(rawID, prefix)
 	if s.db.ReadOnly() && !req.CommandOnly {
 		return nil, apiError(http.StatusNotImplemented,
 			"session launch not available in remote mode")
 	}
 	model := ""
-	if resumeAgentNeedsModel(string(session.Agent)) {
+	if resumeAgentNeedsModel(session.Agent) {
 		counts, err := s.db.GetResumeModelCounts(ctx, session.ID)
 		if err != nil {
 			return nil, internalError("resume: model lookup failed", err)
@@ -1341,8 +1341,8 @@ func (s *Server) humaResumeSession(
 			resumeTarget = strings.TrimPrefix(resumeTarget, host+":")
 		}
 	}
-	cmd := resumeCommand(string(session.Agent), tmpl, resumeTarget, model)
-	if string(session.Agent) == "claude" {
+	cmd := resumeCommand(session.Agent, tmpl, resumeTarget, model)
+	if session.Agent == "claude" {
 		if req.SkipPermissions {
 			cmd += " --dangerously-skip-permissions"
 		}
@@ -1356,11 +1356,11 @@ func (s *Server) humaResumeSession(
 	} else {
 		launchDir, workspaceDir = resolveResumePaths(session)
 	}
-	if string(session.Agent) == "cursor" && workspaceDir != "" {
+	if session.Agent == "cursor" && workspaceDir != "" {
 		cmd += " --workspace " + shellQuote(workspaceDir)
 	}
 	responseCmd := cmd
-	switch string(session.Agent) {
+	switch session.Agent {
 	case "claude", "kiro", "pi":
 		if host != "" {
 			responseCmd = commandWithDir(cmd, launchDir)
@@ -1378,7 +1378,7 @@ func (s *Server) humaResumeSession(
 		}, nil
 	}
 	if req.OpenerID != "" {
-		return s.humaResumeWithOpener(session, rawID, cmd, responseCmd, launchDir, req.OpenerID)
+		return s.humaResumeWithOpener(ctx, session, rawID, cmd, responseCmd, launchDir, req.OpenerID)
 	}
 	s.mu.RLock()
 	termCfg := s.cfg.Terminal
@@ -1395,7 +1395,7 @@ func (s *Server) humaResumeSession(
 	detectCwd := launchDir
 	if termCfg.Mode == string(terminalModeAuto) {
 		detectCwd = resumeLaunchCwd(
-			string(session.Agent), "auto", runtime.GOOS, launchDir,
+			session.Agent, "auto", runtime.GOOS, launchDir,
 		)
 	}
 	termBin, termArgs, termName, termErr := detectTerminal(cmd, detectCwd, termCfg)
@@ -1410,7 +1410,11 @@ func (s *Server) humaResumeSession(
 			},
 		}, nil
 	}
-	proc := exec.CommandContext(ctx, termBin, termArgs...)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// A resumed terminal belongs to the user and outlives this request.
+	proc := exec.CommandContext(context.WithoutCancel(ctx), termBin, termArgs...)
 	proc.Stdout = nil
 	proc.Stderr = nil
 	proc.Stdin = nil
@@ -1439,7 +1443,7 @@ func (s *Server) humaResumeSession(
 	}, nil
 }
 
-func (s *Server) humaResumeWithOpener(
+func (s *Server) humaResumeWithOpener(ctx context.Context,
 	session *db.Session,
 	rawID string,
 	cmd string,
@@ -1460,11 +1464,14 @@ func (s *Server) humaResumeWithOpener(
 			fmt.Sprintf("opener %q not found", openerID))
 	}
 	if opener.ID == "claude-desktop" {
-		if string(session.Agent) != "claude" {
+		if session.Agent != "claude" {
 			return nil, apiError(http.StatusBadRequest,
 				"Claude Desktop resume only supports Claude sessions")
 		}
-		proc := launchClaudeDesktop(rawID, launchDir)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		proc := launchClaudeDesktop(context.WithoutCancel(ctx), rawID, launchDir)
 		if err := proc.Start(); err != nil {
 			log.Printf("resume: Claude Desktop launch failed: %v", err)
 			return &jsonOutput[resumeResponse]{
@@ -1487,9 +1494,12 @@ func (s *Server) humaResumeWithOpener(
 		}, nil
 	}
 	openerCwd := resumeLaunchCwd(
-		string(session.Agent), opener.ID, runtime.GOOS, launchDir,
+		session.Agent, opener.ID, runtime.GOOS, launchDir,
 	)
-	proc := launchResumeInOpener(*opener, cmd, openerCwd)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	proc := launchResumeInOpener(context.WithoutCancel(ctx), *opener, cmd, openerCwd)
 	if proc == nil {
 		return &jsonOutput[resumeResponse]{
 			Body: resumeResponse{

@@ -10,18 +10,16 @@ import (
 )
 
 func TestRawIngestAppendOnlyUnsupportedClassifiesFeatureErrors(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 
 	unsupported := &pgconn.PgError{Code: "0A000"}
-	assert.True(rawIngestAppendOnlyUnsupported(unsupported))
-	assert.True(rawIngestAppendOnlyUnsupported(
+	assert.True(t, rawIngestAppendOnlyUnsupported(unsupported))
+	assert.True(t, rawIngestAppendOnlyUnsupported(
 		fmt.Errorf("installing trigger: %w", unsupported),
 	))
-	assert.True(rawIngestAppendOnlyUnsupported(errors.New(
+	assert.True(t, rawIngestAppendOnlyUnsupported(errors.New(
 		"ERROR: unimplemented PL/pgSQL (SQLSTATE 0A000)",
 	)))
-	assert.False(rawIngestAppendOnlyUnsupported(&pgconn.PgError{Code: "42501"}))
-	assert.False(rawIngestAppendOnlyUnsupported(errors.New("connection closed")))
+	assert.False(t, rawIngestAppendOnlyUnsupported(&pgconn.PgError{Code: "42501"}))
+	assert.False(t, rawIngestAppendOnlyUnsupported(errors.New("connection closed")))
 }

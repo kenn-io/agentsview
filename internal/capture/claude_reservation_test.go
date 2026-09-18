@@ -11,8 +11,6 @@ import (
 )
 
 func TestClaudeSessionReservationCrossesProcesses(t *testing.T) {
-	require := require.New(t)
-
 	if os.Getenv("AGENTSVIEW_CAPTURE_RESERVATION_PROBE") == "1" {
 		reservation, err := reserveClaudeSession(
 			t.Context(),
@@ -33,7 +31,7 @@ func TestClaudeSessionReservationCrossesProcesses(t *testing.T) {
 	reservation, err := reserveClaudeSession(
 		t.Context(), root, sessionID,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	t.Cleanup(reservation.close)
 
 	command := func() *exec.Cmd {
@@ -47,10 +45,10 @@ func TestClaudeSessionReservationCrossesProcesses(t *testing.T) {
 		return cmd
 	}
 	output, err := command().CombinedOutput()
-	require.Error(err)
+	require.Error(t, err)
 	assert.Contains(t, string(output), "already reserved")
 
 	reservation.close()
 	output, err = command().CombinedOutput()
-	require.NoError(err, string(output))
+	require.NoError(t, err, string(output))
 }

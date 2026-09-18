@@ -46,7 +46,7 @@ func TestBrowserURLWithPlatformKeepsLoopbackOutsideWSL(t *testing.T) {
 		cfg,
 		func() bool { return false },
 		func(string) (string, bool) {
-			t.Fatal("interface lookup should not run outside WSL")
+			assert.Fail(t, "interface lookup should not run outside WSL")
 			return "", false
 		},
 	)
@@ -152,13 +152,11 @@ func TestValidateServeConfigNonLoopbackHostGuardrail(t *testing.T) {
 }
 
 func TestValidateServeConfigManagedCaddyRequiresAllowlistForNonLoopbackBind(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	certPath := filepath.Join(dir, "viewer.crt")
 	keyPath := filepath.Join(dir, "viewer.key")
-	require.NoError(os.WriteFile(certPath, []byte("cert"), 0o600))
-	require.NoError(os.WriteFile(keyPath, []byte("key"), 0o600))
+	require.NoError(t, os.WriteFile(certPath, []byte("cert"), 0o600))
+	require.NoError(t, os.WriteFile(keyPath, []byte("key"), 0o600))
 
 	cfg := config.Config{
 		Host:      "127.0.0.1",
@@ -173,7 +171,7 @@ func TestValidateServeConfigManagedCaddyRequiresAllowlistForNonLoopbackBind(t *t
 		},
 	}
 	err := validateServeConfig(cfg)
-	require.Error(err, "expected non-loopback bind allowlist error")
+	require.Error(t, err, "expected non-loopback bind allowlist error")
 	assert.Contains(t, err.Error(), "allowed_subnet")
 }
 
@@ -264,8 +262,6 @@ func TestPrepareManagedCaddyConfigForPGServeUsesNamespacedPathAndBackend(t *test
 }
 
 func TestRewriteConfiguredPublicURLPort_RewritesMatchingExplicitPort(t *testing.T) {
-	assert := assert.New(t)
-
 	updatedURL, updatedOrigins, changed, err := rewriteConfiguredPublicURLPort(
 		"http://viewer.example.test:8004",
 		[]string{"http://viewer.example.test:8004"},
@@ -273,15 +269,13 @@ func TestRewriteConfiguredPublicURLPort_RewritesMatchingExplicitPort(t *testing.
 		8005,
 	)
 	require.NoError(t, err)
-	assert.True(changed, "expected public URL rewrite")
-	assert.Equal("http://viewer.example.test:8005", updatedURL)
-	assert.Equal("http://viewer.example.test:8005",
+	assert.True(t, changed, "expected public URL rewrite")
+	assert.Equal(t, "http://viewer.example.test:8005", updatedURL)
+	assert.Equal(t, "http://viewer.example.test:8005",
 		strings.Join(updatedOrigins, ","))
 }
 
 func TestRewriteConfiguredPublicURLPort_PreservesExternalProxyPort(t *testing.T) {
-	assert := assert.New(t)
-
 	updatedURL, updatedOrigins, changed, err := rewriteConfiguredPublicURLPort(
 		"https://viewer.example.test",
 		[]string{"https://viewer.example.test"},
@@ -289,9 +283,9 @@ func TestRewriteConfiguredPublicURLPort_PreservesExternalProxyPort(t *testing.T)
 		8081,
 	)
 	require.NoError(t, err)
-	assert.False(changed, "expected public URL to remain unchanged")
-	assert.Equal("https://viewer.example.test", updatedURL)
-	assert.Equal("https://viewer.example.test",
+	assert.False(t, changed, "expected public URL to remain unchanged")
+	assert.Equal(t, "https://viewer.example.test", updatedURL)
+	assert.Equal(t, "https://viewer.example.test",
 		strings.Join(updatedOrigins, ","))
 }
 

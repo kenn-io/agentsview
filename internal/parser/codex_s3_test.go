@@ -9,8 +9,6 @@ import (
 )
 
 func TestDiscoverCodexS3RequiresFullRootPrefix(t *testing.T) {
-	assert := assert.New(t)
-
 	oldList := listS3Objects
 	t.Cleanup(func() { listS3Objects = oldList })
 
@@ -38,14 +36,12 @@ func TestDiscoverCodexS3RequiresFullRootPrefix(t *testing.T) {
 
 	got := s3PrefixScan("s3://bucket/root/codex", codexS3Scanner())
 	require.Len(t, got, 1)
-	assert.Equal("s3://bucket/root/codex/2026/06/24/rollout-2026-06-24T00-00-00-good.jsonl", got[0].Path)
-	assert.Equal(int64(11), got[0].SourceSize)
-	assert.Equal(mtime.UnixNano(), got[0].SourceMtime)
+	assert.Equal(t, "s3://bucket/root/codex/2026/06/24/rollout-2026-06-24T00-00-00-good.jsonl", got[0].Path)
+	assert.Equal(t, int64(11), got[0].SourceSize)
+	assert.Equal(t, mtime.UnixNano(), got[0].SourceMtime)
 }
 
 func TestDiscoverCodexS3KeepsSessionIndexMetadataSeparate(t *testing.T) {
-	assert := assert.New(t)
-
 	oldList := listS3Objects
 	oldStat := statS3Object
 	t.Cleanup(func() {
@@ -74,11 +70,11 @@ func TestDiscoverCodexS3KeepsSessionIndexMetadataSeparate(t *testing.T) {
 	got := s3PrefixScan(root, codexS3Scanner())
 
 	require.Len(t, got, 1)
-	assert.Equal(rolloutURI, got[0].Path)
-	assert.Equal(int64(11), got[0].SourceSize)
-	assert.Equal(rolloutMtime.UnixNano(), got[0].SourceMtime)
-	assert.Contains(got[0].SourceFingerprint, "rollout")
-	assert.NotContains(got[0].SourceFingerprint, "index")
+	assert.Equal(t, rolloutURI, got[0].Path)
+	assert.Equal(t, int64(11), got[0].SourceSize)
+	assert.Equal(t, rolloutMtime.UnixNano(), got[0].SourceMtime)
+	assert.Contains(t, got[0].SourceFingerprint, "rollout")
+	assert.NotContains(t, got[0].SourceFingerprint, "index")
 }
 
 func TestCodexS3SessionIndexURIPrefersRawCodexLayout(t *testing.T) {

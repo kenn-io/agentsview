@@ -38,10 +38,9 @@ func WriteTestFile(
 // owning *sql.DB has been closed. A runtime.GC() runs first so
 // any finalizer-driven stmt cleanup in mattn/go-sqlite3 releases
 // its file handles before the directory removal is attempted.
-func MkdirTempWithCleanup(t *testing.T, pattern string) string {
+func MkdirTempWithCleanup(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", pattern)
-	require.NoError(t, err, "creating temp dir")
+	dir := t.TempDir()
 	t.Cleanup(func() {
 		runtime.GC()
 		assert.EventuallyWithT(t, func(collect *assert.CollectT) {
@@ -55,7 +54,7 @@ func MkdirTempWithCleanup(t *testing.T, pattern string) string {
 // The database is automatically closed when the test completes.
 func OpenTestDB(t *testing.T) *db.DB {
 	t.Helper()
-	dir := MkdirTempWithCleanup(t, "agentsview-dbtest-*")
+	dir := MkdirTempWithCleanup(t)
 	return OpenTestDBAt(t, filepath.Join(dir, "test.db"))
 }
 
@@ -65,10 +64,8 @@ func OpenTestDB(t *testing.T) *db.DB {
 func OpenTestDBAt(t *testing.T, path string) *db.DB {
 	t.Helper()
 	EnsureTestDBAt(t, path)
-	d, err := db.Open(path)
-	if err != nil {
-		t.Fatalf("opening test db: %v", err)
-	}
+	d, err := db.Open(t.Context(), path)
+	require.NoError(t, err, "opening test db")
 	t.Cleanup(func() { d.Close() })
 	return d
 }
@@ -78,7 +75,9 @@ func OpenTestDBAt(t *testing.T, path string) *db.DB {
 // and add more fixture rows without losing earlier writes.
 func EnsureTestDBAt(t *testing.T, path string) {
 	t.Helper()
-	ensureTestDBAtWith(t, path, copyTestDBTemplate)
+	ensureTestDBAtWith(t, path, func(path string) error {
+		return copyTestDBTemplate(t.Context(), path)
+	})
 }
 
 func ensureTestDBAtWith(
@@ -90,7 +89,7 @@ func ensureTestDBAtWith(
 		return
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("checking test db %s: %v", path, err)
+		require.NoError(t, err, "checking test db %s", path)
 	}
 	if err := copyTemplate(path); err != nil {
 		// The shared template is only a setup-cost optimization.
@@ -101,12 +100,10 @@ func ensureTestDBAtWith(
 		for _, suffix := range []string{"", "-wal", "-shm"} {
 			_ = os.Remove(path + suffix)
 		}
-		d, openErr := db.Open(path)
-		if openErr != nil {
-			t.Fatalf("creating test db from scratch: %v", openErr)
-		}
+		d, openErr := db.Open(t.Context(), path)
+		require.NoError(t, openErr, "creating test db from scratch")
 		if closeErr := d.Close(); closeErr != nil {
-			t.Fatalf("closing scratch test db: %v", closeErr)
+			require.NoError(t, closeErr, "closing scratch test db")
 		}
 	}
 }
@@ -114,15 +111,15 @@ func ensureTestDBAtWith(
 var (
 	testDBTemplateOnce  sync.Once
 	testDBTemplateFiles map[string][]byte
-	testDBTemplateErr   error
+	errTestDBTemplate   error
 )
 
-func copyTestDBTemplate(dst string) error {
+func copyTestDBTemplate(ctx context.Context, dst string) error {
 	testDBTemplateOnce.Do(func() {
-		testDBTemplateFiles, testDBTemplateErr = buildTestDBTemplate()
+		testDBTemplateFiles, errTestDBTemplate = buildTestDBTemplate(ctx)
 	})
-	if testDBTemplateErr != nil {
-		return testDBTemplateErr
+	if errTestDBTemplate != nil {
+		return errTestDBTemplate
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return fmt.Errorf("creating test db dir: %w", err)
@@ -139,7 +136,7 @@ func copyTestDBTemplate(dst string) error {
 	return nil
 }
 
-func buildTestDBTemplate() (map[string][]byte, error) {
+func buildTestDBTemplate(ctx context.Context) (map[string][]byte, error) {
 	dir, err := os.MkdirTemp("", "agentsview-dbtest-template-*")
 	if err != nil {
 		return nil, fmt.Errorf("creating db template dir: %w", err)
@@ -147,7 +144,7 @@ func buildTestDBTemplate() (map[string][]byte, error) {
 	defer os.RemoveAll(dir)
 
 	path := filepath.Join(dir, "test.db")
-	template, err := db.Open(path)
+	template, err := db.Open(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("opening db template: %w", err)
 	}
@@ -155,7 +152,7 @@ func buildTestDBTemplate() (map[string][]byte, error) {
 	// the copy below carries the -wal/-shm files along, so a checkpoint that
 	// cannot finish in time must not fail the build. The generous deadline only
 	// guards against a hung checkpoint on slow Windows CI disks.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := template.CheckpointWALTruncate(ctx); err != nil {
 		fmt.Fprintf(os.Stderr,
@@ -184,8 +181,8 @@ func buildTestDBTemplate() (map[string][]byte, error) {
 // test on error.
 func SeedMessages(t *testing.T, d *db.DB, msgs ...db.Message) {
 	t.Helper()
-	if err := d.InsertMessages(msgs); err != nil {
-		t.Fatalf("SeedMessages: %v", err)
+	if err := d.InsertMessages(t.Context(), msgs); err != nil {
+		require.NoError(t, err, "SeedMessages")
 	}
 }
 
@@ -242,8 +239,8 @@ func SeedSession(
 	for _, opt := range opts {
 		opt(&s)
 	}
-	if err := d.UpsertSession(s); err != nil {
-		t.Fatalf("SeedSession %s: %v", id, err)
+	if err := d.UpsertSession(t.Context(), s); err != nil {
+		require.NoError(t, err, "SeedSession %s", id)
 	}
 }
 

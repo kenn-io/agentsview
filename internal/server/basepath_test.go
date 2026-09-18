@@ -53,8 +53,6 @@ func TestBasePath_InjectsBaseHrefIntoHTML(t *testing.T) {
 }
 
 func TestBasePath_RewritesAssetPaths(t *testing.T) {
-	assert := assert.New(t)
-
 	s := testServer(t, 0, WithBasePath("/viewer"))
 
 	req := httptest.NewRequestWithContext(t.Context(), "GET", "/viewer/", nil)
@@ -64,15 +62,15 @@ func TestBasePath_RewritesAssetPaths(t *testing.T) {
 	body := w.Body.String()
 
 	// Asset paths should be prefixed.
-	assert.NotContains(body, `src="/assets/`,
+	assert.NotContains(t, body, `src="/assets/`,
 		"found unprefixed src=\"/assets/ in HTML")
-	assert.NotContains(body, `href="/assets/`,
+	assert.NotContains(t, body, `href="/assets/`,
 		"found unprefixed href=\"/assets/ in HTML")
-	assert.NotContains(body, `href="/favicon`,
+	assert.NotContains(t, body, `href="/favicon`,
 		"found unprefixed href=\"/favicon in HTML")
 
 	// External URLs must NOT be prefixed.
-	assert.NotContains(body, `href="/viewer/https://`,
+	assert.NotContains(t, body, `href="/viewer/https://`,
 		"external URL was incorrectly prefixed")
 }
 

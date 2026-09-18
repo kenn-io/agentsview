@@ -17,9 +17,10 @@ import (
 // sync-from-SQLite seeding path for conversation-unit derivation tests.
 func newUnitsStore(t *testing.T, writes []db.SessionBatchWrite) *Store {
 	t.Helper()
+
 	ctx := t.Context()
 	local := newLocalDB(t)
-	_, err := local.WriteSessionBatchAtomic(writes)
+	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
@@ -78,9 +79,6 @@ func unitMatchesByOrdinal(
 // system row are their own units, and ExcludeSystem changes nothing but
 // which rows match.
 func TestDuckSearchContentSubstringDerivedRunRange(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store := newUnitsStore(t, []db.SessionBatchWrite{{
 		Session: unitSession("duck-unit-run", 6),
 		Messages: []db.Message{
@@ -100,21 +98,21 @@ func TestDuckSearchContentSubstringDerivedRunRange(t *testing.T) {
 		Pattern: "RUNHIT", Mode: "substring",
 		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 50,
 	})
-	require.NoError(err, "SearchContent")
-	require.Len(got.Matches, 5, "matches")
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 5, "matches")
 	byOrd := unitMatchesByOrdinal(t, got)
-	assert.Equal([2]int{0, 0}, byOrd[0].OrdinalRange, "user row is its own unit")
-	assert.Equal([2]int{2, 2}, byOrd[2].OrdinalRange, "system row is its own unit")
+	assert.Equal(t, [2]int{0, 0}, byOrd[0].OrdinalRange, "user row is its own unit")
+	assert.Equal(t, [2]int{2, 2}, byOrd[2].OrdinalRange, "system row is its own unit")
 	for _, o := range []int{1, 3, 4} {
 		m := byOrd[o]
-		assert.Equal([2]int{1, 4}, m.OrdinalRange, "run member %d", o)
-		assert.Equal(o, m.Ordinal, "anchor ordinal %d", o)
-		assert.False(m.Subordinate, "top-level run member %d", o)
-		assert.False(m.Sidechain, "non-sidechain run member %d", o)
+		assert.Equal(t, [2]int{1, 4}, m.OrdinalRange, "run member %d", o)
+		assert.Equal(t, o, m.Ordinal, "anchor ordinal %d", o)
+		assert.False(t, m.Subordinate, "top-level run member %d", o)
+		assert.False(t, m.Sidechain, "non-sidechain run member %d", o)
 		// The sync fixture stores relationship_type = "root"; the lineage
 		// fields are a passthrough of the session row on every backend.
-		assert.Equal("root", m.Relationship, "top-level relationship %d", o)
-		assert.Empty(m.ParentSessionID, "top-level parent %d", o)
+		assert.Equal(t, "root", m.Relationship, "top-level relationship %d", o)
+		assert.Empty(t, m.ParentSessionID, "top-level parent %d", o)
 	}
 
 	// ExcludeSystem drops the system row but leaves the derived ranges of
@@ -124,13 +122,13 @@ func TestDuckSearchContentSubstringDerivedRunRange(t *testing.T) {
 		Sources: []string{"messages"}, ExcludeSystem: true,
 		IncludeOneShot: true, Limit: 50,
 	})
-	require.NoError(err, "SearchContent ExcludeSystem")
-	require.Len(ex.Matches, 4, "ExcludeSystem matches")
+	require.NoError(t, err, "SearchContent ExcludeSystem")
+	require.Len(t, ex.Matches, 4, "ExcludeSystem matches")
 	exByOrd := unitMatchesByOrdinal(t, ex)
-	assert.NotContains(exByOrd, 2, "system row excluded")
-	assert.Equal([2]int{0, 0}, exByOrd[0].OrdinalRange)
+	assert.NotContains(t, exByOrd, 2, "system row excluded")
+	assert.Equal(t, [2]int{0, 0}, exByOrd[0].OrdinalRange)
 	for _, o := range []int{1, 3, 4} {
-		assert.Equal([2]int{1, 4}, exByOrd[o].OrdinalRange,
+		assert.Equal(t, [2]int{1, 4}, exByOrd[o].OrdinalRange,
 			"ExcludeSystem run member %d", o)
 	}
 }
@@ -139,9 +137,6 @@ func TestDuckSearchContentSubstringDerivedRunRange(t *testing.T) {
 // sidechain run's members are Subordinate + Sidechain, and the sidechain
 // flip bounds both the sidechain run and the following top-level run.
 func TestDuckSearchContentSidechainRunSubordinate(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store := newUnitsStore(t, []db.SessionBatchWrite{{
 		Session: unitSession("duck-unit-side", 4),
 		Messages: []db.Message{
@@ -159,37 +154,34 @@ func TestDuckSearchContentSidechainRunSubordinate(t *testing.T) {
 		Pattern: "SIDEHIT", Mode: "substring",
 		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 50,
 	})
-	require.NoError(err, "SearchContent sidechain")
-	require.Len(side.Matches, 2, "sidechain matches")
+	require.NoError(t, err, "SearchContent sidechain")
+	require.Len(t, side.Matches, 2, "sidechain matches")
 	for _, m := range side.Matches {
-		assert.Equal([2]int{1, 2}, m.OrdinalRange, "sidechain run range")
-		assert.True(m.Subordinate, "sidechain run is subordinate")
-		assert.True(m.Sidechain, "anchor sidechain flag")
-		assert.Equal("root", m.Relationship,
+		assert.Equal(t, [2]int{1, 2}, m.OrdinalRange, "sidechain run range")
+		assert.True(t, m.Subordinate, "sidechain run is subordinate")
+		assert.True(t, m.Sidechain, "anchor sidechain flag")
+		assert.Equal(t, "root", m.Relationship,
 			"root session lineage passthrough, no subordinate lineage")
-		assert.Empty(m.ParentSessionID, "no parent session")
+		assert.Empty(t, m.ParentSessionID, "no parent session")
 	}
 
 	main, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "MAINHIT", Mode: "substring",
 		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 50,
 	})
-	require.NoError(err, "SearchContent main")
-	require.Len(main.Matches, 1, "main matches")
+	require.NoError(t, err, "SearchContent main")
+	require.Len(t, main.Matches, 1, "main matches")
 	m := main.Matches[0]
-	assert.Equal([2]int{3, 3}, m.OrdinalRange,
+	assert.Equal(t, [2]int{3, 3}, m.OrdinalRange,
 		"sidechain flip bounds the top-level run")
-	assert.False(m.Subordinate, "top-level run")
-	assert.False(m.Sidechain, "top-level anchor")
+	assert.False(t, m.Subordinate, "top-level run")
+	assert.False(t, m.Sidechain, "top-level anchor")
 }
 
 // TestDuckSearchContentSubagentLineage pins session-level lineage on lexical
 // rows: a match inside a subagent session is Subordinate with Relationship
 // and ParentSessionID populated from the sessions join.
 func TestDuckSearchContentSubagentLineage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store := newUnitsStore(t, []db.SessionBatchWrite{
 		{
 			Session: unitSession("duck-unit-parent", 1),
@@ -216,14 +208,14 @@ func TestDuckSearchContentSubagentLineage(t *testing.T) {
 		Sources: []string{"messages"}, IncludeChildren: true,
 		IncludeOneShot: true, Limit: 50,
 	})
-	require.NoError(err, "SearchContent")
-	require.Len(got.Matches, 1, "matches")
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 1, "matches")
 	m := got.Matches[0]
-	assert.Equal([2]int{1, 1}, m.OrdinalRange, "single-member run")
-	assert.True(m.Subordinate, "subagent session is subordinate")
-	assert.Equal("subagent", m.Relationship, "Relationship")
-	assert.Equal("duck-unit-parent", m.ParentSessionID, "ParentSessionID")
-	assert.False(m.Sidechain, "anchor not sidechain")
+	assert.Equal(t, [2]int{1, 1}, m.OrdinalRange, "single-member run")
+	assert.True(t, m.Subordinate, "subagent session is subordinate")
+	assert.Equal(t, "subagent", m.Relationship, "Relationship")
+	assert.Equal(t, "duck-unit-parent", m.ParentSessionID, "ParentSessionID")
+	assert.False(t, m.Sidechain, "anchor not sidechain")
 }
 
 // TestDuckSearchContentToolDerivedRunRange pins derivation for tool_input and
@@ -231,9 +223,6 @@ func TestDuckSearchContentSubagentLineage(t *testing.T) {
 // both locations carry the enclosing run's range while the wire Role stays
 // the hard-coded "assistant".
 func TestDuckSearchContentToolDerivedRunRange(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	call := db.ToolCall{
 		ToolName: "Bash", Category: "execution", ToolUseID: "tu1",
 		InputJSON:     `{"command":"TOOLHIT"}`,
@@ -256,20 +245,20 @@ func TestDuckSearchContentToolDerivedRunRange(t *testing.T) {
 		Pattern: "TOOLHIT", Mode: "substring",
 		Sources: []string{"tool_input"}, IncludeOneShot: true, Limit: 50,
 	})
-	require.NoError(err, "tool_input search")
-	require.Len(in.Matches, 1, "tool_input matches")
-	assert.Equal("assistant", in.Matches[0].Role, "wire role stays assistant")
-	assert.Equal(1, in.Matches[0].Ordinal, "anchor ordinal")
-	assert.Equal([2]int{1, 2}, in.Matches[0].OrdinalRange,
+	require.NoError(t, err, "tool_input search")
+	require.Len(t, in.Matches, 1, "tool_input matches")
+	assert.Equal(t, "assistant", in.Matches[0].Role, "wire role stays assistant")
+	assert.Equal(t, 1, in.Matches[0].Ordinal, "anchor ordinal")
+	assert.Equal(t, [2]int{1, 2}, in.Matches[0].OrdinalRange,
 		"tool_input anchor classified from the real message row")
 
 	res, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "RESHIT", Mode: "substring",
 		Sources: []string{"tool_result"}, IncludeOneShot: true, Limit: 50,
 	})
-	require.NoError(err, "tool_result search")
-	require.Len(res.Matches, 1, "tool_result matches")
-	assert.Equal([2]int{1, 2}, res.Matches[0].OrdinalRange,
+	require.NoError(t, err, "tool_result search")
+	require.Len(t, res.Matches, 1, "tool_result matches")
+	assert.Equal(t, [2]int{1, 2}, res.Matches[0].OrdinalRange,
 		"canonical tool_result anchor classified from the real message row")
 }
 
@@ -282,9 +271,6 @@ func TestDuckSearchContentToolDerivedRunRange(t *testing.T) {
 // message's tool call, so an event at an ordinal with no message row is not
 // representable through the fixture.
 func TestDuckSearchContentToolResultEventsDerived(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	eventCall := db.ToolCall{
 		ToolName: "Bash", Category: "execution", ToolUseID: "tu1",
 		InputJSON: `{"command":"x"}`,
@@ -331,7 +317,7 @@ func TestDuckSearchContentToolResultEventsDerived(t *testing.T) {
 			tool_use_id, source, status, content, content_length, event_index
 		) VALUES (?, 7, 0, 'tux', 'agent', 'success', ?, ?, 0)`,
 		"duck-ev-orph", "ORPHHIT event content", len("ORPHHIT event content"))
-	require.NoError(err, "insert orphan event")
+	require.NoError(t, err, "insert orphan event")
 
 	ctx := t.Context()
 	orph, err := store.SearchContent(ctx, db.ContentSearchFilter{
@@ -339,26 +325,26 @@ func TestDuckSearchContentToolResultEventsDerived(t *testing.T) {
 		Sources: []string{"tool_result"}, IncludeChildren: true,
 		IncludeOneShot: true, Limit: 50,
 	})
-	require.NoError(err, "orphan search")
-	require.Len(orph.Matches, 1, "orphaned event row must not be dropped")
+	require.NoError(t, err, "orphan search")
+	require.Len(t, orph.Matches, 1, "orphaned event row must not be dropped")
 	m := orph.Matches[0]
-	assert.Equal(7, m.Ordinal, "event ordinal")
-	assert.Equal([2]int{7, 7}, m.OrdinalRange,
+	assert.Equal(t, 7, m.Ordinal, "event ordinal")
+	assert.Equal(t, [2]int{7, 7}, m.OrdinalRange,
 		"missing anchor falls back to [o, o]")
-	assert.False(m.Sidechain, "missing anchor has no sidechain flag")
-	assert.True(m.Subordinate, "session lineage still applies")
-	assert.Equal("subagent", m.Relationship, "Relationship from sessions join")
-	assert.Equal("duck-ev-boss", m.ParentSessionID,
+	assert.False(t, m.Sidechain, "missing anchor has no sidechain flag")
+	assert.True(t, m.Subordinate, "session lineage still applies")
+	assert.Equal(t, "subagent", m.Relationship, "Relationship from sessions join")
+	assert.Equal(t, "duck-ev-boss", m.ParentSessionID,
 		"ParentSessionID from sessions join")
 
 	ev, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "EVHIT", Mode: "substring",
 		Sources: []string{"tool_result"}, IncludeOneShot: true, Limit: 50,
 	})
-	require.NoError(err, "event search")
-	require.Len(ev.Matches, 1, "event matches")
-	assert.Equal(1, ev.Matches[0].Ordinal, "anchor ordinal")
-	assert.Equal([2]int{1, 2}, ev.Matches[0].OrdinalRange,
+	require.NoError(t, err, "event search")
+	require.Len(t, ev.Matches, 1, "event matches")
+	assert.Equal(t, 1, ev.Matches[0].Ordinal, "anchor ordinal")
+	assert.Equal(t, [2]int{1, 2}, ev.Matches[0].OrdinalRange,
 		"event with a message row inside a run gets the run's range")
 }
 
@@ -391,9 +377,6 @@ func TestDuckSearchContentRegexDerivedRange(t *testing.T) {
 // TestDuckSearchContentFTSDerivedRange spot-checks that DuckDB's fts mode
 // (ILIKE terms over messages) routes through the shared derivation pass.
 func TestDuckSearchContentFTSDerivedRange(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store := newUnitsStore(t, []db.SessionBatchWrite{{
 		Session: unitSession("duck-unit-fts", 3),
 		Messages: []db.Message{
@@ -410,11 +393,11 @@ func TestDuckSearchContentFTSDerivedRange(t *testing.T) {
 		Pattern: "ftshit", Mode: "fts",
 		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 50,
 	})
-	require.NoError(err, "SearchContent fts")
-	require.Len(got.Matches, 2, "fts matches")
+	require.NoError(t, err, "SearchContent fts")
+	require.Len(t, got.Matches, 2, "fts matches")
 	for _, m := range got.Matches {
-		assert.Equal([2]int{1, 2}, m.OrdinalRange, "derived run range")
-		assert.False(m.Subordinate, "top-level run")
+		assert.Equal(t, [2]int{1, 2}, m.OrdinalRange, "derived run range")
+		assert.False(t, m.Subordinate, "top-level run")
 	}
 }
 
@@ -427,9 +410,6 @@ func TestDuckSearchContentFTSDerivedRange(t *testing.T) {
 // factor changes. The structure packs a main run, a sidechain run, and a
 // flip-bounded main run, and every match must carry its run's exact range.
 func TestDuckSearchContentDenseFlowDerivedRanges(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	// Three runs of runLen anchors each: 3*runLen > UnitBoundsFlowFactor.
 	runLen := db.UnitBoundsFlowFactor/2 + 1
 	runA := [2]int{1, runLen}                  // main run after user 0
@@ -464,7 +444,7 @@ func TestDuckSearchContentDenseFlowDerivedRanges(t *testing.T) {
 	}})
 
 	anchorCount := 3 * runLen
-	require.GreaterOrEqual(anchorCount, db.UnitBoundsFlowFactor,
+	require.GreaterOrEqual(t, anchorCount, db.UnitBoundsFlowFactor,
 		"single-session page must clear the dense-flow gate")
 
 	ctx := t.Context()
@@ -473,22 +453,22 @@ func TestDuckSearchContentDenseFlowDerivedRanges(t *testing.T) {
 		Sources: []string{"messages"}, IncludeOneShot: true,
 		Limit: anchorCount + 10,
 	})
-	require.NoError(err, "SearchContent")
-	require.Len(got.Matches, anchorCount, "matches")
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, anchorCount, "matches")
 	byOrd := unitMatchesByOrdinal(t, got)
 	for o := runA[0]; o <= runA[1]; o++ {
-		assert.Equal(runA, byOrd[o].OrdinalRange, "run A member %d", o)
-		assert.False(byOrd[o].Sidechain, "run A member %d flag", o)
+		assert.Equal(t, runA, byOrd[o].OrdinalRange, "run A member %d", o)
+		assert.False(t, byOrd[o].Sidechain, "run A member %d flag", o)
 	}
 	for o := side[0]; o <= side[1]; o++ {
-		assert.Equal(side, byOrd[o].OrdinalRange, "sidechain member %d", o)
-		assert.True(byOrd[o].Sidechain, "sidechain member %d flag", o)
-		assert.True(byOrd[o].Subordinate, "sidechain member %d subordinate", o)
+		assert.Equal(t, side, byOrd[o].OrdinalRange, "sidechain member %d", o)
+		assert.True(t, byOrd[o].Sidechain, "sidechain member %d flag", o)
+		assert.True(t, byOrd[o].Subordinate, "sidechain member %d subordinate", o)
 	}
 	for o := runC[0]; o <= runC[1]; o++ {
-		assert.Equal(runC, byOrd[o].OrdinalRange,
+		assert.Equal(t, runC, byOrd[o].OrdinalRange,
 			"flip-bounded run C member %d", o)
-		assert.False(byOrd[o].Sidechain, "run C member %d flag", o)
+		assert.False(t, byOrd[o].Sidechain, "run C member %d flag", o)
 	}
 }
 
@@ -497,9 +477,6 @@ func TestDuckSearchContentDenseFlowDerivedRanges(t *testing.T) {
 // top-level runs, a sidechain run between them, and an interior system row
 // that must not close the run it sits inside.
 func TestDuckSearchContentMultiRunReducerParity(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store := newUnitsStore(t, []db.SessionBatchWrite{{
 		Session: unitSession("duck-unit-multi", 9),
 		Messages: []db.Message{
@@ -522,8 +499,8 @@ func TestDuckSearchContentMultiRunReducerParity(t *testing.T) {
 		Pattern: "PARHIT", Mode: "substring",
 		Sources: []string{"messages"}, IncludeOneShot: true, Limit: 50,
 	})
-	require.NoError(err, "SearchContent")
-	require.Len(got.Matches, 9, "matches")
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 9, "matches")
 	byOrd := unitMatchesByOrdinal(t, got)
 
 	want := map[int][2]int{
@@ -538,14 +515,14 @@ func TestDuckSearchContentMultiRunReducerParity(t *testing.T) {
 		8: {8, 8}, // closing embeddable user row
 	}
 	for o, r := range want {
-		assert.Equal(r, byOrd[o].OrdinalRange, "ordinal %d range", o)
+		assert.Equal(t, r, byOrd[o].OrdinalRange, "ordinal %d range", o)
 	}
 	for _, o := range []int{3, 4} {
-		assert.True(byOrd[o].Subordinate, "sidechain member %d subordinate", o)
-		assert.True(byOrd[o].Sidechain, "sidechain member %d flag", o)
+		assert.True(t, byOrd[o].Subordinate, "sidechain member %d subordinate", o)
+		assert.True(t, byOrd[o].Sidechain, "sidechain member %d flag", o)
 	}
 	for _, o := range []int{0, 1, 2, 5, 6, 7, 8} {
-		assert.False(byOrd[o].Subordinate, "top-level row %d", o)
-		assert.False(byOrd[o].Sidechain, "top-level row %d flag", o)
+		assert.False(t, byOrd[o].Subordinate, "top-level row %d", o)
+		assert.False(t, byOrd[o].Sidechain, "top-level row %d flag", o)
 	}
 }

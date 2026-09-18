@@ -12,9 +12,6 @@ import (
 )
 
 func TestOpenHandsProviderSourceMethods(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionID := "086c7ecf-6cb7-46b6-9fbc-b900358d1247"
 	dirName := "086c7ecf6cb746b69fbcb900358d1247"
@@ -28,53 +25,53 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	plan, err := provider.WatchPlan(t.Context())
-	require.NoError(err)
-	require.Len(plan.Roots, 1)
-	assert.Equal(root, plan.Roots[0].Path)
-	assert.False(plan.Roots[0].Recursive)
-	assert.NotEmpty(plan.Roots[0].DebounceKey)
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Equal(t, root, plan.Roots[0].Path)
+	assert.False(t, plan.Roots[0].Recursive)
+	assert.NotEmpty(t, plan.Roots[0].DebounceKey)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(AgentOpenHands, discovered[0].Provider)
-	assert.Equal(sessionDir, discovered[0].Key)
-	assert.Equal(sessionDir, discovered[0].DisplayPath)
-	assert.Equal(sessionDir, discovered[0].FingerprintKey)
-	assert.Empty(discovered[0].ProjectHint)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, AgentOpenHands, discovered[0].Provider)
+	assert.Equal(t, sessionDir, discovered[0].Key)
+	assert.Equal(t, sessionDir, discovered[0].DisplayPath)
+	assert.Equal(t, sessionDir, discovered[0].FingerprintKey)
+	assert.Empty(t, discovered[0].ProjectHint)
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "remote~openhands:" + sessionID,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(sessionDir, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sessionDir, found.DisplayPath)
 
 	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: dirName,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(sessionDir, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sessionDir, found.DisplayPath)
 
 	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: sessionDir,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(sessionDir, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sessionDir, found.DisplayPath)
 
 	snapshot, err := OpenHandsSnapshot(sessionDir)
-	require.NoError(err)
+	require.NoError(t, err)
 	fingerprint, err := provider.Fingerprint(t.Context(), found)
-	require.NoError(err)
-	assert.Equal(sessionDir, fingerprint.Key)
-	assert.Equal(snapshot.Size, fingerprint.Size)
-	assert.Equal(snapshot.Mtime, fingerprint.MTimeNS)
-	assert.Equal(snapshot.Hash, fingerprint.Hash)
+	require.NoError(t, err)
+	assert.Equal(t, sessionDir, fingerprint.Key)
+	assert.Equal(t, snapshot.Size, fingerprint.Size)
+	assert.Equal(t, snapshot.Mtime, fingerprint.MTimeNS)
+	assert.Equal(t, snapshot.Hash, fingerprint.Hash)
 
 	for _, changedPath := range []string{
 		sessionDir,
@@ -86,9 +83,9 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 			t.Context(),
 			ChangedPathRequest{Path: changedPath, EventKind: "write", WatchRoot: root},
 		)
-		require.NoError(err)
-		require.Len(changed, 1, changedPath)
-		assert.Equal(sessionDir, changed[0].DisplayPath)
+		require.NoError(t, err)
+		require.Len(t, changed, 1, changedPath)
+		assert.Equal(t, sessionDir, changed[0].DisplayPath)
 	}
 
 	ignored, err := provider.SourcesForChangedPath(
@@ -99,8 +96,8 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 			WatchRoot: root,
 		},
 	)
-	require.NoError(err)
-	assert.Empty(ignored)
+	require.NoError(t, err)
+	assert.Empty(t, ignored)
 
 	wrongRoot, err := provider.SourcesForChangedPath(
 		t.Context(),
@@ -110,14 +107,11 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 			WatchRoot: filepath.Join(root, "..", "other-root"),
 		},
 	)
-	require.NoError(err)
-	assert.Empty(wrongRoot)
+	require.NoError(t, err)
+	assert.Empty(t, wrongRoot)
 }
 
 func TestOpenHandsProviderParse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionID := "086c7ecf-6cb7-46b6-9fbc-b900358d1247"
 	sessionDir := openHandsProviderWriteSession(
@@ -127,57 +121,54 @@ func TestOpenHandsProviderParse(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
-	require.NoError(err)
+	require.NoError(t, err)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fingerprint,
 	})
-	require.NoError(err)
-	require.True(outcome.ResultSetComplete)
-	require.False(outcome.ForceReplace)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.True(t, outcome.ResultSetComplete)
+	require.False(t, outcome.ForceReplace)
+	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0]
-	assert.Equal(DataVersionCurrent, result.DataVersion)
-	assert.Equal("openhands:"+sessionID, result.Result.Session.ID)
-	assert.Equal(AgentOpenHands, result.Result.Session.Agent)
-	assert.Equal("devbox", result.Result.Session.Machine)
-	assert.Equal(sessionDir, result.Result.Session.File.Path)
-	assert.Equal(fingerprint.Hash, result.Result.Session.File.Hash)
-	assert.Equal("parse question", result.Result.Session.FirstMessage)
-	assert.Len(result.Result.Messages, 1)
+	assert.Equal(t, DataVersionCurrent, result.DataVersion)
+	assert.Equal(t, "openhands:"+sessionID, result.Result.Session.ID)
+	assert.Equal(t, AgentOpenHands, result.Result.Session.Agent)
+	assert.Equal(t, "devbox", result.Result.Session.Machine)
+	assert.Equal(t, sessionDir, result.Result.Session.File.Path)
+	assert.Equal(t, fingerprint.Hash, result.Result.Session.File.Hash)
+	assert.Equal(t, "parse question", result.Result.Session.FirstMessage)
+	assert.Len(t, result.Result.Messages, 1)
 }
 
 func TestOpenHandsProviderProjectDiscoveryPolicy(t *testing.T) {
 	for _, disableDiscovery := range []bool{false, true} {
 		t.Run(fmt.Sprintf("disabled=%t", disableDiscovery), func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			repo := filepath.Join(t.TempDir(), "repository")
 			cwd := filepath.Join(repo, "nested")
-			require.NoError(os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
-			require.NoError(os.MkdirAll(cwd, 0o755))
+			require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+			require.NoError(t, os.MkdirAll(cwd, 0o755))
 			sessionDir := openHandsProviderWriteSession(t, root,
 				"086c7ecf6cb746b69fbcb900358d1247",
 				"086c7ecf-6cb7-46b6-9fbc-b900358d1247", "project question")
 			cwdJSON, err := json.Marshal(cwd)
-			require.NoError(err)
-			require.NoError(os.WriteFile(filepath.Join(sessionDir, "events", "event-00001.json"),
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "events", "event-00001.json"),
 				[]byte(fmt.Sprintf(`{"id":"e1","timestamp":"2026-04-02T15:25:42","source":"environment",
 "observation":{"content":[{"type":"text","text":"terminal output"}],
 "metadata":{"working_dir":%s},"kind":"TerminalObservation"},"kind":"ObservationEvent"}`, cwdJSON)), 0o600))
 			provider, ok := NewProvider(AgentOpenHands, ProviderConfig{Roots: []string{root}})
-			require.True(ok)
+			require.True(t, ok)
 			sources, err := provider.Discover(t.Context())
-			require.NoError(err)
-			require.Len(sources, 1)
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
 
 			originalStat := osStat
 			t.Cleanup(func() { osStat = originalStat })
@@ -193,17 +184,17 @@ func TestOpenHandsProviderProjectDiscoveryPolicy(t *testing.T) {
 				ctx = WithoutFilesystemProjectDiscovery(ctx)
 			}
 			outcome, err := provider.Parse(ctx, ParseRequest{Source: sources[0]})
-			require.NoError(err)
-			require.Len(outcome.Results, 1)
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
 			result := outcome.Results[0].Result
-			assert.Equal(cwd, result.Session.Cwd)
-			assert.Equal("project question", result.Session.FirstMessage)
+			assert.Equal(t, cwd, result.Session.Cwd)
+			assert.Equal(t, "project question", result.Session.FirstMessage)
 			if disableDiscovery {
-				assert.Zero(probes, "recorded cwd must not be inspected")
-				assert.Equal("nested", result.Session.Project)
+				assert.Zero(t, probes, "recorded cwd must not be inspected")
+				assert.Equal(t, "nested", result.Session.Project)
 			} else {
-				assert.Positive(probes, "local Git discovery must still run")
-				assert.Equal("repository", result.Session.Project)
+				assert.Positive(t, probes, "local Git discovery must still run")
+				assert.Equal(t, "repository", result.Session.Project)
 			}
 		})
 	}
@@ -217,6 +208,7 @@ func openHandsProviderWriteSession(
 	firstMessage string,
 ) string {
 	t.Helper()
+
 	sessionDir := filepath.Join(root, dirName)
 	eventsDir := filepath.Join(sessionDir, "events")
 	require.NoError(t, os.MkdirAll(eventsDir, 0o755))

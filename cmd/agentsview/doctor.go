@@ -1,8 +1,7 @@
 package main
 
-import "context"
-
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -101,7 +100,7 @@ func collectDoctorSyncReport(ctx context.Context, cfg config.Config) doctorSyncR
 	report := doctorSyncReport{
 		Config: cfg,
 
-		doctorDBInspection: inspectDoctorDB(cfg.DBPath),
+		doctorDBInspection: inspectDoctorDB(ctx, cfg.DBPath),
 		TempFiles:          listDoctorResyncTempFiles(cfg.DBPath),
 		AgentRoots:         collectDoctorAgentRoots(cfg),
 	}
@@ -115,7 +114,7 @@ func collectDoctorSyncReport(ctx context.Context, cfg config.Config) doctorSyncR
 	return report
 }
 
-func inspectDoctorDB(path string) doctorDBInspection {
+func inspectDoctorDB(ctx context.Context, path string) doctorDBInspection {
 	var insp doctorDBInspection
 	info, err := os.Stat(path)
 	if err != nil {
@@ -138,15 +137,15 @@ func inspectDoctorDB(path string) doctorDBInspection {
 	defer conn.Close()
 
 	var version int
-	if err := conn.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+	if err := conn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		insp.DBError = err
 		return insp
 	}
 	insp.DBReadable = true
 	insp.UserVersion = &version
 
-	rows, err := conn.Query(
-		"SELECT data_version, COUNT(*) FROM sessions " +
+	rows, err := conn.QueryContext(ctx,
+		"SELECT data_version, COUNT(*) FROM sessions "+
 			"GROUP BY data_version ORDER BY data_version",
 	)
 	if err != nil {
@@ -171,13 +170,13 @@ func inspectDoctorDB(path string) doctorDBInspection {
 	// One scan collects both Antigravity operator counts: antigravity-cli
 	// summary-mode sessions (transcript fidelity) and sessions on an
 	// unrecognized schema across both Antigravity agents (decode confidence).
-	row := conn.QueryRow(
-		"SELECT " +
-			"COUNT(*) FILTER (WHERE agent = 'antigravity-cli'), " +
-			"COUNT(*) FILTER (WHERE agent = 'antigravity-cli' " +
-			"AND transcript_fidelity = 'summary'), " +
-			"COUNT(*) FILTER (WHERE agent IN ('antigravity', 'antigravity-cli') " +
-			"AND source_version LIKE 'agy-schema:%') " +
+	row := conn.QueryRowContext(ctx,
+		"SELECT "+
+			"COUNT(*) FILTER (WHERE agent = 'antigravity-cli'), "+
+			"COUNT(*) FILTER (WHERE agent = 'antigravity-cli' "+
+			"AND transcript_fidelity = 'summary'), "+
+			"COUNT(*) FILTER (WHERE agent IN ('antigravity', 'antigravity-cli') "+
+			"AND source_version LIKE 'agy-schema:%') "+
 			"FROM sessions",
 	)
 	var total, summary, unknownSchema int
@@ -194,7 +193,7 @@ func inspectDoctorDB(path string) doctorDBInspection {
 	// under a binary predating the findings-before-signals write
 	// ordering. The filtered signals backfill deliberately does not
 	// revisit them (see db.BackfillSignals), so surface them here.
-	if err := conn.QueryRow(
+	if err := conn.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sessions
 		 WHERE quality_signal_version >= ?
 		   AND secrets_rules_version = ''

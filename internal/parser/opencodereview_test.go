@@ -14,29 +14,26 @@ import (
 )
 
 func TestOpenCodeReviewIssue1612Sample(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	raw := openCodeReviewFixtureBytes(t)
 	root := t.TempDir()
 	path := filepath.Join(root, "Users-reviewer-src-wagtail-wagtail", "efb23cb0-2f65-4f32-9f9d-310b0614b737.jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(os.WriteFile(path, raw, 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, raw, 0o644))
 
 	provider, ok := NewProvider(AgentOpenCodeReview, ProviderConfig{Roots: []string{root}, Machine: "local"})
-	require.True(ok)
-	assert.Equal(CapabilitySupported, provider.Capabilities().Source.ForceReplaceOnParse)
+	require.True(t, ok)
+	assert.Equal(t, CapabilitySupported, provider.Capabilities().Source.ForceReplaceOnParse)
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 	fingerprint, err := provider.Fingerprint(t.Context(), discovered[0])
-	require.NoError(err)
+	require.NoError(t, err)
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      discovered[0],
 		Fingerprint: fingerprint,
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0].Result
 
 	var toolEvents int
@@ -45,32 +42,32 @@ func TestOpenCodeReviewIssue1612Sample(t *testing.T) {
 			toolEvents += len(call.ResultEvents)
 		}
 	}
-	assert.Equal(1, result.Session.UserMessageCount)
-	assert.Equal(3, countMessagesWithRole(result.Messages, RoleAssistant))
-	assert.Equal(2, toolEvents)
+	assert.Equal(t, 1, result.Session.UserMessageCount)
+	assert.Equal(t, 3, countMessagesWithRole(result.Messages, RoleAssistant))
+	assert.Equal(t, 2, toolEvents)
 	fileReadCall := findOpenCodeReviewToolCallByID(t, result.Messages, "call_94ddb2fe02f9436fa02c875d")
 	codeSearchCall := findOpenCodeReviewToolCallByID(t, result.Messages, "call_99b138b06835486190c8fbee")
-	assert.Equal("call_94ddb2fe02f9436fa02c875d", fileReadCall.ToolUseID)
-	assert.Equal("call_94ddb2fe02f9436fa02c875d", fileReadCall.ResultEvents[0].ToolUseID)
-	assert.Equal("call_99b138b06835486190c8fbee", codeSearchCall.ToolUseID)
-	assert.Equal("call_99b138b06835486190c8fbee", codeSearchCall.ResultEvents[0].ToolUseID)
-	assert.Equal("wagtail", result.Session.Project)
-	assert.Equal("commit", result.Session.SessionKind)
-	assert.Equal("deepseek/deepseek-v4-flash-0731", result.Messages[1].Model)
-	assert.Equal("v1.9.2", result.Session.SourceVersion)
-	assert.Equal("efb23cb0-2f65-4f32-9f9d-310b0614b737", result.Session.SourceSessionID)
-	assert.Equal("Review commit eceeedd4e4", result.Session.SessionName)
-	assert.True(result.Messages[1].HasContextTokens)
-	assert.Equal(4767, result.Messages[1].ContextTokens)
-	assert.Equal(5442, result.Messages[2].ContextTokens)
-	assert.Equal(5717, result.Messages[3].ContextTokens)
-	assert.Contains(string(result.Messages[1].TokenUsage), `"input_tokens":4767`)
-	assert.Contains(string(result.Messages[2].TokenUsage), `"cache_read_input_tokens":4864`)
-	assert.Contains(string(result.Messages[2].TokenUsage), `"input_tokens":578`)
-	assert.Contains(string(result.Messages[3].TokenUsage), `"cache_creation_input_tokens":0`)
-	assert.True(result.Messages[3].HasContextTokens)
-	assert.Equal(TerminationClean, result.Session.TerminationStatus)
-	assert.Equal(11, countFixtureRecords(t, raw))
+	assert.Equal(t, "call_94ddb2fe02f9436fa02c875d", fileReadCall.ToolUseID)
+	assert.Equal(t, "call_94ddb2fe02f9436fa02c875d", fileReadCall.ResultEvents[0].ToolUseID)
+	assert.Equal(t, "call_99b138b06835486190c8fbee", codeSearchCall.ToolUseID)
+	assert.Equal(t, "call_99b138b06835486190c8fbee", codeSearchCall.ResultEvents[0].ToolUseID)
+	assert.Equal(t, "wagtail", result.Session.Project)
+	assert.Equal(t, "commit", result.Session.SessionKind)
+	assert.Equal(t, "deepseek/deepseek-v4-flash-0731", result.Messages[1].Model)
+	assert.Equal(t, "v1.9.2", result.Session.SourceVersion)
+	assert.Equal(t, "efb23cb0-2f65-4f32-9f9d-310b0614b737", result.Session.SourceSessionID)
+	assert.Equal(t, "Review commit eceeedd4e4", result.Session.SessionName)
+	assert.True(t, result.Messages[1].HasContextTokens)
+	assert.Equal(t, 4767, result.Messages[1].ContextTokens)
+	assert.Equal(t, 5442, result.Messages[2].ContextTokens)
+	assert.Equal(t, 5717, result.Messages[3].ContextTokens)
+	assert.Contains(t, string(result.Messages[1].TokenUsage), `"input_tokens":4767`)
+	assert.Contains(t, string(result.Messages[2].TokenUsage), `"cache_read_input_tokens":4864`)
+	assert.Contains(t, string(result.Messages[2].TokenUsage), `"input_tokens":578`)
+	assert.Contains(t, string(result.Messages[3].TokenUsage), `"cache_creation_input_tokens":0`)
+	assert.True(t, result.Messages[3].HasContextTokens)
+	assert.Equal(t, TerminationClean, result.Session.TerminationStatus)
+	assert.Equal(t, 11, countFixtureRecords(t, raw))
 	fmt.Printf(
 		"OpenCodeReview issue sample: sources=%d sessions=%d user_messages=%d assistant_responses=%d tool_result_events=%d source_version=%s title=%q second_context_tokens=%d termination=%s\n",
 		len(discovered), len(outcome.Results), result.Session.UserMessageCount,
@@ -81,17 +78,15 @@ func TestOpenCodeReviewIssue1612Sample(t *testing.T) {
 }
 
 func TestOpenCodeReviewTaskDoneWithoutSessionEnd(t *testing.T) {
-	parentAssert := assert.New(t)
-
 	raw := openCodeReviewFixtureBytes(t)
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines[:len(lines)-1], "\n")+"\n"), 0o644))
 	result := openCodeReviewParseForTest(t, path)
-	parentAssert.Equal(TerminationClean, result.Session.TerminationStatus)
+	assert.Equal(t, TerminationClean, result.Session.TerminationStatus)
 	call := findOpenCodeReviewToolCall(t, result.Messages, "task_done", "")
-	parentAssert.NotEmpty(call.ToolUseID)
-	parentAssert.Empty(call.ResultEvents, "task_done has no execution result upstream")
+	assert.NotEmpty(t, call.ToolUseID)
+	assert.Empty(t, call.ResultEvents, "task_done has no execution result upstream")
 
 	for _, tc := range []struct {
 		name   string
@@ -111,23 +106,18 @@ func TestOpenCodeReviewTaskDoneWithoutSessionEnd(t *testing.T) {
 }
 
 func TestOpenCodeReviewCacheWrites(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	// The native Anthropic adapter includes cache reads and writes in prompt_tokens.
 	content := `{"type":"session_start","sessionId":"review"}` + "\n" +
 		`{"type":"llm_response","content":"Review complete","usage":{"prompt_tokens":130,"completion_tokens":5,"cache_read_tokens":80,"cache_write_tokens":30}}` + "\n"
-	require.NoError(os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 	result := openCodeReviewParseForTest(t, path)
-	require.Len(result.Messages, 1)
-	assert.Equal(130, result.Messages[0].ContextTokens)
-	assert.Equal(`{"cache_creation_input_tokens":30,"cache_read_input_tokens":80,"input_tokens":20,"output_tokens":5}`, string(result.Messages[0].TokenUsage))
+	require.Len(t, result.Messages, 1)
+	assert.Equal(t, 130, result.Messages[0].ContextTokens)
+	assert.Equal(t, `{"cache_creation_input_tokens":30,"cache_read_input_tokens":80,"input_tokens":20,"output_tokens":5}`, string(result.Messages[0].TokenUsage))
 }
 
 func TestOpenCodeReviewCompressionAndAuxiliaryPrompts(t *testing.T) {
-	assert := assert.New(t)
-
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	lines := []string{
 		`{"type":"session_start","sessionId":"review"}`,
@@ -144,9 +134,9 @@ func TestOpenCodeReviewCompressionAndAuxiliaryPrompts(t *testing.T) {
 	}
 	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
 	result := openCodeReviewParseForTest(t, path)
-	assert.Equal(4, result.Session.UserMessageCount)
-	assert.Equal([]string{"Review a.go", "Summary", "Please try again or use task_done if finished.", "Plan b.go", "Review b.go"}, messageContents(result.Messages))
-	assert.Equal(100, result.Messages[1].ContextTokens, "auxiliary response usage is retained")
+	assert.Equal(t, 4, result.Session.UserMessageCount)
+	assert.Equal(t, []string{"Review a.go", "Summary", "Please try again or use task_done if finished.", "Plan b.go", "Review b.go"}, messageContents(result.Messages))
+	assert.Equal(t, 100, result.Messages[1].ContextTokens, "auxiliary response usage is retained")
 }
 
 func TestOpenCodeReviewUserTurnsAfterHistoryReset(t *testing.T) {
@@ -197,9 +187,6 @@ func TestOpenCodeReviewUserTurnsAfterHistoryReset(t *testing.T) {
 }
 
 func TestOpenCodeReviewProviderAdmissionAndLookup(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	valid := filepath.Join(root, "project", "11111111-1111-4111-8111-111111111111.jsonl")
 	paths := map[string]string{
@@ -211,44 +198,41 @@ func TestOpenCodeReviewProviderAdmissionAndLookup(t *testing.T) {
 		filepath.Join(root, "project", "invalid.session.jsonl"):                                "",
 	}
 	for path := range paths {
-		require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 		if path == valid {
-			require.NoError(os.WriteFile(path, []byte(`{"type":"session_start","sessionId":"11111111-1111-4111-8111-111111111111"}`+"\n"), 0o644))
+			require.NoError(t, os.WriteFile(path, []byte(`{"type":"session_start","sessionId":"11111111-1111-4111-8111-111111111111"}`+"\n"), 0o644))
 		} else if paths[path] == "foreign" {
-			require.NoError(os.WriteFile(path, []byte(`{"type":"user","message":{"role":"user","content":"foreign transcript"}}`+"\n"), 0o644))
+			require.NoError(t, os.WriteFile(path, []byte(`{"type":"user","message":{"role":"user","content":"foreign transcript"}}`+"\n"), 0o644))
 		} else {
-			require.NoError(os.WriteFile(path, []byte("x\n"), 0o644))
+			require.NoError(t, os.WriteFile(path, []byte("x\n"), 0o644))
 		}
 	}
 	sources := newOpenCodeReviewSourceSet([]string{root})
 	discovered, err := sources.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 2)
+	require.NoError(t, err)
+	require.Len(t, discovered, 2)
 	discoveredPaths := []string{discovered[0].DisplayPath, discovered[1].DisplayPath}
-	assert.Contains(discoveredPaths, valid)
+	assert.Contains(t, discoveredPaths, valid)
 	foreignPath := filepath.Join(root, "project", "99999999-9999-4999-8999-999999999999.jsonl")
 	foreignInfo, err := os.Stat(foreignPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	foreignResult, err := parseOpenCodeReviewFile(t.Context(), foreignPath, "project", "local", SourceFingerprint{Size: foreignInfo.Size(), MTimeNS: foreignInfo.ModTime().UnixNano()})
-	require.NoError(err)
-	assert.Nil(foreignResult)
+	require.NoError(t, err)
+	assert.Nil(t, foreignResult)
 
 	found, ok, err := sources.FindSource(t.Context(), FindSourceRequest{RawSessionID: "11111111-1111-4111-8111-111111111111"})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(valid, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, valid, found.DisplayPath)
 	changed, err := sources.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: valid, EventKind: "write"})
-	require.NoError(err)
-	require.Len(changed, 1)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
 }
 
 func TestOpenCodeReviewReplayAndPartialLines(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(root, "project", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	lines := []string{
 		`{"type":"session_start","sessionId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","cwd":"/src/project","reviewMode":"commit","diffCommit":"abc"}`,
 		`{"type":"llm_request","uuid":"r1","filePath":"a.go","taskType":"main_task","messages":[{"role":"user","content":"one"}]}`,
@@ -256,31 +240,29 @@ func TestOpenCodeReviewReplayAndPartialLines(t *testing.T) {
 		`{"type":"malformed"`,
 		`{"type":"llm_response","uuid":"a1","filePath":"a.go","taskType":"main_task","content":"answer"}`,
 	}
-	require.NoError(os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
 	full := openCodeReviewParseForTest(t, path)
-	require.Len(full.Messages, 2)
-	assert.Equal(1, full.Session.MalformedLines)
+	require.Len(t, full.Messages, 2)
+	assert.Equal(t, 1, full.Session.MalformedLines)
 
 	appendLine := `{"type":"llm_request","uuid":"r2","filePath":"a.go","taskType":"main_task","messages":[{"role":"user","content":"one"},{"role":"assistant","content":"answer"},{"role":"user","content":"two"}]}` + "\n"
-	require.NoError(os.WriteFile(path, append(readFileTest(t, path), []byte(appendLine)...), 0o644))
+	require.NoError(t, os.WriteFile(path, append(readFileTest(t, path), []byte(appendLine)...), 0o644))
 	appended := openCodeReviewParseForTest(t, path)
-	assert.Equal(2, appended.Session.UserMessageCount)
+	assert.Equal(t, 2, appended.Session.UserMessageCount)
 
-	require.NoError(os.WriteFile(path, []byte(strings.Join(lines[:2], "\n")+"\n{"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines[:2], "\n")+"\n{"), 0o644))
 	partial := openCodeReviewParseForTest(t, path)
-	assert.True(partial.Session.IsTruncated)
-	assert.Equal(0, partial.Session.MalformedLines)
-	assert.Equal(TerminationTruncated, partial.Session.TerminationStatus)
+	assert.True(t, partial.Session.IsTruncated)
+	assert.Equal(t, 0, partial.Session.MalformedLines)
+	assert.Equal(t, TerminationTruncated, partial.Session.TerminationStatus)
 
-	require.NoError(os.WriteFile(path, []byte(strings.Join(lines[:2], "\n")+"\n"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines[:2], "\n")+"\n"), 0o644))
 	rewritten := openCodeReviewParseForTest(t, path)
-	assert.False(rewritten.Session.IsTruncated)
-	assert.Equal(1, rewritten.Session.UserMessageCount)
+	assert.False(t, rewritten.Session.IsTruncated)
+	assert.Equal(t, 1, rewritten.Session.UserMessageCount)
 }
 
 func TestOpenCodeReviewRequestSuffixAndStreamPairing(t *testing.T) {
-	assert := assert.New(t)
-
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	lines := []string{
 		`{"type":"session_start","sessionId":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}`,
@@ -297,67 +279,62 @@ func TestOpenCodeReviewRequestSuffixAndStreamPairing(t *testing.T) {
 	}
 	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
 	result := openCodeReviewParseForTest(t, path)
-	assert.Equal(2, result.Session.UserMessageCount)
+	assert.Equal(t, 2, result.Session.UserMessageCount)
 	aCall := findOpenCodeReviewToolCall(t, result.Messages, "file_read", `"path":"a"`)
 	pCall := findOpenCodeReviewToolCall(t, result.Messages, "file_read", `"path":"p"`)
-	assert.Equal("Read", aCall.Category)
-	assert.Equal("call_a", aCall.ToolUseID)
-	assert.Equal("tool_execution", aCall.ResultEvents[0].Source)
-	assert.Equal("completed", aCall.ResultEvents[0].Status)
-	assert.Equal("a result", aCall.ResultEvents[0].Content)
-	assert.Equal("call_a", aCall.ResultEvents[0].ToolUseID)
-	assert.Equal("p result", pCall.ResultEvents[0].Content)
-	assert.Equal("call_p", pCall.ResultEvents[0].ToolUseID)
-	assert.Contains(result.Messages[len(result.Messages)-2].Content, "orphan")
-	assert.Equal(RoleSystem, result.Messages[len(result.Messages)-2].Role)
-	assert.Equal("completed", pCall.ResultEvents[0].Status)
+	assert.Equal(t, "Read", aCall.Category)
+	assert.Equal(t, "call_a", aCall.ToolUseID)
+	assert.Equal(t, "tool_execution", aCall.ResultEvents[0].Source)
+	assert.Equal(t, "completed", aCall.ResultEvents[0].Status)
+	assert.Equal(t, "a result", aCall.ResultEvents[0].Content)
+	assert.Equal(t, "call_a", aCall.ResultEvents[0].ToolUseID)
+	assert.Equal(t, "p result", pCall.ResultEvents[0].Content)
+	assert.Equal(t, "call_p", pCall.ResultEvents[0].ToolUseID)
+	assert.Contains(t, result.Messages[len(result.Messages)-2].Content, "orphan")
+	assert.Equal(t, RoleSystem, result.Messages[len(result.Messages)-2].Role)
+	assert.Equal(t, "completed", pCall.ResultEvents[0].Status)
 	pendingCall := findOpenCodeReviewToolCall(t, result.Messages, "file_read", `"path":"pending"`)
-	assert.Equal("call_pending", pendingCall.ToolUseID)
-	assert.Equal(TerminationToolCallPending, result.Session.TerminationStatus)
+	assert.Equal(t, "call_pending", pendingCall.ToolUseID)
+	assert.Equal(t, TerminationToolCallPending, result.Session.TerminationStatus)
 }
 
 func TestOpenCodeReviewForceReplacesAppendedToolResult(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(root, "project", "dddddddd-dddd-4ddd-8ddd-dddddddddddd.jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	initial := strings.Join([]string{
 		`{"type":"session_start","sessionId":"dddddddd-dddd-4ddd-8ddd-dddddddddddd"}`,
 		`{"type":"llm_response","uuid":"response","filePath":"review.go","taskType":"main_task","content":"checking","tool_calls":[{"id":"call_review","name":"file_read","arguments":{"path":"review.go"}}]}`,
 	}, "\n") + "\n"
-	require.NoError(os.WriteFile(path, []byte(initial), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
 
 	provider, ok := NewProvider(AgentOpenCodeReview, ProviderConfig{Roots: []string{root}, Machine: "local"})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 	initialFingerprint, err := provider.Fingerprint(t.Context(), sources[0])
-	require.NoError(err)
+	require.NoError(t, err)
 	first, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0], Fingerprint: initialFingerprint})
-	require.NoError(err)
-	require.Len(first.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, first.Results, 1)
 	initialCall := findOpenCodeReviewToolCallByID(t, first.Results[0].Result.Messages, "call_review")
-	assert.Empty(initialCall.ResultEvents)
+	assert.Empty(t, initialCall.ResultEvents)
 
 	appended := `{"type":"tool_call","filePath":"review.go","taskType":"main_task","tool_name":"file_read","result":"review contents","ok":true}` + "\n"
-	require.NoError(os.WriteFile(path, append(readFileTest(t, path), []byte(appended)...), 0o644))
+	require.NoError(t, os.WriteFile(path, append(readFileTest(t, path), []byte(appended)...), 0o644))
 	updatedFingerprint, err := provider.Fingerprint(t.Context(), sources[0])
-	require.NoError(err)
+	require.NoError(t, err)
 	second, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0], Fingerprint: updatedFingerprint})
-	require.NoError(err)
-	require.True(second.ForceReplace)
-	require.Len(second.Results, 1)
+	require.NoError(t, err)
+	require.True(t, second.ForceReplace)
+	require.Len(t, second.Results, 1)
 	updatedCall := findOpenCodeReviewToolCallByID(t, second.Results[0].Result.Messages, "call_review")
-	require.Len(updatedCall.ResultEvents, 1)
-	assert.Equal("review contents", updatedCall.ResultEvents[0].Content)
+	require.Len(t, updatedCall.ResultEvents, 1)
+	assert.Equal(t, "review contents", updatedCall.ResultEvents[0].Content)
 }
 
 func TestOpenCodeReviewMetadataAndContinuation(t *testing.T) {
-	assert := assert.New(t)
-
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	lines := []string{
 		`{"type":"session_start","sessionId":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","cwd":"/repo/project","gitBranch":"main","model":"review-model","reviewMode":"range","diffFrom":"base","diffTo":"head","resumedFrom":"parent-run"}`,
@@ -369,15 +346,15 @@ func TestOpenCodeReviewMetadataAndContinuation(t *testing.T) {
 	}
 	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
 	result := openCodeReviewParseForTest(t, path)
-	assert.Equal("opencodereview:parent-run", result.Session.ParentSessionID)
-	assert.Equal(RelContinuation, result.Session.RelationshipType)
-	assert.Equal("review-model", result.Messages[0].Model)
-	assert.Equal("base..head", strings.TrimPrefix(result.Session.SessionName, "Review "))
-	assert.Equal("v1.9.2", result.Session.SourceVersion)
-	assert.Equal("cccccccc-cccc-4ccc-8ccc-cccccccccccc", result.Session.SourceSessionID)
-	assert.Contains(strings.Join(messageContents(result.Messages), "\n"), "reused comment")
-	assert.JSONEq(`{"sourceSessionId":"older","comments":[{"path":"a.go","start_line":12,"end_line":14,"severity":"high","content":"reused comment","suggestion_code":"return err"}]}`, result.Messages[1].Content)
-	assert.Contains(strings.Join(messageContents(result.Messages), "\n"), "failed review")
+	assert.Equal(t, "opencodereview:parent-run", result.Session.ParentSessionID)
+	assert.Equal(t, RelContinuation, result.Session.RelationshipType)
+	assert.Equal(t, "review-model", result.Messages[0].Model)
+	assert.Equal(t, "base..head", strings.TrimPrefix(result.Session.SessionName, "Review "))
+	assert.Equal(t, "v1.9.2", result.Session.SourceVersion)
+	assert.Equal(t, "cccccccc-cccc-4ccc-8ccc-cccccccccccc", result.Session.SourceSessionID)
+	assert.Contains(t, strings.Join(messageContents(result.Messages), "\n"), "reused comment")
+	assert.JSONEq(t, `{"sourceSessionId":"older","comments":[{"path":"a.go","start_line":12,"end_line":14,"severity":"high","content":"reused comment","suggestion_code":"return err"}]}`, result.Messages[1].Content)
+	assert.Contains(t, strings.Join(messageContents(result.Messages), "\n"), "failed review")
 }
 
 func openCodeReviewFixtureBytes(t *testing.T) []byte {
@@ -395,6 +372,7 @@ func openCodeReviewFixtureBytes(t *testing.T) []byte {
 
 func openCodeReviewParseForTest(t *testing.T, path string) ParseResult {
 	t.Helper()
+
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	parsed, err := parseOpenCodeReviewFile(t.Context(), path, "project", "local", SourceFingerprint{Size: info.Size(), MTimeNS: info.ModTime().UnixNano()})
@@ -437,7 +415,7 @@ func findOpenCodeReviewToolCall(t *testing.T, messages []ParsedMessage, name, pa
 			}
 		}
 	}
-	t.Fatalf("tool call %s for %s not found", name, path)
+	require.FailNowf(t, "test failed", "tool call %s for %s not found", name, path)
 	return ParsedToolCall{}
 }
 
@@ -450,7 +428,7 @@ func findOpenCodeReviewToolCallByID(t *testing.T, messages []ParsedMessage, id s
 			}
 		}
 	}
-	t.Fatalf("tool call %s not found", id)
+	require.FailNowf(t, "test failed", "tool call %s not found", id)
 	return ParsedToolCall{}
 }
 

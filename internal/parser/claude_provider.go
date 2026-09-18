@@ -9,11 +9,13 @@ import (
 	"strings"
 )
 
-var _ Provider = (*claudeProvider)(nil)
-var _ S3Provider = (*claudeProvider)(nil)
-var _ RawCaptureProvider = (*claudeProvider)(nil)
-var _ RawCaptureSourceProvider = (*claudeProvider)(nil)
-var _ StreamingRawCaptureSourceProvider = (*claudeProvider)(nil)
+var (
+	_ Provider                          = (*claudeProvider)(nil)
+	_ S3Provider                        = (*claudeProvider)(nil)
+	_ RawCaptureProvider                = (*claudeProvider)(nil)
+	_ RawCaptureSourceProvider          = (*claudeProvider)(nil)
+	_ StreamingRawCaptureSourceProvider = (*claudeProvider)(nil)
+)
 
 type claudeProviderFactory struct {
 	def AgentDef
@@ -836,7 +838,7 @@ func claudeProviderProject(ctx context.Context, projectHint, path string) string
 }
 
 func errorsIsClaudeDAG(err error) bool {
-	return err == ErrDAGDetected
+	return errors.Is(err, ErrDAGDetected)
 }
 
 func claudeProviderUserMessageCount(msgs []ParsedMessage) int {

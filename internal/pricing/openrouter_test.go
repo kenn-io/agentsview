@@ -34,7 +34,7 @@ func TestFetchCatalogDegradesWhenOpenRouterFails(t *testing.T) {
 		t.Context(), noGenAIPricing, fetchLiteLLM, fetchOpenRouter,
 	)
 
-	assert.ErrorIs(t, err, openrouterErr)
+	require.ErrorIs(t, err, openrouterErr)
 	assert.Equal(t, Catalog{LiteLLM: litellm}, catalog,
 		"LiteLLM rows survive an OpenRouter outage")
 }
@@ -45,7 +45,7 @@ func TestFetchCatalogFailsWhenLiteLLMFails(t *testing.T) {
 		return nil, litellmErr
 	}
 	fetchOpenRouter := func(context.Context) ([]ModelPricing, error) {
-		t.Fatal("openrouter must not be fetched after a litellm failure")
+		assert.Fail(t, "openrouter must not be fetched after a litellm failure")
 		return nil, nil
 	}
 
@@ -53,14 +53,11 @@ func TestFetchCatalogFailsWhenLiteLLMFails(t *testing.T) {
 		t.Context(), noGenAIPricing, fetchLiteLLM, fetchOpenRouter,
 	)
 
-	assert.ErrorIs(t, err, litellmErr)
+	require.ErrorIs(t, err, litellmErr)
 	assert.Equal(t, Catalog{}, catalog)
 }
 
 func TestCatalogReconcile(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	litellm := []ModelPricing{
 		{ModelPattern: "minimax/MiniMax-M3", InputPerMTok: rate("2")},
 		{ModelPattern: "openrouter/openai/gpt-x", InputPerMTok: rate("1")},
@@ -88,21 +85,21 @@ func TestCatalogReconcile(t *testing.T) {
 		LiteLLM: litellm, OpenRouter: openrouter,
 	}.Reconcile(stored, []string{"acme/previous", "acme/old-spelling"})
 
-	assert.Equal(append(litellm, openrouter[4]), prices)
-	assert.Equal([]string{"acme/only-openrouter", "acme/previous"}, owned,
+	assert.Equal(t, append(litellm, openrouter[4]), prices)
+	assert.Equal(t, []string{"acme/only-openrouter", "acme/previous"}, owned,
 		"a delisted OpenRouter row stays tracked until something covers it")
-	assert.Equal([]string{"acme/old-spelling"}, retired)
+	assert.Equal(t, []string{"acme/old-spelling"}, retired)
 
 	byPattern := make(map[string]ModelPricing, len(prices))
 	for _, p := range prices {
 		byPattern[p.ModelPattern] = p
 	}
 	price, ok := Resolve(byPattern, "MiniMax-M3")
-	require.True(ok, "bare lookup resolves without a tie")
-	assert.Equal(rate("2"), price.InputPerMTok)
+	require.True(t, ok, "bare lookup resolves without a tie")
+	assert.Equal(t, rate("2"), price.InputPerMTok)
 	price, ok = Resolve(byPattern, "only-openrouter")
-	require.True(ok, "OpenRouter-only model resolves by bare name")
-	assert.Equal(rate("7"), price.InputPerMTok)
+	require.True(t, ok, "OpenRouter-only model resolves by bare name")
+	assert.Equal(t, rate("7"), price.InputPerMTok)
 }
 
 func TestCatalogReconcileRetiresShadowedPrevious(t *testing.T) {
@@ -154,18 +151,15 @@ func TestShadowedPatterns(t *testing.T) {
 }
 
 func TestOpenRouterModelsRoundTrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
-	assert.Equal("[]", EncodeOpenRouterModels(nil))
+	assert.Equal(t, "[]", EncodeOpenRouterModels(nil))
 	decoded, err := DecodeOpenRouterModels(EncodeOpenRouterModels(
 		[]string{"a", "b"},
 	))
-	require.NoError(err)
-	assert.Equal([]string{"a", "b"}, decoded)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, decoded)
 	decoded, err = DecodeOpenRouterModels("")
-	require.NoError(err)
-	assert.Nil(decoded)
+	require.NoError(t, err)
+	assert.Nil(t, decoded)
 	_, err = DecodeOpenRouterModels("not json")
-	require.Error(err)
+	require.Error(t, err)
 }

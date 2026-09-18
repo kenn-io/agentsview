@@ -95,8 +95,8 @@ func endpointScopedRejection(err error) bool {
 		errors.Is(err, errRedirectRefused) {
 		return true
 	}
-	var rejection *requestStatusError
-	if !errors.As(err, &rejection) {
+	rejection, hasRejection := errors.AsType[*requestStatusError](err)
+	if !hasRejection {
 		return false
 	}
 	switch rejection.status {
@@ -340,8 +340,8 @@ func (c *Client) DistillWithRecovery(
 				ErrPersistentTruncation,
 			)
 		}
-		var transient *transientError
-		if !errors.As(err, &transient) {
+		transient, hasTransient := errors.AsType[*transientError](err)
+		if !hasTransient {
 			return nil, total, err
 		}
 		lastErr = err

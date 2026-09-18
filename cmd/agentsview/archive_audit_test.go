@@ -23,11 +23,9 @@ import (
 // delay doubles and caps at archiveAuditInterval, success returns to the daily
 // cadence, and no in-process sync ever runs.
 func TestArchiveAuditRetriesWithBackoffOnFailure(t *testing.T) {
-	assert := assert.New(t)
-
 	cfg := testConfigWithClaudeFixture(t)
 	database, lock := openTestWriteDB(t, cfg)
-	engine := sync.NewEngine(database, workerEngineConfig(cfg))
+	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
 	t.Cleanup(engine.Close)
 	em := &scopedEmitter{scopes: make(chan string, 8)}
 
@@ -35,7 +33,7 @@ func TestArchiveAuditRetriesWithBackoffOnFailure(t *testing.T) {
 	restore := stubLaunchSyncWorker(t, func(
 		_ context.Context, _ config.Config, mode string, _ func(workerLine),
 	) (workerResult, error) {
-		assert.Equal("audit", mode)
+		assert.Equal(t, "audit", mode)
 		attempts++
 		if attempts <= 6 {
 			return workerResult{Status: "failed"}, errors.New("audit boom")
@@ -60,25 +58,22 @@ func TestArchiveAuditRetriesWithBackoffOnFailure(t *testing.T) {
 
 	runArchiveAuditLoop(ctx, wait, audit)
 
-	assert.Equal(7, attempts, "the audit obligation is retained across failures")
+	assert.Equal(t, 7, attempts, "the audit obligation is retained across failures")
 	require.GreaterOrEqual(t, len(delays), 8)
-	assert.Equal([]time.Duration{
+	assert.Equal(t, []time.Duration{
 		archiveAuditInterval, // initial daily wait
 		1 * time.Hour, 2 * time.Hour, 4 * time.Hour, 8 * time.Hour,
 		16 * time.Hour, archiveAuditInterval, // backoff doubles then caps at 24h
 		archiveAuditInterval, // success returns to the daily cadence
 	}, delays[:8])
-	assert.True(engine.LastSync().IsZero(),
+	assert.True(t, engine.LastSync().IsZero(),
 		"the audit must never run an in-process sync pass")
 }
 
 func TestArchiveAuditPublishesAndClearsWorkerProgress(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	cfg := testConfigWithClaudeFixture(t)
 	database, lock := openTestWriteDB(t, cfg)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		ProgressStallAfter: time.Nanosecond,
 	})
 	t.Cleanup(engine.Close)
@@ -100,7 +95,7 @@ func TestArchiveAuditPublishesAndClearsWorkerProgress(t *testing.T) {
 	restore := stubLaunchSyncWorker(t, func(
 		_ context.Context, _ config.Config, mode string, onLine func(workerLine),
 	) (workerResult, error) {
-		assert.Equal("audit", mode)
+		assert.Equal(t, "audit", mode)
 		close(workerStarted)
 		<-emitProgress
 		if onLine != nil {
@@ -120,11 +115,11 @@ func TestArchiveAuditPublishesAndClearsWorkerProgress(t *testing.T) {
 	select {
 	case <-workerStarted:
 	case <-time.After(time.Second):
-		require.FailNow("audit worker did not start")
+		require.FailNow(t, "audit worker did not start")
 	}
 
 	var progress sync.Progress
-	require.Eventually(func() bool {
+	require.Eventually(t, func() bool {
 		current, active := engine.CurrentProgress()
 		if !active || !current.Stalled {
 			return false
@@ -133,25 +128,25 @@ func TestArchiveAuditPublishesAndClearsWorkerProgress(t *testing.T) {
 		return true
 	}, time.Second, time.Millisecond,
 		"daemon health must observe a stalled audit blocked in its worker pass")
-	assert.Equal(sync.PhaseDiscovering, progress.Phase)
+	assert.Equal(t, sync.PhaseDiscovering, progress.Phase)
 
 	emitProgress <- struct{}{}
 	select {
 	case <-progressSeen:
 	case <-time.After(time.Second):
-		require.FailNow("audit worker did not publish progress")
+		require.FailNow(t, "audit worker did not publish progress")
 	}
 	progress, active := engine.CurrentProgress()
-	require.True(active,
+	require.True(t, active,
 		"daemon health must receive progress from the audit worker")
-	assert.Equal(sync.PhaseSyncing, progress.Phase)
-	assert.Equal(9, progress.SessionsTotal)
-	assert.Equal(4, progress.SessionsDone)
+	assert.Equal(t, sync.PhaseSyncing, progress.Phase)
+	assert.Equal(t, 9, progress.SessionsTotal)
+	assert.Equal(t, 4, progress.SessionsDone)
 
 	release <- struct{}{}
-	require.ErrorIs(<-done, sentinel)
+	require.ErrorIs(t, <-done, sentinel)
 	_, active = engine.CurrentProgress()
-	assert.False(active,
+	assert.False(t, active,
 		"completed audit pass must clear daemon-visible progress")
 }
 
@@ -160,7 +155,7 @@ func TestArchiveAuditPublishesAndClearsWorkerProgress(t *testing.T) {
 func TestArchiveAuditEmitsOnDataChange(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	database, lock := openTestWriteDB(t, cfg)
-	engine := sync.NewEngine(database, workerEngineConfig(cfg))
+	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
 	t.Cleanup(engine.Close)
 	em := &scopedEmitter{scopes: make(chan string, 1)}
 
@@ -183,32 +178,30 @@ func TestArchiveAuditEmitsOnDataChange(t *testing.T) {
 }
 
 func TestArchiveAuditReloadsParentSkipCacheAfterWorkerTombstones(t *testing.T) {
-	require := require.New(t)
-
 	cfg := testConfigWithClaudeFixture(t)
 	database, lock := openTestWriteDB(t, cfg)
 	hashKey := filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "project", "session.jsonl") +
 		"?source_hash=unchanged"
-	require.NoError(database.ReplaceSkippedFiles(map[string]int64{hashKey: 123}))
-	engine := sync.NewEngine(database, workerEngineConfig(cfg))
+	require.NoError(t, database.ReplaceSkippedFiles(t.Context(), map[string]int64{hashKey: 123}))
+	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
 	t.Cleanup(engine.Close)
-	require.Contains(engine.SnapshotSkipCache(), hashKey)
+	require.Contains(t, engine.SnapshotSkipCache(), hashKey)
 
 	restore := stubLaunchSyncWorker(t, func(
 		_ context.Context, workerCfg config.Config, mode string, _ func(workerLine),
 	) (workerResult, error) {
 		assert.Equal(t, "audit", mode)
-		workerDB, err := db.Open(workerCfg.DBPath)
-		require.NoError(err)
-		require.NoError(workerDB.ReplaceSkippedFiles(map[string]int64{}))
-		require.NoError(workerDB.Close())
+		workerDB, err := db.Open(t.Context(), workerCfg.DBPath)
+		require.NoError(t, err)
+		require.NoError(t, workerDB.ReplaceSkippedFiles(t.Context(), map[string]int64{}))
+		require.NoError(t, workerDB.Close())
 		return workerResult{
 			Status: "ok", Tombstoned: 1, DiscoveryComplete: true,
 		}, nil
 	})
 	defer restore()
 
-	require.NoError(runArchiveAudit(
+	require.NoError(t, runArchiveAudit(
 		t.Context(), cfg, engine, database, lock, nil,
 	))
 	assert.NotContains(t, engine.SnapshotSkipCache(), hashKey,
@@ -221,24 +214,22 @@ func TestArchiveAuditReloadsParentSkipCacheAfterWorkerTombstones(t *testing.T) {
 // line reaches the parent, so a zero-value result with a protocol error must
 // still refresh the daemon's in-memory skip cache.
 func TestArchiveAuditReloadsSkipCacheOnLostTerminalResult(t *testing.T) {
-	require := require.New(t)
-
 	cfg := testConfigWithClaudeFixture(t)
 	database, lock := openTestWriteDB(t, cfg)
 	hashKey := filepath.Join(cfg.AgentDirs[parser.AgentClaude][0], "project", "session.jsonl") +
 		"?source_hash=unchanged"
-	require.NoError(database.ReplaceSkippedFiles(map[string]int64{hashKey: 123}))
-	engine := sync.NewEngine(database, workerEngineConfig(cfg))
+	require.NoError(t, database.ReplaceSkippedFiles(t.Context(), map[string]int64{hashKey: 123}))
+	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
 	t.Cleanup(engine.Close)
-	require.Contains(engine.SnapshotSkipCache(), hashKey)
+	require.Contains(t, engine.SnapshotSkipCache(), hashKey)
 
 	restore := stubLaunchSyncWorker(t, func(
 		_ context.Context, workerCfg config.Config, _ string, _ func(workerLine),
 	) (workerResult, error) {
-		workerDB, err := db.Open(workerCfg.DBPath)
-		require.NoError(err)
-		require.NoError(workerDB.ReplaceSkippedFiles(map[string]int64{}))
-		require.NoError(workerDB.Close())
+		workerDB, err := db.Open(t.Context(), workerCfg.DBPath)
+		require.NoError(t, err)
+		require.NoError(t, workerDB.ReplaceSkippedFiles(t.Context(), map[string]int64{}))
+		require.NoError(t, workerDB.Close())
 		return workerResult{}, errors.New(
 			"audit worker: sync worker emitted 0 terminal results, want exactly 1",
 		)
@@ -246,7 +237,7 @@ func TestArchiveAuditReloadsSkipCacheOnLostTerminalResult(t *testing.T) {
 	defer restore()
 
 	err := runArchiveAudit(t.Context(), cfg, engine, database, lock, nil)
-	require.Error(err, "the protocol failure must surface so the caller retries")
+	require.Error(t, err, "the protocol failure must surface so the caller retries")
 	assert.NotContains(t, engine.SnapshotSkipCache(), hashKey,
 		"a lost terminal result must not leave the daemon's skip cache stale")
 }
@@ -258,7 +249,7 @@ func TestArchiveAuditReloadsSkipCacheOnLostTerminalResult(t *testing.T) {
 func TestArchiveAuditEmitsOnPartialSuccess(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	database, lock := openTestWriteDB(t, cfg)
-	engine := sync.NewEngine(database, workerEngineConfig(cfg))
+	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
 	t.Cleanup(engine.Close)
 	em := &scopedEmitter{scopes: make(chan string, 1)}
 
@@ -286,7 +277,7 @@ func TestArchiveAuditEmitsOnPartialSuccess(t *testing.T) {
 func TestArchiveAuditSurfacesWorkerFailureWithoutFallback(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	database, lock := openTestWriteDB(t, cfg)
-	engine := sync.NewEngine(database, workerEngineConfig(cfg))
+	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
 	t.Cleanup(engine.Close)
 	em := &scopedEmitter{scopes: make(chan string, 1)}
 
@@ -390,15 +381,13 @@ func TestArchiveAuditLoopStopsOnContextCancel(t *testing.T) {
 // TestSyncWorkerAuditModeRunsSyncPass confirms the audit worker mode performs a
 // full authoritative pass over the archive and emits an ok terminal result.
 func TestSyncWorkerAuditModeRunsSyncPass(t *testing.T) {
-	assert := assert.New(t)
-
 	cfg := testConfigWithClaudeFixture(t)
 	var out bytes.Buffer
 	require.NoError(t, runSyncWorker(cfg, "audit", &out))
 	result := decodeSingleResult(t, &out)
-	assert.Equal("ok", result.Status)
-	assert.True(result.DiscoveryComplete)
-	assert.Equal(3, result.Synced)
+	assert.Equal(t, "ok", result.Status)
+	assert.True(t, result.DiscoveryComplete)
+	assert.Equal(t, 3, result.Synced)
 }
 
 // TestSyncWorkerAuditMarksMissedSourceMissing is the audit's safety-net
@@ -406,61 +395,56 @@ func TestSyncWorkerAuditModeRunsSyncPass(t *testing.T) {
 // marked missing by the daily audit, with the session left browsable in the
 // persistent archive.
 func TestSyncWorkerAuditMarksMissedSourceMissing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	cfg := testConfigWithClaudeFixture(t)
-	database, err := db.Open(cfg.DBPath)
-	require.NoError(err)
-	engine := sync.NewEngine(database, workerEngineConfig(cfg))
-	require.Equal(3, engine.SyncAll(t.Context(), nil).Synced)
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
+	require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
 	claudeDir := cfg.AgentDirs[parser.AgentClaude][0]
 	deletedPath := filepath.Join(claudeDir, "-home-proj0", "session0.jsonl")
 	hashKey := deletedPath + "?source_hash=unchanged"
-	require.NoError(database.ReplaceSkippedFiles(map[string]int64{hashKey: 123}))
+	require.NoError(t, database.ReplaceSkippedFiles(t.Context(), map[string]int64{hashKey: 123}))
 	engine.Close()
-	require.NoError(database.Close())
+	require.NoError(t, database.Close())
 
 	// Delete one source with no watcher running: only the audit can notice.
-	require.NoError(os.Remove(deletedPath))
+	require.NoError(t, os.Remove(deletedPath))
 
 	var out bytes.Buffer
-	require.NoError(runSyncWorker(cfg, "audit", &out))
+	require.NoError(t, runSyncWorker(cfg, "audit", &out))
 	result := decodeSingleResult(t, &out)
-	assert.Equal("ok", result.Status)
-	assert.Equal(1, result.Tombstoned,
+	assert.Equal(t, "ok", result.Status)
+	assert.Equal(t, 1, result.Tombstoned,
 		"the audit must report the source-state change the watcher missed")
 
-	database, err = db.Open(cfg.DBPath)
-	require.NoError(err)
+	database, err = db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
 	defer database.Close()
 	var visible, sourceMissing, total int
-	require.NoError(database.Reader().QueryRow(
+	require.NoError(t, database.Reader().QueryRow(t.Context(),
 		"SELECT COUNT(*) FROM sessions WHERE deleted_at IS NULL",
 	).Scan(&visible))
-	require.NoError(database.Reader().QueryRow(
+	require.NoError(t, database.Reader().QueryRow(t.Context(),
 		"SELECT COUNT(*) FROM sessions WHERE source_missing_at IS NOT NULL",
 	).Scan(&sourceMissing))
-	require.NoError(database.Reader().QueryRow(
+	require.NoError(t, database.Reader().QueryRow(t.Context(),
 		"SELECT COUNT(*) FROM sessions",
 	).Scan(&total))
-	assert.Equal(3, visible, "a missing source must not hide its session")
-	assert.Equal(1, sourceMissing, "the audit must record the missing source")
-	assert.Equal(3, total, "source reconciliation must preserve every archived row")
-	persistedSkips, err := database.LoadSkippedFiles()
-	require.NoError(err)
-	assert.NotContains(persistedSkips, hashKey,
+	assert.Equal(t, 3, visible, "a missing source must not hide its session")
+	assert.Equal(t, 1, sourceMissing, "the audit must record the missing source")
+	assert.Equal(t, 3, total, "source reconciliation must preserve every archived row")
+	persistedSkips, err := database.LoadSkippedFiles(t.Context())
+	require.NoError(t, err)
+	assert.NotContains(t, persistedSkips, hashKey,
 		"the audit worker must durably remove the tombstoned source's hash key")
 }
 
 func TestWorkerResultHasSessionChangesSeesCwdOnlyStats(t *testing.T) {
-	assert := assert.New(t)
-
-	assert.False(workerResultHasSessionChanges(workerResult{}))
-	assert.True(workerResultHasSessionChanges(workerResult{Synced: 1}))
-	assert.True(workerResultHasSessionChanges(workerResult{Tombstoned: 1}))
+	assert.False(t, workerResultHasSessionChanges(workerResult{}))
+	assert.True(t, workerResultHasSessionChanges(workerResult{Synced: 1}))
+	assert.True(t, workerResultHasSessionChanges(workerResult{Tombstoned: 1}))
 
 	cwdOnly := workerResult{Stats: &sync.SyncStats{CwdUpdated: 1}}
-	assert.True(workerResultHasSessionChanges(cwdOnly),
+	assert.True(t, workerResultHasSessionChanges(cwdOnly),
 		"a cwd-only audit pass must still notify SSE clients")
 }

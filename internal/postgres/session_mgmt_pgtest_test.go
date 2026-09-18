@@ -51,7 +51,7 @@ func TestStoreSessionManagementCRUD(t *testing.T) {
 	require.NoError(t, err, "marking restore target current")
 
 	renamed := "Renamed by PG store"
-	require.NoError(t, store.RenameSession("mgmt-rename", &renamed),
+	require.NoError(t, store.RenameSession(t.Context(), "mgmt-rename", &renamed),
 		"RenameSession")
 	sess, err := store.GetSession(ctx, "mgmt-rename")
 	require.NoError(t, err, "GetSession after rename")
@@ -59,13 +59,13 @@ func TestStoreSessionManagementCRUD(t *testing.T) {
 	require.NotNil(t, sess.DisplayName)
 	assert.Equal(t, renamed, *sess.DisplayName)
 
-	require.NoError(t, store.SoftDeleteSession("mgmt-trash"),
+	require.NoError(t, store.SoftDeleteSession(t.Context(), "mgmt-trash"),
 		"SoftDeleteSession")
 	trashed, err := store.ListTrashedSessions(ctx)
 	require.NoError(t, err, "ListTrashedSessions after soft delete")
 	assert.Contains(t, sessionIDs(trashed), "mgmt-trash")
 
-	restored, err := store.RestoreSession("mgmt-trash")
+	restored, err := store.RestoreSession(t.Context(), "mgmt-trash")
 	require.NoError(t, err, "RestoreSession")
 	assert.EqualValues(t, 1, restored)
 	sess, err = store.GetSession(ctx, "mgmt-trash")
@@ -74,22 +74,22 @@ func TestStoreSessionManagementCRUD(t *testing.T) {
 	assert.Less(t, sess.DataVersion, db.CurrentDataVersion(),
 		"restoring a session must force a source reparse")
 
-	require.NoError(t, store.SoftDeleteSession("mgmt-delete"),
+	require.NoError(t, store.SoftDeleteSession(t.Context(), "mgmt-delete"),
 		"SoftDeleteSession delete target")
-	deleted, err := store.DeleteSessionIfTrashed("mgmt-delete")
+	deleted, err := store.DeleteSessionIfTrashed(t.Context(), "mgmt-delete")
 	require.NoError(t, err, "DeleteSessionIfTrashed")
 	assert.EqualValues(t, 1, deleted)
 	sess, err = store.GetSessionFull(ctx, "mgmt-delete")
 	require.NoError(t, err, "GetSessionFull after delete")
 	assert.Nil(t, sess)
 
-	deletedCount, err := store.SoftDeleteSessions([]string{
+	deletedCount, err := store.SoftDeleteSessions(t.Context(), []string{
 		"mgmt-empty-a", "mgmt-empty-b",
 	})
 	require.NoError(t, err, "SoftDeleteSessions")
 	assert.Equal(t, 2, deletedCount)
 
-	count, err := store.EmptyTrash()
+	count, err := store.EmptyTrash(t.Context())
 	require.NoError(t, err, "EmptyTrash")
 	assert.Equal(t, 2, count)
 	trashed, err = store.ListTrashedSessions(ctx)
@@ -97,9 +97,9 @@ func TestStoreSessionManagementCRUD(t *testing.T) {
 	assert.NotContains(t, sessionIDs(trashed), "mgmt-empty-a")
 	assert.NotContains(t, sessionIDs(trashed), "mgmt-empty-b")
 
-	assert.Equal(t, db.ErrReadOnly, store.UpsertSession(db.Session{}))
+	assert.Equal(t, db.ErrReadOnly, store.UpsertSession(t.Context(), db.Session{}))
 	assert.Equal(t, db.ErrReadOnly,
-		store.ReplaceSessionMessages("mgmt-rename", nil))
-	_, err = store.WriteSessionBatchAtomic(nil)
+		store.ReplaceSessionMessages(t.Context(), "mgmt-rename", nil))
+	_, err = store.WriteSessionBatchAtomic(t.Context(), nil)
 	assert.ErrorIs(t, err, db.ErrReadOnly)
 }

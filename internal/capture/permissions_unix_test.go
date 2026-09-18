@@ -34,34 +34,30 @@ func TestCreateStateAllowsTrustedStickyParent(t *testing.T) {
 }
 
 func TestOpenStateRejectsParentMadeReplaceable(t *testing.T) {
-	require := require.New(t)
-
 	parent := filepath.Join(t.TempDir(), "private")
-	require.NoError(os.Mkdir(parent, 0o700))
+	require.NoError(t, os.Mkdir(parent, 0o700))
 	dir := filepath.Join(parent, "capture")
 	state, err := createState(dir, permissionTestManifest(t))
-	require.NoError(err)
+	require.NoError(t, err)
 	state.close()
-	require.NoError(os.Chmod(parent, 0o777))
+	require.NoError(t, os.Chmod(parent, 0o777))
 
 	_, err = openState(dir)
 
-	require.ErrorContains(err, "writable by another user")
+	require.ErrorContains(t, err, "writable by another user")
 }
 
 func TestOpenCaptureEngineCreatesOwnerOnlyArchive(t *testing.T) {
-	require := require.New(t)
-
 	state := &captureState{dir: t.TempDir(), manifest: manifest{
 		Provider: string(ProviderClaude), Limits: DefaultLimits(),
 	}}
 	database, engine, err := openCaptureEngine(t.Context(), state, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	engine.Close()
-	require.NoError(database.Close())
+	require.NoError(t, database.Close())
 
 	info, err := os.Stat(state.archivePath())
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
@@ -80,19 +76,16 @@ func permissionTestManifest(t *testing.T) manifest {
 }
 
 func TestOpenStateDoesNotSecureAnInvalidCaptureDirectory(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, manifestFileName), []byte("not json"), 0o600))
-	require.NoError(os.Chmod(dir, 0o755))
+	require.NoError(t, os.Chmod(dir, 0o755))
 
 	_, err := openState(dir)
 
-	require.ErrorContains(err, "decoding capture manifest")
+	require.ErrorContains(t, err, "decoding capture manifest")
 	info, statErr := os.Stat(dir)
-	require.NoError(statErr)
-	assert.Equal(os.FileMode(0o755), info.Mode().Perm())
-	assert.NoFileExists(filepath.Join(dir, lockFileName))
+	require.NoError(t, statErr)
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+	assert.NoFileExists(t, filepath.Join(dir, lockFileName))
 }

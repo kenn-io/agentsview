@@ -15,6 +15,7 @@ import (
 // for query.
 func explainVectorPlan(t *testing.T, ix *Index, query string, args ...any) []string {
 	t.Helper()
+
 	rows, err := ix.db.QueryContext(
 		t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
 	require.NoError(t, err)
@@ -47,20 +48,17 @@ func TestMirrorRevisionIndexExists(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			ix, err := OpenSpec(t.Context(),
 				filepath.Join(t.TempDir(), "vectors.db"), tt.spec, false, 4000)
-			require.NoError(err)
-			t.Cleanup(func() { require.NoError(ix.Close()) })
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, ix.Close()) })
 
 			var sql string
-			require.NoError(ix.db.QueryRowContext(t.Context(),
+			require.NoError(t, ix.db.QueryRowContext(t.Context(),
 				`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`,
 				tt.index).Scan(&sql))
-			assert.Contains(sql, tt.spec.DocsTable)
-			assert.Contains(strings.ReplaceAll(sql, " ", ""), "(doc_key,content_hash)")
+			assert.Contains(t, sql, tt.spec.DocsTable)
+			assert.Contains(t, strings.ReplaceAll(sql, " ", ""), "(doc_key,content_hash)")
 		})
 	}
 }
@@ -70,8 +68,6 @@ func TestMirrorRevisionIndexExists(t *testing.T) {
 // after-sync refresh. The pending set must resolve through the mirror's
 // covering index, and content must only be read per pending doc_key.
 func TestPendingContentQueryPlanSkipsStampedDocumentContent(t *testing.T) {
-	assert := assert.New(t)
-
 	ix, gen := builtPendingIndex(t)
 	ordinal, err := ix.ordinalForFingerprint(t.Context(), gen.Fingerprint())
 	require.NoError(t, err)
@@ -79,14 +75,14 @@ func TestPendingContentQueryPlanSkipsStampedDocumentContent(t *testing.T) {
 	plan := explainVectorPlan(t, ix, ix.pendingContentQuery(), ordinal)
 	joined := strings.Join(plan, "\n")
 
-	assert.Contains(joined,
+	assert.Contains(t, joined,
 		"SCAN d USING COVERING INDEX idx_vector_messages_revision",
 		"the pending set must come from the covering index:\n%s", joined)
-	assert.Contains(joined,
+	assert.Contains(t, joined,
 		"SEARCH d USING INDEX sqlite_autoindex_vector_messages_1 (doc_key=?)",
 		"content must be fetched per pending doc_key:\n%s", joined)
 	for _, line := range plan {
-		assert.NotEqual("SCAN d", line,
+		assert.NotEqual(t, "SCAN d", line,
 			"no step may read every mirror row's content:\n%s", joined)
 	}
 }
@@ -139,6 +135,8 @@ func TestCountPendingMatchesCoverageMissing(t *testing.T) {
 		{
 			name: "StaleRevisionCountsAsPending",
 			mutate: func(t *testing.T, ix *Index) {
+				t.Helper()
+
 				_, err := ix.db.ExecContext(ctx,
 					`UPDATE vector_messages SET content_hash = 'changed'
 					 WHERE doc_key = 'u:s1:u1'`)
@@ -150,6 +148,8 @@ func TestCountPendingMatchesCoverageMissing(t *testing.T) {
 		{
 			name: "UnstampedMultiChunkDocumentCountsEveryChunk",
 			mutate: func(t *testing.T, ix *Index) {
+				t.Helper()
+
 				_, err := ix.db.ExecContext(ctx, `
 INSERT INTO vector_messages
     (doc_key, session_id, source_uuid, ordinal, ordinal_end, content, content_hash)
@@ -157,6 +157,8 @@ VALUES ('u:s1:u3', 's1', 'u3', 9, 9, ?, 'hash-u3')`, longContent)
 				require.NoError(t, err)
 			},
 			wantChunks: func(t *testing.T, ix *Index) int64 {
+				t.Helper()
+
 				chunks := int64(len(kitvec.Split(longContent, ix.split)))
 				require.Greater(t, chunks, int64(1),
 					"content must split into several chunks for this case to be meaningful")
@@ -167,21 +169,18 @@ VALUES ('u:s1:u3', 's1', 'u3', 9, 9, ?, 'hash-u3')`, longContent)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			ix, gen := builtPendingIndex(t)
 			tt.mutate(t, ix)
 			want := tt.wantChunks(t, ix)
 
 			total, err := ix.countPending(ctx, gen.Fingerprint())
-			require.NoError(err)
-			assert.Equal(want, total)
+			require.NoError(t, err)
+			assert.Equal(t, want, total)
 
 			gens, err := ix.Generations(ctx)
-			require.NoError(err)
-			require.Len(gens, 1)
-			assert.Equal(tt.wantMissing, gens[0].Missing,
+			require.NoError(t, err)
+			require.Len(t, gens, 1)
+			assert.Equal(t, tt.wantMissing, gens[0].Missing,
 				"countPending and the coverage query must agree on what is pending")
 		})
 	}

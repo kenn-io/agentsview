@@ -79,13 +79,11 @@ func withPricingCatalogTransport(t *testing.T, transport http.RoundTripper) {
 
 func TestPricingRefreshStartsDespiteRecentAttemptAndRecovers(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		require := require.New(t)
-
 		database := dbtest.OpenTestDB(t)
 		previousAttempt := time.Now().Add(-10 * time.Minute).UTC().Format(
 			time.RFC3339,
 		)
-		require.NoError(database.SetPricingMeta(
+		require.NoError(t, database.SetPricingMeta(
 			"_litellm_last_attempt", previousAttempt,
 		))
 
@@ -102,14 +100,14 @@ func TestPricingRefreshStartsDespiteRecentAttemptAndRecovers(t *testing.T) {
 			sched.Wait()
 		})
 		synctest.Wait()
-		require.Contains(sched.Status()[0].LastError, "simulated pricing catalog transport failure")
+		require.Contains(t, sched.Status()[0].LastError, "simulated pricing catalog transport failure")
 
 		failing = false
-		require.NoError(sched.TriggerNow(pricingRefreshJobName))
+		require.NoError(t, sched.TriggerNow(pricingRefreshJobName))
 
 		price, err := database.GetModelPricing("scheduled-model")
-		require.NoError(err)
-		require.NotNil(price)
+		require.NoError(t, err)
+		require.NotNil(t, price)
 		assert.Equal(t, int64(2_000_000), price.InputPerMTok.Microdollars)
 	})
 }
@@ -124,7 +122,7 @@ func TestPricingWritesWaitForResyncSwap(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
-			engine := agentsync.NewEngine(database, agentsync.EngineConfig{})
+			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{})
 			t.Cleanup(engine.Close)
 			dbtest.EnsureTestDBAt(t, engine.ResyncTempPath())
 
@@ -140,7 +138,7 @@ func TestPricingWritesWaitForResyncSwap(t *testing.T) {
 					if _, err := engine.SwapResyncDatabase(engine.ResyncTempPath()); err != nil {
 						return err
 					}
-					return engine.ResetCachesAfterSwap()
+					return engine.ResetCachesAfterSwap(t.Context())
 				})
 			}()
 			awaitPricingResult(t, swapEntered)
@@ -177,6 +175,6 @@ func awaitPricingResult(t *testing.T, result <-chan error) {
 	case err := <-result:
 		require.NoError(t, err)
 	case <-time.After(pricingResyncTestTimeout):
-		t.Fatal("pricing operation did not finish")
+		require.FailNow(t, "pricing operation did not finish")
 	}
 }

@@ -48,27 +48,22 @@ func TestImporterUsesRecordedProjectWithoutLocalGitDiscovery(t *testing.T) {
 		},
 	} {
 		t.Run(string(tc.agent), func(t *testing.T) {
-			parentRequire := require.New(t)
-
 			repo := filepath.Join(t.TempDir(), "local-repository")
 			cwd := filepath.Join(repo, "recorded-project")
 			// Plain directories exercise project discovery without invoking Git.
-			parentRequire.NoError(os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
-			parentRequire.NoError(os.MkdirAll(cwd, 0o755))
+			require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+			require.NoError(t, os.MkdirAll(cwd, 0o755))
 			cwdJSON, err := json.Marshal(cwd)
-			parentRequire.NoError(err)
+			require.NoError(t, err)
 			extracted := t.TempDir()
 			const remoteDir = "/remote/sessions"
 			sessions := remappedRemotePath(extracted, remoteDir)
-			parentRequire.NoError(os.MkdirAll(filepath.Dir(filepath.Join(sessions, tc.filename)), 0o755))
-			parentRequire.NoError(os.WriteFile(filepath.Join(sessions, tc.filename),
+			require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Join(sessions, tc.filename)), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(sessions, tc.filename),
 				[]byte(fmt.Sprintf(tc.body, cwdJSON)), 0o600))
 
 			for _, mode := range []string{"full", "delta"} {
 				t.Run(mode, func(t *testing.T) {
-					assert := assert.New(t)
-					require := require.New(t)
-
 					database := dbtest.OpenTestDB(t)
 					importer := Importer{
 						Host: "source-host", DB: database, Root: extracted,
@@ -80,28 +75,28 @@ func TestImporterUsesRecordedProjectWithoutLocalGitDiscovery(t *testing.T) {
 						stats, err = importer.ImportExtracted(t.Context(), importer.Targets, extracted)
 					} else {
 						journalPath, pathErr := mirrorRelativeLocalChangePath(extracted, filepath.Join(sessions, tc.filename))
-						require.NoError(pathErr)
+						require.NoError(t, pathErr)
 						pending, prepareErr := importer.PreparePending(t.Context(), DeltaImportRequest{
 							Journal: MirrorChangeJournal{
 								Version: mirrorJournalVersion,
 								Entries: []MirrorChangeEntry{{Path: journalPath}},
 							},
 						})
-						require.NoError(prepareErr)
+						require.NoError(t, prepareErr)
 						stats, err = pending.Execute(t.Context())
 					}
 
-					require.NoError(err)
-					require.Zero(stats.Failed)
-					require.Equal(1, stats.SessionsSynced)
+					require.NoError(t, err)
+					require.Zero(t, stats.Failed)
+					require.Equal(t, 1, stats.SessionsSynced)
 					session, err := database.GetSessionFull(t.Context(), "source-host~"+tc.id)
-					require.NoError(err)
-					require.NotNil(session)
-					assert.Equal("recorded_project", session.Project)
+					require.NoError(t, err)
+					require.NotNil(t, session)
+					assert.Equal(t, "recorded_project", session.Project)
 					messages, err := database.GetMessages(t.Context(), session.ID, 0, 100, true)
-					require.NoError(err)
-					require.Len(messages, 1)
-					assert.Equal("Remote session content", messages[0].Content)
+					require.NoError(t, err)
+					require.Len(t, messages, 1)
+					assert.Equal(t, "Remote session content", messages[0].Content)
 				})
 			}
 		})

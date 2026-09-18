@@ -250,8 +250,7 @@ func parseGeminiMessage(
 	if msgType == "gemini" {
 		role = RoleAssistant
 	}
-	content, hasThinking, hasToolUse, tcs, trs :=
-		extractGeminiContent(msg)
+	content, hasThinking, hasToolUse, tcs, trs := extractGeminiContent(msg)
 	if strings.TrimSpace(content) == "" {
 		return ParsedMessage{}, false
 	}

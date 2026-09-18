@@ -52,6 +52,7 @@ type crushTestFixture struct {
 
 func newCrushTestFixture(t *testing.T) *crushTestFixture {
 	t.Helper()
+
 	projectDir := t.TempDir()
 	dataDir := filepath.Join(projectDir, ".crush")
 	require.NoError(t, os.MkdirAll(dataDir, 0o755))
@@ -107,9 +108,6 @@ func nullableCrushTestString(value string) any {
 }
 
 func TestCrushProviderParsesTranscriptToolsAndUsage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	fixture := newCrushTestFixture(t)
 	// Unix seconds, 2026 era: 1789093626 is 2026-09-10 UTC.
 	const created = int64(1_789_093_626)
@@ -140,100 +138,97 @@ func TestCrushProviderParsesTranscriptToolsAndUsage(t *testing.T) {
 	]`, created+30, "glm-5.3-flash", "hyper")
 
 	session, messages, err := parseCrushSession(t.Context(), fixture.dbPath, "sess-1", "workstation", false, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
-	require.NotNil(session)
-	assert.Equal("crush:sess-1", session.ID)
-	assert.Equal(AgentCrush, session.Agent)
-	assert.Equal("Review auth flow", session.SessionName)
-	assert.Equal("crush-sqlite-v1", session.SourceVersion)
-	assert.Equal("workstation", session.Machine)
-	assert.Equal("Review the auth flow please.", session.FirstMessage)
+	require.NotNil(t, session)
+	assert.Equal(t, "crush:sess-1", session.ID)
+	assert.Equal(t, AgentCrush, session.Agent)
+	assert.Equal(t, "Review auth flow", session.SessionName)
+	assert.Equal(t, "crush-sqlite-v1", session.SourceVersion)
+	assert.Equal(t, "workstation", session.Machine)
+	assert.Equal(t, "Review the auth flow please.", session.FirstMessage)
 	// Timestamps are Unix seconds; a ms interpretation would land in 1970.
-	assert.Equal(time.Unix(created, 0).UTC(), session.StartedAt)
-	assert.Equal(time.Unix(created+120, 0).UTC(), session.EndedAt)
-	assert.Equal(5, session.MessageCount)
-	assert.Equal(1, session.UserMessageCount)
+	assert.Equal(t, time.Unix(created, 0).UTC(), session.StartedAt)
+	assert.Equal(t, time.Unix(created+120, 0).UTC(), session.EndedAt)
+	assert.Equal(t, 5, session.MessageCount)
+	assert.Equal(t, 1, session.UserMessageCount)
 	// Project resolves from the <project>/.crush store location.
-	assert.Equal(filepath.Base(fixture.projectDir), session.Project)
-	assert.Equal(fixture.projectDir, session.Cwd)
+	assert.Equal(t, filepath.Base(fixture.projectDir), session.Project)
+	assert.Equal(t, fixture.projectDir, session.Cwd)
 
-	require.Len(messages, 5)
+	require.Len(t, messages, 5)
 	for i, message := range messages {
-		assert.Equal(i, message.Ordinal)
+		assert.Equal(t, i, message.Ordinal)
 	}
 
 	user := messages[0]
-	assert.Equal(RoleUser, user.Role)
-	assert.False(user.IsSystem)
-	assert.Equal("Review the auth flow please.", user.Content)
-	assert.Empty(user.StopReason, "finish parts are internal metadata")
+	assert.Equal(t, RoleUser, user.Role)
+	assert.False(t, user.IsSystem)
+	assert.Equal(t, "Review the auth flow please.", user.Content)
+	assert.Empty(t, user.StopReason, "finish parts are internal metadata")
 
 	assistant := messages[1]
-	assert.Equal(RoleAssistant, assistant.Role)
-	assert.Equal("glm-5.3-flash", assistant.Model)
-	assert.Equal("hyper", assistant.ProviderID)
-	assert.True(assistant.HasThinking)
+	assert.Equal(t, RoleAssistant, assistant.Role)
+	assert.Equal(t, "glm-5.3-flash", assistant.Model)
+	assert.Equal(t, "hyper", assistant.ProviderID)
+	assert.True(t, assistant.HasThinking)
 	// Multiple reasoning parts accumulate instead of overwriting.
-	assert.Contains(assistant.ThinkingText, "Inspect auth.go first.")
-	assert.Contains(assistant.ThinkingText, "Then check the middleware.")
-	assert.Equal("tool_use", assistant.StopReason)
-	require.Len(assistant.ToolCalls, 2)
-	assert.True(assistant.HasToolUse)
+	assert.Contains(t, assistant.ThinkingText, "Inspect auth.go first.")
+	assert.Contains(t, assistant.ThinkingText, "Then check the middleware.")
+	assert.Equal(t, "tool_use", assistant.StopReason)
+	require.Len(t, assistant.ToolCalls, 2)
+	assert.True(t, assistant.HasToolUse)
 
 	firstCall := assistant.ToolCalls[0]
-	assert.Equal("crush:chatcmpl-tool-1", firstCall.ToolUseID)
-	assert.Equal("view", firstCall.ToolName)
-	assert.Equal("Read", firstCall.Category)
-	assert.JSONEq(`{"file_path":"auth.go"}`, firstCall.InputJSON)
-	assert.Equal("crush:child$$chatcmpl-tool-1", firstCall.SubagentSessionID)
+	assert.Equal(t, "crush:chatcmpl-tool-1", firstCall.ToolUseID)
+	assert.Equal(t, "view", firstCall.ToolName)
+	assert.Equal(t, "Read", firstCall.Category)
+	assert.JSONEq(t, `{"file_path":"auth.go"}`, firstCall.InputJSON)
+	assert.Equal(t, "crush:child$$chatcmpl-tool-1", firstCall.SubagentSessionID)
 	secondCall := assistant.ToolCalls[1]
-	assert.Equal("crush:chatcmpl-tool-2", secondCall.ToolUseID)
-	assert.Equal("bash", secondCall.ToolName)
-	assert.Equal("Bash", secondCall.Category)
+	assert.Equal(t, "crush:chatcmpl-tool-2", secondCall.ToolUseID)
+	assert.Equal(t, "bash", secondCall.ToolName)
+	assert.Equal(t, "Bash", secondCall.Category)
 
 	toolResult := messages[2]
-	assert.Equal(RoleUser, toolResult.Role)
-	assert.True(toolResult.IsSystem,
+	assert.Equal(t, RoleUser, toolResult.Role)
+	assert.True(t, toolResult.IsSystem,
 		"role='tool' rows are system messages, not human turns")
-	require.Len(toolResult.ToolResults, 1)
-	assert.Equal("crush:chatcmpl-tool-1", toolResult.ToolResults[0].ToolUseID)
+	require.Len(t, toolResult.ToolResults, 1)
+	assert.Equal(t, "crush:chatcmpl-tool-1", toolResult.ToolResults[0].ToolUseID)
 
 	// An empty-but-present result still completes its call.
 	emptyResult := messages[3]
-	require.Len(emptyResult.ToolResults, 1)
-	assert.Equal("crush:chatcmpl-tool-2", emptyResult.ToolResults[0].ToolUseID)
+	require.Len(t, emptyResult.ToolResults, 1)
+	assert.Equal(t, "crush:chatcmpl-tool-2", emptyResult.ToolResults[0].ToolUseID)
 
 	final := messages[4]
-	assert.Equal(RoleAssistant, final.Role)
-	assert.Equal("The auth flow looks correct.", final.Content)
-	assert.Equal("stop", final.StopReason)
+	assert.Equal(t, RoleAssistant, final.Role)
+	assert.Equal(t, "The auth flow looks correct.", final.Content)
+	assert.Equal(t, "stop", final.StopReason)
 
 	// Exactly one aggregate usage event; session totals are the sole
 	// accounting source and per-message tokens are absent.
-	require.Len(session.UsageEvents, 1)
+	require.Len(t, session.UsageEvents, 1)
 	event := session.UsageEvents[0]
-	assert.Equal("crush:sess-1", event.SessionID)
-	assert.Equal("glm-5.3-flash", event.Model)
-	assert.Equal("hyper", event.ProviderID)
-	assert.Equal(43_922, event.InputTokens)
-	assert.Equal(185, event.OutputTokens)
-	require.NotNil(event.Cost)
-	assert.Equal(money.Money{Microdollars: 12_600}, *event.Cost)
+	assert.Equal(t, "crush:sess-1", event.SessionID)
+	assert.Equal(t, "glm-5.3-flash", event.Model)
+	assert.Equal(t, "hyper", event.ProviderID)
+	assert.Equal(t, 43_922, event.InputTokens)
+	assert.Equal(t, 185, event.OutputTokens)
+	require.NotNil(t, event.Cost)
+	assert.Equal(t, money.Money{Microdollars: 12_600}, *event.Cost)
 
-	assert.True(session.HasTotalOutputTokens)
-	assert.Equal(185, session.TotalOutputTokens)
-	assert.True(session.HasPeakContextTokens)
-	assert.Equal(43_922, session.PeakContextTokens)
+	assert.True(t, session.HasTotalOutputTokens)
+	assert.Equal(t, 185, session.TotalOutputTokens)
+	assert.True(t, session.HasPeakContextTokens)
+	assert.Equal(t, 43_922, session.PeakContextTokens)
 
-	assert.False(hasOrphanedToolCall(messages),
+	assert.False(t, hasOrphanedToolCall(messages),
 		"every tool call has a paired result message")
 }
 
 func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	fixture := newCrushTestFixture(t)
 	const created = int64(1_789_093_626)
 	fixture.insertSession(t, "sess-1", "Discovery", "",
@@ -243,78 +238,76 @@ func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 	registryDir := t.TempDir()
 	registry := `{"projects":[{"path":"` + filepath.ToSlash(fixture.projectDir) +
 		`","data_dir":"` + filepath.ToSlash(fixture.dataDir) + `"}]}`
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(registryDir, CrushProjectsFileName),
 		[]byte(registry), 0o600,
 	))
 	roots, registryMapping, projectMapping := normalizeCrushRoots([]string{registryDir})
-	require.Equal([]string{fixture.dataDir}, roots)
-	require.Len(registryMapping, 1)
-	assert.Equal([]string{fixture.dataDir}, registryMapping[filepath.Clean(registryDir)])
-	require.Len(projectMapping, 1)
-	assert.Equal(filepath.Clean(fixture.projectDir), projectMapping[filepath.Clean(fixture.dataDir)])
+	require.Equal(t, []string{fixture.dataDir}, roots)
+	require.Len(t, registryMapping, 1)
+	assert.Equal(t, []string{fixture.dataDir}, registryMapping[filepath.Clean(registryDir)])
+	require.Len(t, projectMapping, 1)
+	assert.Equal(t, filepath.Clean(fixture.projectDir), projectMapping[filepath.Clean(fixture.dataDir)])
 	provider := newCrushProviderFactory(AgentDef{
 		Type: AgentCrush, IDPrefix: "crush:",
 	}).NewProvider(ProviderConfig{Roots: []string{registryDir}})
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
-	assert.Equal(filepath.Clean(registryDir), sources[0].ConfiguredRoot)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, filepath.Clean(registryDir), sources[0].ConfiguredRoot)
 
 	metas := make([]dbBackedSessionMeta, 0)
-	require.NoError(forEachCrushSessionMeta(
+	require.NoError(t, forEachCrushSessionMeta(
 		t.Context(), crushDBPath(roots[0]), false,
 		func(meta dbBackedSessionMeta) error {
 			metas = append(metas, meta)
 			return nil
 		},
 	))
-	require.Len(metas, 1)
-	assert.Equal("sess-1", metas[0].SessionID)
-	assert.Equal(VirtualSourcePath(fixture.dbPath, "sess-1"), metas[0].VirtualPath)
-	assert.Positive(metas[0].FileMtime)
+	require.Len(t, metas, 1)
+	assert.Equal(t, "sess-1", metas[0].SessionID)
+	assert.Equal(t, VirtualSourcePath(fixture.dbPath, "sess-1"), metas[0].VirtualPath)
+	assert.Positive(t, metas[0].FileMtime)
 
 	meta, found, err := crushSessionMeta(t.Context(), fixture.dbPath, "missing", false)
-	require.NoError(err)
-	assert.False(found)
-	assert.Empty(meta.SessionID)
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Empty(t, meta.SessionID)
 
 	// A root pointing directly at a .crush data dir is kept as-is.
 	dataDirs, _, _ := normalizeCrushRoots([]string{fixture.dataDir})
-	assert.Equal([]string{fixture.dataDir}, dataDirs)
+	assert.Equal(t, []string{fixture.dataDir}, dataDirs)
 	// A root pointing at the db file resolves to its directory.
 	dataDirs, _, _ = normalizeCrushRoots([]string{fixture.dbPath})
-	assert.Equal([]string{fixture.dataDir}, dataDirs)
+	assert.Equal(t, []string{fixture.dataDir}, dataDirs)
 	// An unreadable registry leaves the root untouched rather than
 	// failing discovery.
 	dataDirs, _, _ = normalizeCrushRoots([]string{registryDir + "-missing"})
-	assert.Equal([]string{registryDir + "-missing"}, dataDirs)
+	assert.Equal(t, []string{registryDir + "-missing"}, dataDirs)
 }
 
 func TestCrushRawDiscoveryRefreshesRegistryAfterProviderConstruction(t *testing.T) {
-	require := require.New(t)
-
 	first := newCrushTestFixture(t)
 	second := newCrushTestFixture(t)
 	registryDir := t.TempDir()
 	registryPath := filepath.Join(registryDir, CrushProjectsFileName)
-	require.NoError(os.WriteFile(registryPath, []byte(`{"projects":[{"path":"`+
+	require.NoError(t, os.WriteFile(registryPath, []byte(`{"projects":[{"path":"`+
 		filepath.ToSlash(first.projectDir)+`","data_dir":"`+
 		filepath.ToSlash(first.dataDir)+`"}]}`), 0o600))
 	provider := newCrushProviderFactory(AgentDef{
 		Type: AgentCrush, IDPrefix: "crush:",
 	}).NewProvider(ProviderConfig{Roots: []string{registryDir}})
 
-	require.NoError(os.WriteFile(registryPath, []byte(`{"projects":[`+
+	require.NoError(t, os.WriteFile(registryPath, []byte(`{"projects":[`+
 		`{"path":"`+filepath.ToSlash(first.projectDir)+`","data_dir":"`+
 		filepath.ToSlash(first.dataDir)+`"},`+
 		`{"path":"`+filepath.ToSlash(second.projectDir)+`","data_dir":"`+
 		filepath.ToSlash(second.dataDir)+`"}]}`), 0o600))
 	discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
 
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.True(t, discovery.Complete)
-	require.Len(discovery.Sources, 2,
+	require.Len(t, discovery.Sources, 2,
 		"a periodic raw-sync audit must see projects registered after startup")
 }
 
@@ -322,9 +315,6 @@ func TestCrushRawDiscoveryRefreshesRegistryAfterProviderConstruction(t *testing.
 // holds virtual session members, so reconciliation can prove the whole
 // membership rather than the bare crush.db path.
 func TestCrushResolveReconciliationScopesMapsDatabaseFileRoot(t *testing.T) {
-	parentAssert := assert.New(t)
-	parentRequire := require.New(t)
-
 	fixture := newCrushTestFixture(t)
 	factory := newCrushProviderFactory(AgentDef{
 		Type: AgentCrush, IDPrefix: "crush:",
@@ -336,25 +326,22 @@ func TestCrushResolveReconciliationScopesMapsDatabaseFileRoot(t *testing.T) {
 		"data directory": fixture.dataDir,
 	} {
 		t.Run(name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			provider := factory.NewProvider(ProviderConfig{
 				Roots: []string{fixture.dbPath},
 			})
 			plan, err := provider.ResolveReconciliationScopes(
 				t.Context(), ReconciliationScopeRequest{Roots: []string{requested}},
 			)
-			require.NoError(err)
-			require.Len(plan.Scopes, 1)
+			require.NoError(t, err)
+			require.Len(t, plan.Scopes, 1)
 			scope := plan.Scopes[0]
-			assert.Equal([]string{filepath.Clean(fixture.dbPath)}, scope.TraversalRoots,
+			assert.Equal(t, []string{filepath.Clean(fixture.dbPath)}, scope.TraversalRoots,
 				"traversal must keep the original configured database-file root")
-			assert.Equal([]string{cleanReconciliationScopeRoot(fixture.dataDir)},
+			assert.Equal(t, []string{cleanReconciliationScopeRoot(fixture.dataDir)},
 				scope.CoverageIdentities,
 				"the database-file request must cover the configured data directory")
-			assert.Equal([]string{requested}, scope.RetryRoots)
-			assert.Equal([]string{cleanReconciliationScopeRoot(fixture.dataDir)},
+			assert.Equal(t, []string{requested}, scope.RetryRoots)
+			assert.Equal(t, []string{cleanReconciliationScopeRoot(fixture.dataDir)},
 				plan.RequiredCoverageIdentities)
 		})
 	}
@@ -367,18 +354,16 @@ func TestCrushResolveReconciliationScopesMapsDatabaseFileRoot(t *testing.T) {
 	plan, err := provider.ResolveReconciliationScopes(
 		t.Context(), ReconciliationScopeRequest{Roots: []string{fixture.dbPath}},
 	)
-	parentRequire.NoError(err)
-	parentRequire.Len(plan.Scopes, 1)
-	parentAssert.Equal([]string{filepath.Clean(fixture.dataDir)}, plan.Scopes[0].TraversalRoots)
-	parentAssert.Equal([]string{cleanReconciliationScopeRoot(fixture.dataDir)},
+	require.NoError(t, err)
+	require.Len(t, plan.Scopes, 1)
+	assert.Equal(t, []string{filepath.Clean(fixture.dataDir)}, plan.Scopes[0].TraversalRoots)
+	assert.Equal(t, []string{cleanReconciliationScopeRoot(fixture.dataDir)},
 		plan.Scopes[0].CoverageIdentities,
 	)
-	parentAssert.Equal([]string{fixture.dbPath}, plan.Scopes[0].RetryRoots)
+	assert.Equal(t, []string{fixture.dbPath}, plan.Scopes[0].RetryRoots)
 }
 
 func TestCrushSchemaValidationRejectsGooseStores(t *testing.T) {
-	require := require.New(t)
-
 	fixture := newCrushTestFixture(t)
 	// Drop the parts column marker: a messages table without it is not
 	// a Crush store (e.g. goose's vendored migrations).
@@ -388,20 +373,17 @@ func TestCrushSchemaValidationRejectsGooseStores(t *testing.T) {
 			content_json TEXT, created_at INTEGER
 		)
 	`)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = fixture.database.ExecContext(t.Context(), `DROP TABLE messages`)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = fixture.database.ExecContext(t.Context(), `ALTER TABLE messages_like_goose RENAME TO messages`)
-	require.NoError(err)
-	require.Error(validateCrushSchema(
+	require.NoError(t, err)
+	require.Error(t, validateCrushSchema(
 		t.Context(), fixture.database,
 	), "a messages table without parts must not be treated as Crush")
 }
 
 func TestCrushSummaryMessageIsCompactBoundary(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	fixture := newCrushTestFixture(t)
 	const created = int64(1_789_093_626)
 	fixture.insertSession(t, "sess-summary", "Compacted", "",
@@ -413,25 +395,22 @@ func TestCrushSummaryMessageIsCompactBoundary(t *testing.T) {
 	_, err := fixture.database.ExecContext(t.Context(),
 		`UPDATE messages SET is_summary_message = 1 WHERE id = 'msg-sum'`,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	session, messages, err := parseCrushSession(t.Context(), fixture.dbPath, "sess-summary", "m", false, nil)
-	require.NoError(err)
-	require.Len(messages, 1)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
 	message := messages[0]
-	assert.Equal(RoleSystem, message.Role)
-	assert.True(message.IsSystem)
-	assert.True(message.IsCompactBoundary)
-	assert.Equal("Summary of the conversation so far.", message.Content)
-	assert.Empty(message.Model,
+	assert.Equal(t, RoleSystem, message.Role)
+	assert.True(t, message.IsSystem)
+	assert.True(t, message.IsCompactBoundary)
+	assert.Equal(t, "Summary of the conversation so far.", message.Content)
+	assert.Empty(t, message.Model,
 		"summary rows must not attribute the original row's model")
-	assert.Equal(0, session.UserMessageCount)
+	assert.Equal(t, 0, session.UserMessageCount)
 }
 
 func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	fixture := newCrushTestFixture(t)
 	const created = int64(1_789_093_626)
 	fixture.insertSession(t, "sess-fp", "Fingerprint", "",
@@ -444,8 +423,8 @@ func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
 	first, found, err := crushSessionFingerprint(
 		t.Context(), fixture.dbPath, "sess-fp", false, &childCache,
 	)
-	require.NoError(err)
-	require.True(found)
+	require.NoError(t, err)
+	require.True(t, found)
 
 	// An edit within the same second leaves every timestamp unchanged;
 	// the content hash must still move.
@@ -453,34 +432,31 @@ func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
 		UPDATE messages SET parts = '[{"type":"text","data":{"text":"after"}}]'
 		WHERE id = 'msg-fp'
 	`)
-	require.NoError(err)
+	require.NoError(t, err)
 	second, found, err := crushSessionFingerprint(
 		t.Context(), fixture.dbPath, "sess-fp", false, &childCache,
 	)
-	require.NoError(err)
-	require.True(found)
-	assert.NotEqual(first, second,
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.NotEqual(t, first, second,
 		"a same-second parts edit must change the fingerprint")
 
 	// A vanished session reports not-found rather than a stale hash.
 	_, found, err = crushSessionFingerprint(
 		t.Context(), fixture.dbPath, "sess-missing", false, &childCache,
 	)
-	require.NoError(err)
-	assert.False(found)
+	require.NoError(t, err)
+	assert.False(t, found)
 }
 
 func TestCrushParseSessionWithoutOptionalColumns(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	projectDir := t.TempDir()
 	dataDir := filepath.Join(projectDir, ".crush")
-	require.NoError(os.MkdirAll(dataDir, 0o755))
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
 	dbPath := filepath.Join(dataDir, CrushDBName)
 	db, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer db.Close()
 	_, err = db.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
@@ -501,19 +477,19 @@ func TestCrushParseSessionWithoutOptionalColumns(t *testing.T) {
 		INSERT INTO messages (id, session_id, role, parts, model, created_at)
 		VALUES ('msg-1', 'sess-min', 'user', '[]', '', 1000);
 	`)
-	require.NoError(err)
-	require.NoError(db.Close())
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
 
 	session, messages, err := parseCrushSession(
 		t.Context(), dbPath, "sess-min", "m", false, nil,
 	)
 
-	require.NoError(err)
-	require.NotNil(session)
-	require.Len(messages, 1)
-	assert.Equal(RoleUser, messages[0].Role)
-	assert.Empty(messages[0].ProviderID)
-	assert.False(messages[0].IsSystem)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.Len(t, messages, 1)
+	assert.Equal(t, RoleUser, messages[0].Role)
+	assert.Empty(t, messages[0].ProviderID)
+	assert.False(t, messages[0].IsSystem)
 
 	// Fingerprint freshness is mandatory for Crush sync; a minimal accepted
 	// schema without messages.updated_at must still produce a hash.
@@ -521,8 +497,8 @@ func TestCrushParseSessionWithoutOptionalColumns(t *testing.T) {
 	hash, found, err := crushSessionFingerprint(
 		t.Context(), dbPath, "sess-min", false, &childCache,
 	)
-	require.NoError(err)
-	require.True(found,
+	require.NoError(t, err)
+	require.True(t, found,
 		"fingerprint must work without the optional messages.updated_at column")
-	assert.NotEmpty(hash)
+	assert.NotEmpty(t, hash)
 }

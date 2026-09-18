@@ -23,9 +23,6 @@ func writeFile(t *testing.T, path, contents string) {
 }
 
 func TestJSONLSourceSetCompanionFingerprintReflectsCompanionChange(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	root := t.TempDir()
 	transcript := filepath.Join(root, "session.jsonl")
@@ -40,28 +37,26 @@ func TestJSONLSourceSetCompanionFingerprintReflectsCompanionChange(t *testing.T)
 	)
 
 	sources, err := set.Discover(ctx)
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 	source := sources[0]
 
 	before, err := set.Fingerprint(ctx, source)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// Changing only the companion must change the source fingerprint, since the
 	// companion size/mtime are folded into the transcript's freshness identity.
 	writeFile(t, companion, "v2-larger-contents")
 	after, err := set.Fingerprint(ctx, source)
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.NotEqual(before.Size, after.Size,
+	assert.NotEqual(t, before.Size, after.Size,
 		"companion size should be folded into the fingerprint size")
-	assert.NotEqual(before, after,
+	assert.NotEqual(t, before, after,
 		"a companion change must alter the source fingerprint")
 }
 
 func TestJSONLSourceSetCompanionFingerprintHashChanges(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	root := t.TempDir()
 	transcript := filepath.Join(root, "session.jsonl")
@@ -76,18 +71,18 @@ func TestJSONLSourceSetCompanionFingerprintHashChanges(t *testing.T) {
 		WithCompanionFiles(companionFor),
 	)
 	sources, err := set.Discover(ctx)
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 
 	before, err := set.Fingerprint(ctx, sources[0])
-	require.NoError(err)
-	require.NotEmpty(before.Hash)
+	require.NoError(t, err)
+	require.NotEmpty(t, before.Hash)
 
 	// Rewrite the companion to the same length so size and mtime resolution are
 	// not the only signals; the content hash must still change.
 	writeFile(t, companion, "v2")
 	after, err := set.Fingerprint(ctx, sources[0])
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.NotEqual(t, before.Hash, after.Hash,
 		"companion content must be mixed into the fingerprint hash")
 }
@@ -109,9 +104,6 @@ func TestJSONLSourceSetCompanionSymlinkPolicy(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			ctx := t.Context()
 			root := t.TempDir()
 			transcript := filepath.Join(root, "session.jsonl")
@@ -130,20 +122,20 @@ func TestJSONLSourceSetCompanionSymlinkPolicy(t *testing.T) {
 			}
 			set := NewJSONLSourceSet(AgentClaude, []string{root}, opts...)
 			sources, err := set.Discover(ctx)
-			require.NoError(err)
-			require.Len(sources, 1)
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
 
 			before, err := set.Fingerprint(ctx, sources[0])
-			require.NoError(err)
+			require.NoError(t, err)
 			writeFile(t, target, "v2")
 			after, err := set.Fingerprint(ctx, sources[0])
-			require.NoError(err)
+			require.NoError(t, err)
 
 			if tc.strict {
-				assert.Equal(before, after,
+				assert.Equal(t, before, after,
 					"strict mode must exclude symlinked companion content")
 			} else {
-				assert.NotEqual(before.Hash, after.Hash,
+				assert.NotEqual(t, before.Hash, after.Hash,
 					"legacy mode must follow symlinked companion content")
 			}
 		})
@@ -151,8 +143,6 @@ func TestJSONLSourceSetCompanionSymlinkPolicy(t *testing.T) {
 }
 
 func TestJSONLSourceSetCompanionChangedPathMapsToTranscript(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	root := t.TempDir()
 	transcript := filepath.Join(root, "session.jsonl")
@@ -171,12 +161,12 @@ func TestJSONLSourceSetCompanionChangedPathMapsToTranscript(t *testing.T) {
 		EventKind: "write",
 		WatchRoot: root,
 	})
-	require.NoError(err)
-	require.Len(changed, 1,
+	require.NoError(t, err)
+	require.Len(t, changed, 1,
 		"a companion change must map back to its owning transcript")
 
 	src, ok := changed[0].Opaque.(JSONLSource)
-	require.True(ok)
+	require.True(t, ok)
 	assert.Equal(t, transcript, src.Path)
 }
 
@@ -208,14 +198,11 @@ func TestJSONLSourceSetCompanionWatchRootsStayBoundedByConfiguredRoots(t *testin
 	largeRoots, largeAllocs := measure(t, 500)
 	assert.Equal(t, smallRoots, largeRoots,
 		"root-plan cardinality must depend on configured roots, not transcripts")
-	assert.Equal(t, smallAllocs, largeAllocs,
+	assert.InDelta(t, smallAllocs, largeAllocs, 0,
 		"root planning allocations must not scale with transcript companions")
 }
 
 func TestJSONLSourceSetCompanionWatchPlanIncludesCompanionGlob(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	root := t.TempDir()
 	transcript := filepath.Join(root, "session.jsonl")
@@ -229,15 +216,13 @@ func TestJSONLSourceSetCompanionWatchPlanIncludesCompanionGlob(t *testing.T) {
 	)
 
 	plan, err := set.WatchPlan(ctx)
-	require.NoError(err)
-	require.Len(plan.Roots, 1)
-	assert.Contains(plan.Roots[0].IncludeGlobs, "session.jsonl.meta")
-	assert.Contains(plan.Roots[0].IncludeGlobs, "*.jsonl")
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Contains(t, plan.Roots[0].IncludeGlobs, "session.jsonl.meta")
+	assert.Contains(t, plan.Roots[0].IncludeGlobs, "*.jsonl")
 }
 
 func TestJSONLSourceSetWithoutCompanionsUnaffected(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	root := t.TempDir()
 	transcript := filepath.Join(root, "session.jsonl")
@@ -245,14 +230,14 @@ func TestJSONLSourceSetWithoutCompanionsUnaffected(t *testing.T) {
 
 	set := NewJSONLSourceSet(AgentClaude, []string{root})
 	sources, err := set.Discover(ctx)
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 
 	fp, err := set.Fingerprint(ctx, sources[0])
-	require.NoError(err)
+	require.NoError(t, err)
 
 	info, err := os.Stat(transcript)
-	require.NoError(err)
+	require.NoError(t, err)
 	// Without a companion hook the fingerprint size is exactly the transcript
 	// size, confirming the companion folding is inert when unconfigured.
 	assert.Equal(t, info.Size(), fp.Size)
@@ -264,6 +249,7 @@ func TestJSONLSourceSetWithoutCompanionsUnaffected(t *testing.T) {
 func TestJSONLSourceSetCompanionChangedPathSkipsForwardScan(t *testing.T) {
 	measure := func(t *testing.T, transcriptCount int) int {
 		t.Helper()
+
 		root := t.TempDir()
 		for i := range transcriptCount {
 			transcript := filepath.Join(root, fmt.Sprintf("session-%04d.jsonl", i))

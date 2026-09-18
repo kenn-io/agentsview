@@ -19,23 +19,21 @@ import (
 )
 
 func TestDoctorSyncTraeEncryptedLayout(t *testing.T) {
-	require := require.New(t)
-
 	root := filepath.Join(t.TempDir(), "Trae", "User")
 	state := filepath.Join(root, "globalStorage", "state.vscdb")
-	require.NoError(os.MkdirAll(filepath.Dir(state), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(state), 0o755))
 	conn, err := sql.Open("sqlite3", state)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `INSERT INTO ItemTable(key, value) VALUES (?, ?)`,
 		"memento/icube-ai-agent-storage",
 		`{"list":[{"sessionId":"stub","messages":[]}]}`)
-	require.NoError(err)
-	require.NoError(conn.Close())
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
 	modular := filepath.Join(filepath.Dir(root), "ModularData", "ai-agent", "database.db")
-	require.NoError(os.MkdirAll(filepath.Dir(modular), 0o755))
-	require.NoError(os.WriteFile(modular, []byte("encrypted header"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(modular), 0o755))
+	require.NoError(t, os.WriteFile(modular, []byte("encrypted header"), 0o644))
 
 	var out bytes.Buffer
 	writeDoctorTraeEncryptedLayouts(&out, doctorSyncReport{
@@ -46,44 +44,38 @@ func TestDoctorSyncTraeEncryptedLayout(t *testing.T) {
 }
 
 func TestDoctorSyncCurrentDatabaseReportsNormalStartupSync(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := testDataDir(t)
 
-	database, err := db.Open(filepath.Join(dataDir, "sessions.db"))
-	require.NoError(err, "open db")
-	require.NoError(database.Close(), "close db")
+	database, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err, "open db")
+	require.NoError(t, database.Close(), "close db")
 
 	out, err := executeCommand(newRootCommand(), "doctor", "sync")
-	require.NoError(err, "doctor sync")
+	require.NoError(t, err, "doctor sync")
 	_, statErr := os.Stat(filepath.Join(dataDir, "config.toml"))
-	require.ErrorIs(statErr, os.ErrNotExist,
+	require.ErrorIs(t, statErr, os.ErrNotExist,
 		"doctor sync must not create config.toml")
 
-	assert.Contains(out, "Sync Diagnostics")
-	assert.Contains(out, "Data directory: "+dataDir)
-	assert.Contains(out, "Database: "+filepath.Join(dataDir, "sessions.db"))
-	assert.Contains(out,
+	assert.Contains(t, out, "Sync Diagnostics")
+	assert.Contains(t, out, "Data directory: "+dataDir)
+	assert.Contains(t, out, "Database: "+filepath.Join(dataDir, "sessions.db"))
+	assert.Contains(t, out,
 		fmt.Sprintf("SQLite user_version: %d", db.CurrentDataVersion()))
-	assert.Contains(out,
+	assert.Contains(t, out,
 		fmt.Sprintf("Binary data version: %d", db.CurrentDataVersion()))
-	assert.Contains(out,
+	assert.Contains(t, out,
 		"Startup sync decision: normal initial sync (no data-version resync)")
-	assert.Contains(out,
+	assert.Contains(t, out,
 		"Likely cause: data-version resync is not expected")
 }
 
 func TestDoctorSyncStaleDatabaseReportsLikelyAbortedResync(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := testDataDir(t)
 	dbPath := filepath.Join(dataDir, "sessions.db")
 
-	database, err := db.Open(dbPath)
-	require.NoError(err, "open db")
-	require.NoError(database.UpsertSession(db.Session{
+	database, err := db.Open(t.Context(), dbPath)
+	require.NoError(t, err, "open db")
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:           "stale-session",
 		Project:      "proj",
 		Machine:      "local",
@@ -91,144 +83,134 @@ func TestDoctorSyncStaleDatabaseReportsLikelyAbortedResync(t *testing.T) {
 		MessageCount: 1,
 		DataVersion:  0,
 	}), "insert session")
-	require.NoError(database.Close(), "close db")
+	require.NoError(t, database.Close(), "close db")
 
 	conn, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err, "raw sqlite open")
+	require.NoError(t, err, "raw sqlite open")
 	_, err = conn.ExecContext(t.Context(), "PRAGMA user_version = 0")
-	require.NoError(err, "downgrade user_version")
-	require.NoError(conn.Close(), "close raw sqlite")
+	require.NoError(t, err, "downgrade user_version")
+	require.NoError(t, conn.Close(), "close raw sqlite")
 
 	logPath := filepath.Join(dataDir, "debug.log")
-	require.NoError(os.WriteFile(logPath, []byte(
+	require.NoError(t, os.WriteFile(logPath, []byte(
 		"2026/06/18 data version outdated; full resync required\n"+
 			"2026/06/18 resync aborted: 0 synced, 3 failed\n",
 	), 0o644), "write debug log")
 
 	out, err := executeCommand(newRootCommand(), "doctor", "sync")
-	require.NoError(err, "doctor sync")
+	require.NoError(t, err, "doctor sync")
 
-	assert.Contains(out, "SQLite user_version: 0")
-	assert.Contains(out,
+	assert.Contains(t, out, "SQLite user_version: 0")
+	assert.Contains(t, out,
 		fmt.Sprintf("Binary data version: %d", db.CurrentDataVersion()))
-	assert.Contains(out,
+	assert.Contains(t, out,
 		"Startup sync decision: full data-version resync required")
-	assert.Contains(out, "Session data versions:")
-	assert.Contains(out, "version 0: 1")
-	assert.Contains(out, "Recent debug.log evidence:")
-	assert.Contains(out, "resync aborted: 0 synced, 3 failed")
-	assert.Contains(out,
+	assert.Contains(t, out, "Session data versions:")
+	assert.Contains(t, out, "version 0: 1")
+	assert.Contains(t, out, "Recent debug.log evidence:")
+	assert.Contains(t, out, "resync aborted: 0 synced, 3 failed")
+	assert.Contains(t, out,
 		"Likely cause: previous data-version resync likely aborted before completion")
 }
 
 func TestDoctorSyncReportsSessionsMissingSecretScan(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := testDataDir(t)
 	dbPath := filepath.Join(dataDir, "sessions.db")
 
-	database, err := db.Open(dbPath)
-	require.NoError(err, "open db")
+	database, err := db.Open(t.Context(), dbPath)
+	require.NoError(t, err, "open db")
 	for _, id := range []string{"suspect", "scanned"} {
-		require.NoError(database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "proj", Machine: "local", Agent: "claude",
 			MessageCount: 1,
 		}), "insert session %s", id)
 	}
-	require.NoError(database.Close(), "close db")
+	require.NoError(t, database.Close(), "close db")
 
 	// Both sessions carry current signals, but only "scanned" ever had
 	// findings persisted (any non-empty rules version).
 	conn, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err, "raw sqlite open")
+	require.NoError(t, err, "raw sqlite open")
 	_, err = conn.ExecContext(t.Context(),
 		`UPDATE sessions SET quality_signal_version = ?`,
 		db.CurrentQualitySignalVersion,
 	)
-	require.NoError(err, "set current signal versions")
+	require.NoError(t, err, "set current signal versions")
 	_, err = conn.ExecContext(t.Context(),
 		`UPDATE sessions SET secrets_rules_version = 'v-old'
 		 WHERE id = 'scanned'`,
 	)
-	require.NoError(err, "mark scanned session")
-	require.NoError(conn.Close(), "close raw sqlite")
+	require.NoError(t, err, "mark scanned session")
+	require.NoError(t, conn.Close(), "close raw sqlite")
 
 	out, err := executeCommand(newRootCommand(), "doctor", "sync")
-	require.NoError(err, "doctor sync")
+	require.NoError(t, err, "doctor sync")
 
-	assert.Contains(out,
+	assert.Contains(t, out,
 		"1 session(s) have current quality signals but no persisted secret scan")
-	assert.Contains(out, `run "agentsview secrets scan"`)
+	assert.Contains(t, out, `run "agentsview secrets scan"`)
 }
 
 func TestDoctorSyncSilentWithoutMissingSecretScans(t *testing.T) {
-	require := require.New(t)
-
 	dataDir := testDataDir(t)
 
-	database, err := db.Open(filepath.Join(dataDir, "sessions.db"))
-	require.NoError(err, "open db")
-	require.NoError(database.Close(), "close db")
+	database, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err, "open db")
+	require.NoError(t, database.Close(), "close db")
 
 	out, err := executeCommand(newRootCommand(), "doctor", "sync")
-	require.NoError(err, "doctor sync")
+	require.NoError(t, err, "doctor sync")
 
 	assert.NotContains(t, out, "secrets scan",
 		"clean archives must not suggest a rescan")
 }
 
 func TestDoctorSyncNewerDatabaseReportsRefusedStartup(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := testDataDir(t)
 	dbPath := filepath.Join(dataDir, "sessions.db")
 
-	database, err := db.Open(dbPath)
-	require.NoError(err, "open db")
-	require.NoError(database.Close(), "close db")
+	database, err := db.Open(t.Context(), dbPath)
+	require.NoError(t, err, "open db")
+	require.NoError(t, database.Close(), "close db")
 
 	futureVersion := db.CurrentDataVersion() + 10
 	conn, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err, "raw sqlite open")
+	require.NoError(t, err, "raw sqlite open")
 	_, err = conn.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", futureVersion))
-	require.NoError(err, "set future user_version")
-	require.NoError(conn.Close(), "close raw sqlite")
+	require.NoError(t, err, "set future user_version")
+	require.NoError(t, conn.Close(), "close raw sqlite")
 
 	out, err := executeCommand(newRootCommand(), "doctor", "sync")
-	require.NoError(err, "doctor sync")
+	require.NoError(t, err, "doctor sync")
 
-	assert.Contains(out,
+	assert.Contains(t, out,
 		fmt.Sprintf("SQLite user_version: %d", futureVersion))
-	assert.Contains(out,
+	assert.Contains(t, out,
 		fmt.Sprintf("Binary data version: %d", db.CurrentDataVersion()))
-	assert.Contains(out,
+	assert.Contains(t, out,
 		"Startup sync decision: refuse startup (database requires newer agentsview)")
-	assert.Contains(out,
+	assert.Contains(t, out,
 		"Likely cause: SQLite user_version is newer than this binary")
-	assert.Contains(out,
+	assert.Contains(t, out,
 		fmt.Sprintf("Use an AgentsView build with data version %d or newer",
 			futureVersion))
-	assert.Contains(out,
+	assert.Contains(t, out,
 		fmt.Sprintf("restore an archive backup compatible with data version %d",
 			db.CurrentDataVersion()))
-	assert.NotContains(out, `Run "agentsview update"`)
+	assert.NotContains(t, out, `Run "agentsview update"`)
 }
 
 func TestWriteDoctorSummaryMode(t *testing.T) {
-	assert := assert.New(t)
-
 	var buf bytes.Buffer
 	writeDoctorSummaryMode(&buf, doctorSyncReport{
 		AntigravityCLITotal:   12,
 		AntigravityCLISummary: 5,
 	})
 	out := buf.String()
-	assert.Contains(out, "antigravity-cli")
-	assert.Contains(out, "5")
-	assert.Contains(out, "summary mode")
-	assert.Contains(out, "agy-reader")
+	assert.Contains(t, out, "antigravity-cli")
+	assert.Contains(t, out, "5")
+	assert.Contains(t, out, "summary mode")
+	assert.Contains(t, out, "agy-reader")
 }
 
 func TestWriteDoctorSummaryModeSilentWhenNone(t *testing.T) {
@@ -277,89 +259,82 @@ func TestWriteDoctorUnknownSchemaSilentOnErr(t *testing.T) {
 }
 
 func TestInspectDoctorDBCountsAntigravityCLISummaryMode(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "sessions.db")
 
 	database := dbtest.OpenTestDBAt(t, dbPath)
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:                 "agy-summary",
 		Agent:              "antigravity-cli",
 		Machine:            "local",
 		Project:            "proj",
 		TranscriptFidelity: "summary",
 	}), "upsert summary session")
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:                 "agy-full",
 		Agent:              "antigravity-cli",
 		Machine:            "local",
 		Project:            "proj",
 		TranscriptFidelity: "full",
 	}), "upsert full session")
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:      "other-agent",
 		Agent:   "claude-code",
 		Machine: "local",
 		Project: "proj",
 	}), "upsert other-agent session")
-	require.NoError(database.Close(), "close db")
+	require.NoError(t, database.Close(), "close db")
 
-	insp := inspectDoctorDB(dbPath)
-	require.NoError(insp.AntigravityCountsErr, "antigravity counts query")
-	assert.Equal(2, insp.AntigravityCLITotal, "AntigravityCLITotal")
-	assert.Equal(1, insp.AntigravityCLISummary, "AntigravityCLISummary")
+	insp := inspectDoctorDB(t.Context(), dbPath)
+	require.NoError(t, insp.AntigravityCountsErr, "antigravity counts query")
+	assert.Equal(t, 2, insp.AntigravityCLITotal, "AntigravityCLITotal")
+	assert.Equal(t, 1, insp.AntigravityCLISummary, "AntigravityCLISummary")
 }
 
 // TestInspectDoctorDBCountsUnknownSchema verifies the unrecognized-schema
 // count spans both Antigravity agents and excludes known-range labels and
 // other agents that carry a generic source_version.
 func TestInspectDoctorDBCountsUnknownSchema(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "sessions.db")
 
 	database := dbtest.OpenTestDBAt(t, dbPath)
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:            "agy-ide-unknown",
 		Agent:         "antigravity",
 		Machine:       "local",
 		Project:       "proj",
 		SourceVersion: "agy-schema:abc123def456",
 	}), "upsert IDE unknown-schema session")
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:            "agy-cli-unknown",
 		Agent:         "antigravity-cli",
 		Machine:       "local",
 		Project:       "proj",
 		SourceVersion: "agy-schema:abc123def456",
 	}), "upsert CLI unknown-schema session")
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:            "agy-known",
 		Agent:         "antigravity-cli",
 		Machine:       "local",
 		Project:       "proj",
 		SourceVersion: "1.0.7-1.0.10",
 	}), "upsert known-range session")
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:            "piebald-generic",
 		Agent:         "piebald",
 		Machine:       "local",
 		Project:       "proj",
 		SourceVersion: "piebald-appdb-v1",
 	}), "upsert non-antigravity session")
-	require.NoError(database.Close(), "close db")
+	require.NoError(t, database.Close(), "close db")
 
-	insp := inspectDoctorDB(dbPath)
-	require.NoError(insp.AntigravityCountsErr, "antigravity counts query")
+	insp := inspectDoctorDB(t.Context(), dbPath)
+	require.NoError(t, insp.AntigravityCountsErr, "antigravity counts query")
 	assert.Equal(t, 2, insp.AntigravityUnknownSchema, "AntigravityUnknownSchema")
 }
 
 func TestDoctorSyncReportStatErrorDoesNotRenderAsMissingDatabase(t *testing.T) {
-	assert := assert.New(t)
-
 	report := doctorSyncReport{
 		Config: config.Config{
 			DataDir: "/data",
@@ -373,14 +348,14 @@ func TestDoctorSyncReportStatErrorDoesNotRenderAsMissingDatabase(t *testing.T) {
 	writeDoctorSyncReport(&out, report)
 	got := out.String()
 
-	assert.Contains(got, "Database exists: unknown")
-	assert.Contains(got,
+	assert.Contains(t, got, "Database exists: unknown")
+	assert.Contains(t, got,
 		"Startup sync decision: unknown (database could not be inspected)")
-	assert.Contains(got, "Session data versions:")
-	assert.Contains(got,
+	assert.Contains(t, got, "Session data versions:")
+	assert.Contains(t, got,
 		"unavailable: stat /data/sessions.db: permission denied")
-	assert.Contains(got,
+	assert.Contains(t, got,
 		"Likely cause: database could not be inspected; check database path and permissions")
-	assert.NotContains(got, "database will be created")
-	assert.NotContains(got, "database does not exist yet")
+	assert.NotContains(t, got, "database will be created")
+	assert.NotContains(t, got, "database does not exist yet")
 }

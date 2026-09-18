@@ -352,6 +352,16 @@ go.kenn.io/kit v0.24.2-0.20260908151812-b9d6bb63077d h1:KJr8spxLUMutd0vGst6Fhnxo
 go.kenn.io/kit v0.24.2-0.20260908151812-b9d6bb63077d/go.mod h1:dO7SImegZe4P9PdnxuANdSQFbnrUvF3eE6/RDOfOMqo=
 go.kenn.io/kit v0.25.1-0.20260918025836-45765c649d05 h1:hWWU0gqdB8X2UmVjV05VpZqXsM3q8wcfzpQSLnuFEAY=
 go.kenn.io/kit v0.25.1-0.20260918025836-45765c649d05/go.mod h1:WTjumnQlcE1TLTNmHDsmPYRyjPVjd1IP+fQ9YOnzBvc=
+go.kenn.io/kit v0.25.1-0.20260918114758-bec5a2fea523 h1:of6WvOBWMsJxozvgBlWkUlfN7rbHuMUJHc8l/bauI2k=
+go.kenn.io/kit v0.25.1-0.20260918114758-bec5a2fea523/go.mod h1:JJN5uFf93goZI0+NV5UrGDd3N0+yJ04a1uzyPlx+R+g=
+go.kenn.io/kit v0.25.1-0.20260918120414-e9c05633bd6b h1:K5aNglKfuMF1p6TuwH7XPPhIJJ0/hf4g5XAEs3VeZ5Q=
+go.kenn.io/kit v0.25.1-0.20260918120414-e9c05633bd6b/go.mod h1:JJN5uFf93goZI0+NV5UrGDd3N0+yJ04a1uzyPlx+R+g=
+go.kenn.io/kit v0.25.1-0.20260918121140-44064b27c45b h1:C5Tc03WN1NrIFAtVEB3JQtJVkcl4n8ODeYcQuvngVvE=
+go.kenn.io/kit v0.25.1-0.20260918121140-44064b27c45b/go.mod h1:JJN5uFf93goZI0+NV5UrGDd3N0+yJ04a1uzyPlx+R+g=
+go.kenn.io/kit v0.25.1-0.20260918123953-cce4baa9a3e1 h1:oMk536I7ZE2umjWE8zbj4vX7ViKDN0i/TJ9lD4gZYvY=
+go.kenn.io/kit v0.25.1-0.20260918123953-cce4baa9a3e1/go.mod h1:JJN5uFf93goZI0+NV5UrGDd3N0+yJ04a1uzyPlx+R+g=
+go.kenn.io/kit v0.25.1-0.20260918125623-3403aa33e0b6 h1:+DXkZYdbI6fy8tS7QzgYAaYx1U3C/1qbC6NOWDsgsfE=
+go.kenn.io/kit v0.25.1-0.20260918125623-3403aa33e0b6/go.mod h1:JJN5uFf93goZI0+NV5UrGDd3N0+yJ04a1uzyPlx+R+g=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
 go.opentelemetry.io/contrib/bridges/prometheus v0.69.0 h1:saQoWg5845Q8TojpqeVStS7zGwVZ6bc5W2PJavTPiBM=

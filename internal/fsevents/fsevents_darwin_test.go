@@ -42,8 +42,6 @@ func TestStreamCallbackBoundsNativeDelivery(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			var got []Event
 			var copiedEvents int
 			var copiedBytes int
@@ -59,11 +57,11 @@ func TestStreamCallbackBoundsNativeDelivery(t *testing.T) {
 
 			invokeTestCallback(stream, tc.count, tc.path, eventFlagItemCreated)
 
-			assert.Equal([]Event{{Flags: eventFlagMustScanSubDirs}}, got)
-			assert.Equal(tc.wantCopies, copiedEvents)
-			assert.Equal(tc.wantBytes, copiedBytes)
-			assert.LessOrEqual(copiedEvents, callbackMaxEvents)
-			assert.LessOrEqual(copiedBytes, callbackMaxPathBytes)
+			assert.Equal(t, []Event{{Flags: eventFlagMustScanSubDirs}}, got)
+			assert.Equal(t, tc.wantCopies, copiedEvents)
+			assert.Equal(t, tc.wantBytes, copiedBytes)
+			assert.LessOrEqual(t, copiedEvents, callbackMaxEvents)
+			assert.LessOrEqual(t, copiedBytes, callbackMaxPathBytes)
 		})
 	}
 }
@@ -136,9 +134,6 @@ func TestStreamCloseWaitsForCallback(t *testing.T) {
 }
 
 func TestStreamCopiesCallbackData(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	events := make(chan Event, 128)
 	stream := newTestStream(t, root, func(batch []Event) {
@@ -148,27 +143,25 @@ func TestStreamCopiesCallbackData(t *testing.T) {
 	})
 
 	firstPath := filepath.Join(root, "first.txt")
-	require.NoError(os.WriteFile(firstPath, []byte("first"), 0o600))
+	require.NoError(t, os.WriteFile(firstPath, []byte("first"), 0o600))
 	canonicalFirstPath := filepath.Join(canonicalPath(t, root), "first.txt")
 	first := waitForPath(t, events, canonicalFirstPath)
 
 	var lastPath string
 	for i := range 32 {
 		path := filepath.Join(root, fmt.Sprintf("reuse-%02d.txt", i))
-		require.NoError(os.WriteFile(path, []byte("reuse"), 0o600))
+		require.NoError(t, os.WriteFile(path, []byte("reuse"), 0o600))
 		lastPath = path
 	}
 	waitForPath(t, events, filepath.Join(canonicalPath(t, root), filepath.Base(lastPath)))
 
-	assert.Equal(canonicalFirstPath, first.Path)
-	assert.NotZero(first.ID)
-	assert.NotZero(first.Flags)
-	assert.NoError(stream.Close())
+	assert.Equal(t, canonicalFirstPath, first.Path)
+	assert.NotZero(t, first.ID)
+	assert.NotZero(t, first.Flags)
+	assert.NoError(t, stream.Close())
 }
 
 func TestStreamHasNoCallbacksAfterCloseReturns(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	events := make(chan Event, 16)
 	stream := newTestStream(t, root, func(batch []Event) {
@@ -178,13 +171,13 @@ func TestStreamHasNoCallbacksAfterCloseReturns(t *testing.T) {
 	})
 
 	beforeClose := filepath.Join(root, "before-close.txt")
-	require.NoError(os.WriteFile(beforeClose, []byte("before"), 0o600))
+	require.NoError(t, os.WriteFile(beforeClose, []byte("before"), 0o600))
 	waitForPath(t, events, filepath.Join(canonicalPath(t, root), "before-close.txt"))
-	require.NoError(stream.Close())
+	require.NoError(t, stream.Close())
 	drainEvents(events)
 
 	afterClose := filepath.Join(root, "after-close.txt")
-	require.NoError(os.WriteFile(afterClose, []byte("after"), 0o600))
+	require.NoError(t, os.WriteFile(afterClose, []byte("after"), 0o600))
 	assert.Never(t, func() bool {
 		select {
 		case <-events:
@@ -196,15 +189,13 @@ func TestStreamHasNoCallbacksAfterCloseReturns(t *testing.T) {
 }
 
 func TestStreamClosingSharedQueueSiblingKeepsOtherStreamRunning(t *testing.T) {
-	require := require.New(t)
-
 	queue, err := NewQueue()
-	require.NoError(err)
+	require.NoError(t, err)
 
 	firstRoot := t.TempDir()
 	first, err := NewStream(queue, firstRoot, 500*time.Millisecond, func([]Event) {})
-	require.NoError(err)
-	require.NoError(first.Start())
+	require.NoError(t, err)
+	require.NoError(t, first.Start())
 	t.Cleanup(func() { assert.NoError(t, first.Close()) })
 
 	secondRoot := t.TempDir()
@@ -214,18 +205,19 @@ func TestStreamClosingSharedQueueSiblingKeepsOtherStreamRunning(t *testing.T) {
 			events <- event
 		}
 	})
-	require.NoError(err)
-	require.NoError(second.Start())
+	require.NoError(t, err)
+	require.NoError(t, second.Start())
 	t.Cleanup(func() { assert.NoError(t, second.Close()) })
 
-	require.NoError(first.Close())
+	require.NoError(t, first.Close())
 	path := filepath.Join(secondRoot, "sibling.txt")
-	require.NoError(os.WriteFile(path, []byte("sibling"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("sibling"), 0o600))
 	waitForPath(t, events, filepath.Join(canonicalPath(t, secondRoot), "sibling.txt"))
 }
 
 func newTestStream(t *testing.T, root string, sink func([]Event)) *Stream {
 	t.Helper()
+
 	queue, err := NewQueue()
 	require.NoError(t, err)
 	stream, err := NewStream(queue, root, 500*time.Millisecond, sink)

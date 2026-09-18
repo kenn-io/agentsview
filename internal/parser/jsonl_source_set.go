@@ -343,7 +343,7 @@ func (s JSONLSourceSet) SourceForReconciliation(
 	path = filepath.Clean(path)
 	info, err := s.sourcePathInfo(path)
 	if err != nil || !info.Mode().IsRegular() {
-		return SourceRef{}, false, nil
+		return SourceRef{}, false, nil //nolint:nilerr // Unavailable source paths are represented by the found=false outcome.
 	}
 	for _, root := range s.roots {
 		if !s.pathAllowedByRoot(root, path) ||
@@ -686,7 +686,7 @@ func (s JSONLSourceSet) sourceForPath(
 	path = filepath.Clean(path)
 	info, err := s.sourcePathInfo(path)
 	if err != nil || !info.Mode().IsRegular() {
-		return SourceRef{}, false, nil
+		return SourceRef{}, false, nil //nolint:nilerr // Unavailable source paths are represented by the found=false outcome.
 	}
 	for _, root := range s.roots {
 		if !s.pathAllowedByRoot(root, path) {

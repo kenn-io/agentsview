@@ -43,8 +43,8 @@ func usageCacheReadShouldRecapture(err error) bool {
 	if errors.Is(err, errUsageCacheSourceChanged) {
 		return true
 	}
-	var missing *usageCacheMissingSessionError
-	return errors.As(err, &missing)
+	_, hasMissing := errors.AsType[*usageCacheMissingSessionError](err)
+	return hasMissing
 }
 
 func usageCursorIncluded(filter UsageFilter) bool {
@@ -360,6 +360,7 @@ func (cache *usageCache) usageRollupActivityQuery(
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	sessions := usageRollupSessionMap(snapshot)
 	result := make(map[string]UsageSessionInfo)
 	for rows.Next() {
@@ -397,7 +398,7 @@ func aggregateUsageRollupExceptions(
 	plain = filterUsageRollupOwners(plain, sessions, filter)
 	general = filterUsageRollupOwners(general, sessions, filter)
 	general = deduplicateUsageRollupGeneral(general)
-	survivors := append(plain, general...)
+	survivors := slices.Concat(plain, general)
 	type key struct {
 		session, date, model, providerID, priced, pattern, rateHash string
 		rateOK                                                      bool
@@ -423,10 +424,12 @@ func aggregateUsageRollupExceptions(
 		if priced.BandThreshold != nil {
 			band = *priced.BandThreshold
 		}
-		itemKey := key{fact.AttributionSessionID, fact.LocalDate, fact.Model,
+		itemKey := key{
+			fact.AttributionSessionID, fact.LocalDate, fact.Model,
 			fact.Fact.ProviderID,
 			priced.PricedModel, priced.MatchedPattern, priced.RateHash,
-			priced.RateOK, band}
+			priced.RateOK, band,
+		}
 		group := groups[itemKey]
 		if group == nil {
 			session := sessions[fact.AttributionSessionID]
@@ -719,9 +722,12 @@ func compareUsageGeneralWinner(left, right usageRollupFact) int {
 }
 
 func compareUsageFactTies(left, right usageRollupFact) int {
-	values := [][2]string{{left.SourceSessionID, right.SourceSessionID},
-		{left.Fact.Source, right.Fact.Source}, {left.Fact.SourceUUID, right.Fact.SourceUUID},
-		{left.Fact.UsageDedupKey, right.Fact.UsageDedupKey}}
+	values := [][2]string{
+		{left.SourceSessionID, right.SourceSessionID},
+		{left.Fact.Source, right.Fact.Source},
+		{left.Fact.SourceUUID, right.Fact.SourceUUID},
+		{left.Fact.UsageDedupKey, right.Fact.UsageDedupKey},
+	}
 	leftOrdinal, rightOrdinal := -1, -1
 	if left.Fact.MessageOrdinal != nil {
 		leftOrdinal = *left.Fact.MessageOrdinal
@@ -729,8 +735,10 @@ func compareUsageFactTies(left, right usageRollupFact) int {
 	if right.Fact.MessageOrdinal != nil {
 		rightOrdinal = *right.Fact.MessageOrdinal
 	}
-	orders := []int{cmp.Compare(values[0][0], values[0][1]),
-		cmp.Compare(leftOrdinal, rightOrdinal)}
+	orders := []int{
+		cmp.Compare(values[0][0], values[0][1]),
+		cmp.Compare(leftOrdinal, rightOrdinal),
+	}
 	for _, pair := range values[1:] {
 		orders = append(orders, cmp.Compare(pair[0], pair[1]))
 	}
@@ -763,9 +771,12 @@ func compareNullableInt64(left, right *int64, nilHigh bool) int {
 }
 
 func compareUsageFactsGroup(left, right usageFactsGroup) int {
-	for _, pair := range [][2]string{{left.Date, right.Date},
-		{left.SessionID, right.SessionID}, {left.Model, right.Model},
-		{left.ProviderID, right.ProviderID}} {
+	for _, pair := range [][2]string{
+		{left.Date, right.Date},
+		{left.SessionID, right.SessionID},
+		{left.Model, right.Model},
+		{left.ProviderID, right.ProviderID},
+	} {
 		if order := cmp.Compare(pair[0], pair[1]); order != 0 {
 			return order
 		}

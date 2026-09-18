@@ -27,16 +27,13 @@ func seedSearchSession(t *testing.T, d *db.DB, id, project, content string) {
 		dbtest.UserMsg(id, 0, content),
 		dbtest.AsstMsg(id, 1, "understood"),
 	}
-	require.NoError(t, d.InsertMessages(msgs))
+	require.NoError(t, d.InsertMessages(t.Context(), msgs))
 }
 
 func TestDirectBackend_Search_Roundtrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("FTS not available in this build")
 	}
 	seedSearchSession(t, d, "s1", "proj-a", "the quick brown fox jumped")
@@ -47,11 +44,11 @@ func TestDirectBackend_Search_Roundtrip(t *testing.T) {
 		Query: "fox",
 		Limit: 10,
 	})
-	require.NoError(err)
-	require.NotNil(res)
-	require.Len(res.Results, 1)
-	assert.Equal("s1", res.Results[0].SessionID)
-	assert.Equal("proj-a", res.Results[0].Project)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.Len(t, res.Results, 1)
+	assert.Equal(t, "s1", res.Results[0].SessionID)
+	assert.Equal(t, "proj-a", res.Results[0].Project)
 
 	// Project filter restricts results.
 	none, err := be.Search(t.Context(), service.SearchRequest{
@@ -59,8 +56,8 @@ func TestDirectBackend_Search_Roundtrip(t *testing.T) {
 		Project: "proj-b",
 		Limit:   10,
 	})
-	require.NoError(err)
-	assert.Empty(none.Results)
+	require.NoError(t, err)
+	assert.Empty(t, none.Results)
 }
 
 func TestDirectBackend_Search_EmptyQuery(t *testing.T) {
@@ -81,7 +78,7 @@ func TestDirectBackend_Search_EmptyQuery(t *testing.T) {
 func TestDirectBackend_Search_PunctuationIsLiteral(t *testing.T) {
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("FTS not available in this build")
 	}
 	seedSearchSession(t, d, "s1", "proj", "deploying agentsview-mcp today")
@@ -97,12 +94,10 @@ func TestDirectBackend_Search_PunctuationIsLiteral(t *testing.T) {
 }
 
 func TestHTTPBackend_Search_Roundtrip(t *testing.T) {
-	require := require.New(t)
-
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	d := env.DB
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("FTS not available in this build")
 	}
 	seedSearchSession(t, d, "s1", "proj-a", "the quick brown fox jumped")
@@ -112,17 +107,15 @@ func TestHTTPBackend_Search_Roundtrip(t *testing.T) {
 		Query: "fox",
 		Limit: 10,
 	})
-	require.NoError(err)
-	require.NotNil(res)
-	require.Len(res.Results, 1)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.Len(t, res.Results, 1)
 	assert.Equal(t, "s1", res.Results[0].SessionID)
 }
 
 // The HTTP backend must forward all search params to the daemon's
 // /api/v1/search endpoint with the expected query-key names.
 func TestHTTPBackend_Search_SendsParams(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 	var got url.Values
 	srv := httptest.NewServer(http.HandlerFunc(
@@ -138,11 +131,11 @@ func TestHTTPBackend_Search_SendsParams(t *testing.T) {
 		Query: "needle", Project: "proj", Sort: "recency", Cursor: 7, Limit: 5,
 	})
 	require.NoError(t, err)
-	assert.Equal("needle", got.Get("q"))
-	assert.Equal("proj", got.Get("project"))
-	assert.Equal("recency", got.Get("sort"))
-	assert.Equal("7", got.Get("cursor"))
-	assert.Equal("5", got.Get("limit"))
+	assert.Equal(t, "needle", got.Get("q"))
+	assert.Equal(t, "proj", got.Get("project"))
+	assert.Equal(t, "recency", got.Get("sort"))
+	assert.Equal(t, "7", got.Get("cursor"))
+	assert.Equal(t, "5", got.Get("limit"))
 }
 
 // A daemon without an FTS index responds 501; the HTTP backend maps that

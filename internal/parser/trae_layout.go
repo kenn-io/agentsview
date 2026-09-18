@@ -52,6 +52,8 @@ func TraeEncryptedLayoutDetected(ctx context.Context, root string) bool {
 			return false
 		case traeLayoutUnsupported:
 			foundUnsupported = true
+		case traeLayoutValidEmpty, traeLayoutIncomplete:
+			// Neither layout proves an unsupported populated database.
 		}
 	}
 	return foundUnsupported

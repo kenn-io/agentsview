@@ -1,8 +1,7 @@
 package parser
 
-import "context"
-
 import (
+	"context"
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
@@ -205,16 +204,16 @@ func newTestDB(t *testing.T) (string, *OpenCodeSeeder, *sql.DB) {
 var (
 	openCodeSchemaTemplateOnce  sync.Once
 	openCodeSchemaTemplateBytes []byte
-	openCodeSchemaTemplateErr   error
+	errOpenCodeSchemaTemplate   error
 )
 
 func copyOpenCodeSchemaTemplate(t *testing.T, dbPath string) {
 	t.Helper()
+
 	openCodeSchemaTemplateOnce.Do(func() {
-		openCodeSchemaTemplateBytes, openCodeSchemaTemplateErr =
-			buildOpenCodeSchemaTemplate(t.Context())
+		openCodeSchemaTemplateBytes, errOpenCodeSchemaTemplate = buildOpenCodeSchemaTemplate(t.Context())
 	})
-	require.NoError(t, openCodeSchemaTemplateErr)
+	require.NoError(t, errOpenCodeSchemaTemplate)
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755),
 		"mkdir opencode test db dir")
 	require.NoError(t, os.WriteFile(dbPath, openCodeSchemaTemplateBytes, 0o644),
@@ -254,6 +253,7 @@ func buildOpenCodeSchemaTemplate(ctx context.Context) ([]byte, error) {
 // required.
 func seedHybridSQLiteDB(t *testing.T, dbPath, sessionID string) {
 	t.Helper()
+
 	copyOpenCodeSchemaTemplate(t, dbPath)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open hybrid db")
@@ -289,6 +289,7 @@ func writeOpenCodeStorageFile(
 	t *testing.T, path string, data any,
 ) {
 	t.Helper()
+
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755),
 		"mkdir %s", filepath.Dir(path))
 	raw, err := json.Marshal(data)
@@ -305,10 +306,10 @@ func BenchmarkOpenCodeStorageSessionFingerprint(b *testing.B) {
 			)
 			writeFile := func(path string, data []byte) {
 				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-					b.Fatal(err)
+					require.FailNow(b, fmt.Sprint(err))
 				}
 				if err := os.WriteFile(path, data, 0o644); err != nil {
-					b.Fatal(err)
+					require.FailNow(b, fmt.Sprint(err))
 				}
 			}
 			writeFile(sessionPath, []byte(`{"id":"ses_benchmark","directory":"/work/benchmark","title":"Benchmark","time":{"created":1700000000000,"updated":1700000060000}}`))
@@ -345,10 +346,10 @@ func BenchmarkOpenCodeStorageSessionFingerprint(b *testing.B) {
 			for range b.N {
 				hash, err := openCodeStorageSessionFingerprint(b.Context(), sessionPath)
 				if err != nil {
-					b.Fatal(err)
+					require.FailNow(b, fmt.Sprint(err))
 				}
 				if hash == "" {
-					b.Fatal("expected fingerprint")
+					require.FailNow(b, "expected fingerprint")
 				}
 			}
 		})
@@ -387,28 +388,23 @@ func TestParseOpenCodeDB_StandardSession(t *testing.T) {
 }
 
 func TestOpenOpenCodeDBDoesNotForceWALMode(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath, _, writer := newTestDB(t)
-	require.NoError(writer.Close())
+	require.NoError(t, writer.Close())
 
 	reader, err := openOpenCodeDB(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer reader.Close()
 	_, err = reader.ExecContext(t.Context(), "CREATE TABLE must_stay_read_only (id INTEGER)")
-	require.Error(err, "OpenCode source databases must stay read-only")
+	require.Error(t, err, "OpenCode source databases must stay read-only")
 
 	var journalMode string
-	require.NoError(reader.QueryRowContext(t.Context(), "PRAGMA journal_mode").Scan(&journalMode))
-	assert.Equal("delete", journalMode)
-	assert.NoFileExists(dbPath + "-wal")
-	assert.NoFileExists(dbPath + "-shm")
+	require.NoError(t, reader.QueryRowContext(t.Context(), "PRAGMA journal_mode").Scan(&journalMode))
+	assert.Equal(t, "delete", journalMode)
+	assert.NoFileExists(t, dbPath+"-wal")
+	assert.NoFileExists(t, dbPath+"-shm")
 }
 
 func TestParseOpenCodeFile_StorageSession(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionPath := filepath.Join(
 		root, "storage", "session", "global", "ses_storage.json",
@@ -497,8 +493,8 @@ func TestParseOpenCodeFile_StorageSession(t *testing.T) {
 	sess, msgs, err := parseOpenCodeStorageFile(
 		sessionPath, "testmachine",
 	)
-	require.NoError(err, "parseOpenCodeStorageFile")
-	require.NotNil(sess, "expected non-nil session")
+	require.NoError(t, err, "parseOpenCodeStorageFile")
+	require.NotNil(t, sess, "expected non-nil session")
 
 	assertEq(t, "ID", sess.ID, "opencode:ses_storage")
 	assertEq(t, "Agent", sess.Agent, AgentOpenCode)
@@ -512,7 +508,7 @@ func TestParseOpenCodeFile_StorageSession(t *testing.T) {
 
 	assertEq(t, "messages len", len(msgs), 2)
 	fingerprint, err := openCodeStorageSessionFingerprint(t.Context(), sessionPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Equal(t, sess.File.Hash, fingerprint,
 		"fingerprinting and parsing must stamp the same raw storage identity")
 	assertEq(t, "msg[0].Role", msgs[0].Role, RoleUser)
@@ -535,9 +531,6 @@ func TestParseOpenCodeFile_StorageSession(t *testing.T) {
 }
 
 func TestOpenCodeStorageEmptySessionKeepsSkipAndFingerprint(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionPath := filepath.Join(root, "storage", "session", "global", "ses_empty.json")
 	writeOpenCodeStorageFile(t, sessionPath, map[string]any{
@@ -549,13 +542,13 @@ func TestOpenCodeStorageEmptySessionKeepsSkipAndFingerprint(t *testing.T) {
 	})
 
 	sess, messages, err := parseOpenCodeStorageFile(sessionPath, "")
-	require.NoError(err)
-	assert.Nil(sess)
-	assert.Empty(messages)
+	require.NoError(t, err)
+	assert.Nil(t, sess)
+	assert.Empty(t, messages)
 
 	fingerprint, err := openCodeStorageSessionFingerprint(t.Context(), sessionPath)
-	require.NoError(err)
-	assert.Empty(fingerprint)
+	require.NoError(t, err)
+	assert.Empty(t, fingerprint)
 
 	writeOpenCodeStorageFile(t, filepath.Join(
 		root, "storage", "message", "ses_empty", "msg_in_progress.json",
@@ -564,12 +557,12 @@ func TestOpenCodeStorageEmptySessionKeepsSkipAndFingerprint(t *testing.T) {
 		"time": map[string]any{"created": int64(1700000000000)},
 	})
 	sess, messages, err = parseOpenCodeStorageFile(sessionPath, "")
-	require.NoError(err)
-	assert.Nil(sess)
-	assert.Empty(messages)
+	require.NoError(t, err)
+	assert.Nil(t, sess)
+	assert.Empty(t, messages)
 	fingerprint, err = openCodeStorageSessionFingerprint(t.Context(), sessionPath)
-	require.NoError(err)
-	assert.Empty(fingerprint)
+	require.NoError(t, err)
+	assert.Empty(t, fingerprint)
 
 	writeOpenCodeStorageFile(t, filepath.Join(
 		root, "storage", "part", "msg_in_progress", "part_whitespace.json",
@@ -578,12 +571,12 @@ func TestOpenCodeStorageEmptySessionKeepsSkipAndFingerprint(t *testing.T) {
 		"messageID": "msg_in_progress", "type": "text", "text": "   ",
 	})
 	sess, messages, err = parseOpenCodeStorageFile(sessionPath, "")
-	require.NoError(err)
-	assert.Nil(sess)
-	assert.Empty(messages)
+	require.NoError(t, err)
+	assert.Nil(t, sess)
+	assert.Empty(t, messages)
 	fingerprint, err = openCodeStorageSessionFingerprint(t.Context(), sessionPath)
-	require.NoError(err)
-	assert.Empty(fingerprint)
+	require.NoError(t, err)
+	assert.Empty(t, fingerprint)
 }
 
 func TestOpenCodeStorageFingerprintSerializationIsStable(t *testing.T) {
@@ -619,19 +612,19 @@ func TestOpenCodeStorageFingerprintAvoidsNormalizedParseAllocations(
 	fingerprintAllocs := testing.AllocsPerRun(5, func() {
 		hash, err := openCodeStorageSessionFingerprint(t.Context(), sessionPath)
 		if err != nil {
-			t.Fatalf("fingerprint: %v", err)
+			require.FailNowf(t, "test failed", "fingerprint: %v", err)
 		}
 		if hash == "" {
-			t.Fatal("expected fingerprint")
+			require.FailNow(t, "expected fingerprint")
 		}
 	})
 	parseAllocs := testing.AllocsPerRun(5, func() {
 		sess, _, err := parseOpenCodeStorageFile(sessionPath, "testmachine")
 		if err != nil {
-			t.Fatalf("parse: %v", err)
+			require.FailNowf(t, "test failed", "parse: %v", err)
 		}
 		if sess == nil {
-			t.Fatal("expected parsed session")
+			require.FailNow(t, "expected parsed session")
 		}
 	})
 
@@ -640,9 +633,6 @@ func TestOpenCodeStorageFingerprintAvoidsNormalizedParseAllocations(
 }
 
 func TestParseOpenCodeFile_LegacySessionUsesProjectWorktree(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	const projectID = "legacy-project"
 	const sessionID = "ses_legacy"
 	root := t.TempDir()
@@ -669,24 +659,22 @@ func TestParseOpenCodeFile_LegacySessionUsesProjectWorktree(t *testing.T) {
 	})
 
 	sess, _, err := parseOpenCodeStorageFile(sessionPath, "machine")
-	require.NoError(err)
-	require.NotNil(sess)
-	assert.Equal("/home/user/code/legacy-app", sess.Cwd)
-	assert.Equal("legacy_app", sess.Project)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "/home/user/code/legacy-app", sess.Cwd)
+	assert.Equal(t, "legacy_app", sess.Project)
 
 	writeOpenCodeStorageFile(t, sessionPath, map[string]any{
 		"id": "ses_legacy", "directory": "/home/user/code/session-app", "title": "Legacy",
 		"time": map[string]any{"created": int64(1700000000000), "updated": int64(1700000060000)},
 	})
 	sess, _, err = parseOpenCodeStorageFile(sessionPath, "machine")
-	require.NoError(err)
-	assert.Equal("/home/user/code/session-app", sess.Cwd)
-	assert.Equal("session_app", sess.Project)
+	require.NoError(t, err)
+	assert.Equal(t, "/home/user/code/session-app", sess.Cwd)
+	assert.Equal(t, "session_app", sess.Project)
 }
 
 func TestOpenCodeStorageFingerprintTracksRawRows(t *testing.T) {
-	parentRequire := require.New(t)
-
 	root := t.TempDir()
 	const (
 		projectID = "fingerprint-project"
@@ -725,11 +713,11 @@ func TestOpenCodeStorageFingerprintTracksRawRows(t *testing.T) {
 	})
 
 	baseline, err := openCodeStorageSessionFingerprint(t.Context(), sessionPath)
-	parentRequire.NoError(err)
-	parentRequire.NotEmpty(baseline)
+	require.NoError(t, err)
+	require.NotEmpty(t, baseline)
 	sess, _, err := parseOpenCodeStorageFile(sessionPath, "testmachine")
-	parentRequire.NoError(err)
-	parentRequire.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 	assert.Equal(t, baseline, sess.File.Hash)
 
 	tests := []struct {
@@ -844,9 +832,6 @@ func TestResolveOpenCodeStorageWorktreeTrimsSessionDirectory(t *testing.T) {
 }
 
 func TestParseOpenCodeFile_LegacySessionMissingProjectFallback(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionPath := filepath.Join(root, "storage", "session", "legacy-project", "ses_legacy.json")
 	writeOpenCodeStorageFile(t, sessionPath, map[string]any{
@@ -864,18 +849,15 @@ func TestParseOpenCodeFile_LegacySessionMissingProjectFallback(t *testing.T) {
 	})
 
 	sess, _, err := parseOpenCodeStorageFile(sessionPath, "machine")
-	require.NoError(err)
-	require.NotNil(sess)
-	assert.Empty(sess.Cwd)
-	assert.Equal("unknown", sess.Project)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Empty(t, sess.Cwd)
+	assert.Equal(t, "unknown", sess.Project)
 }
 
 func TestParseOpenCodeFile_LegacySessionMalformedProjectReturnsScopedError(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionPath := filepath.Join(root, "storage", "session", "legacy-project", "ses_legacy.json")
 	writeOpenCodeStorageFile(t, sessionPath, map[string]any{
@@ -891,29 +873,27 @@ func TestParseOpenCodeFile_LegacySessionMalformedProjectReturnsScopedError(
 		"id": "part_1", "sessionID": "ses_legacy", "messageID": "msg_1",
 		"type": "text", "text": "hello", "time": map[string]any{"created": int64(1700000000000)},
 	})
-	require.NoError(os.MkdirAll(filepath.Dir(openCodeProjectPath(sessionPath)), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(openCodeProjectPath(sessionPath)), 0o755))
 	writeOpenCodeStorageFile(t, openCodeProjectPath(sessionPath), map[string]any{
 		"id": "legacy-project", "worktree": "/home/user/code/legacy-app",
 	})
 
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		openCodeProjectPath(sessionPath), []byte("{"), 0o644,
 	))
 
 	sess, msgs, err := parseOpenCodeStorageFile(sessionPath, "machine")
-	assert.Error(err)
-	assert.Nil(sess)
-	assert.Nil(msgs)
+	require.Error(t, err)
+	assert.Nil(t, sess)
+	assert.Nil(t, msgs)
 	_, fingerprintErr := openCodeStorageSessionFingerprint(t.Context(), sessionPath)
-	assert.Error(fingerprintErr)
-	assert.Contains(fingerprintErr.Error(), "decoding opencode project file")
+	require.Error(t, fingerprintErr)
+	assert.Contains(t, fingerprintErr.Error(), "decoding opencode project file")
 }
 
 func TestParseOpenCodeFile_LegacySessionUnreadableProjectReturnsScopedError(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-
 	root := t.TempDir()
 	sessionPath := filepath.Join(
 		root, "storage", "session", "legacy-project", "ses_legacy.json",
@@ -940,19 +920,16 @@ func TestParseOpenCodeFile_LegacySessionUnreadableProjectReturnsScopedError(
 	require.NoError(t, os.MkdirAll(projectPath, 0o755))
 
 	sess, msgs, err := parseOpenCodeStorageFile(sessionPath, "machine")
-	assert.Error(err)
-	assert.Nil(sess)
-	assert.Nil(msgs)
-	assert.Contains(err.Error(), "reading opencode project file")
+	require.Error(t, err)
+	assert.Nil(t, sess)
+	assert.Nil(t, msgs)
+	assert.Contains(t, err.Error(), "reading opencode project file")
 	_, fingerprintErr := openCodeStorageSessionFingerprint(t.Context(), sessionPath)
-	assert.Error(fingerprintErr)
-	assert.Contains(fingerprintErr.Error(), "reading opencode project file")
+	require.Error(t, fingerprintErr)
+	assert.Contains(t, fingerprintErr.Error(), "reading opencode project file")
 }
 
 func TestOpenCodeStorageMtimeUsesProjectOnlyForFallback(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	concreteRoot := t.TempDir()
 	concretePath := writeOpenCodeProviderStorageSession(
 		t, concreteRoot, "session", "ses_directory_mtime", "directory-app", "Directory",
@@ -962,14 +939,14 @@ func TestOpenCodeStorageMtimeUsesProjectOnlyForFallback(t *testing.T) {
 		"id": "global", "worktree": "/work/unused",
 	})
 	concreteBefore, err := OpenCodeSourceMtime(t.Context(), concretePath)
-	require.NoError(err)
+	require.NoError(t, err)
 	future := time.Unix(1810000000, 123456789)
-	require.NoError(os.Chtimes(
+	require.NoError(t, os.Chtimes(
 		concreteProjectPath, future, future,
 	))
 	concreteAfter, err := OpenCodeSourceMtime(t.Context(), concretePath)
-	require.NoError(err)
-	assert.Equal(concreteBefore, concreteAfter,
+	require.NoError(t, err)
+	assert.Equal(t, concreteBefore, concreteAfter,
 		"unused project metadata must not refresh a session with a concrete directory")
 
 	fallbackRoot := t.TempDir()
@@ -985,22 +962,20 @@ func TestOpenCodeStorageMtimeUsesProjectOnlyForFallback(t *testing.T) {
 		"id": "global", "worktree": "/work/fallback",
 	})
 	fallbackBefore, err := OpenCodeSourceMtime(t.Context(), fallbackPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	future = time.Unix(1810000100, 123456789)
-	require.NoError(os.Chtimes(
+	require.NoError(t, os.Chtimes(
 		fallbackProjectPath, future, future,
 	))
 	fallbackAfter, err := OpenCodeSourceMtime(t.Context(), fallbackPath)
-	require.NoError(err)
-	assert.Greater(fallbackAfter, fallbackBefore,
+	require.NoError(t, err)
+	assert.Greater(t, fallbackAfter, fallbackBefore,
 		"project metadata must refresh a legacy session without a directory")
 }
 
 func TestStatOpenCodeStorageSessionStateTracksProjectContentRewrite(
 	t *testing.T,
 ) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionPath := filepath.Join(
 		root, "storage", "session", "legacy-project", "ses_state.json",
@@ -1018,21 +993,21 @@ func TestStatOpenCodeStorageSessionStateTracksProjectContentRewrite(
 	})
 
 	before, ok := StatOpenCodeStorageSessionState(sessionPath)
-	require.True(ok)
+	require.True(t, ok)
 	info, err := os.Stat(projectPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	writeOpenCodeStorageFile(t, projectPath, map[string]any{
 		"id": "legacy-project", "worktree": "/home/user/code/new-app",
 	})
 	afterInfo, err := os.Stat(projectPath)
-	require.NoError(err)
-	require.Equal(info.Size(), afterInfo.Size())
-	require.NoError(os.Chtimes(
+	require.NoError(t, err)
+	require.Equal(t, info.Size(), afterInfo.Size())
+	require.NoError(t, os.Chtimes(
 		projectPath, info.ModTime(), info.ModTime(),
 	))
 
 	after, ok := StatOpenCodeStorageSessionState(sessionPath)
-	require.True(ok)
+	require.True(t, ok)
 	assert.NotEqual(t, before, after,
 		"project content must invalidate equal-size, preserved-mtime state")
 	t.Logf("project state changed after equal-size rewrite with preserved mtime")
@@ -1041,9 +1016,6 @@ func TestStatOpenCodeStorageSessionStateTracksProjectContentRewrite(
 func TestParseOpenCodeFile_StorageSessionInvalidChildFails(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionPath := filepath.Join(
 		root, "storage", "session", "global", "ses_storage.json",
@@ -1067,10 +1039,10 @@ func TestParseOpenCodeFile_StorageSessionInvalidChildFails(
 			"created": 1700000000000,
 		},
 	})
-	require.NoError(os.MkdirAll(filepath.Join(
+	require.NoError(t, os.MkdirAll(filepath.Join(
 		root, "storage", "message", "ses_storage",
 	), 0o755), "mkdir invalid message dir")
-	require.NoError(os.WriteFile(filepath.Join(
+	require.NoError(t, os.WriteFile(filepath.Join(
 		root, "storage", "message", "ses_storage", "msg_bad.json",
 	), []byte(`{"id":"msg_bad"`), 0o644), "write invalid message")
 	writeOpenCodeStorageFile(t, filepath.Join(
@@ -1085,22 +1057,22 @@ func TestParseOpenCodeFile_StorageSessionInvalidChildFails(
 			"created": 1700000000000,
 		},
 	})
-	require.NoError(os.MkdirAll(filepath.Join(
+	require.NoError(t, os.MkdirAll(filepath.Join(
 		root, "storage", "part", "msg_1",
 	), 0o755), "mkdir invalid part dir")
-	require.NoError(os.WriteFile(filepath.Join(
+	require.NoError(t, os.WriteFile(filepath.Join(
 		root, "storage", "part", "msg_1", "prt_bad.json",
 	), []byte(`{"id":"prt_bad"`), 0o644), "write invalid part")
 
 	sess, msgs, err := parseOpenCodeStorageFile(
 		sessionPath, "testmachine",
 	)
-	require.Error(err, "expected parseOpenCodeStorageFile error")
-	assert.Nil(sess, "session, want nil")
-	assert.Nil(msgs, "msgs, want nil")
+	require.Error(t, err, "expected parseOpenCodeStorageFile error")
+	assert.Nil(t, sess, "session, want nil")
+	assert.Nil(t, msgs, "msgs, want nil")
 	_, fingerprintErr := openCodeStorageSessionFingerprint(t.Context(), sessionPath)
-	assert.Error(fingerprintErr)
-	assert.Contains(fingerprintErr.Error(), "decoding opencode message file")
+	require.Error(t, fingerprintErr)
+	assert.Contains(t, fingerprintErr.Error(), "decoding opencode message file")
 }
 
 func TestParseOpenCodeFile_MissingPartDirAllowed(t *testing.T) {
@@ -1138,8 +1110,6 @@ func TestParseOpenCodeFile_MissingPartDirAllowed(t *testing.T) {
 }
 
 func TestParseOpenCodeFile_StorageMessageMissingIDFails(t *testing.T) {
-	assert := assert.New(t)
-
 	root := t.TempDir()
 	sessionPath := filepath.Join(
 		root, "storage", "session", "global", "ses_storage.json",
@@ -1167,16 +1137,14 @@ func TestParseOpenCodeFile_StorageMessageMissingIDFails(t *testing.T) {
 		sessionPath, "testmachine",
 	)
 	require.Error(t, err, "expected parseOpenCodeStorageFile error")
-	assert.Nil(sess, "session, want nil")
-	assert.Nil(msgs, "msgs, want nil")
+	assert.Nil(t, sess, "session, want nil")
+	assert.Nil(t, msgs, "msgs, want nil")
 	_, fingerprintErr := openCodeStorageSessionFingerprint(t.Context(), sessionPath)
-	assert.Error(fingerprintErr)
-	assert.Contains(fingerprintErr.Error(), "missing id")
+	require.Error(t, fingerprintErr)
+	assert.Contains(t, fingerprintErr.Error(), "missing id")
 }
 
 func TestParseOpenCodeFile_StoragePartMissingIDFails(t *testing.T) {
-	assert := assert.New(t)
-
 	root := t.TempDir()
 	sessionPath := filepath.Join(
 		root, "storage", "session", "global", "ses_storage.json",
@@ -1215,11 +1183,11 @@ func TestParseOpenCodeFile_StoragePartMissingIDFails(t *testing.T) {
 		sessionPath, "testmachine",
 	)
 	require.Error(t, err, "expected parseOpenCodeStorageFile error")
-	assert.Nil(sess, "session, want nil")
-	assert.Nil(msgs, "msgs, want nil")
+	assert.Nil(t, sess, "session, want nil")
+	assert.Nil(t, msgs, "msgs, want nil")
 	_, fingerprintErr := openCodeStorageSessionFingerprint(t.Context(), sessionPath)
-	assert.Error(fingerprintErr)
-	assert.Contains(fingerprintErr.Error(), "missing id")
+	require.Error(t, fingerprintErr)
+	assert.Contains(t, fingerprintErr.Error(), "missing id")
 }
 
 func TestParseOpenCodeFile_StoragePartOrderingUsesStartTime(
@@ -1501,8 +1469,6 @@ func TestParseOpenCodeDB_ToolParts(t *testing.T) {
 // inference heuristics. Before this fix extractOpenCodeToolCall
 // never set SkillName at all (#1040).
 func TestParseOpenCodeDB_SkillTool(t *testing.T) {
-	require := require.New(t)
-
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
 
@@ -1517,14 +1483,14 @@ func TestParseOpenCodeDB_SkillTool(t *testing.T) {
 		`{"type":"tool","tool":"skill","callID":"call_skill","state":{"input":{"name":"doc-writer"}}}`)
 
 	sessions, err := parseOpenCodeAll(dbPath, "m")
-	require.NoError(err, "ParseOpenCodeDB")
-	require.Len(sessions, 1, "sessions len")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1, "sessions len")
 
 	msgs := sessions[0].Messages
-	require.Len(msgs, 2, "messages len")
+	require.Len(t, msgs, 2, "messages len")
 
 	ast := msgs[1]
-	require.Len(ast.ToolCalls, 1, "tool calls len")
+	require.Len(t, ast.ToolCalls, 1, "tool calls len")
 	assertEq(t, "SkillName", ast.ToolCalls[0].SkillName, "doc-writer")
 }
 
@@ -1532,8 +1498,6 @@ func TestParseOpenCodeDB_SkillTool(t *testing.T) {
 // tool call (tool:"invalid") populates ResultEvents with
 // Status:"errored" so the signal engine detects it as a failure.
 func TestParseOpenCodeDB_InvalidToolCall(t *testing.T) {
-	require := require.New(t)
-
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
 
@@ -1548,15 +1512,15 @@ func TestParseOpenCodeDB_InvalidToolCall(t *testing.T) {
 		`{"type":"tool","tool":"invalid","callID":"call_inv","state":{"input":{"tool":"nonexistent_tool","error":"Model tried to call unavailable tool 'nonexistent_tool'"}}}`)
 
 	sessions, err := parseOpenCodeAll(dbPath, "m")
-	require.NoError(err, "ParseOpenCodeDB")
-	require.Len(sessions, 1, "sessions len")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1, "sessions len")
 
 	msgs := sessions[0].Messages
-	require.Len(msgs, 2, "messages len")
+	require.Len(t, msgs, 2, "messages len")
 
 	ast := msgs[1]
-	require.Len(ast.ToolCalls, 1, "tool calls len")
-	require.Len(ast.ToolCalls[0].ResultEvents, 1, "result events len")
+	require.Len(t, ast.ToolCalls, 1, "tool calls len")
+	require.Len(t, ast.ToolCalls[0].ResultEvents, 1, "result events len")
 	assertEq(t, "ResultEvents[0].Status", ast.ToolCalls[0].ResultEvents[0].Status, "errored")
 }
 
@@ -1611,8 +1575,6 @@ func TestParseOpenCodeDB_BashExitFailure(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require := require.New(t)
-
 			dbPath, seeder, db := newTestDB(t)
 			defer db.Close()
 
@@ -1627,19 +1589,19 @@ func TestParseOpenCodeDB_BashExitFailure(t *testing.T) {
 				`{"type":"tool","tool":"`+tt.tool+`","callID":"call_exit","state":`+tt.state+`}`)
 
 			sessions, err := parseOpenCodeAll(dbPath, "m")
-			require.NoError(err, "ParseOpenCodeDB")
-			require.Len(sessions, 1, "sessions len")
+			require.NoError(t, err, "ParseOpenCodeDB")
+			require.Len(t, sessions, 1, "sessions len")
 
 			msgs := sessions[0].Messages
-			require.Len(msgs, 2, "messages len")
+			require.Len(t, msgs, 2, "messages len")
 
 			ast := msgs[1]
-			require.Len(ast.ToolCalls, 1, "tool calls len")
+			require.Len(t, ast.ToolCalls, 1, "tool calls len")
 			if !tt.wantErrored {
 				assert.Empty(t, ast.ToolCalls[0].ResultEvents, "result events")
 				return
 			}
-			require.Len(ast.ToolCalls[0].ResultEvents, 1, "result events len")
+			require.Len(t, ast.ToolCalls[0].ResultEvents, 1, "result events len")
 			assertEq(t, "ResultEvents[0].Status", ast.ToolCalls[0].ResultEvents[0].Status, "errored")
 		})
 	}
@@ -1650,8 +1612,6 @@ func TestParseOpenCodeDB_BashExitFailure(t *testing.T) {
 // infers the skill name from the file's frontmatter, matching the
 // Cursor/Codex read-file heuristic shared via inferOpenCodeSkillName.
 func TestParseOpenCodeDB_SkillNameFromReadTool(t *testing.T) {
-	require := require.New(t)
-
 	path := writeTestSkill(t, "foo", "foo")
 
 	dbPath, seeder, db := newTestDB(t)
@@ -1669,14 +1629,14 @@ func TestParseOpenCodeDB_SkillNameFromReadTool(t *testing.T) {
 			quoteJSON(t, path)+`}}}`)
 
 	sessions, err := parseOpenCodeAll(dbPath, "m")
-	require.NoError(err, "ParseOpenCodeDB")
-	require.Len(sessions, 1, "sessions len")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1, "sessions len")
 
 	msgs := sessions[0].Messages
-	require.Len(msgs, 2, "messages len")
+	require.Len(t, msgs, 2, "messages len")
 
 	ast := msgs[1]
-	require.Len(ast.ToolCalls, 1, "tool calls len")
+	require.Len(t, ast.ToolCalls, 1, "tool calls len")
 	assertEq(t, "SkillName", ast.ToolCalls[0].SkillName, "foo")
 }
 
@@ -1685,8 +1645,6 @@ func TestParseOpenCodeDB_SkillNameFromReadTool(t *testing.T) {
 // the session worktree and reads frontmatter instead of falling
 // back to the parent directory name.
 func TestParseOpenCodeDB_SkillNameFromReadToolRelativePath(t *testing.T) {
-	require := require.New(t)
-
 	// Frontmatter name intentionally differs from the folder name
 	// ("renamed") to prove we read frontmatter, not the directory.
 	path := writeTestSkill(t, "renamed", "actual-skill")
@@ -1709,14 +1667,14 @@ func TestParseOpenCodeDB_SkillNameFromReadToolRelativePath(t *testing.T) {
 		`{"type":"tool","tool":"read","callID":"call_read","state":{"input":{"file_path":"skills/renamed/SKILL.md"}}}`)
 
 	sessions, err := parseOpenCodeAll(dbPath, "m")
-	require.NoError(err, "ParseOpenCodeDB")
-	require.Len(sessions, 1, "sessions len")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1, "sessions len")
 
 	msgs := sessions[0].Messages
-	require.Len(msgs, 2, "messages len")
+	require.Len(t, msgs, 2, "messages len")
 
 	ast := msgs[1]
-	require.Len(ast.ToolCalls, 1, "tool calls len")
+	require.Len(t, ast.ToolCalls, 1, "tool calls len")
 	assertEq(t, "SkillName", ast.ToolCalls[0].SkillName, "actual-skill")
 }
 
@@ -1726,8 +1684,6 @@ func TestParseOpenCodeDB_SkillNameFromReadToolRelativePath(t *testing.T) {
 // worktree (threaded through buildOpenCodeMessage), matching the
 // Codex shell-command heuristic.
 func TestParseOpenCodeDB_SkillNameFromShellCommandRelativePath(t *testing.T) {
-	require := require.New(t)
-
 	path := writeTestSkill(t, "foo", "foo")
 	worktree := filepath.Dir(filepath.Dir(filepath.Dir(path)))
 
@@ -1745,14 +1701,14 @@ func TestParseOpenCodeDB_SkillNameFromShellCommandRelativePath(t *testing.T) {
 		`{"type":"tool","tool":"bash","callID":"call_bash","state":{"input":{"command":"cat skills/foo/SKILL.md"}}}`)
 
 	sessions, err := parseOpenCodeAll(dbPath, "m")
-	require.NoError(err, "ParseOpenCodeDB")
-	require.Len(sessions, 1, "sessions len")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1, "sessions len")
 
 	msgs := sessions[0].Messages
-	require.Len(msgs, 2, "messages len")
+	require.Len(t, msgs, 2, "messages len")
 
 	ast := msgs[1]
-	require.Len(ast.ToolCalls, 1, "tool calls len")
+	require.Len(t, ast.ToolCalls, 1, "tool calls len")
 	assertEq(t, "SkillName", ast.ToolCalls[0].SkillName, "foo")
 }
 
@@ -1847,9 +1803,6 @@ func TestResolveOpenCodeWorktree(t *testing.T) {
 }
 
 func TestParseOpenCodeDB_PrefersSessionDirectoryOverGlobalProject(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
 
@@ -1868,27 +1821,24 @@ func TestParseOpenCodeDB_PrefersSessionDirectoryOverGlobalProject(t *testing.T) 
 	)
 
 	sessions, err := parseOpenCodeAll(dbPath, "testmachine")
-	require.NoError(err, "ParseOpenCodeDB")
-	require.Len(sessions, 1)
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1)
 
 	s := sessions[0].Session
-	assert.Equal("/home/user/code/lonely-app", s.Cwd)
-	assert.Equal("lonely_app", s.Project)
-	assert.NotEqual("unknown", s.Project)
+	assert.Equal(t, "/home/user/code/lonely-app", s.Cwd)
+	assert.Equal(t, "lonely_app", s.Project)
+	assert.NotEqual(t, "unknown", s.Project)
 }
 
 func TestParseOpenCodeDB_ProjectFromUnavailableProjectWorktree(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
 
 	worktree := filepath.Join(t.TempDir(), "unavailable-repo")
 	directory := filepath.Join(worktree, "subdir")
 	_, err := os.Stat(worktree)
-	require.Error(err)
-	require.True(os.IsNotExist(err), "project checkout must be unavailable")
+	require.Error(t, err)
+	require.True(t, os.IsNotExist(err), "project checkout must be unavailable")
 
 	seeder.AddProject("prj_unavailable", worktree)
 	seeder.AddSessionDirectory(
@@ -1906,17 +1856,14 @@ func TestParseOpenCodeDB_ProjectFromUnavailableProjectWorktree(t *testing.T) {
 	)
 
 	sessions, err := parseOpenCodeAll(dbPath, "testmachine")
-	require.NoError(err)
-	require.Len(sessions, 1)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
 
-	assert.Equal(directory, sessions[0].Session.Cwd)
-	assert.Equal("unavailable_repo", sessions[0].Session.Project)
+	assert.Equal(t, directory, sessions[0].Session.Cwd)
+	assert.Equal(t, "unavailable_repo", sessions[0].Session.Project)
 }
 
 func TestParseOpenCodeDB_EmptySessionDirectoryUsesProjectWorktree(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
 
@@ -1934,12 +1881,12 @@ func TestParseOpenCodeDB_EmptySessionDirectoryUsesProjectWorktree(t *testing.T) 
 	)
 
 	sessions, err := parseOpenCodeAll(dbPath, "testmachine")
-	require.NoError(err, "ParseOpenCodeDB")
-	require.Len(sessions, 1)
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1)
 
 	s := sessions[0].Session
-	assert.Equal("/home/user/code/myapp", s.Cwd)
-	assert.Equal("myapp", s.Project)
+	assert.Equal(t, "/home/user/code/myapp", s.Cwd)
+	assert.Equal(t, "myapp", s.Project)
 }
 
 func TestParseOpenCodeDB_EmptySessionDirectoryPreservesSQLiteRootWorktree(t *testing.T) {
@@ -2041,9 +1988,6 @@ func newLegacyOpenCodeTestDB(t *testing.T) (string, *OpenCodeSeeder, *sql.DB) {
 }
 
 func TestParseOpenCodeDB_LegacySchemaWithoutDirectoryUsesProjectWorktree(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath, seeder, db := newLegacyOpenCodeTestDB(t)
 	defer db.Close()
 
@@ -2063,34 +2007,31 @@ func TestParseOpenCodeDB_LegacySchemaWithoutDirectoryUsesProjectWorktree(t *test
 	// Confirm the column is actually absent so the test would fail closed
 	// if the modern SELECT path were used.
 	hasDir, err := openCodeTableHasColumn(t.Context(), db, "session", "directory")
-	require.NoError(err)
-	require.False(hasDir, "legacy fixture must omit session.directory")
+	require.NoError(t, err)
+	require.False(t, hasDir, "legacy fixture must omit session.directory")
 
 	sessions, err := parseOpenCodeAll(dbPath, "testmachine")
-	require.NoError(err, "ParseOpenCodeDB on legacy schema")
-	require.Len(sessions, 1)
+	require.NoError(t, err, "ParseOpenCodeDB on legacy schema")
+	require.Len(t, sessions, 1)
 
 	s := sessions[0].Session
-	assert.Equal("/home/user/code/legacy-app", s.Cwd)
-	assert.Equal("legacy_app", s.Project)
+	assert.Equal(t, "/home/user/code/legacy-app", s.Cwd)
+	assert.Equal(t, "legacy_app", s.Project)
 }
 
 func TestParseOpenCodeDB_ModernSchemaDirectoryColumnDetected(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
 	seedStandardSession(t, seeder)
 
 	hasDir, err := openCodeSessionHasDirectoryCached(t.Context(), db, dbPath, "session")
-	require.NoError(err)
-	assert.True(hasDir, "modern fixture must include session.directory")
+	require.NoError(t, err)
+	assert.True(t, hasDir, "modern fixture must include session.directory")
 
 	sessions, err := parseOpenCodeAll(dbPath, "testmachine")
-	require.NoError(err)
-	require.Len(sessions, 1)
-	assert.Equal("/home/user/code/myapp", sessions[0].Session.Cwd)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "/home/user/code/myapp", sessions[0].Session.Cwd)
 }
 
 func TestParseOpenCodeSession_SingleSession(t *testing.T) {
@@ -2208,9 +2149,6 @@ func TestListOpenCodeSessionMeta_NonexistentDB(t *testing.T) {
 // (session and project time_updated, never child times) with no digest, so
 // listing every session touches no message or part rows.
 func TestListOpenCodeSessionWatermarkMeta(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
 
@@ -2231,19 +2169,19 @@ func TestListOpenCodeSessionWatermarkMeta(t *testing.T) {
 		"UPDATE project SET time_updated = ? WHERE id = ?",
 		1700000070000, "prj_1",
 	)
-	require.NoError(err, "raise project time")
+	require.NoError(t, err, "raise project time")
 
 	metas, err := ListOpenCodeSessionWatermarkMeta(dbPath)
-	require.NoError(err, "ListOpenCodeSessionWatermarkMeta")
-	require.Len(metas, 1)
+	require.NoError(t, err, "ListOpenCodeSessionWatermarkMeta")
+	require.Len(t, metas, 1)
 
 	m := metas[0]
-	assert.Equal("ses_wm", m.SessionID)
-	assert.Equal(dbPath+"#ses_wm", m.VirtualPath)
-	assert.True(m.WatermarkOnly, "composite container must list watermark-only")
-	assert.True(m.CompositeMtime)
-	assert.Empty(m.ChildDigest, "watermark listing must not resolve the child digest")
-	assert.Equal(int64(1700000070000)*1_000_000, m.FileMtime,
+	assert.Equal(t, "ses_wm", m.SessionID)
+	assert.Equal(t, dbPath+"#ses_wm", m.VirtualPath)
+	assert.True(t, m.WatermarkOnly, "composite container must list watermark-only")
+	assert.True(t, m.CompositeMtime)
+	assert.Empty(t, m.ChildDigest, "watermark listing must not resolve the child digest")
+	assert.Equal(t, int64(1700000070000)*1_000_000, m.FileMtime,
 		"watermark must be MAX(session, project) and exclude child times")
 }
 
@@ -2286,9 +2224,6 @@ func TestOpenCodeChildDigestMetadataWatermarkNS(t *testing.T) {
 // mtime, no composite, and no watermark-only marker, so the engine never
 // watermark-skips a session whose only change signal is the container size.
 func TestListOpenCodeSessionWatermarkMeta_LegacySchema(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath, seeder, db := newLegacyOpenCodeTestDB(t)
 	defer db.Close()
 
@@ -2298,16 +2233,16 @@ func TestListOpenCodeSessionWatermarkMeta_LegacySchema(t *testing.T) {
 	)
 
 	metas, err := ListOpenCodeSessionWatermarkMeta(dbPath)
-	require.NoError(err, "ListOpenCodeSessionWatermarkMeta legacy")
-	require.Len(metas, 1)
+	require.NoError(t, err, "ListOpenCodeSessionWatermarkMeta legacy")
+	require.Len(t, metas, 1)
 
 	full, err := ListOpenCodeSessionMeta(dbPath)
-	require.NoError(err, "ListOpenCodeSessionMeta legacy")
-	require.Len(full, 1)
+	require.NoError(t, err, "ListOpenCodeSessionMeta legacy")
+	require.Len(t, full, 1)
 
-	assert.False(metas[0].WatermarkOnly,
+	assert.False(t, metas[0].WatermarkOnly,
 		"legacy containers must not be marked watermark-only")
-	assert.Equal(full[0], metas[0],
+	assert.Equal(t, full[0], metas[0],
 		"legacy watermark listing must match the full listing")
 }
 
@@ -2317,9 +2252,6 @@ func TestListOpenCodeSessionWatermarkMeta_LegacySchema(t *testing.T) {
 // session totals roll up. Without this fix the usage dashboard
 // reports $0 for every OpenCode session.
 func TestParseOpenCodeDB_TokenUsage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
 
@@ -2361,8 +2293,8 @@ func TestParseOpenCodeDB_TokenUsage(t *testing.T) {
 		`{"type":"text","text":"answer2"}`)
 
 	sessions, err := parseOpenCodeAll(dbPath, "testmachine")
-	require.NoError(err, "ParseOpenCodeDB")
-	require.Len(sessions, 1, "sessions len")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1, "sessions len")
 	s := sessions[0]
 
 	var asst1, asst2 *ParsedMessage
@@ -2378,15 +2310,16 @@ func TestParseOpenCodeDB_TokenUsage(t *testing.T) {
 			asst2 = m
 		}
 	}
-	require.NotNil(asst1, "missing gpt-5.2-codex assistant message")
-	require.NotNil(asst2, "missing claude-sonnet assistant message")
+	require.NotNil(t, asst1, "missing gpt-5.2-codex assistant message")
+	require.NotNil(t, asst2, "missing claude-sonnet assistant message")
 
 	checkUsage := func(name string, m *ParsedMessage,
-		wantIn, wantOut, wantCacheRead, wantCacheCreate int) {
+		wantIn, wantOut, wantCacheRead, wantCacheCreate int,
+	) {
 		t.Helper()
-		require.NotEmpty(m.TokenUsage, "%s: TokenUsage empty", name)
+		require.NotEmpty(t, m.TokenUsage, "%s: TokenUsage empty", name)
 		var got map[string]int
-		require.NoError(json.Unmarshal(m.TokenUsage, &got),
+		require.NoError(t, json.Unmarshal(m.TokenUsage, &got),
 			"%s: unmarshal TokenUsage", name)
 		assertEq(t, name+" input_tokens",
 			got["input_tokens"], wantIn)
@@ -2411,10 +2344,10 @@ func TestParseOpenCodeDB_TokenUsage(t *testing.T) {
 	checkUsage("claude", asst2, 1, 102, 500, 11969)
 
 	// Session-level rollups via accumulateMessageTokenUsage.
-	assert.True(s.Session.HasTotalOutputTokens, "session HasTotalOutputTokens")
+	assert.True(t, s.Session.HasTotalOutputTokens, "session HasTotalOutputTokens")
 	assertEq(t, "TotalOutputTokens",
 		s.Session.TotalOutputTokens, 137) // 35 + 102
-	assert.True(s.Session.HasPeakContextTokens, "session HasPeakContextTokens")
+	assert.True(t, s.Session.HasPeakContextTokens, "session HasPeakContextTokens")
 	assertEq(t, "PeakContextTokens",
 		s.Session.PeakContextTokens, 12470) // 1 + 500 + 11969
 }
@@ -2435,8 +2368,6 @@ func TestParseOpenCodeDB_UnknownTokensShape(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			require := require.New(t)
-
 			dbPath, seeder, db := newTestDB(t)
 			defer db.Close()
 
@@ -2458,8 +2389,8 @@ func TestParseOpenCodeDB_UnknownTokensShape(t *testing.T) {
 				`{"type":"text","text":"answer"}`)
 
 			sessions, err := parseOpenCodeAll(dbPath, "m")
-			require.NoError(err, "ParseOpenCodeDB")
-			require.Len(sessions, 1, "sessions len")
+			require.NoError(t, err, "ParseOpenCodeDB")
+			require.Len(t, sessions, 1, "sessions len")
 
 			var asst *ParsedMessage
 			for i := range sessions[0].Messages {
@@ -2468,7 +2399,7 @@ func TestParseOpenCodeDB_UnknownTokensShape(t *testing.T) {
 					break
 				}
 			}
-			require.NotNil(asst, "missing assistant message")
+			require.NotNil(t, asst, "missing assistant message")
 			assertEq(t, "Model", asst.Model, "gpt-5.4")
 			assert.Empty(t, asst.TokenUsage,
 				"TokenUsage = %q, want empty", string(asst.TokenUsage))
@@ -2487,8 +2418,6 @@ func TestParseOpenCodeDB_UnknownTokensShape(t *testing.T) {
 // coverage flags are set, so downstream rollups can
 // distinguish an errored request from a missing usage blob.
 func TestParseOpenCodeDB_ZeroTokens(t *testing.T) {
-	require := require.New(t)
-
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
 
@@ -2517,8 +2446,8 @@ func TestParseOpenCodeDB_ZeroTokens(t *testing.T) {
 		`{"type":"text","text":"sorry, request failed"}`)
 
 	sessions, err := parseOpenCodeAll(dbPath, "m")
-	require.NoError(err, "ParseOpenCodeDB")
-	require.Len(sessions, 1, "sessions len")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1, "sessions len")
 
 	var asst *ParsedMessage
 	for i := range sessions[0].Messages {
@@ -2527,11 +2456,11 @@ func TestParseOpenCodeDB_ZeroTokens(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(asst, "missing assistant message")
+	require.NotNil(t, asst, "missing assistant message")
 	assertEq(t, "Model", asst.Model, "gpt-5.2-chat-latest")
-	require.NotEmpty(asst.TokenUsage, "TokenUsage empty; want zero-valued JSON preserved")
+	require.NotEmpty(t, asst.TokenUsage, "TokenUsage empty; want zero-valued JSON preserved")
 	var got map[string]int
-	require.NoError(json.Unmarshal(asst.TokenUsage, &got), "unmarshal TokenUsage")
+	require.NoError(t, json.Unmarshal(asst.TokenUsage, &got), "unmarshal TokenUsage")
 	assertEq(t, "input_tokens", got["input_tokens"], 0)
 	assertEq(t, "output_tokens", got["output_tokens"], 0)
 	assertEq(t, "cache_read_input_tokens",
@@ -2548,8 +2477,6 @@ func TestParseOpenCodeDB_ZeroTokens(t *testing.T) {
 // messages with no tokens block (e.g. errored requests) leave
 // TokenUsage empty so they are filtered out by the usage query.
 func TestParseOpenCodeDB_NoTokenUsage(t *testing.T) {
-	require := require.New(t)
-
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
 
@@ -2572,8 +2499,8 @@ func TestParseOpenCodeDB_NoTokenUsage(t *testing.T) {
 		`{"type":"text","text":"oops"}`)
 
 	sessions, err := parseOpenCodeAll(dbPath, "m")
-	require.NoError(err, "ParseOpenCodeDB")
-	require.Len(sessions, 1, "sessions len")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1, "sessions len")
 
 	var asst *ParsedMessage
 	for i := range sessions[0].Messages {
@@ -2582,7 +2509,7 @@ func TestParseOpenCodeDB_NoTokenUsage(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(asst, "missing assistant message")
+	require.NotNil(t, asst, "missing assistant message")
 	assertEq(t, "Model", asst.Model, "gpt-5.4")
 	assert.Empty(t, asst.TokenUsage, "TokenUsage = %q, want empty", string(asst.TokenUsage))
 }

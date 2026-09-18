@@ -46,6 +46,7 @@ type cursorIDETestComposer struct {
 
 func createCursorIDEDB(t *testing.T, composers []cursorIDETestComposer) string {
 	t.Helper()
+
 	dbPath := filepath.Join(t.TempDir(), CursorIDEDBRelPath)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
@@ -118,6 +119,7 @@ func createCursorIDEDB(t *testing.T, composers []cursorIDETestComposer) string {
 // siblings and still pass.
 func assertCursorDiskKVStoredShape(t *testing.T, dbPath, key string, wantNull bool) {
 	t.Helper()
+
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	defer conn.Close()
@@ -144,26 +146,20 @@ func cursorIDEStringResult(t *testing.T, text string) jsontext.Value {
 }
 
 func TestCursorIDEProviderCapabilities(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	factory, ok := ProviderFactoryByType(AgentCursorIDE)
-	require.True(ok)
+	require.True(t, ok)
 	caps := factory.Capabilities()
-	assert.Equal(CapabilitySupported, caps.Content.ToolCalls)
-	assert.Equal(CapabilitySupported, caps.Content.ToolResults)
+	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
+	assert.Equal(t, CapabilitySupported, caps.Content.ToolResults)
 
 	provider, ok := NewProvider(AgentCursorIDE, ProviderConfig{
 		Roots: []string{t.TempDir()}, Machine: "devbox",
 	})
-	require.True(ok)
-	require.NotNil(provider)
+	require.True(t, ok)
+	require.NotNil(t, provider)
 }
 
 func TestCursorIDEProviderDiscoverAndParse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{
 		{
 			id:        "0cd7922b-f080-4672-b26f-2d521feee055",
@@ -210,128 +206,125 @@ func TestCursorIDEProviderDiscoverAndParse(t *testing.T) {
 	provider, ok := NewProvider(AgentCursorIDE, ProviderConfig{
 		Roots: []string{root}, Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	plan, err := provider.WatchPlan(t.Context())
-	require.NoError(err)
-	require.Len(plan.Roots, 1)
-	assert.Equal(root, plan.Roots[0].Path)
-	assert.False(plan.Roots[0].Recursive)
-	assert.Equal([]string{"state.vscdb", "state.vscdb-*"}, plan.Roots[0].IncludeGlobs)
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Equal(t, root, plan.Roots[0].Path)
+	assert.False(t, plan.Roots[0].Recursive)
+	assert.Equal(t, []string{"state.vscdb", "state.vscdb-*"}, plan.Roots[0].IncludeGlobs)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(AgentCursorIDE, discovered[0].Provider)
-	assert.Equal(dbPath, discovered[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, AgentCursorIDE, discovered[0].Provider)
+	assert.Equal(t, dbPath, discovered[0].DisplayPath)
 
 	fingerprint, err := provider.Fingerprint(t.Context(), discovered[0])
-	require.NoError(err)
-	require.NotZero(fingerprint.MTimeNS)
+	require.NoError(t, err)
+	require.NotZero(t, fingerprint.MTimeNS)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: discovered[0], Machine: "devbox", Fingerprint: fingerprint,
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1, "the empty draft composer must not surface as a session")
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1, "the empty draft composer must not surface as a session")
 
 	sess := outcome.Results[0].Result.Session
 	messages := outcome.Results[0].Result.Messages
-	assert.Equal("cursor-ide:0cd7922b-f080-4672-b26f-2d521feee055", sess.ID)
-	assert.Equal(AgentCursorIDE, sess.Agent)
-	assert.Equal("Factory course status", sess.SessionName)
-	assert.Equal("/Users/alice/dev/dark-factory", sess.Cwd)
-	assert.Equal("dark_factory", sess.Project)
-	assert.Equal("dev", sess.GitBranch)
-	assert.Equal(1, sess.UserMessageCount)
-	assert.Equal("give me an overview on the development status", sess.FirstMessage)
+	assert.Equal(t, "cursor-ide:0cd7922b-f080-4672-b26f-2d521feee055", sess.ID)
+	assert.Equal(t, AgentCursorIDE, sess.Agent)
+	assert.Equal(t, "Factory course status", sess.SessionName)
+	assert.Equal(t, "/Users/alice/dev/dark-factory", sess.Cwd)
+	assert.Equal(t, "dark_factory", sess.Project)
+	assert.Equal(t, "dev", sess.GitBranch)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "give me an overview on the development status", sess.FirstMessage)
 
 	// composerData createdAt/lastUpdatedAt are epoch milliseconds; the parser
 	// must not confuse them with the bubbles' ISO-8601 createdAt encoding.
 	// This fixture's lastUpdatedAt (07:26:31.522Z) lags the final bubble, so
 	// EndedAt comes from the latest message timestamp instead.
-	assert.Equal(time.UnixMilli(1782026756842).UTC(), sess.StartedAt)
-	assert.Equal(time.Date(2026, 6, 21, 7, 27, 32, 0, time.UTC), sess.EndedAt)
+	assert.Equal(t, time.UnixMilli(1782026756842).UTC(), sess.StartedAt)
+	assert.Equal(t, time.Date(2026, 6, 21, 7, 27, 32, 0, time.UTC), sess.EndedAt)
 	// Both encodings describe the same real conversation, so they must land
 	// within the same window rather than merely both parsing without error.
-	assert.WithinDuration(sess.StartedAt, sess.EndedAt, 2*time.Minute)
+	assert.WithinDuration(t, sess.StartedAt, sess.EndedAt, 2*time.Minute)
 
-	require.Len(messages, 3)
-	assert.Equal(RoleUser, messages[0].Role)
-	assert.Equal("give me an overview on the development status", messages[0].Content)
-	assert.Equal(RoleAssistant, messages[1].Role)
-	assert.Equal("I'll inspect the factory-course package structure.", messages[1].Content)
-	assert.Equal(RoleAssistant, messages[2].Role)
-	assert.True(messages[2].HasToolUse)
-	require.Len(messages[2].ToolCalls, 1)
-	assert.Equal("glob_file_search", messages[2].ToolCalls[0].ToolName)
-	assert.Contains(messages[2].ToolCalls[0].InputJSON, "globPattern")
-	require.Len(messages[2].ToolResults, 1)
-	assert.Contains(messages[2].ToolResults[0].ContentRaw, "absPath")
+	require.Len(t, messages, 3)
+	assert.Equal(t, RoleUser, messages[0].Role)
+	assert.Equal(t, "give me an overview on the development status", messages[0].Content)
+	assert.Equal(t, RoleAssistant, messages[1].Role)
+	assert.Equal(t, "I'll inspect the factory-course package structure.", messages[1].Content)
+	assert.Equal(t, RoleAssistant, messages[2].Role)
+	assert.True(t, messages[2].HasToolUse)
+	require.Len(t, messages[2].ToolCalls, 1)
+	assert.Equal(t, "glob_file_search", messages[2].ToolCalls[0].ToolName)
+	assert.Contains(t, messages[2].ToolCalls[0].InputJSON, "globPattern")
+	require.Len(t, messages[2].ToolResults, 1)
+	assert.Contains(t, messages[2].ToolResults[0].ContentRaw, "absPath")
 
 	// Ordering must come from fullConversationHeadersOnly, not from a
 	// lexicographic bubble-key scan.
 	for i, m := range messages {
-		assert.Equal(i, m.Ordinal)
+		assert.Equal(t, i, m.Ordinal)
 	}
 }
 
 func TestCursorIDEProviderObjectToolResult(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	raw, err := os.ReadFile("testdata/cursor-ide-object-tool-result.json")
-	require.NoError(err)
+	require.NoError(t, err)
 	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{
 		{id: "a-healthy", bubbles: []cursorIDETestBubble{{id: "before", bubbleType: 1, text: "before"}}},
 		{id: "object-result", bubbles: []cursorIDETestBubble{{id: "tool-bubble", bubbleType: 2, raw: raw}}},
 		{id: "z-healthy", bubbles: []cursorIDETestBubble{{id: "after", bubbleType: 1, text: "after"}}},
 	})
 	provider, ok := NewProvider(AgentCursorIDE, ProviderConfig{Roots: []string{filepath.Dir(dbPath)}, Machine: "test"})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
-	require.NoError(err)
+	require.NoError(t, err)
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0], Machine: "test", Fingerprint: fingerprint})
 	t.Logf("container results=%d error=%v", len(outcome.Results), err)
-	require.NoError(err)
-	require.Len(outcome.Results, 3)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 3)
 	var ids []string
 	for _, entry := range outcome.Results {
 		result := entry.Result
 		ids = append(ids, result.Session.ID)
-		assert.False(result.Session.IsTruncated)
-		require.Len(result.Messages, 1)
+		assert.False(t, result.Session.IsTruncated)
+		require.Len(t, result.Messages, 1)
 		msg := result.Messages[0]
 		switch result.Session.ID {
 		case "cursor-ide:a-healthy":
-			assert.Equal("before", msg.Content)
-			assert.Equal("before", msg.SourceUUID)
+			assert.Equal(t, "before", msg.Content)
+			assert.Equal(t, "before", msg.SourceUUID)
 		case "cursor-ide:z-healthy":
-			assert.Equal("after", msg.Content)
-			assert.Equal("after", msg.SourceUUID)
+			assert.Equal(t, "after", msg.Content)
+			assert.Equal(t, "after", msg.SourceUUID)
 		case "cursor-ide:object-result":
-			assert.Equal("tool-bubble", msg.SourceUUID)
-			assert.Equal(RoleAssistant, msg.Role)
-			assert.True(msg.HasToolUse)
-			require.Len(msg.ToolCalls, 1)
-			assert.Equal("todo_write", msg.ToolCalls[0].ToolName)
-			assert.Equal("00000000-0000-4000-8000-000000000001", msg.ToolCalls[0].ToolUseID)
-			assert.Equal(`{"todos":[{"id":"sample-task","content":"sample-task","status":"TODO_STATUS_IN_PROGRESS","createdAt":"1782026756842","updatedAt":"1782026756842","dependencies":[]}],"merge":true}`, msg.ToolCalls[0].InputJSON)
-			require.Len(msg.ToolResults, 1)
+			assert.Equal(t, "tool-bubble", msg.SourceUUID)
+			assert.Equal(t, RoleAssistant, msg.Role)
+			assert.True(t, msg.HasToolUse)
+			require.Len(t, msg.ToolCalls, 1)
+			assert.Equal(t, "todo_write", msg.ToolCalls[0].ToolName)
+			assert.Equal(t, "00000000-0000-4000-8000-000000000001", msg.ToolCalls[0].ToolUseID)
+			assert.Equal(t, `{"todos":[{"id":"sample-task","content":"sample-task","status":"TODO_STATUS_IN_PROGRESS","createdAt":"1782026756842","updatedAt":"1782026756842","dependencies":[]}],"merge":true}`, msg.ToolCalls[0].InputJSON)
+			require.Len(t, msg.ToolResults, 1)
 			want := `{"success":true,"readyTaskIds":[],"needsInProgressTodos":false,"finalTodos":[{"content":"sample-task","status":"in_progress","id":"sample-task","dependencies":[]}],"initialTodos":[{"content":"sample-task","status":"completed","id":"sample-task","dependencies":[]}],"wasMerge":true}`
 			tr := msg.ToolResults[0]
-			assert.Equal("00000000-0000-4000-8000-000000000001", tr.ToolUseID)
-			assert.Equal(want, DecodeContent(tr.ContentRaw))
-			assert.Equal(len(want), tr.ContentLength)
+			assert.Equal(t, "00000000-0000-4000-8000-000000000001", tr.ToolUseID)
+			assert.Equal(t, want, DecodeContent(tr.ContentRaw))
+			assert.Equal(t, len(want), tr.ContentLength)
 			var text string
-			require.NoError(json.Unmarshal([]byte(tr.ContentRaw), &text))
-			assert.Equal(want, text)
+			require.NoError(t, json.Unmarshal([]byte(tr.ContentRaw), &text))
+			assert.Equal(t, want, text)
 		}
 	}
-	assert.ElementsMatch([]string{"cursor-ide:a-healthy", "cursor-ide:object-result", "cursor-ide:z-healthy"}, ids)
+	assert.ElementsMatch(t, []string{"cursor-ide:a-healthy", "cursor-ide:object-result", "cursor-ide:z-healthy"}, ids)
 }
 
 func TestParseCursorIDEComposer_ResultValues(t *testing.T) {
@@ -348,9 +341,6 @@ func TestParseCursorIDEComposer_ResultValues(t *testing.T) {
 		{"empty-string", `,"result":""`, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			raw := []byte(`{"type":2,"text":"visible","toolFormerData":{"toolCallId":"call","name":"sample_tool","rawArgs":"{}"` + tc.field + `}}`)
 			dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{id: "result-values", bubbles: []cursorIDETestBubble{
 				{id: "tool", bubbleType: 2, raw: raw},
@@ -358,65 +348,60 @@ func TestParseCursorIDEComposer_ResultValues(t *testing.T) {
 				{id: "bookkeeping", bubbleType: 3},
 			}}})
 			conn, err := openCursorIDEDB(dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			defer conn.Close()
 			info, err := os.Stat(dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			result, err := parseCursorIDEComposer(t.Context(), conn, dbPath, "result-values", "test", info)
-			require.NoError(err)
-			require.NotNil(result)
-			assert.False(result.Session.IsTruncated)
-			require.Len(result.Messages, 2)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.False(t, result.Session.IsTruncated)
+			require.Len(t, result.Messages, 2)
 			msg := result.Messages[0]
-			assert.Equal("tool", msg.SourceUUID)
-			assert.Equal("visible", msg.Content)
-			assert.Equal(RoleAssistant, msg.Role)
-			assert.True(msg.HasToolUse)
-			require.Len(msg.ToolCalls, 1)
-			assert.Equal("call", msg.ToolCalls[0].ToolUseID)
-			assert.Equal("sample_tool", msg.ToolCalls[0].ToolName)
-			assert.Equal("{}", msg.ToolCalls[0].InputJSON)
-			assert.Equal("answer", result.Messages[1].Content)
-			assert.Equal("visible", result.Messages[1].SourceUUID)
-			assert.Empty(result.Messages[1].ToolResults)
+			assert.Equal(t, "tool", msg.SourceUUID)
+			assert.Equal(t, "visible", msg.Content)
+			assert.Equal(t, RoleAssistant, msg.Role)
+			assert.True(t, msg.HasToolUse)
+			require.Len(t, msg.ToolCalls, 1)
+			assert.Equal(t, "call", msg.ToolCalls[0].ToolUseID)
+			assert.Equal(t, "sample_tool", msg.ToolCalls[0].ToolName)
+			assert.Equal(t, "{}", msg.ToolCalls[0].InputJSON)
+			assert.Equal(t, "answer", result.Messages[1].Content)
+			assert.Equal(t, "visible", result.Messages[1].SourceUUID)
+			assert.Empty(t, result.Messages[1].ToolResults)
 			if tc.want == "" {
-				assert.Empty(msg.ToolResults)
+				assert.Empty(t, msg.ToolResults)
 				return
 			}
-			require.Len(msg.ToolResults, 1)
+			require.Len(t, msg.ToolResults, 1)
 			tr := msg.ToolResults[0]
-			assert.Equal("call", tr.ToolUseID)
-			assert.Equal(tc.wantRaw, tr.ContentRaw)
-			assert.Equal(tc.want, DecodeContent(tr.ContentRaw))
-			assert.Equal(len(tc.want), tr.ContentLength)
+			assert.Equal(t, "call", tr.ToolUseID)
+			assert.Equal(t, tc.wantRaw, tr.ContentRaw)
+			assert.Equal(t, tc.want, DecodeContent(tr.ContentRaw))
+			assert.Equal(t, len(tc.want), tr.ContentLength)
 			t.Logf("preserved text=%s ContentRaw=%s bytes=%d", DecodeContent(tr.ContentRaw), tr.ContentRaw, tr.ContentLength)
 		})
 	}
 }
 
 func TestParseCursorIDEComposer_MalformedResult(t *testing.T) {
-	require := require.New(t)
-
 	const raw = `{"type":2,"toolFormerData":{"result":{"success":true}`
 	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{id: "malformed-result", bubbles: []cursorIDETestBubble{
 		{id: "before", bubbleType: 1, text: "before"},
 		{id: "broken", bubbleType: 2, raw: []byte(raw)},
 	}}})
 	conn, err := openCursorIDEDB(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer conn.Close()
 	info, err := os.Stat(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	result, err := parseCursorIDEComposer(t.Context(), conn, dbPath, "malformed-result", "test", info)
-	require.Error(err)
+	require.Error(t, err)
 	assert.Nil(t, result)
 	t.Logf("input=%s error=%v", raw, err)
 }
 
 func TestCursorIDEFindSourceAndFingerprint(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
 		id:        "142856b4-34d8-4950-ba25-b45fe1c47941",
 		name:      "Thread",
@@ -434,21 +419,21 @@ func TestCursorIDEFindSourceAndFingerprint(t *testing.T) {
 	provider, ok := NewProvider(AgentCursorIDE, ProviderConfig{
 		Roots: []string{root}, Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "devbox~cursor-ide:" + composerID,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(virtualPath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, virtualPath, found.DisplayPath)
 
 	fingerprint, err := provider.Fingerprint(t.Context(), found)
-	require.NoError(err)
-	assert.Equal(virtualPath, fingerprint.Key)
-	assert.Positive(fingerprint.Size)
-	assert.NotZero(fingerprint.MTimeNS)
-	assert.NotEmpty(fingerprint.Hash)
+	require.NoError(t, err)
+	assert.Equal(t, virtualPath, fingerprint.Key)
+	assert.Positive(t, fingerprint.Size)
+	assert.NotZero(t, fingerprint.MTimeNS)
+	assert.NotEmpty(t, fingerprint.Hash)
 
 	// A vanished composer (row deleted, DB file still present) fingerprints
 	// as keyed-empty rather than erroring, so Parse runs and force-replaces
@@ -460,14 +445,11 @@ func TestCursorIDEFindSourceAndFingerprint(t *testing.T) {
 		ghost.Opaque = src
 	}
 	ghostFingerprint, err := provider.Fingerprint(t.Context(), ghost)
-	require.NoError(err)
-	assert.Empty(ghostFingerprint.Hash)
+	require.NoError(t, err)
+	assert.Empty(t, ghostFingerprint.Hash)
 }
 
 func TestParseCursorIDEComposer_ToleratesMissingBubbleRow(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
 		id:        "gap-0000-0000-0000-000000000000",
 		name:      "Gappy thread",
@@ -481,46 +463,42 @@ func TestParseCursorIDEComposer_ToleratesMissingBubbleRow(t *testing.T) {
 	}})
 
 	conn, err := openCursorIDEDB(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer conn.Close()
 	info, err := os.Stat(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	result, err := parseCursorIDEComposer(
 		t.Context(), conn, dbPath,
 		"gap-0000-0000-0000-000000000000", "devbox", info,
 	)
-	require.NoError(err)
-	require.NotNil(result)
-	require.Len(result.Messages, 1)
-	assert.Equal("hello", result.Messages[0].Content)
-	assert.True(result.Session.IsTruncated,
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Messages, 1)
+	assert.Equal(t, "hello", result.Messages[0].Content)
+	assert.True(t, result.Session.IsTruncated,
 		"a transcript with a missing bubble row must be flagged truncated")
 }
 
 func TestParseCursorIDEComposer_EmptyComposerSkipped(t *testing.T) {
-	require := require.New(t)
-
 	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
 		id: "empty-0000-0000-0000-000000000000",
 	}})
 	conn, err := openCursorIDEDB(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer conn.Close()
 	info, err := os.Stat(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	result, err := parseCursorIDEComposer(
 		t.Context(), conn, dbPath,
 		"empty-0000-0000-0000-000000000000", "devbox", info,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Nil(t, result)
 }
 
 func TestParseCursorIDEComposer_MalformedBubbleFailsInsteadOfTruncating(t *testing.T) {
-	require := require.New(t)
-
 	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
 		id:        "corrupt-bubble-0000-0000-000000000000",
 		name:      "Corrupt bubble",
@@ -532,33 +510,31 @@ func TestParseCursorIDEComposer_MalformedBubbleFailsInsteadOfTruncating(t *testi
 		},
 	}})
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(),
 		`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 		[]byte(`{"type": "not-an-int"`),
 		"bubbleId:corrupt-bubble-0000-0000-000000000000:b2",
 	)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	conn, err := openCursorIDEDB(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer conn.Close()
 	info, err := os.Stat(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	result, err := parseCursorIDEComposer(
 		t.Context(), conn, dbPath,
 		"corrupt-bubble-0000-0000-000000000000", "devbox", info,
 	)
-	require.Error(err,
+	require.Error(t, err,
 		"a stored bubble that no longer decodes must fail, not truncate the transcript")
 	assert.Nil(t, result)
 }
 
 func TestParseCursorIDEComposer_MalformedComposerFailsInsteadOfRetiring(t *testing.T) {
-	require := require.New(t)
-
 	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
 		id:        "corrupt-doc-0000-0000-000000000000",
 		name:      "Corrupt doc",
@@ -570,40 +546,37 @@ func TestParseCursorIDEComposer_MalformedComposerFailsInsteadOfRetiring(t *testi
 		}},
 	}})
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(),
 		`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 		[]byte(`{"fullConversationHeadersOnly": [truncated`),
 		"composerData:corrupt-doc-0000-0000-000000000000",
 	)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	conn, err := openCursorIDEDB(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer conn.Close()
 	info, err := os.Stat(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	result, err := parseCursorIDEComposer(
 		t.Context(), conn, dbPath,
 		"corrupt-doc-0000-0000-000000000000", "devbox", info,
 	)
-	require.Error(err,
+	require.Error(t, err,
 		"a composer row that no longer decodes must fail, not read as a clean no-session")
 	assert.Nil(t, result)
 
 	_, _, err = loadCursorIDEComposerMeta(
 		t.Context(), conn, "corrupt-doc-0000-0000-000000000000",
 	)
-	require.Error(err,
+	require.Error(t, err,
 		"the freshness meta load must not fingerprint a malformed composer as vanished")
 }
 
 func TestParseCursorIDEComposer_EndedAtNotBeforeLastMessage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
 		id:        "stale-stamp-0000-0000-000000000000",
 		name:      "Stale stamp",
@@ -615,20 +588,20 @@ func TestParseCursorIDEComposer_EndedAtNotBeforeLastMessage(t *testing.T) {
 		},
 	}})
 	conn, err := openCursorIDEDB(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer conn.Close()
 	info, err := os.Stat(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	result, err := parseCursorIDEComposer(
 		t.Context(), conn, dbPath,
 		"stale-stamp-0000-0000-000000000000", "devbox", info,
 	)
-	require.NoError(err)
-	require.NotNil(result)
-	assert.Equal(time.Date(2026, 6, 21, 7, 28, 5, 0, time.UTC), result.Session.EndedAt,
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, time.Date(2026, 6, 21, 7, 28, 5, 0, time.UTC), result.Session.EndedAt,
 		"a stale lastUpdatedAt must not place EndedAt before the final message")
-	assert.False(result.Session.EndedAt.Before(result.Session.StartedAt))
+	assert.False(t, result.Session.EndedAt.Before(result.Session.StartedAt))
 }
 
 func TestCursorIDEParseContainerKeepsSiblingsPastNullComposer(t *testing.T) {
@@ -648,9 +621,6 @@ func TestCursorIDEParseContainerKeepsSiblingsPastNullComposer(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			dbPath := createCursorIDEDB(t, []cursorIDETestComposer{
 				{
 					id:        "husk-0000-0000-0000-000000000000",
@@ -684,13 +654,13 @@ func TestCursorIDEParseContainerKeepsSiblingsPastNullComposer(t *testing.T) {
 				},
 			})
 			writer, err := sql.Open("sqlite3", dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(),
 				`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 				tc.value, "composerData:husk-0000-0000-0000-000000000000",
 			)
-			require.NoError(err)
-			require.NoError(writer.Close())
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
 			assertCursorDiskKVStoredShape(t, dbPath,
 				"composerData:husk-0000-0000-0000-000000000000", tc.value == nil)
 
@@ -698,21 +668,21 @@ func TestCursorIDEParseContainerKeepsSiblingsPastNullComposer(t *testing.T) {
 			provider, ok := NewProvider(AgentCursorIDE, ProviderConfig{
 				Roots: []string{root}, Machine: "devbox",
 			})
-			require.True(ok)
+			require.True(t, ok)
 
 			discovered, err := provider.Discover(t.Context())
-			require.NoError(err)
-			require.Len(discovered, 1)
+			require.NoError(t, err)
+			require.Len(t, discovered, 1)
 
 			fingerprint, err := provider.Fingerprint(t.Context(), discovered[0])
-			require.NoError(err)
+			require.NoError(t, err)
 
 			outcome, err := provider.Parse(t.Context(), ParseRequest{
 				Source: discovered[0], Machine: "devbox", Fingerprint: fingerprint,
 			})
-			require.NoError(err,
+			require.NoError(t, err,
 				"a husk composer must not fail the whole container fan-out")
-			require.Len(outcome.Results, 2,
+			require.Len(t, outcome.Results, 2,
 				"both healthy siblings must survive past the husk composer")
 
 			var ids []string
@@ -723,29 +693,29 @@ func TestCursorIDEParseContainerKeepsSiblingsPastNullComposer(t *testing.T) {
 					siblingOne = r.Result
 				}
 			}
-			assert.ElementsMatch([]string{
+			assert.ElementsMatch(t, []string{
 				"cursor-ide:sibling-one-0000-0000-000000000000",
 				"cursor-ide:sibling-two-0000-0000-000000000000",
 			}, ids)
-			assert.NotContains(ids, "cursor-ide:husk-0000-0000-0000-000000000000")
+			assert.NotContains(t, ids, "cursor-ide:husk-0000-0000-0000-000000000000")
 
 			// P3: a surviving sibling's full parsed-session metadata contract
 			// (not just its ID) is unaffected by a sibling husk elsewhere in the
 			// same container.
-			require.Len(siblingOne.Messages, 1)
-			assert.Equal("kept one", siblingOne.Messages[0].Content)
-			assert.Equal("b1", siblingOne.Messages[0].SourceUUID)
-			assert.False(siblingOne.Session.IsTruncated)
-			assert.Equal("Sibling one", siblingOne.Session.SessionName)
-			assert.NotEmpty(siblingOne.Session.File.Hash)
-			assert.False(siblingOne.Session.StartedAt.IsZero())
-			assert.False(siblingOne.Session.EndedAt.IsZero())
+			require.Len(t, siblingOne.Messages, 1)
+			assert.Equal(t, "kept one", siblingOne.Messages[0].Content)
+			assert.Equal(t, "b1", siblingOne.Messages[0].SourceUUID)
+			assert.False(t, siblingOne.Session.IsTruncated)
+			assert.Equal(t, "Sibling one", siblingOne.Session.SessionName)
+			assert.NotEmpty(t, siblingOne.Session.File.Hash)
+			assert.False(t, siblingOne.Session.StartedAt.IsZero())
+			assert.False(t, siblingOne.Session.EndedAt.IsZero())
 			// P7: cursor-ide assigns none of these lineage fields; a sibling
 			// surviving a husk composer must not pick any of them up either.
-			assert.Empty(siblingOne.Session.RelationshipType)
-			assert.Empty(siblingOne.Session.SourceVersion)
-			assert.Empty(siblingOne.Session.ParentSessionID)
-			assert.Empty(siblingOne.Session.TerminationStatus)
+			assert.Empty(t, siblingOne.Session.RelationshipType)
+			assert.Empty(t, siblingOne.Session.SourceVersion)
+			assert.Empty(t, siblingOne.Session.ParentSessionID)
+			assert.Empty(t, siblingOne.Session.TerminationStatus)
 		})
 	}
 }
@@ -764,9 +734,6 @@ func TestParseCursorIDEComposer_NullBubbleValueBecomesGap(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			composer := []cursorIDETestComposer{{
 				id:        "null-bubble-0000-0000-000000000000",
 				name:      "Null bubble thread",
@@ -786,54 +753,54 @@ func TestParseCursorIDEComposer_NullBubbleValueBecomesGap(t *testing.T) {
 			// and value bytes unconditionally, so husking b2 must change it.
 			intactPath := createCursorIDEDB(t, composer)
 			intactConn, err := openCursorIDEDB(intactPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			intactInfo, err := os.Stat(intactPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			intactResult, err := parseCursorIDEComposer(
 				t.Context(), intactConn, intactPath,
 				"null-bubble-0000-0000-000000000000", "devbox", intactInfo,
 			)
-			require.NoError(err)
-			require.NotNil(intactResult)
-			require.NotEmpty(intactResult.Session.File.Hash)
-			require.NoError(intactConn.Close())
+			require.NoError(t, err)
+			require.NotNil(t, intactResult)
+			require.NotEmpty(t, intactResult.Session.File.Hash)
+			require.NoError(t, intactConn.Close())
 
 			dbPath := createCursorIDEDB(t, composer)
 			writer, err := sql.Open("sqlite3", dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(),
 				`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 				tc.value, "bubbleId:null-bubble-0000-0000-000000000000:b2",
 			)
-			require.NoError(err)
-			require.NoError(writer.Close())
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
 			assertCursorDiskKVStoredShape(t, dbPath,
 				"bubbleId:null-bubble-0000-0000-000000000000:b2", tc.value == nil)
 
 			conn, err := openCursorIDEDB(dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			defer conn.Close()
 			info, err := os.Stat(dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 
 			result, err := parseCursorIDEComposer(
 				t.Context(), conn, dbPath,
 				"null-bubble-0000-0000-000000000000", "devbox", info,
 			)
-			require.NoError(err,
+			require.NoError(t, err,
 				"a bubble whose value is NULL or empty must become a truncation gap, not a fatal error")
-			require.NotNil(result)
-			require.Len(result.Messages, 1)
-			assert.Equal("kept", result.Messages[0].Content)
-			assert.True(result.Session.IsTruncated,
+			require.NotNil(t, result)
+			require.Len(t, result.Messages, 1)
+			assert.Equal(t, "kept", result.Messages[0].Content)
+			assert.True(t, result.Session.IsTruncated,
 				"a transcript with a husked bubble row must be flagged truncated")
-			assert.Zero(result.Session.MalformedLines,
+			assert.Zero(t, result.Session.MalformedLines,
 				"this diff writes no malformed-line counter for a husk bubble")
-			assert.Equal("b1", result.Messages[0].SourceUUID,
+			assert.Equal(t, "b1", result.Messages[0].SourceUUID,
 				"the surviving message's SourceUUID must be unchanged")
 
-			assert.NotEmpty(result.Session.File.Hash)
-			assert.NotEqual(intactResult.Session.File.Hash, result.Session.File.Hash,
+			assert.NotEmpty(t, result.Session.File.Hash)
+			assert.NotEqual(t, intactResult.Session.File.Hash, result.Session.File.Hash,
 				"husking bubble b2 must change the composer digest")
 		})
 	}
@@ -841,34 +808,31 @@ func TestParseCursorIDEComposer_NullBubbleValueBecomesGap(t *testing.T) {
 
 func TestCursorIDEEmptyJSONObjectValuesTakeExistingPaths(t *testing.T) {
 	t.Run("composer", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
 			id: "empty-object-composer-0000-00000000",
 		}})
 		writer, err := sql.Open("sqlite3", dbPath)
-		require.NoError(err)
+		require.NoError(t, err)
 		_, err = writer.ExecContext(t.Context(),
 			`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 			[]byte(`{}`), "composerData:empty-object-composer-0000-00000000",
 		)
-		require.NoError(err)
-		require.NoError(writer.Close())
+		require.NoError(t, err)
+		require.NoError(t, writer.Close())
 
 		conn, err := openCursorIDEDB(dbPath)
-		require.NoError(err)
+		require.NoError(t, err)
 		defer conn.Close()
 		info, err := os.Stat(dbPath)
-		require.NoError(err)
+		require.NoError(t, err)
 
 		result, err := parseCursorIDEComposer(
 			t.Context(), conn, dbPath,
 			"empty-object-composer-0000-00000000", "devbox", info,
 		)
-		require.NoError(err,
+		require.NoError(t, err,
 			"a two-byte {} value decodes cleanly and must not take the absent path")
-		assert.Nil(result,
+		assert.Nil(t, result,
 			"a composer with zero headers must not surface as a session")
 
 		// parseCursorIDEComposer's (nil, nil) return is identical whether the
@@ -882,17 +846,14 @@ func TestCursorIDEEmptyJSONObjectValuesTakeExistingPaths(t *testing.T) {
 		meta, ok, err := loadCursorIDEComposerMeta(
 			t.Context(), conn, "empty-object-composer-0000-00000000",
 		)
-		require.NoError(err)
-		assert.True(ok,
+		require.NoError(t, err)
+		assert.True(t, ok,
 			"a decoded {} composer must report found, unlike a husk composer")
-		assert.NotEmpty(meta.digest,
+		assert.NotEmpty(t, meta.digest,
 			"a decoded {} composer must fingerprint with a real digest")
 	})
 
 	t.Run("bubble", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
 			id:        "empty-object-bubble-0000-0000000000",
 			name:      "Empty object bubble",
@@ -904,30 +865,30 @@ func TestCursorIDEEmptyJSONObjectValuesTakeExistingPaths(t *testing.T) {
 			},
 		}})
 		writer, err := sql.Open("sqlite3", dbPath)
-		require.NoError(err)
+		require.NoError(t, err)
 		_, err = writer.ExecContext(t.Context(),
 			`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 			[]byte(`{}`), "bubbleId:empty-object-bubble-0000-0000000000:b2",
 		)
-		require.NoError(err)
-		require.NoError(writer.Close())
+		require.NoError(t, err)
+		require.NoError(t, writer.Close())
 
 		conn, err := openCursorIDEDB(dbPath)
-		require.NoError(err)
+		require.NoError(t, err)
 		defer conn.Close()
 		info, err := os.Stat(dbPath)
-		require.NoError(err)
+		require.NoError(t, err)
 
 		result, err := parseCursorIDEComposer(
 			t.Context(), conn, dbPath,
 			"empty-object-bubble-0000-0000000000", "devbox", info,
 		)
-		require.NoError(err,
+		require.NoError(t, err,
 			"a two-byte {} bubble value decodes cleanly and must not take the absent path")
-		require.NotNil(result)
-		require.Len(result.Messages, 1)
-		assert.Equal("kept", result.Messages[0].Content)
-		assert.True(result.Session.IsTruncated,
+		require.NotNil(t, result)
+		require.Len(t, result.Messages, 1)
+		assert.Equal(t, "kept", result.Messages[0].Content)
+		assert.True(t, result.Session.IsTruncated,
 			"a bubble that decodes but renders nothing still takes the truncation path")
 
 		// parseCursorIDEComposer's outer result (one surviving message,
@@ -944,10 +905,10 @@ func TestCursorIDEEmptyJSONObjectValuesTakeExistingPaths(t *testing.T) {
 			t.Context(), conn,
 			"empty-object-bubble-0000-0000000000", "b2",
 		)
-		require.NoError(err)
-		require.NotNil(bubble,
+		require.NoError(t, err)
+		require.NotNil(t, bubble,
 			"a decoded {} bubble must return non-nil, unlike a husk bubble")
-		assert.Equal(cursorIDEBubble{}, *bubble,
+		assert.Equal(t, cursorIDEBubble{}, *bubble,
 			"a {} bubble decodes to a zero-valued struct, not an absence")
 	})
 }
@@ -966,9 +927,6 @@ func TestLoadCursorIDEComposerMetaNullValueReportsNotFound(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
 				id:        "null-meta-0000-0000-000000000000",
 				name:      "Null meta chat",
@@ -980,38 +938,35 @@ func TestLoadCursorIDEComposerMetaNullValueReportsNotFound(t *testing.T) {
 				}},
 			}})
 			writer, err := sql.Open("sqlite3", dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(),
 				`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 				tc.value, "composerData:null-meta-0000-0000-000000000000",
 			)
-			require.NoError(err)
-			require.NoError(writer.Close())
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
 			assertCursorDiskKVStoredShape(t, dbPath,
 				"composerData:null-meta-0000-0000-000000000000", tc.value == nil)
 
 			conn, err := openCursorIDEDB(dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			defer conn.Close()
 
 			meta, ok, err := loadCursorIDEComposerMeta(
 				t.Context(), conn, "null-meta-0000-0000-000000000000",
 			)
-			require.NoError(err,
+			require.NoError(t, err,
 				"a NULL or empty composer value must fingerprint as absent, not error")
-			assert.False(ok)
-			assert.Equal(cursorIDEComposerMeta{}, meta)
+			assert.False(t, ok)
+			assert.Equal(t, cursorIDEComposerMeta{}, meta)
 
-			assert.True(CursorIDEComposerExists(t.Context(), dbPath, "null-meta-0000-0000-000000000000"),
+			assert.True(t, CursorIDEComposerExists(t.Context(), dbPath, "null-meta-0000-0000-000000000000"),
 				"the key remains present in cursorDiskKV even though its value is NULL or empty")
 		})
 	}
 }
 
 func TestParseCursorIDEComposer_TypelessBubbleFallsBackToHeaderType(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath := createCursorIDEDB(t, []cursorIDETestComposer{{
 		id:        "typeless-0000-0000-0000-000000000000",
 		name:      "Typeless bubble",
@@ -1025,30 +980,30 @@ func TestParseCursorIDEComposer_TypelessBubbleFallsBackToHeaderType(t *testing.T
 	// Strip the type field from the assistant bubble's row, as a shrunk or
 	// partially-written row would: the header still records the turn's role.
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(),
 		`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 		[]byte(`{"text": "answer", "createdAt": "2026-06-21T07:27:31.522Z"}`),
 		"bubbleId:typeless-0000-0000-0000-000000000000:b2",
 	)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	conn, err := openCursorIDEDB(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer conn.Close()
 	info, err := os.Stat(dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	result, err := parseCursorIDEComposer(
 		t.Context(), conn, dbPath,
 		"typeless-0000-0000-0000-000000000000", "devbox", info,
 	)
-	require.NoError(err)
-	require.NotNil(result)
-	require.Len(result.Messages, 2,
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Messages, 2,
 		"a bubble missing its type field must fall back to the header's role")
-	assert.Equal(RoleUser, result.Messages[0].Role)
-	assert.Equal(RoleAssistant, result.Messages[1].Role)
-	assert.Equal("answer", result.Messages[1].Content)
+	assert.Equal(t, RoleUser, result.Messages[0].Role)
+	assert.Equal(t, RoleAssistant, result.Messages[1].Role)
+	assert.Equal(t, "answer", result.Messages[1].Content)
 }

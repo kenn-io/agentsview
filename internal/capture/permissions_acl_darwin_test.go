@@ -26,14 +26,12 @@ func TestCreateStateRejectsUntrustedParentACL(t *testing.T) {
 }
 
 func TestSecureCaptureDirectoryClearsExtendedACL(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
-	require.NoError(exec.CommandContext(t.Context(), "chmod", "+a", testDirectoryACL, dir).Run())
+	require.NoError(t, exec.CommandContext(t.Context(), "chmod", "+a", testDirectoryACL, dir).Run())
 
-	require.NoError(secureCaptureDirectory(dir))
+	require.NoError(t, secureCaptureDirectory(dir))
 
 	listing, err := exec.CommandContext(t.Context(), "ls", "-lde", dir).Output()
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.NotContains(t, strings.TrimSpace(string(listing)), "\n 0:")
 }

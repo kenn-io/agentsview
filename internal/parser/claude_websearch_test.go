@@ -219,9 +219,6 @@ func TestClaudeWebSearchRequestsPerMessage(t *testing.T) {
 }
 
 func TestClaudeWebSearchAnnotationPreservesOtherUsageFields(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	lines := []string{
 		`{"type":"user","timestamp":"2026-07-30T10:00:00Z","uuid":"u1",` +
 			`"message":{"content":"find something"},"cwd":"/tmp"}`,
@@ -240,8 +237,8 @@ func TestClaudeWebSearchAnnotationPreservesOtherUsageFields(t *testing.T) {
 	}
 	path := createTestFile(t, "websearch-fields.jsonl", strings.Join(lines, "\n"))
 	results, err := parseClaudeSession(path, "proj", "local")
-	require.NoError(err)
-	require.NotEmpty(results)
+	require.NoError(t, err)
+	require.NotEmpty(t, results)
 
 	var usage string
 	for _, msg := range results[0].Messages {
@@ -249,19 +246,19 @@ func TestClaudeWebSearchAnnotationPreservesOtherUsageFields(t *testing.T) {
 			usage = string(msg.TokenUsage)
 		}
 	}
-	require.NotEmpty(usage)
-	require.True(gjson.Valid(usage), "usage stays valid JSON: %s", usage)
-	assert.Equal(int64(2),
+	require.NotEmpty(t, usage)
+	require.True(t, gjson.Valid(usage), "usage stays valid JSON: %s", usage)
+	assert.Equal(t, int64(2),
 		gjson.Get(usage, usageWebSearchRequestsPath).Int())
-	assert.Equal(int64(11), gjson.Get(usage, "input_tokens").Int())
-	assert.Equal(int64(22),
+	assert.Equal(t, int64(11), gjson.Get(usage, "input_tokens").Int())
+	assert.Equal(t, int64(22),
 		gjson.Get(usage, "cache_creation_input_tokens").Int())
-	assert.Equal(int64(33),
+	assert.Equal(t, int64(33),
 		gjson.Get(usage, "cache_read_input_tokens").Int())
-	assert.Equal(int64(44), gjson.Get(usage, "output_tokens").Int())
-	assert.Equal(int64(7),
+	assert.Equal(t, int64(44), gjson.Get(usage, "output_tokens").Int())
+	assert.Equal(t, int64(7),
 		gjson.Get(usage, "server_tool_use.web_fetch_requests").Int())
-	assert.Equal("standard", gjson.Get(usage, "service_tier").String())
+	assert.Equal(t, "standard", gjson.Get(usage, "service_tier").String())
 }
 
 func TestSetUsageWebSearchRequests(t *testing.T) {
@@ -332,16 +329,14 @@ func TestSetUsageWebSearchRequests(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			got, ok := setUsageWebSearchRequests(tt.usage, tt.count)
-			assert.Equal(tt.ok, ok)
-			assert.Equal(tt.want, got)
+			assert.Equal(t, tt.ok, ok)
+			assert.Equal(t, tt.want, got)
 			if !tt.ok {
 				return
 			}
 			require.True(t, gjson.Valid(got))
-			assert.Equal(tt.count, usageWebSearchRequests(got))
+			assert.Equal(t, tt.count, usageWebSearchRequests(got))
 		})
 	}
 }

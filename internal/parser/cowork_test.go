@@ -43,6 +43,7 @@ func coworkParseTranscript(
 	t *testing.T, root, transcript, machine string,
 ) ([]ParseResult, []string) {
 	t.Helper()
+
 	provider := coworkProviderForRoot(t, root, machine)
 	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: transcript,
@@ -106,12 +107,11 @@ func writeCoworkSession(
 	)
 	require.NoError(t, os.MkdirAll(projectDir, 0o755), "mkdir project")
 	transcriptPath = filepath.Join(projectDir, f.cliSessionID+".jsonl")
-	require.NoError(t,
-		os.WriteFile(
-			transcriptPath,
-			[]byte(strings.Join(f.transcriptLines, "\n")+"\n"),
-			0o644,
-		),
+	require.NoError(t, os.WriteFile(
+		transcriptPath,
+		[]byte(strings.Join(f.transcriptLines, "\n")+"\n"),
+		0o644,
+	),
 		"write transcript",
 	)
 	return metaPath, transcriptPath
@@ -159,31 +159,27 @@ func TestCoworkProviderDiscoversSessions(t *testing.T) {
 
 func TestCoworkStreamingDiscoveryPropagatesMetadataErrors(t *testing.T) {
 	t.Run("decode", func(t *testing.T) {
-		require := require.New(t)
-
 		root := t.TempDir()
 		dir := filepath.Join(root, "org", "workspace")
-		require.NoError(os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.MkdirAll(dir, 0o755))
 		metaPath := filepath.Join(dir, "local_50000000-0000-4000-8000-000000000099.json")
-		require.NoError(os.WriteFile(metaPath, []byte("{"), 0o600))
+		require.NoError(t, os.WriteFile(metaPath, []byte("{"), 0o600))
 		provider := coworkProviderForRoot(t, root, "local")
 
 		err := provider.(StreamingDiscoverer).DiscoverEach(t.Context(), func(SourceRef) error {
 			return nil
 		})
 
-		require.Error(err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "decode cowork metadata")
 	})
 
 	t.Run("projects directory", func(t *testing.T) {
-		require := require.New(t)
-
 		root := t.TempDir()
 		dir := filepath.Join(root, "org", "workspace")
 		base := "local_50000000-0000-4000-8000-000000000098"
-		require.NoError(os.MkdirAll(filepath.Join(dir, base), 0o755))
-		require.NoError(os.WriteFile(
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, base), 0o755))
+		require.NoError(t, os.WriteFile(
 			filepath.Join(dir, base+".json"),
 			[]byte(`{"cliSessionId":"c0000000-0000-4000-8000-000000000098"}`), 0o600,
 		))
@@ -193,17 +189,15 @@ func TestCoworkStreamingDiscoveryPropagatesMetadataErrors(t *testing.T) {
 			return nil
 		})
 
-		require.Error(err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "stat cowork projects directory")
 	})
 }
 
 func TestCoworkProviderDiscoverIgnoresNoise(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	wsDir := filepath.Join(root, "org", "ws")
-	require.NoError(os.MkdirAll(wsDir, 0o755), "mkdir ws")
+	require.NoError(t, os.MkdirAll(wsDir, 0o755), "mkdir ws")
 
 	// Sibling cache files must not be treated as session metadata.
 	for _, name := range []string{
@@ -211,20 +205,20 @@ func TestCoworkProviderDiscoverIgnoresNoise(t *testing.T) {
 		"cowork-clientdata-cache.json",
 		"artifacts.json",
 	} {
-		require.NoError(os.WriteFile(filepath.Join(wsDir, name), []byte("{}"), 0o644),
+		require.NoError(t, os.WriteFile(filepath.Join(wsDir, name), []byte("{}"), 0o644),
 			"write %s", name,
 		)
 	}
 	// A skills-plugin mirror must be skipped entirely.
 	skillDir := filepath.Join(root, "skills-plugin", "ws", "org")
-	require.NoError(os.MkdirAll(skillDir, 0o755), "mkdir skills")
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.MkdirAll(skillDir, 0o755), "mkdir skills")
+	require.NoError(t, os.WriteFile(
 		filepath.Join(skillDir, "local_fake.json"), []byte("{}"), 0o644,
 	),
 		"write skills noise",
 	)
 	// A metadata file with no transcript yet must be skipped.
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(wsDir, "local_"+
 			"00000000-0000-4000-8000-0000000000ff.json"),
 		[]byte(`{"cliSessionId":"00000000-0000-4000-8000-0000000000fe"}`), 0o644,
@@ -236,9 +230,6 @@ func TestCoworkProviderDiscoverIgnoresNoise(t *testing.T) {
 }
 
 func TestCoworkProviderParsesSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	cli := "c0000000-0000-4000-8000-000000000002"
 	_, transcript := writeCoworkSession(t, root, coworkFixture{
@@ -256,26 +247,26 @@ func TestCoworkProviderParsesSession(t *testing.T) {
 	})
 
 	results, excluded := coworkParseTranscript(t, root, transcript, "host-1")
-	require.Empty(excluded, "excluded")
-	require.Len(results, 1, "results")
+	require.Empty(t, excluded, "excluded")
+	require.Len(t, results, 1, "results")
 
 	sess := results[0].Session
-	assert.Equal("cowork:"+cli, sess.ID, "ID prefixed")
-	assert.Equal(AgentCowork, sess.Agent, "Agent")
-	assert.Equal("", sess.AgentLabel, "AgentLabel")
-	assert.Equal("", sess.Entrypoint, "Entrypoint")
-	assert.Equal("cowork", sess.Project, "Project")
-	assert.Equal("Sample session title", sess.SessionName, "title")
-	assert.Equal("host-1", sess.Machine, "Machine")
-	assert.Equal(2, sess.MessageCount, "MessageCount")
-	assert.Equal(1, sess.UserMessageCount, "UserMessageCount")
+	assert.Equal(t, "cowork:"+cli, sess.ID, "ID prefixed")
+	assert.Equal(t, AgentCowork, sess.Agent, "Agent")
+	assert.Empty(t, sess.AgentLabel, "AgentLabel")
+	assert.Empty(t, sess.Entrypoint, "Entrypoint")
+	assert.Equal(t, "cowork", sess.Project, "Project")
+	assert.Equal(t, "Sample session title", sess.SessionName, "title")
+	assert.Equal(t, "host-1", sess.Machine, "Machine")
+	assert.Equal(t, 2, sess.MessageCount, "MessageCount")
+	assert.Equal(t, 1, sess.UserMessageCount, "UserMessageCount")
 
 	// Token usage must be counted (this is the crux of issue #639).
 	hasTotal, hasPeak := sess.AggregateTokenPresence()
-	assert.True(hasTotal, "HasTotalOutputTokens")
-	assert.True(hasPeak, "HasPeakContextTokens")
-	assert.Equal(5, sess.TotalOutputTokens, "TotalOutputTokens")
-	assert.Equal(12, sess.PeakContextTokens, "PeakContextTokens (input+cacheRead)")
+	assert.True(t, hasTotal, "HasTotalOutputTokens")
+	assert.True(t, hasPeak, "HasPeakContextTokens")
+	assert.Equal(t, 5, sess.TotalOutputTokens, "TotalOutputTokens")
+	assert.Equal(t, 12, sess.PeakContextTokens, "PeakContextTokens (input+cacheRead)")
 }
 
 func TestCoworkProviderParseTitleFallsBackToAITitle(t *testing.T) {
@@ -318,9 +309,6 @@ func TestCoworkProviderParseProjectFromSelectedFolder(t *testing.T) {
 }
 
 func TestCoworkProviderFindsSourceFile(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	cli := "c0000000-0000-4000-8000-000000000005"
 	_, transcript := writeCoworkSession(t, root, coworkFixture{
@@ -337,21 +325,18 @@ func TestCoworkProviderFindsSourceFile(t *testing.T) {
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: cli,
 	})
-	require.NoError(err)
-	require.True(ok, "found")
-	assert.Equal(transcript, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok, "found")
+	assert.Equal(t, transcript, found.DisplayPath)
 
 	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "nonexistent-id",
 	})
-	require.NoError(err)
-	assert.False(ok, "missing")
+	require.NoError(t, err)
+	assert.False(t, ok, "missing")
 }
 
 func TestCoworkProviderClassifiesChangedPath(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	cli := "c0000000-0000-4000-8000-000000000006"
 	metaPath, transcript := writeCoworkSession(t, root, coworkFixture{
@@ -370,35 +355,32 @@ func TestCoworkProviderClassifiesChangedPath(t *testing.T) {
 			t.Context(),
 			ChangedPathRequest{Path: path, EventKind: "write", WatchRoot: root},
 		)
-		require.NoError(err)
+		require.NoError(t, err)
 		if len(sources) == 0 {
 			return "", false
 		}
-		require.Len(sources, 1)
+		require.Len(t, sources, 1)
 		return sources[0].DisplayPath, true
 	}
 
 	// A transcript change classifies to itself.
 	got, ok := classify(transcript)
-	require.True(ok, "transcript classified")
-	assert.Equal(transcript, got, "transcript path")
+	require.True(t, ok, "transcript classified")
+	assert.Equal(t, transcript, got, "transcript path")
 
 	// A metadata change resolves to the session's transcript.
 	got, ok = classify(metaPath)
-	require.True(ok, "metadata classified")
-	assert.Equal(transcript, got, "metadata resolves to transcript")
+	require.True(t, ok, "metadata classified")
+	assert.Equal(t, transcript, got, "metadata resolves to transcript")
 
 	// Unrelated and outside-root paths are ignored.
 	_, ok = classify(filepath.Join(root, "org", "ws", "artifacts.json"))
-	assert.False(ok, "cache file ignored")
+	assert.False(t, ok, "cache file ignored")
 	_, ok = classify("/some/other/place.jsonl")
-	assert.False(ok, "outside root ignored")
+	assert.False(t, ok, "outside root ignored")
 }
 
 func TestCoworkSessionMtime(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	cli := "c0000000-0000-4000-8000-000000000007"
 	metaPath, transcript := writeCoworkSession(t, root, coworkFixture{
@@ -412,33 +394,30 @@ func TestCoworkSessionMtime(t *testing.T) {
 	})
 
 	tInfo, err := os.Stat(transcript)
-	require.NoError(err, "stat transcript")
+	require.NoError(t, err, "stat transcript")
 	tMtime := tInfo.ModTime().UnixNano()
 
 	// Baseline: with metadata older than the transcript, the transcript
 	// mtime wins.
 	older := tInfo.ModTime().Add(-time.Hour)
-	require.NoError(os.Chtimes(metaPath, older, older), "age metadata")
-	assert.Equal(tMtime, CoworkSessionMtime(transcript, tMtime),
+	require.NoError(t, os.Chtimes(metaPath, older, older), "age metadata")
+	assert.Equal(t, tMtime, CoworkSessionMtime(transcript, tMtime),
 		"transcript mtime wins when metadata is older")
 
 	// A title rename bumps only the metadata file's mtime; the composite
 	// must reflect it so the session is re-parsed instead of skipped.
 	newer := tInfo.ModTime().Add(time.Hour)
-	require.NoError(os.Chtimes(metaPath, newer, newer), "touch metadata")
-	assert.Equal(newer.UnixNano(), CoworkSessionMtime(transcript, tMtime),
+	require.NoError(t, os.Chtimes(metaPath, newer, newer), "touch metadata")
+	assert.Equal(t, newer.UnixNano(), CoworkSessionMtime(transcript, tMtime),
 		"metadata mtime folded into composite")
 
 	// No metadata file -> transcript mtime.
-	require.NoError(os.Remove(metaPath), "remove metadata")
-	assert.Equal(tMtime, CoworkSessionMtime(transcript, tMtime),
+	require.NoError(t, os.Remove(metaPath), "remove metadata")
+	assert.Equal(t, tMtime, CoworkSessionMtime(transcript, tMtime),
 		"transcript mtime when metadata missing")
 }
 
 func TestCoworkProviderDiscoverIncludesSubagents(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	cli := "c0000000-0000-4000-8000-000000000008"
 	enc := "-sessions-demo"
@@ -455,7 +434,7 @@ func TestCoworkProviderDiscoverIncludesSubagents(t *testing.T) {
 	// Write a subagent transcript alongside the main one, mirroring
 	// Claude Code's layout: <enc>/<cli>/subagents/agent-<id>.jsonl.
 	subDir := filepath.Join(filepath.Dir(transcript), cli, "subagents")
-	require.NoError(os.MkdirAll(subDir, 0o755), "mkdir subagents")
+	require.NoError(t, os.MkdirAll(subDir, 0o755), "mkdir subagents")
 	subPath := filepath.Join(subDir, "agent-0000000000000001.jsonl")
 	subLines := []string{
 		`{"type":"user","uuid":"su1","parentUuid":null,"sessionId":"` + cli + `",` +
@@ -467,36 +446,34 @@ func TestCoworkProviderDiscoverIncludesSubagents(t *testing.T) {
 			`"content":[{"type":"text","text":"done"}],` +
 			`"usage":{"input_tokens":3,"output_tokens":2}}}`,
 	}
-	require.NoError(os.WriteFile(subPath, []byte(strings.Join(subLines, "\n")+"\n"), 0o644),
+	require.NoError(t, os.WriteFile(subPath, []byte(strings.Join(subLines, "\n")+"\n"), 0o644),
 		"write subagent",
 	)
 
 	paths := coworkDiscoveredPaths(t, root)
-	assert.Contains(paths, transcript, "main transcript discovered")
-	assert.Contains(paths, subPath, "subagent transcript discovered")
+	assert.Contains(t, paths, transcript, "main transcript discovered")
+	assert.Contains(t, paths, subPath, "subagent transcript discovered")
 
 	// The subagent parses into a cowork-namespaced subagent session whose
 	// parent is the main session.
 	results, _ := coworkParseTranscript(t, root, subPath, "host-1")
-	require.Len(results, 1, "results")
+	require.Len(t, results, 1, "results")
 	sub := results[0].Session
-	assert.Equal("cowork:agent-0000000000000001", sub.ID, "subagent ID")
-	assert.Equal("cowork:"+cli, sub.ParentSessionID, "parent prefixed")
-	assert.Equal(RelSubagent, sub.RelationshipType, "RelSubagent")
+	assert.Equal(t, "cowork:agent-0000000000000001", sub.ID, "subagent ID")
+	assert.Equal(t, "cowork:"+cli, sub.ParentSessionID, "parent prefixed")
+	assert.Equal(t, RelSubagent, sub.RelationshipType, "RelSubagent")
 
 	// The provider resolves the subagent by its raw ID too.
 	provider := coworkProviderForRoot(t, root, "")
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "agent-0000000000000001",
 	})
-	require.NoError(err)
-	require.True(ok, "find subagent source")
-	assert.Equal(subPath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok, "find subagent source")
+	assert.Equal(t, subPath, found.DisplayPath)
 }
 
 func TestCoworkStreamingDiscoveryPropagatesSubagentCandidateStatError(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	cli := "c0000000-0000-4000-8000-000000000096"
 	_, transcript := writeCoworkSession(t, root, coworkFixture{
@@ -506,8 +483,8 @@ func TestCoworkStreamingDiscoveryPropagatesSubagentCandidateStatError(t *testing
 		transcriptLines: coworkTranscriptLines(cli),
 	})
 	subagents := filepath.Join(filepath.Dir(transcript), cli, "subagents")
-	require.NoError(os.MkdirAll(subagents, 0o755))
-	require.NoError(os.Symlink(
+	require.NoError(t, os.MkdirAll(subagents, 0o755))
+	require.NoError(t, os.Symlink(
 		filepath.Join(root, "missing-subagent"),
 		filepath.Join(subagents, "agent-broken.jsonl"),
 	))
@@ -517,14 +494,11 @@ func TestCoworkStreamingDiscoveryPropagatesSubagentCandidateStatError(t *testing
 		return nil
 	})
 
-	require.Error(err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stat cowork subagent candidate")
 }
 
 func TestResolveCoworkSessionRejectsSymlinkEscape(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")
 	}
@@ -532,39 +506,37 @@ func TestResolveCoworkSessionRejectsSymlinkEscape(t *testing.T) {
 	cli := "c0000000-0000-4000-8000-000000000009"
 	sessionDir := filepath.Join(root, "org", "ws", "local_session")
 	projectsDir := filepath.Join(sessionDir, ".claude", "projects")
-	require.NoError(os.MkdirAll(projectsDir, 0o755), "mkdir projects")
+	require.NoError(t, os.MkdirAll(projectsDir, 0o755), "mkdir projects")
 
 	// Plant the real transcript OUTSIDE the session dir, then expose it
 	// inside projects/ via a directory symlink. resolveCoworkSession must
 	// refuse to follow the escape.
 	outside := filepath.Join(root, "outside")
-	require.NoError(os.MkdirAll(outside, 0o755), "mkdir outside")
-	require.NoError(os.WriteFile(filepath.Join(outside, cli+".jsonl"), []byte("{}\n"), 0o644),
+	require.NoError(t, os.MkdirAll(outside, 0o755), "mkdir outside")
+	require.NoError(t, os.WriteFile(filepath.Join(outside, cli+".jsonl"), []byte("{}\n"), 0o644),
 		"write escaped transcript",
 	)
-	require.NoError(os.Symlink(outside, filepath.Join(projectsDir, "-evil")),
+	require.NoError(t, os.Symlink(outside, filepath.Join(projectsDir, "-evil")),
 		"symlink enc dir",
 	)
 
 	main, encDir := resolveCoworkSession(sessionDir, cli)
-	assert.Empty(main, "symlinked escape rejected")
-	assert.Empty(encDir, "no enc dir for escape")
+	assert.Empty(t, main, "symlinked escape rejected")
+	assert.Empty(t, encDir, "no enc dir for escape")
 }
 
 func TestCoworkDefaultDirs(t *testing.T) {
-	assert := assert.New(t)
-
 	dirs := coworkDefaultDirs()
 	require.Len(t, dirs, 4, "macOS, Linux, Windows MSIX, Windows Roaming")
-	assert.Contains(dirs,
+	assert.Contains(t, dirs,
 		"AppData/Local/Packages/Claude_pzs8sxrjxfjjc/"+
 			"LocalCache/Roaming/Claude/local-agent-mode-sessions",
 		"Windows MSIX package-local path")
-	assert.Contains(dirs,
+	assert.Contains(t, dirs,
 		"AppData/Roaming/Claude/local-agent-mode-sessions",
 		"Windows Roaming fallback")
 	for _, d := range dirs {
-		assert.True(strings.HasSuffix(d, "local-agent-mode-sessions"),
+		assert.True(t, strings.HasSuffix(d, "local-agent-mode-sessions"),
 			"dir %q targets local-agent-mode-sessions", d,
 		)
 	}

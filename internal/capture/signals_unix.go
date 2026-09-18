@@ -95,12 +95,14 @@ func signalNameAndCode(sig syscall.Signal) (string, int) {
 	if sig == 0 {
 		return "", 0
 	}
-	name := fmt.Sprintf("SIG%d", sig)
+	var name string
 	switch sig {
 	case syscall.SIGINT:
 		name = "SIGINT"
 	case syscall.SIGTERM:
 		name = "SIGTERM"
+	default:
+		name = fmt.Sprintf("SIG%d", sig)
 	}
 	return name, 128 + int(sig)
 }

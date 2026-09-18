@@ -39,6 +39,7 @@ func corruptStoredTokenUsage(
 	t *testing.T, dbPath, sessionID string, ordinal int, raw string,
 ) {
 	t.Helper()
+
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	defer conn.Close()

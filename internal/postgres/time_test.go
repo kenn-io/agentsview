@@ -163,20 +163,18 @@ func TestNormalizeLocalSyncTimestamp(t *testing.T) {
 }
 
 func TestNormalizeLocalSyncStateTimestamps(t *testing.T) {
-	require := require.New(t)
-
-	local, err := db.Open(t.TempDir() + "/test.db")
-	require.NoError(err)
+	local, err := db.Open(t.Context(), t.TempDir()+"/test.db")
+	require.NoError(t, err)
 	defer local.Close()
 
-	require.NoError(local.SetSyncState(
+	require.NoError(t, local.SetSyncState(t.Context(),
 		"last_push_at",
 		"2026-03-11T12:34:56.123456789Z",
 	))
 
-	require.NoError(NormalizeLocalSyncStateTimestamps(local))
+	require.NoError(t, NormalizeLocalSyncStateTimestamps(t.Context(), local))
 
-	got, err := local.GetSyncState("last_push_at")
-	require.NoError(err)
+	got, err := local.GetSyncState(t.Context(), "last_push_at")
+	require.NoError(t, err)
 	assert.Equal(t, "2026-03-11T12:34:56.123Z", got)
 }

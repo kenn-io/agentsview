@@ -55,9 +55,6 @@ func TestNewSyncCommandRejectsTargetWithAdHocHost(t *testing.T) {
 }
 
 func TestRunArtifactFolderSyncPassesOnlyDistinctProtectedRoots(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := t.TempDir()
 	providerA := filepath.Join(t.TempDir(), "provider-a")
 	providerB := filepath.Join(t.TempDir(), "provider-b")
@@ -74,9 +71,9 @@ func TestRunArtifactFolderSyncPassesOnlyDistinctProtectedRoots(t *testing.T) {
 			parser.AgentGemini: {dataDir},
 		},
 	}
-	database, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
 	original := runArtifactSyncCLI
 	var got artifact.SyncOptions
@@ -96,22 +93,20 @@ func TestRunArtifactFolderSyncPassesOnlyDistinctProtectedRoots(t *testing.T) {
 		database,
 		SyncConfig{Target: target, Full: true},
 	)
-	require.NoError(err)
-	assert.Equal("node-a1b2c3", result.Origin)
-	assert.Equal(dataDir, got.DataDir)
-	assert.Equal(target, got.Target)
-	assert.Empty(got.Origin)
-	assert.True(got.Full)
-	assert.ElementsMatch(
+	require.NoError(t, err)
+	assert.Equal(t, "node-a1b2c3", result.Origin)
+	assert.Equal(t, dataDir, got.DataDir)
+	assert.Equal(t, target, got.Target)
+	assert.Empty(t, got.Origin)
+	assert.True(t, got.Full)
+	assert.ElementsMatch(t,
 		[]string{dataDir, providerA, providerB},
 		got.ForbiddenRoots,
 	)
-	assert.Len(got.ForbiddenRoots, 3)
+	assert.Len(t, got.ForbiddenRoots, 3)
 }
 
 func TestRunArtifactFolderSyncRedactsTargetFromErrors(t *testing.T) {
-	assert := assert.New(t)
-
 	target := filepath.Join(t.TempDir(), "private-target")
 	cause := fmt.Errorf("opening %s: permission denied", target)
 	original := runArtifactSyncCLI
@@ -131,9 +126,9 @@ func TestRunArtifactFolderSyncRedactsTargetFromErrors(t *testing.T) {
 		SyncConfig{Target: target},
 	)
 	require.Error(t, err)
-	assert.Equal("artifact folder sync failed", err.Error())
-	assert.NotContains(err.Error(), target)
-	assert.ErrorIs(err, cause)
+	assert.Equal(t, "artifact folder sync failed", err.Error())
+	assert.NotContains(t, err.Error(), target)
+	assert.ErrorIs(t, err, cause)
 }
 
 func TestPrintArtifactSyncSummaryReportsBoundedRerun(t *testing.T) {
@@ -171,15 +166,12 @@ func TestDoSyncWithoutTargetDoesNotCreateArtifactRepository(t *testing.T) {
 }
 
 func TestDoSyncRunsArtifactExchangeAfterLocalSync(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	env := newSyncCLIEnv(t)
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	isolateDirectCLISources(t)
 	sourceRoot := filepath.Join(t.TempDir(), "claude")
-	require.NoError(os.MkdirAll(filepath.Join(sourceRoot, "project"), 0o755))
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.MkdirAll(filepath.Join(sourceRoot, "project"), 0o755))
+	require.NoError(t, os.WriteFile(
 		filepath.Join(sourceRoot, "project", "session.jsonl"),
 		[]byte(testjsonl.NewSessionBuilder().
 			AddClaudeUser("2026-07-12T00:00:00Z", "local before artifact").
@@ -198,9 +190,9 @@ func TestDoSyncRunsArtifactExchangeAfterLocalSync(t *testing.T) {
 	) (artifact.SyncResult, error) {
 		called = true
 		stats, err := database.GetStats(ctx, false, false)
-		require.NoError(err)
-		assert.Equal(1, stats.SessionCount)
-		assert.Equal(target, opts.Target)
+		require.NoError(t, err)
+		assert.Equal(t, 1, stats.SessionCount)
+		assert.Equal(t, target, opts.Target)
 		return artifact.SyncResult{ExportedSessions: 1}, nil
 	}
 	t.Cleanup(func() { runArtifactSyncCLI = original })
@@ -210,10 +202,10 @@ func TestDoSyncRunsArtifactExchangeAfterLocalSync(t *testing.T) {
 		hadFailures = doSync(SyncConfig{Target: target})
 	})
 
-	assert.False(hadFailures)
-	assert.True(called)
-	assert.Contains(output, "Artifacts: exported 1 session")
-	assert.FileExists(env.DBPath)
+	assert.False(t, hadFailures)
+	assert.True(t, called)
+	assert.Contains(t, output, "Artifacts: exported 1 session")
+	assert.FileExists(t, env.DBPath)
 }
 
 func TestDoSyncRunsArtifactExchangeAfterConfiguredRemoteFanout(t *testing.T) {
@@ -261,8 +253,6 @@ func TestDoSyncRunsArtifactExchangeAfterConfiguredRemoteFanout(t *testing.T) {
 func TestRunDaemonArtifactExchangeUsesAuthenticatedLoopbackEndpoint(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-
 	target := filepath.Join(t.TempDir(), "archive")
 	var got server.ArtifactExchangeRequest
 	var ts *httptest.Server
@@ -270,16 +260,20 @@ func TestRunDaemonArtifactExchangeUsesAuthenticatedLoopbackEndpoint(
 		w http.ResponseWriter,
 		r *http.Request,
 	) {
-		require.Equal(t, http.MethodPost, r.Method)
-		require.Equal(t, "/viewer/api/v1/artifacts/exchange", r.URL.Path)
-		require.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
-		require.Equal(t, ts.URL, r.Header.Get("Origin"))
-		require.NoError(t, json.UnmarshalRead(r.Body, &got))
+		if !assert.Equal(t, http.MethodPost, r.Method) ||
+			!assert.Equal(t, "/viewer/api/v1/artifacts/exchange", r.URL.Path) ||
+			!assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization")) ||
+			!assert.Equal(t, ts.URL, r.Header.Get("Origin")) ||
+			!assert.NoError(t, json.UnmarshalRead(r.Body, &got)) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.MarshalWrite(w, artifact.SyncResult{
+		if !assert.NoError(t, json.MarshalWrite(w, artifact.SyncResult{
 			Origin:             "node-a1b2c3",
 			PublishedArtifacts: 3,
-		}))
+		})) {
+			return
+		}
 	}))
 	t.Cleanup(ts.Close)
 
@@ -292,23 +286,20 @@ func TestRunDaemonArtifactExchangeUsesAuthenticatedLoopbackEndpoint(
 	)
 
 	require.NoError(t, err)
-	assert.Equal(server.ArtifactExchangeRequest{
+	assert.Equal(t, server.ArtifactExchangeRequest{
 		Target: target,
 		Full:   true,
 	}, got)
-	assert.Equal("node-a1b2c3", result.Origin)
-	assert.Equal(3, result.PublishedArtifacts)
+	assert.Equal(t, "node-a1b2c3", result.Origin)
+	assert.Equal(t, 3, result.PublishedArtifacts)
 }
 
 func TestDaemonArtifactExchangeNotifiesClientsAndSchedulersAfterImport(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
-	database, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
 	broadcaster := server.NewBroadcaster(0)
 	events, unsubscribe := broadcaster.Subscribe()
@@ -336,7 +327,7 @@ func TestDaemonArtifactExchangeNotifiesClientsAndSchedulersAfterImport(
 		},
 		true,
 	)
-	engine := agentsync.NewEngine(
+	engine := agentsync.NewEngine(t.Context(),
 		database,
 		agentsync.EngineConfig{Emitter: emitter},
 	)
@@ -365,13 +356,13 @@ func TestDaemonArtifactExchangeNotifiesClientsAndSchedulersAfterImport(
 		Target: t.TempDir(),
 	})
 
-	require.NoError(err)
-	assert.Equal(1, result.ImportedSessions)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.ImportedSessions)
 	select {
 	case event := <-events:
-		assert.Equal("sessions", event.Scope)
+		assert.Equal(t, "sessions", event.Scope)
 	case <-time.After(time.Second):
-		require.Fail("artifact import did not notify SSE subscribers")
+		require.Fail(t, "artifact import did not notify SSE subscribers")
 	}
 	waitForSchedulerCondition(
 		t,
@@ -381,29 +372,30 @@ func TestDaemonArtifactExchangeNotifiesClientsAndSchedulersAfterImport(
 	select {
 	case <-recallNotified:
 	case <-time.After(time.Second):
-		require.Fail("artifact import did not notify the recall scheduler")
+		require.Fail(t, "artifact import did not notify the recall scheduler")
 	}
 }
 
 func TestRunDaemonArtifactExchangeMakesRelativeTargetAbsolute(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	var got server.ArtifactExchangeRequest
 	ts := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter,
 		r *http.Request,
 	) {
-		require.NoError(json.UnmarshalRead(r.Body, &got))
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &got)) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, err := io.WriteString(w, `{}`)
-		require.NoError(err)
+		if !assert.NoError(t, err) {
+			return
+		}
 	}))
 	t.Cleanup(ts.Close)
 
 	relativeTarget := filepath.Join("relative", "artifact-target")
 	wantTarget, err := filepath.Abs(relativeTarget)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = runDaemonArtifactExchange(
 		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL},
@@ -412,9 +404,9 @@ func TestRunDaemonArtifactExchangeMakesRelativeTargetAbsolute(t *testing.T) {
 		false,
 	)
 
-	require.NoError(err)
-	assert.True(filepath.IsAbs(got.Target))
-	assert.Equal(wantTarget, got.Target)
+	require.NoError(t, err)
+	assert.True(t, filepath.IsAbs(got.Target))
+	assert.Equal(t, wantTarget, got.Target)
 }
 
 func TestRunDaemonArtifactExchangeAcceptsLocalhostEndpoint(t *testing.T) {
@@ -426,7 +418,9 @@ func TestRunDaemonArtifactExchangeAcceptsLocalhostEndpoint(t *testing.T) {
 		gotHost = r.Host
 		w.Header().Set("Content-Type", "application/json")
 		_, err := io.WriteString(w, `{}`)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 	}))
 	t.Cleanup(ts.Close)
 	endpoint, err := url.Parse(ts.URL)
@@ -458,7 +452,9 @@ func TestRunDaemonArtifactExchangeConnectsToIPv6LocalhostListener(t *testing.T) 
 		gotHost = r.Host
 		w.Header().Set("Content-Type", "application/json")
 		_, writeErr := io.WriteString(w, `{}`)
-		require.NoError(t, writeErr)
+		if !assert.NoError(t, writeErr) {
+			return
+		}
 	}))
 	ts.Listener = listener
 	ts.Start()
@@ -480,7 +476,7 @@ func TestRunDaemonArtifactExchangeConnectsToIPv6LocalhostListener(t *testing.T) 
 }
 
 func TestRunLocalAndArtifactFolderSyncStopsAfterLocalFailure(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	localFailure := errors.New("provider discovery failed")
@@ -556,8 +552,6 @@ func TestRunDaemonArtifactExchangeRejectsUnsafeDaemonEndpoints(
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			privateTarget := "/private/company/archive"
 
 			_, err := runDaemonArtifactExchange(
@@ -569,17 +563,15 @@ func TestRunDaemonArtifactExchangeRejectsUnsafeDaemonEndpoints(
 			)
 
 			require.Error(t, err)
-			assert.Equal("daemon artifact exchange failed", err.Error())
-			assert.NotContains(err.Error(), privateTarget)
-			assert.NotContains(err.Error(), "private-password")
+			assert.Equal(t, "daemon artifact exchange failed", err.Error())
+			assert.NotContains(t, err.Error(), privateTarget)
+			assert.NotContains(t, err.Error(), "private-password")
 		})
 	}
 	assert.False(t, redirected)
 }
 
 func TestRunDaemonArtifactExchangeRedactsDaemonErrors(t *testing.T) {
-	assert := assert.New(t)
-
 	privateTarget := "/private/company/archive"
 	ts := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter,
@@ -602,9 +594,9 @@ func TestRunDaemonArtifactExchangeRedactsDaemonErrors(t *testing.T) {
 	)
 
 	require.Error(t, err)
-	assert.Equal("daemon artifact exchange failed", err.Error())
-	assert.NotContains(err.Error(), privateTarget)
-	assert.NotContains(err.Error(), "permission denied")
+	assert.Equal(t, "daemon artifact exchange failed", err.Error())
+	assert.NotContains(t, err.Error(), privateTarget)
+	assert.NotContains(t, err.Error(), "permission denied")
 }
 
 func TestDoSyncDelegatesArtifactExchangeAfterDaemonSync(t *testing.T) {
@@ -622,14 +614,18 @@ func TestDoSyncDelegatesArtifactExchangeAfterDaemonSync(t *testing.T) {
 		) {
 			order = append(order, "artifact")
 			var request server.ArtifactExchangeRequest
-			require.NoError(t, json.UnmarshalRead(r.Body, &request))
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+				return
+			}
 			assert.Equal(t, target, request.Target)
 			w.Header().Set("Content-Type", "application/json")
 			_, err := io.WriteString(
 				w,
 				`{"origin":"node-a1b2c3","exported_sessions":1}`,
 			)
-			require.NoError(t, err)
+			if !assert.NoError(t, err) {
+				return
+			}
 		},
 	})
 	registerSyncRouteTestRuntime(t, env.DataDir, ts.URL)

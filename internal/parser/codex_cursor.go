@@ -122,7 +122,7 @@ func (s *codexCursorState) MarshalBinary() ([]byte, error) {
 	if err := writeStr(s.lastTaskEvent); err != nil {
 		return nil, err
 	}
-	if err := write(uint8(s.pendingCallCount)); err != nil {
+	if err := write(s.pendingCallCount); err != nil {
 		return nil, err
 	}
 	for i := range s.pendingCallCount {

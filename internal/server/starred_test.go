@@ -57,41 +57,38 @@ func TestStarSessionReturns503WhileWriterClosed(t *testing.T) {
 }
 
 func TestStarredHandlers(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 	te.seedSession(t, "s1", "alpha", 2)
 	te.seedSession(t, "s2", "beta", 2)
 
 	w := te.put(t, "/api/v1/sessions/s1/star", `{}`)
-	require.Equal(http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
 
 	w = te.put(t, "/api/v1/sessions/s1/star", `{}`)
-	require.Equal(http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
 
 	w = te.get(t, "/api/v1/starred")
-	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	list := decode[starredHandlerResponse](t, w)
-	assert.Equal([]string{"s1"}, list.SessionIDs)
+	assert.Equal(t, []string{"s1"}, list.SessionIDs)
 
 	w = te.del(t, "/api/v1/sessions/s1/star")
-	require.Equal(http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
 
 	w = te.get(t, "/api/v1/starred")
-	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	list = decode[starredHandlerResponse](t, w)
-	assert.Empty(list.SessionIDs)
+	assert.Empty(t, list.SessionIDs)
 
 	w = te.put(t, "/api/v1/sessions/missing/star", `{}`)
-	require.Equal(http.StatusNotFound, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
 	assertErrorResponse(t, w, "session not found")
 
 	w = te.post(t, "/api/v1/starred/bulk", `{"session_ids":["s1","s2","missing"]}`)
-	require.Equal(http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
 
 	w = te.get(t, "/api/v1/starred")
-	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	list = decode[starredHandlerResponse](t, w)
-	assert.ElementsMatch([]string{"s1", "s2"}, list.SessionIDs)
+	assert.ElementsMatch(t, []string{"s1", "s2"}, list.SessionIDs)
 }

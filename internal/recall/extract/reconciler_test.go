@@ -24,29 +24,27 @@ func seedServedGeneratedEntry(t *testing.T, d *db.DB, fp, sessionID, entryID str
 // session that later becomes ineligible are deleted, while an eligible
 // session's entries survive.
 func TestReconcilerRetractsIneligibleGeneratedEntries(t *testing.T) {
-	require := require.New(t)
-
 	d := newTestArchive(t)
 	ctx := t.Context()
 	fp := "fp-a"
 	_, err := d.EnsureExtractGeneration(ctx, db.ExtractGeneration{
 		Fingerprint: fp, Model: "m", Segmenter: "turns-v1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	seedSession(t, d, "sess-ok", turnMessages("keep this", "done"), nil)
 	seedSession(t, d, "sess-gone", turnMessages("drop this", "done"), nil)
 	seedServedGeneratedEntry(t, d, fp, "sess-ok", "e-ok")
 	seedServedGeneratedEntry(t, d, fp, "sess-gone", "e-gone")
-	require.NoError(d.SoftDeleteSession("sess-gone"))
+	require.NoError(t, d.SoftDeleteSession(ctx, "sess-gone"))
 
 	started, _, err := NewReconciler(d).TryPass(ctx, PassOptions{})
-	require.NoError(err)
-	require.True(started)
+	require.NoError(t, err)
+	require.True(t, started)
 
 	gone, err := d.GetRecallEntry(ctx, "e-gone")
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Nil(t, gone, "an ineligible session's generated entry must be retracted")
 	ok, err := d.GetRecallEntry(ctx, "e-ok")
-	require.NoError(err)
-	require.NotNil(ok, "an eligible session's entry must survive")
+	require.NoError(t, err)
+	require.NotNil(t, ok, "an eligible session's entry must survive")
 }

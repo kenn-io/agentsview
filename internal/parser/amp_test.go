@@ -53,9 +53,6 @@ func parseAmpTestSession(
 }
 
 func TestAmpProviderParsesBasic(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	threadID := "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd"
 	content := `{
 		"v": 1,
@@ -81,8 +78,8 @@ func TestAmpProviderParsesBasic(t *testing.T) {
 
 	path := createTestFile(t, threadID+".json", content)
 	sess, msgs, err := parseAmpTestSession(t, path, "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
 	assertSessionMeta(t, sess,
 		"amp:"+threadID,
@@ -90,9 +87,9 @@ func TestAmpProviderParsesBasic(t *testing.T) {
 	)
 
 	// Title takes precedence as FirstMessage.
-	assert.Equal("Migrate database schema", sess.FirstMessage)
+	assert.Equal(t, "Migrate database schema", sess.FirstMessage)
 	assertMessageCount(t, sess.MessageCount, 2)
-	assert.Equal(1, sess.UserMessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
 
 	// Start time from created (epoch ms).
 	wantStart := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -102,17 +99,14 @@ func TestAmpProviderParsesBasic(t *testing.T) {
 	wantEnd := time.Date(2024, 1, 1, 0, 0, 5, 0, time.UTC)
 	assertTimestamp(t, sess.EndedAt, wantEnd)
 
-	require.Len(msgs, 2)
+	require.Len(t, msgs, 2)
 	assertMessage(t, msgs[0], RoleUser, "Migrate the DB schema.")
 	assertMessage(t, msgs[1], RoleAssistant, "Sure, I will help.")
-	assert.Equal(0, msgs[0].Ordinal)
-	assert.Equal(1, msgs[1].Ordinal)
+	assert.Equal(t, 0, msgs[0].Ordinal)
+	assert.Equal(t, 1, msgs[1].Ordinal)
 }
 
 func TestAmpProviderParsesToolUseAndThinking(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	content := `{
 		"v": 1,
 		"id": "T-tooluse",
@@ -133,32 +127,32 @@ func TestAmpProviderParsesToolUseAndThinking(t *testing.T) {
 	}`
 
 	sess, msgs, err := runAmpParserTest(t, content)
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
 	assertMessageCount(t, sess.MessageCount, 3)
 	// tool_result-only user messages have no text content,
 	// so only the first user message (with text) is counted.
-	assert.Equal(1, sess.UserMessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
 
-	assert.False(msgs[0].HasThinking)
-	assert.False(msgs[0].HasToolUse)
+	assert.False(t, msgs[0].HasThinking)
+	assert.False(t, msgs[0].HasToolUse)
 
-	assert.True(msgs[1].HasThinking)
-	assert.True(msgs[1].HasToolUse)
-	assert.Contains(msgs[1].Content, "[Thinking]")
-	assert.Contains(msgs[1].Content, "Let me plan this.")
-	assert.Contains(msgs[1].Content, "[Read: main.go]")
+	assert.True(t, msgs[1].HasThinking)
+	assert.True(t, msgs[1].HasToolUse)
+	assert.Contains(t, msgs[1].Content, "[Thinking]")
+	assert.Contains(t, msgs[1].Content, "Let me plan this.")
+	assert.Contains(t, msgs[1].Content, "[Read: main.go]")
 
-	require.Len(msgs[1].ToolCalls, 1)
-	assert.Equal("Read", msgs[1].ToolCalls[0].ToolName)
-	assert.Equal("Read", msgs[1].ToolCalls[0].Category)
-	assert.Equal("tu1", msgs[1].ToolCalls[0].ToolUseID)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "Read", msgs[1].ToolCalls[0].ToolName)
+	assert.Equal(t, "Read", msgs[1].ToolCalls[0].Category)
+	assert.Equal(t, "tu1", msgs[1].ToolCalls[0].ToolUseID)
 
 	// tool_result message: content should be empty (no text blocks),
 	// but tool results are recorded.
-	assert.Len(msgs[2].ToolResults, 1)
-	assert.Equal("tu1", msgs[2].ToolResults[0].ToolUseID)
+	assert.Len(t, msgs[2].ToolResults, 1)
+	assert.Equal(t, "tu1", msgs[2].ToolResults[0].ToolUseID)
 
 	// EndTime absent (empty traces) → zero.
 	assertZeroTimestamp(t, sess.EndedAt, "EndedAt")
@@ -349,25 +343,20 @@ func TestExtractAmpToolResults(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			got := extractAmpToolResults(gjson.Parse(tt.input))
-			assert.Len(got, tt.wantN)
+			assert.Len(t, got, tt.wantN)
 			if tt.wantN == 0 {
 				return
 			}
 
-			assert.Equal(tt.wantID, got[0].ToolUseID)
-			assert.Equal(tt.want, DecodeContent(got[0].ContentRaw))
-			assert.Equal(len(tt.want), got[0].ContentLength)
+			assert.Equal(t, tt.wantID, got[0].ToolUseID)
+			assert.Equal(t, tt.want, DecodeContent(got[0].ContentRaw))
+			assert.Equal(t, len(tt.want), got[0].ContentLength)
 		})
 	}
 }
 
 func TestAmpProviderParsesAmpToolResultSchema(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	content := `{
 		"v": 1,
 		"id": "T-amp-tool-result-schema",
@@ -384,17 +373,15 @@ func TestAmpProviderParsesAmpToolResultSchema(t *testing.T) {
 	}`
 
 	sess, msgs, err := runAmpParserTest(t, content)
-	require.NoError(err)
-	require.NotNil(sess)
-	require.Len(msgs, 2)
-	require.Len(msgs[1].ToolResults, 1)
-	assert.Equal("toolu1", msgs[1].ToolResults[0].ToolUseID)
-	assert.Equal("Here is a complete breakdown", DecodeContent(msgs[1].ToolResults[0].ContentRaw))
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolResults, 1)
+	assert.Equal(t, "toolu1", msgs[1].ToolResults[0].ToolUseID)
+	assert.Equal(t, "Here is a complete breakdown", DecodeContent(msgs[1].ToolResults[0].ContentRaw))
 }
 
 func TestAmpProviderParsesAmpToolResultDict(t *testing.T) {
-	require := require.New(t)
-
 	content := `{
 		"v": 1,
 		"id": "T-amp-tool-result-dict",
@@ -411,15 +398,13 @@ func TestAmpProviderParsesAmpToolResultDict(t *testing.T) {
 	}`
 
 	_, msgs, err := runAmpParserTest(t, content)
-	require.NoError(err)
-	require.Len(msgs, 2)
-	require.Len(msgs[1].ToolResults, 1)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolResults, 1)
 	assert.Equal(t, "cmd output", DecodeContent(msgs[1].ToolResults[0].ContentRaw))
 }
 
 func TestAmpProviderParsesNoEnv(t *testing.T) {
-	require := require.New(t)
-
 	content := `{
 		"v": 1,
 		"id": "T-noenv",
@@ -430,12 +415,12 @@ func TestAmpProviderParsesNoEnv(t *testing.T) {
 	}`
 
 	sess, msgs, err := runAmpParserTest(t, content)
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
 	// No env → project falls back to "amp".
 	assert.Equal(t, "amp", sess.Project)
-	require.Len(msgs, 1)
+	require.Len(t, msgs, 1)
 }
 
 func TestAmpProviderParsesNoTitle(t *testing.T) {
@@ -613,7 +598,7 @@ func TestAmpProviderParsesErrors(t *testing.T) {
 		content := `{"v":1,"created":1704067200000,"messages":[]}`
 		path := createTestFile(t, "bad-name.json", content)
 		_, _, err := parseAmpTestSession(t, path, "local")
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "missing or invalid id")
 	})
 }
@@ -700,8 +685,6 @@ func ampUsageThread(t *testing.T, messages string) []ParsedMessage {
 // uncached prompt as cache creation. That portion is uncached input,
 // and no cache-creation bucket is emitted.
 func TestAmpProviderParsesOpenAIFamilyUsage(t *testing.T) {
-	assert := assert.New(t)
-
 	msgs := ampUsageThread(t, `
 		{"role": "user", "content": [{"type": "text", "text": "hi"}]},
 		{"role": "assistant", "content": [{"type": "text", "text": "hello"}],
@@ -712,24 +695,22 @@ func TestAmpProviderParsesOpenAIFamilyUsage(t *testing.T) {
 	require.Len(t, msgs, 2)
 	assistant := msgs[1]
 
-	assert.Equal("gpt-5.6-sol", assistant.Model)
+	assert.Equal(t, "gpt-5.6-sol", assistant.Model)
 	usage := gjson.ParseBytes(assistant.TokenUsage)
-	assert.Equal(int64(18621), usage.Get("input_tokens").Int())
-	assert.Equal(int64(15), usage.Get("output_tokens").Int())
-	assert.Equal(int64(0), usage.Get("cache_read_input_tokens").Int())
-	assert.False(usage.Get("cache_creation_input_tokens").Exists())
+	assert.Equal(t, int64(18621), usage.Get("input_tokens").Int())
+	assert.Equal(t, int64(15), usage.Get("output_tokens").Int())
+	assert.Equal(t, int64(0), usage.Get("cache_read_input_tokens").Int())
+	assert.False(t, usage.Get("cache_creation_input_tokens").Exists())
 
-	assert.Equal(15, assistant.OutputTokens)
-	assert.True(assistant.HasOutputTokens)
-	assert.Equal(18621, assistant.ContextTokens)
-	assert.True(assistant.HasContextTokens)
+	assert.Equal(t, 15, assistant.OutputTokens)
+	assert.True(t, assistant.HasOutputTokens)
+	assert.Equal(t, 18621, assistant.ContextTokens)
+	assert.True(t, assistant.HasContextTokens)
 }
 
 // Anthropic-family buckets already carry Anthropic semantics and pass
 // through unchanged.
 func TestAmpProviderParsesAnthropicFamilyUsage(t *testing.T) {
-	assert := assert.New(t)
-
 	msgs := ampUsageThread(t, `
 		{"role": "user", "content": [{"type": "text", "text": "hi"}]},
 		{"role": "assistant", "content": [{"type": "text", "text": "hello"}],
@@ -741,22 +722,20 @@ func TestAmpProviderParsesAnthropicFamilyUsage(t *testing.T) {
 	require.Len(t, msgs, 2)
 	assistant := msgs[1]
 
-	assert.Equal("claude-sonnet-4-20250514", assistant.Model)
+	assert.Equal(t, "claude-sonnet-4-20250514", assistant.Model)
 	usage := gjson.ParseBytes(assistant.TokenUsage)
-	assert.Equal(int64(7), usage.Get("input_tokens").Int())
-	assert.Equal(int64(87), usage.Get("output_tokens").Int())
-	assert.Equal(int64(180), usage.Get("cache_creation_input_tokens").Int())
-	assert.Equal(int64(15863), usage.Get("cache_read_input_tokens").Int())
+	assert.Equal(t, int64(7), usage.Get("input_tokens").Int())
+	assert.Equal(t, int64(87), usage.Get("output_tokens").Int())
+	assert.Equal(t, int64(180), usage.Get("cache_creation_input_tokens").Int())
+	assert.Equal(t, int64(15863), usage.Get("cache_read_input_tokens").Int())
 
 	// 7 + 180 + 15863, matching the thread's own totalInputTokens.
-	assert.Equal(16050, assistant.ContextTokens)
+	assert.Equal(t, 16050, assistant.ContextTokens)
 }
 
 // Older threads omit model entirely. Tokens are still recorded; the
 // buckets keep Amp's own labels because no provider can be determined.
 func TestAmpProviderParsesUsageWithoutModel(t *testing.T) {
-	assert := assert.New(t)
-
 	msgs := ampUsageThread(t, `
 		{"role": "user", "content": [{"type": "text", "text": "hi"}]},
 		{"role": "assistant", "content": [{"type": "text", "text": "hello"}],
@@ -767,12 +746,12 @@ func TestAmpProviderParsesUsageWithoutModel(t *testing.T) {
 	require.Len(t, msgs, 2)
 	assistant := msgs[1]
 
-	assert.Empty(assistant.Model)
+	assert.Empty(t, assistant.Model)
 	usage := gjson.ParseBytes(assistant.TokenUsage)
-	assert.Equal(int64(9), usage.Get("input_tokens").Int())
-	assert.Equal(int64(13258), usage.Get("cache_creation_input_tokens").Int())
-	assert.Equal(13267, assistant.ContextTokens)
-	assert.True(assistant.HasContextTokens)
+	assert.Equal(t, int64(9), usage.Get("input_tokens").Int())
+	assert.Equal(t, int64(13258), usage.Get("cache_creation_input_tokens").Int())
+	assert.Equal(t, 13267, assistant.ContextTokens)
+	assert.True(t, assistant.HasContextTokens)
 }
 
 // A fully cached prompt reports inputTokens as 0. Presence must come
@@ -791,9 +770,6 @@ func TestAmpProviderParsesFullyCachedUsage(t *testing.T) {
 }
 
 func TestAmpProviderPreservesUsageOnlyAssistantMessage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	content := `{
 		"v": 1,
 		"id": "T-usage-only-response",
@@ -808,34 +784,32 @@ func TestAmpProviderPreservesUsageOnlyAssistantMessage(t *testing.T) {
 	}`
 
 	sess, msgs, err := runAmpParserTest(t, content)
-	require.NoError(err)
-	require.NotNil(sess)
-	require.Len(msgs, 2)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, msgs, 2)
 
 	assistant := msgs[1]
-	assert.Equal(RoleAssistant, assistant.Role)
-	assert.Empty(assistant.Content)
-	assert.Equal("gpt-5.6-sol", assistant.Model)
-	assert.JSONEq(`{
+	assert.Equal(t, RoleAssistant, assistant.Role)
+	assert.Empty(t, assistant.Content)
+	assert.Equal(t, "gpt-5.6-sol", assistant.Model)
+	assert.JSONEq(t, `{
 		"input_tokens": 25,
 		"output_tokens": 0,
 		"cache_read_input_tokens": 75
 	}`, string(assistant.TokenUsage))
-	assert.True(assistant.HasContextTokens)
-	assert.Equal(100, assistant.ContextTokens)
-	assert.True(assistant.HasOutputTokens)
-	assert.Zero(assistant.OutputTokens)
+	assert.True(t, assistant.HasContextTokens)
+	assert.Equal(t, 100, assistant.ContextTokens)
+	assert.True(t, assistant.HasOutputTokens)
+	assert.Zero(t, assistant.OutputTokens)
 
-	assert.True(sess.HasPeakContextTokens)
-	assert.Equal(100, sess.PeakContextTokens)
-	assert.True(sess.HasTotalOutputTokens)
-	assert.Zero(sess.TotalOutputTokens)
+	assert.True(t, sess.HasPeakContextTokens)
+	assert.Equal(t, 100, sess.PeakContextTokens)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Zero(t, sess.TotalOutputTokens)
 }
 
 // Assistant messages without a usage object are normal, not corruption.
 func TestAmpProviderParsesMessageWithoutUsage(t *testing.T) {
-	assert := assert.New(t)
-
 	msgs := ampUsageThread(t, `
 		{"role": "user", "content": [{"type": "text", "text": "hi"}]},
 		{"role": "assistant", "content": [{"type": "text", "text": "hello"}]}`)
@@ -843,18 +817,15 @@ func TestAmpProviderParsesMessageWithoutUsage(t *testing.T) {
 	require.Len(t, msgs, 2)
 	assistant := msgs[1]
 
-	assert.Empty(assistant.Model)
-	assert.Nil(assistant.TokenUsage)
-	assert.False(assistant.HasContextTokens)
-	assert.False(assistant.HasOutputTokens)
+	assert.Empty(t, assistant.Model)
+	assert.Nil(t, assistant.TokenUsage)
+	assert.False(t, assistant.HasContextTokens)
+	assert.False(t, assistant.HasOutputTokens)
 }
 
 // A thread may switch models. Each inference keeps its own, and session
 // totals take peak context with summed output.
 func TestAmpProviderParsesMixedModelsAndAggregates(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	content := `{
 		"v": 1,
 		"id": "T-019ca26f-5555-6666-7777-888888888888",
@@ -873,25 +844,25 @@ func TestAmpProviderParsesMixedModelsAndAggregates(t *testing.T) {
 	}`
 
 	sess, msgs, err := runAmpParserTest(t, content)
-	require.NoError(err)
-	require.Len(msgs, 4)
+	require.NoError(t, err)
+	require.Len(t, msgs, 4)
 
-	assert.Equal("gpt-5.6-sol", msgs[1].Model)
-	assert.Equal("claude-sonnet-4-20250514", msgs[3].Model)
+	assert.Equal(t, "gpt-5.6-sol", msgs[1].Model)
+	assert.Equal(t, "claude-sonnet-4-20250514", msgs[3].Model)
 
 	// gpt-* folds cache creation into input; claude-* keeps it split.
 	first := gjson.ParseBytes(msgs[1].TokenUsage)
-	assert.Equal(int64(5000), first.Get("input_tokens").Int())
-	assert.False(first.Get("cache_creation_input_tokens").Exists())
+	assert.Equal(t, int64(5000), first.Get("input_tokens").Int())
+	assert.False(t, first.Get("cache_creation_input_tokens").Exists())
 
 	second := gjson.ParseBytes(msgs[3].TokenUsage)
-	assert.Equal(int64(10), second.Get("input_tokens").Int())
-	assert.Equal(int64(40), second.Get("cache_creation_input_tokens").Int())
+	assert.Equal(t, int64(10), second.Get("input_tokens").Int())
+	assert.Equal(t, int64(40), second.Get("cache_creation_input_tokens").Int())
 
-	assert.True(sess.HasTotalOutputTokens)
-	assert.Equal(300, sess.TotalOutputTokens)
-	assert.True(sess.HasPeakContextTokens)
-	assert.Equal(8050, sess.PeakContextTokens)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Equal(t, 300, sess.TotalOutputTokens)
+	assert.True(t, sess.HasPeakContextTokens)
+	assert.Equal(t, 8050, sess.PeakContextTokens)
 }
 
 // Each inference carries its own timestamp. Without it a long-lived

@@ -48,7 +48,7 @@ func newWarmBenchEngine(t *testing.T) (*Engine, context.Context) {
 			path, []byte(builder.String()), 0o644,
 		))
 	}
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {dir},
 		},
@@ -59,16 +59,14 @@ func newWarmBenchEngine(t *testing.T) (*Engine, context.Context) {
 }
 
 func TestWarmNoopSyncAcquiresNoRetentionLeases(t *testing.T) {
-	require := require.New(t)
-
 	e, ctx := newWarmBenchEngine(t)
 	e.SyncAll(ctx, nil) // cold pass parses, acquires leases
-	require.NotNil(e.bulkRetentionBudget,
+	require.NotNil(t, e.bulkRetentionBudget,
 		"a full sync pass must run under the bulk retention budget")
 	before := e.bulkRetentionBudget.acquired.Load()
-	require.Positive(before, "cold pass must acquire bulk leases")
+	require.Positive(t, before, "cold pass must acquire bulk leases")
 	stats := e.SyncAll(ctx, nil) // warm pass: everything skips
-	require.Equal(0, stats.Synced)
+	require.Equal(t, 0, stats.Synced)
 	assert.Equal(t, before, e.bulkRetentionBudget.acquired.Load(),
 		"warm no-op pass must not acquire parse-retention leases")
 }
@@ -76,7 +74,7 @@ func TestWarmNoopSyncAcquiresNoRetentionLeases(t *testing.T) {
 func TestBulkCollectorReleasesFlushedParsedBatch(t *testing.T) {
 	for _, staged := range []bool{false, true} {
 		t.Run(fmt.Sprintf("staged_%t", staged), func(t *testing.T) {
-			engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+			engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{Machine: "local"})
 			t.Cleanup(engine.Close)
 
 			flushed := make(chan struct{})
@@ -91,7 +89,7 @@ func TestBulkCollectorReleasesFlushedParsedBatch(t *testing.T) {
 			finalized := make(chan struct{})
 			func() {
 				if staged {
-					sink, err := newCodexStagingSink(t.TempDir(), nil)
+					sink, err := newCodexStagingSink(t.Context(), t.TempDir(), nil)
 					require.NoError(t, err)
 					runtime.SetFinalizer(sink, func(*codexStagingSink) { close(finalized) })
 					results <- syncJob{
@@ -137,7 +135,7 @@ func TestBulkCollectorReleasesFlushedParsedBatch(t *testing.T) {
 			select {
 			case <-flushed:
 			case <-time.After(5 * time.Second):
-				t.Fatal("collector did not flush the full parsed batch")
+				require.FailNow(t, "collector did not flush the full parsed batch")
 			}
 
 			assert.Eventually(t, func() bool {
@@ -157,16 +155,13 @@ func TestBulkCollectorReleasesFlushedParsedBatch(t *testing.T) {
 			select {
 			case <-done:
 			case <-time.After(5 * time.Second):
-				t.Fatal("collector did not finish")
+				require.FailNow(t, "collector did not finish")
 			}
 		})
 	}
 }
 
 func TestFullSyncPassUsesBoundedRetentionAndScavengesOnce(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	e, ctx := newWarmBenchEngine(t)
 	var scavenges int
 	e.bulkRetentionBudget = newBulkParseRetentionBudget(
@@ -176,39 +171,36 @@ func TestFullSyncPassUsesBoundedRetentionAndScavengesOnce(t *testing.T) {
 
 	e.SyncAll(ctx, nil) // cold pass parses every source
 	acquired := e.bulkRetentionBudget.acquired.Load()
-	require.Positive(acquired,
+	require.Positive(t, acquired,
 		"full pass must admit parses through the bulk budget")
-	require.NotNil(e.bulkRetentionBudget.weighted,
+	require.NotNil(t, e.bulkRetentionBudget.weighted,
 		"full pass must use byte-weighted parse admission")
-	assert.Equal(defaultBulkParseRetentionBytes, e.bulkRetentionBudget.capacity)
+	assert.Equal(t, defaultBulkParseRetentionBytes, e.bulkRetentionBudget.capacity)
 	if e.parseRetentionBudget != nil {
-		assert.Zero(e.parseRetentionBudget.acquired.Load(),
+		assert.Zero(t, e.parseRetentionBudget.acquired.Load(),
 			"full pass must not consume the bounded daemon budget")
 	}
-	assert.Equal(1, scavenges,
+	assert.Equal(t, 1, scavenges,
 		"a parse-bearing bulk pass must release memory once at the end")
 
 	stats := e.SyncAll(ctx, nil) // warm pass: everything skips
-	require.Equal(0, stats.Synced)
-	assert.Equal(1, scavenges,
+	require.Equal(t, 0, stats.Synced)
+	assert.Equal(t, 1, scavenges,
 		"a warm no-op pass must not force another scavenge")
-	assert.Nil(e.activeRetention.Load(),
+	assert.Nil(t, e.activeRetention.Load(),
 		"bulk budget must be uninstalled after the pass")
 }
 
 func TestScopedSyncKeepsBoundedRetentionBudget(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	e, ctx := newWarmBenchEngine(t)
 	cutoff := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	stats := e.SyncAllSince(ctx, cutoff, nil) // cutoff-scoped daemon churn
-	require.Positive(stats.Synced)
-	require.NotNil(e.parseRetentionBudget,
+	require.Positive(t, stats.Synced)
+	require.NotNil(t, e.parseRetentionBudget,
 		"a cutoff-scoped pass must use the bounded budget")
-	assert.Positive(e.parseRetentionBudget.acquired.Load(),
+	assert.Positive(t, e.parseRetentionBudget.acquired.Load(),
 		"scoped pass parses must be admitted by the bounded budget")
-	assert.Nil(e.bulkRetentionBudget,
+	assert.Nil(t, e.bulkRetentionBudget,
 		"a cutoff-scoped pass must not create the bulk budget")
 }
 
@@ -235,7 +227,7 @@ func TestBulkParseRetentionBudgetBoundsConcurrentSourceWeight(t *testing.T) {
 		select {
 		case second := <-acquired:
 			second.Release()
-			t.Fatal("second bulk parse admitted above the retention limit")
+			require.FailNow(t, "second bulk parse admitted above the retention limit")
 		default:
 		}
 
@@ -245,7 +237,7 @@ func TestBulkParseRetentionBudgetBoundsConcurrentSourceWeight(t *testing.T) {
 		case second := <-acquired:
 			second.Release()
 		default:
-			t.Fatal("second bulk parse was not admitted after capacity was released")
+			require.FailNow(t, "second bulk parse was not admitted after capacity was released")
 		}
 		assert.Equal(t, int64(2), budget.acquired.Load())
 	})
@@ -296,7 +288,7 @@ func TestBulkParseRetentionBudgetCountsUnknownSourceAtPendingLimit(t *testing.T)
 }
 
 func TestCollectAndBatchFlushesOnByteCap(t *testing.T) {
-	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{Machine: "local"})
 	t.Cleanup(engine.Close)
 	var batchLengths []int
 	engine.writeBatchOverride = func(
@@ -351,7 +343,7 @@ func TestParseRetentionBudgetBoundsConcurrentSourceWeight(t *testing.T) {
 		select {
 		case lease := <-acquired:
 			lease.Release()
-			t.Fatal("third parse admitted above the weighted retention limit")
+			require.FailNow(t, "third parse admitted above the weighted retention limit")
 		default:
 		}
 
@@ -361,18 +353,16 @@ func TestParseRetentionBudgetBoundsConcurrentSourceWeight(t *testing.T) {
 		case lease := <-acquired:
 			lease.Release()
 		default:
-			t.Fatal("third parse was not admitted after capacity was released")
+			require.FailNow(t, "third parse was not admitted after capacity was released")
 		}
 	})
 }
 
 func TestParseRetentionBudgetRunsOversizedSourceExclusively(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		require := require.New(t)
-
 		budget := newParseRetentionBudget(defaultParseRetentionBytes)
 		oversized, err := budget.acquire(t.Context(), defaultParseRetentionBytes)
-		require.NoError(err)
+		require.NoError(t, err)
 		t.Cleanup(oversized.Release)
 
 		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
@@ -387,42 +377,39 @@ func TestParseRetentionBudgetRunsOversizedSourceExclusively(t *testing.T) {
 		select {
 		case err = <-acquired:
 		default:
-			require.FailNow("oversized source admission did not reach its deadline")
+			require.FailNow(t, "oversized source admission did not reach its deadline")
 		}
-		assert.ErrorIs(t, err, context.DeadlineExceeded)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
 
 		oversized.Release()
 		lease, err := budget.acquire(t.Context(), 1)
-		require.NoError(err)
+		require.NoError(t, err)
 		lease.Release()
 	})
 }
 
 func TestParseRetentionBudgetScavengesOnceAfterKnownLargeSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	budget := newParseRetentionBudget(defaultParseRetentionBytes)
 	var scavenges int
 	budget.scavenge = func() { scavenges++ }
 
 	unknown, err := budget.acquire(t.Context(), 0)
-	require.NoError(err)
+	require.NoError(t, err)
 	unknown.Release()
 	budget.scavengeIfNeeded()
-	assert.Zero(scavenges, "unknown sources must not force GC on every virtual event")
+	assert.Zero(t, scavenges, "unknown sources must not force GC on every virtual event")
 
 	large, err := budget.acquire(t.Context(), parseRetentionScavengeThreshold)
-	require.NoError(err)
+	require.NoError(t, err)
 	large.Release()
 	budget.scavengeIfNeeded()
 	budget.scavengeIfNeeded()
-	assert.Equal(1, scavenges, "one large batch needs one post-write scavenge")
+	assert.Equal(t, 1, scavenges, "one large batch needs one post-write scavenge")
 }
 
 func TestCollectAndBatchRetainsParseLeaseThroughWrite(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+		engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{Machine: "local"})
 		t.Cleanup(engine.Close)
 		budget := newParseRetentionBudget(defaultParseRetentionBytes)
 		lease, err := budget.acquire(t.Context(), defaultParseRetentionBytes)
@@ -472,7 +459,7 @@ func TestCollectAndBatchRetainsParseLeaseThroughWrite(t *testing.T) {
 		select {
 		case second := <-secondAcquired:
 			second.Release()
-			t.Fatal("next parse admitted while the prior parse payload was being written")
+			require.FailNow(t, "next parse admitted while the prior parse payload was being written")
 		default:
 		}
 
@@ -482,7 +469,7 @@ func TestCollectAndBatchRetainsParseLeaseThroughWrite(t *testing.T) {
 		case second := <-secondAcquired:
 			second.Release()
 		default:
-			t.Fatal("parse lease was not released after the database write completed")
+			require.FailNow(t, "parse lease was not released after the database write completed")
 		}
 		<-done
 	})
@@ -499,9 +486,7 @@ func TestArchiveCollectorReleasesParseLeaseBeforeWrite(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				require := require.New(t)
-
-				engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+				engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{Machine: "local"})
 				t.Cleanup(engine.Close)
 				restore := engine.beginBulkRetentionPass()
 				t.Cleanup(restore)
@@ -509,7 +494,7 @@ func TestArchiveCollectorReleasesParseLeaseBeforeWrite(t *testing.T) {
 				lease, err := budget.acquire(
 					t.Context(), defaultBulkParseRetentionBytes,
 				)
-				require.NoError(err)
+				require.NoError(t, err)
 
 				writeEntered := make(chan struct{})
 				allowWrite := make(chan struct{})
@@ -548,7 +533,7 @@ func TestArchiveCollectorReleasesParseLeaseBeforeWrite(t *testing.T) {
 				select {
 				case <-writeEntered:
 				default:
-					require.FailNow("collector did not enter write")
+					require.FailNow(t, "collector did not enter write")
 				}
 
 				acquireCtx, cancel := context.WithTimeout(
@@ -574,7 +559,7 @@ func TestArchiveCollectorReleasesParseLeaseBeforeWrite(t *testing.T) {
 				select {
 				case acquireResult = <-acquired:
 				default:
-					require.FailNow("archive writes must not retain active parse admission")
+					require.FailNow(t, "archive writes must not retain active parse admission")
 				}
 				cancel()
 				if acquireResult.next != nil {
@@ -585,7 +570,7 @@ func TestArchiveCollectorReleasesParseLeaseBeforeWrite(t *testing.T) {
 				select {
 				case <-done:
 				default:
-					require.FailNow("collector did not finish")
+					require.FailNow(t, "collector did not finish")
 				}
 				assert.NoError(t, acquireResult.err,
 					"archive writes must not retain active parse admission")
@@ -595,10 +580,7 @@ func TestArchiveCollectorReleasesParseLeaseBeforeWrite(t *testing.T) {
 }
 
 func TestBulkCollectorBoundsPendingParsedBytesBetweenWrites(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
-	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{Machine: "local"})
 	t.Cleanup(engine.Close)
 	engine.bulkRetentionBudget = newBulkParseRetentionBudget(128 << 20)
 	engine.bulkRetentionBudget.pendingCapacity = 100 << 20
@@ -608,9 +590,9 @@ func TestBulkCollectorBoundsPendingParsedBytesBetweenWrites(t *testing.T) {
 
 	const sourceBytes = 15 << 20
 	first, err := budget.acquire(t.Context(), sourceBytes)
-	require.NoError(err)
+	require.NoError(t, err)
 	second, err := budget.acquire(t.Context(), sourceBytes)
-	require.NoError(err)
+	require.NoError(t, err)
 	results := make(chan syncJob, 2)
 	for i, lease := range []*parseRetentionLease{first, second} {
 		results <- syncJob{
@@ -634,8 +616,8 @@ func TestBulkCollectorBoundsPendingParsedBytesBetweenWrites(t *testing.T) {
 		t.Context(), results, 2, 2, nil, syncWriteBulk,
 	)
 
-	assert.Equal([]int{1, 1}, batchLengths)
-	assert.Equal(2, stats.Synced)
+	assert.Equal(t, []int{1, 1}, batchLengths)
+	assert.Equal(t, 2, stats.Synced)
 }
 
 func TestCollectAndBatchReportsFinalizingOnlyBeforeBulkTerminalFlush(t *testing.T) {
@@ -663,10 +645,7 @@ func TestCollectAndBatchReportsFinalizingOnlyBeforeBulkTerminalFlush(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				assert := assert.New(t)
-				require := require.New(t)
-
-				engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+				engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{Machine: "local"})
 				t.Cleanup(engine.Close)
 				writeEntered := make(chan struct{})
 				allowWrite := make(chan struct{})
@@ -700,7 +679,7 @@ func TestCollectAndBatchReportsFinalizingOnlyBeforeBulkTerminalFlush(t *testing.
 				select {
 				case <-writeEntered:
 				default:
-					require.FailNow("collector did not enter write")
+					require.FailNow(t, "collector did not enter write")
 				}
 				var last Progress
 			drain:
@@ -711,14 +690,14 @@ func TestCollectAndBatchReportsFinalizingOnlyBeforeBulkTerminalFlush(t *testing.
 						break drain
 					}
 				}
-				assert.Equal(tt.wantPhase, last.Phase)
-				assert.Equal(tt.wantDetail, last.Detail)
+				assert.Equal(t, tt.wantPhase, last.Phase)
+				assert.Equal(t, tt.wantDetail, last.Detail)
 				close(allowWrite)
 				synctest.Wait()
 				select {
 				case <-done:
 				default:
-					require.FailNow("collector did not finish")
+					require.FailNow(t, "collector did not finish")
 				}
 			})
 		})
@@ -727,17 +706,14 @@ func TestCollectAndBatchReportsFinalizingOnlyBeforeBulkTerminalFlush(t *testing.
 
 func TestCollectAndBatchReportsOrderedBulkFinalization(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
-		engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+		engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{Machine: "local"})
 		t.Cleanup(engine.Close)
 		restore := engine.beginBulkRetentionPass()
 		defer restore()
 		budget := engine.retentionBudget()
 		// Parsing a source arms the end-of-pass bulk memory scavenge.
 		lease, err := budget.acquire(t.Context(), parseRetentionScavengeThreshold)
-		require.NoError(err)
+		require.NoError(t, err)
 
 		scavengeEntered := make(chan struct{})
 		allowScavenge := make(chan struct{})
@@ -771,7 +747,7 @@ func TestCollectAndBatchReportsOrderedBulkFinalization(t *testing.T) {
 		select {
 		case <-scavengeEntered:
 		default:
-			require.FailNow("collector did not enter memory scavenge")
+			require.FailNow(t, "collector did not enter memory scavenge")
 		}
 		var events []Progress
 	drain:
@@ -783,15 +759,15 @@ func TestCollectAndBatchReportsOrderedBulkFinalization(t *testing.T) {
 				break drain
 			}
 		}
-		require.NotEmpty(events)
-		assert.Equal("Finalizing sync: releasing parsed-session memory",
+		require.NotEmpty(t, events)
+		assert.Equal(t, "Finalizing sync: releasing parsed-session memory",
 			events[len(events)-1].Detail)
 		close(allowScavenge)
 		synctest.Wait()
 		select {
 		case <-done:
 		default:
-			require.FailNow("collector did not finish after memory scavenge")
+			require.FailNow(t, "collector did not finish after memory scavenge")
 		}
 		var details []string
 		for _, event := range events {
@@ -799,7 +775,7 @@ func TestCollectAndBatchReportsOrderedBulkFinalization(t *testing.T) {
 				details = append(details, event.Detail)
 			}
 		}
-		assert.Equal([]string{
+		assert.Equal(t, []string{
 			"Finalizing sync: committing session writes",
 			"Finalizing sync: saving session source state",
 			"Finalizing sync: linking file-backed subagent sessions",
@@ -810,17 +786,14 @@ func TestCollectAndBatchReportsOrderedBulkFinalization(t *testing.T) {
 }
 
 func TestCollectAndBatchDiscardsPendingResultAfterCancellation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		Machine:                      "local",
 		DiscardPendingWritesOnCancel: true,
 	})
 	t.Cleanup(engine.Close)
 	budget := newParseRetentionBudget(defaultParseRetentionBytes)
 	lease, err := budget.acquire(t.Context(), defaultParseRetentionBytes)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	results := make(chan syncJob, 2)
 	results <- syncJob{
@@ -857,10 +830,10 @@ func TestCollectAndBatchDiscardsPendingResultAfterCancellation(t *testing.T) {
 		}},
 	)
 
-	assert.True(stats.Aborted)
-	assert.Zero(writes, "cancellation must not flush parsed scratch rows")
+	assert.True(t, stats.Aborted)
+	assert.Zero(t, writes, "cancellation must not flush parsed scratch rows")
 	next, err := budget.acquire(t.Context(), defaultParseRetentionBytes)
-	require.NoError(err, "discarded parse data must release its retention lease")
+	require.NoError(t, err, "discarded parse data must release its retention lease")
 	next.Release()
 }
 
@@ -884,19 +857,16 @@ func TestDrainResultsReleasesParseLeases(t *testing.T) {
 }
 
 func TestCollectAndBatchPromotesClaudeSourceAfterShutdownCancellation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := openTestDB(t)
 	for _, id := range []string{"root", "fork"} {
-		require.NoError(database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "project-a", Machine: "local", Agent: "claude",
 		}))
-		require.NoError(database.SetSessionDataVersion(
+		require.NoError(t, database.SetSessionDataVersion(t.Context(),
 			id, db.CurrentDataVersion(),
 		))
 	}
-	engine := NewEngine(database, EngineConfig{Machine: "local"})
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
 	t.Cleanup(engine.Close)
 	ctx, cancel := context.WithCancel(t.Context())
 	engine.writeBatchOverride = func(
@@ -918,20 +888,17 @@ func TestCollectAndBatchPromotesClaudeSourceAfterShutdownCancellation(t *testing
 
 	engine.collectAndBatch(ctx, results, 1, 2, nil, syncWriteDefault)
 
-	assert.Equal(db.CurrentDataVersion(), database.GetSessionDataVersion("root"))
-	assert.Equal(db.CurrentDataVersion(), database.GetSessionDataVersion("fork"))
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "root"))
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "fork"))
 }
 
 func TestCollectAndBatchKeepsFanoutUnderOneLeaseUntilOneWrite(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
-		engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+		engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{Machine: "local"})
 		t.Cleanup(engine.Close)
 		budget := newParseRetentionBudget(defaultParseRetentionBytes)
 		lease, err := budget.acquire(t.Context(), defaultParseRetentionBytes)
-		require.NoError(err)
+		require.NoError(t, err)
 
 		parsed := make([]parser.ParseResult, batchSize+1)
 		for i := range parsed {
@@ -958,12 +925,12 @@ func TestCollectAndBatchKeepsFanoutUnderOneLeaseUntilOneWrite(t *testing.T) {
 			t.Context(), results, 1, 1, nil, syncWriteDefault,
 		)
 
-		assert.Equal([]int{batchSize + 1}, batchLengths)
-		assert.Equal(batchSize+1, stats.Synced)
+		assert.Equal(t, []int{batchSize + 1}, batchLengths)
+		assert.Equal(t, batchSize+1, stats.Synced)
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		next, err := budget.acquire(ctx, defaultParseRetentionBytes)
-		require.NoError(err)
+		require.NoError(t, err)
 		next.Release()
 	})
 }
@@ -980,9 +947,6 @@ func TestStartWorkersKeepsBulkBatchingIndependentOfParseAdmission(t *testing.T) 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				assert := assert.New(t)
-				require := require.New(t)
-
 				const agent parser.AgentType = "retention-test"
 				provider := &directStreamingProvider{
 					Def: parser.AgentDef{Type: agent},
@@ -995,7 +959,7 @@ func TestStartWorkersKeepsBulkBatchingIndependentOfParseAdmission(t *testing.T) 
 						ResultSetComplete: true,
 					},
 				}
-				engine := NewEngine(openTestDB(t), EngineConfig{
+				engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 					Machine: "local",
 					ProviderFactories: []parser.ProviderFactory{
 						directStreamingFactory{provider},
@@ -1022,9 +986,9 @@ func TestStartWorkersKeepsBulkBatchingIndependentOfParseAdmission(t *testing.T) 
 				for i := range files {
 					path := filepath.Join(t.TempDir(), fmt.Sprintf("large-%d.jsonl", i))
 					file, err := os.Create(path)
-					require.NoError(err)
-					require.NoError(file.Truncate(20 << 20))
-					require.NoError(file.Close())
+					require.NoError(t, err)
+					require.NoError(t, file.Truncate(20<<20))
+					require.NoError(t, file.Close())
 					source := parser.SourceRef{
 						Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path,
 					}
@@ -1041,9 +1005,9 @@ func TestStartWorkersKeepsBulkBatchingIndependentOfParseAdmission(t *testing.T) 
 					tt.mode,
 				)
 
-				assert.False(stats.Aborted)
-				assert.Equal(2, stats.Synced)
-				assert.Equal(tt.wantWrites, writes,
+				assert.False(t, stats.Aborted)
+				assert.Equal(t, 2, stats.Synced)
+				assert.Equal(t, tt.wantWrites, writes,
 					"bulk parse admission must not fragment the database batch")
 			})
 		})
@@ -1052,9 +1016,6 @@ func TestStartWorkersKeepsBulkBatchingIndependentOfParseAdmission(t *testing.T) 
 
 func TestStartWorkersCancellationReleasesAdmissionWaiters(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		const agent parser.AgentType = "retention-cancel-test"
 		provider := &directStreamingProvider{
 			Def: parser.AgentDef{Type: agent},
@@ -1067,7 +1028,7 @@ func TestStartWorkersCancellationReleasesAdmissionWaiters(t *testing.T) {
 				ResultSetComplete: true,
 			},
 		}
-		engine := NewEngine(openTestDB(t), EngineConfig{
+		engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 			Machine:           "local",
 			ProviderFactories: []parser.ProviderFactory{directStreamingFactory{provider}},
 			ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
@@ -1080,7 +1041,7 @@ func TestStartWorkersCancellationReleasesAdmissionWaiters(t *testing.T) {
 		engine.parseRetentionBudget = budget
 
 		holder, err := budget.acquire(t.Context(), defaultParseRetentionBytes)
-		require.NoError(err)
+		require.NoError(t, err)
 		files := make([]parser.DiscoveredFile, 2)
 		for i := range files {
 			// A provider-authoritative, force-parsed source reaches the provider
@@ -1088,7 +1049,7 @@ func TestStartWorkersCancellationReleasesAdmissionWaiters(t *testing.T) {
 			// through a skip gate before the admission wait now that acquisition
 			// follows the gates.
 			path := filepath.Join(t.TempDir(), fmt.Sprintf("waiting-%d.jsonl", i))
-			require.NoError(os.WriteFile(path, []byte("{}\n"), 0o600))
+			require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
 			source := parser.SourceRef{
 				Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path,
 			}
@@ -1100,19 +1061,19 @@ func TestStartWorkersCancellationReleasesAdmissionWaiters(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		results := engine.startWorkers(ctx, files)
 		synctest.Wait()
-		assert.True(budget.underPressure(),
+		assert.True(t, budget.underPressure(),
 			"workers must reach the admission wait before cancellation")
 		cancel()
 		synctest.Wait()
 
 		for range files {
 			job := <-results
-			assert.ErrorIs(job.err, context.Canceled)
+			require.ErrorIs(t, job.err, context.Canceled)
 			job.releaseRetention()
 		}
 		holder.Release()
 		next, err := budget.acquire(t.Context(), defaultParseRetentionBytes)
-		require.NoError(err, "canceled waiters must not leak weighted capacity")
+		require.NoError(t, err, "canceled waiters must not leak weighted capacity")
 		next.Release()
 	})
 }
@@ -1124,13 +1085,14 @@ func newSQLiteContainerMemberFixture(
 	t *testing.T, containerBytes int64, members int,
 ) (*Engine, []parser.DiscoveredFile, string) {
 	t.Helper()
+
 	dbPath := filepath.Join(t.TempDir(), "mimocode.db")
 	handle, err := os.Create(dbPath)
 	require.NoError(t, err)
 	require.NoError(t, handle.Truncate(containerBytes))
 	require.NoError(t, handle.Close())
 
-	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{Machine: "local"})
 	t.Cleanup(engine.Close)
 
 	files := make([]parser.DiscoveredFile, members)
@@ -1184,9 +1146,6 @@ func TestParseRetentionChargesContainerMemberItsShare(t *testing.T) {
 }
 
 func TestParseRetentionFloorsContainerMemberShareAboveZero(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	// A container smaller than its membership divides to zero, which
 	// retainedBytes reads as an unknown source and charges the whole budget:
 	// the exact fault per-member sizing removes. The floor is what prevents it,
@@ -1194,28 +1153,25 @@ func TestParseRetentionFloorsContainerMemberShareAboveZero(t *testing.T) {
 	engine, files, _ := newSQLiteContainerMemberFixture(t, 32, 64)
 
 	charged := engine.parseRetentionSourceBytes(files[0])
-	assert.Equal(int64(1), charged,
+	assert.Equal(t, int64(1), charged,
 		"a member share must floor at one byte, never divide to zero")
 
 	budget := newBulkParseRetentionBudget(defaultBulkParseRetentionBytes)
-	assert.Equal(parseRetentionFixedBytes+parseRetentionMultiplier, budget.weight(charged),
+	assert.Equal(t, parseRetentionFixedBytes+parseRetentionMultiplier, budget.weight(charged),
 		"the floored share must weigh as a known small source")
-	assert.Equal(defaultBulkParseRetentionBytes, budget.weight(0),
+	assert.Equal(t, defaultBulkParseRetentionBytes, budget.weight(0),
 		"a zero estimate would instead charge the whole admission capacity")
 
 	first, err := budget.acquire(t.Context(), charged)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer first.Release()
 	second, err := budget.acquire(t.Context(), charged)
-	require.NoError(err,
+	require.NoError(t, err,
 		"a floored member share must not hold the budget exclusively")
 	second.Release()
 }
 
 func TestParseRetentionKeepsDaemonScavengeForLargeNonMembers(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	// Preservation invariant: correcting the estimate narrows which sources
 	// clear the daemon scavenge threshold. A member's share may now fall below
 	// it, which is coherent with the smaller parse, but a genuinely large
@@ -1223,34 +1179,32 @@ func TestParseRetentionKeepsDaemonScavengeForLargeNonMembers(t *testing.T) {
 	engine, files, dbPath := newSQLiteContainerMemberFixture(t, 64<<20, 64)
 
 	memberBytes := engine.parseRetentionSourceBytes(files[0])
-	assert.Less(memberBytes, parseRetentionScavengeThreshold,
+	assert.Less(t, memberBytes, parseRetentionScavengeThreshold,
 		"a member share below the threshold is what narrows daemon scavenging")
 
 	plainPath := filepath.Join(filepath.Dir(dbPath), "large.jsonl")
 	handle, err := os.Create(plainPath)
-	require.NoError(err)
-	require.NoError(handle.Truncate(64 << 20))
-	require.NoError(handle.Close())
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(64<<20))
+	require.NoError(t, handle.Close())
 	plain := parser.DiscoveredFile{Path: plainPath, Agent: parser.AgentClaude}
 
 	daemon := newParseRetentionBudget(defaultParseRetentionBytes)
 	daemon.scavenge = func() {}
 	lease, err := daemon.acquire(t.Context(), engine.parseRetentionSourceBytes(plain))
-	require.NoError(err)
+	require.NoError(t, err)
 	defer lease.Release()
-	assert.True(daemon.scavengePending.Load(),
+	assert.True(t, daemon.scavengePending.Load(),
 		"a large non-member source must still mark a daemon scavenge")
 }
 
 func TestParseRetentionKeepsWholeFileSourceExclusive(t *testing.T) {
-	parentRequire := require.New(t)
-
 	engine, _, dbPath := newSQLiteContainerMemberFixture(t, 64<<20, 64)
 	plainPath := filepath.Join(filepath.Dir(dbPath), "whole.jsonl")
 	handle, err := os.Create(plainPath)
-	parentRequire.NoError(err)
-	parentRequire.NoError(handle.Truncate(67108864))
-	parentRequire.NoError(handle.Close())
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(67108864))
+	require.NoError(t, handle.Close())
 	plain := parser.DiscoveredFile{Path: plainPath, Agent: parser.AgentClaude}
 
 	sourceBytes := engine.parseRetentionSourceBytes(plain)
@@ -1274,14 +1228,12 @@ func TestParseRetentionKeepsWholeFileSourceExclusive(t *testing.T) {
 }
 
 func TestParseRetentionIgnoresNonFamilyVirtualPath(t *testing.T) {
-	require := require.New(t)
-
 	engine, _, dbPath := newSQLiteContainerMemberFixture(t, 64<<20, 64)
 	otherPath := filepath.Join(filepath.Dir(dbPath), "other.db")
 	handle, err := os.Create(otherPath)
-	require.NoError(err)
-	require.NoError(handle.Truncate(67108864))
-	require.NoError(handle.Close())
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(67108864))
+	require.NoError(t, handle.Close())
 
 	assert.Equal(t, int64(67108864), engine.parseRetentionSourceBytes(
 		parser.DiscoveredFile{
@@ -1292,14 +1244,12 @@ func TestParseRetentionIgnoresNonFamilyVirtualPath(t *testing.T) {
 }
 
 func TestParseRetentionKeepsCodexSourceBytesForStagingThreshold(t *testing.T) {
-	require := require.New(t)
-
 	engine, _, dbPath := newSQLiteContainerMemberFixture(t, 64<<20, 64)
 	codexPath := filepath.Join(filepath.Dir(dbPath), "rollout.jsonl")
 	handle, err := os.Create(codexPath)
-	require.NoError(err)
-	require.NoError(handle.Truncate(67108864))
-	require.NoError(handle.Close())
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(67108864))
+	require.NoError(t, handle.Close())
 
 	assert.Equal(t, int64(67108864), engine.parseRetentionSourceBytes(
 		parser.DiscoveredFile{Path: codexPath, Agent: parser.AgentCodex}),
@@ -1358,20 +1308,17 @@ func (f retentionSourceTestFactory) NewProvider(parser.ProviderConfig) parser.Pr
 }
 
 func TestProcessProviderFileUsesResolvedSourceAfterStaleMetadataDiscard(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath := filepath.Join(t.TempDir(), "mimocode.db")
 	handle, err := os.Create(dbPath)
-	require.NoError(err)
-	require.NoError(handle.Truncate(64 << 20))
-	require.NoError(handle.Close())
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(64<<20))
+	require.NoError(t, handle.Close())
 
 	shadowPath := filepath.Join(t.TempDir(), "session.json")
 	handle, err = os.Create(shadowPath)
-	require.NoError(err)
-	require.NoError(handle.Truncate(64 << 20))
-	require.NoError(handle.Close())
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(64<<20))
+	require.NoError(t, handle.Close())
 
 	virtualPath := parser.VirtualSourcePath(dbPath, "session")
 	virtual := parser.SourceRef{
@@ -1396,7 +1343,7 @@ func TestProcessProviderFileUsesResolvedSourceAfterStaleMetadataDiscard(t *testi
 			},
 		},
 	}
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentMiMoCode: {filepath.Dir(dbPath)},
 		},
@@ -1443,32 +1390,29 @@ func TestProcessProviderFileUsesResolvedSourceAfterStaleMetadataDiscard(t *testi
 		ProviderProcess: true,
 	}})
 	job, ok := <-results
-	require.True(ok)
-	require.NoError(job.err)
-	assert.Equal(int64(64<<20), job.sourceBytes,
+	require.True(t, ok)
+	require.NoError(t, job.err)
+	assert.Equal(t, int64(64<<20), job.sourceBytes,
 		"a source resolved after stale metadata discard must size from the resolved path")
-	assert.Equal(shadowPath, job.containerResultPath(),
+	assert.Equal(t, shadowPath, job.containerResultPath(),
 		"container completion must use the resolved source path")
 	engine.noteSQLiteContainerResult(job.containerResultPath(), true)
 	engine.containerMu.Lock()
 	completed := engine.containerPass.completed[dbPath]
 	engine.containerMu.Unlock()
-	assert.Zero(completed,
+	assert.Zero(t, completed,
 		"a storage shadow must not count as a completed SQLite member")
 	job.releaseAll()
 }
 
 func TestRehydrateStorageShadowRemovesSQLiteMembership(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	engine, files, dbPath := newSQLiteContainerMemberFixture(t, 64<<20, 64)
 	shadowPath := filepath.Join(filepath.Dir(dbPath), "storage", "session.json")
-	require.NoError(os.MkdirAll(filepath.Dir(shadowPath), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(shadowPath), 0o755))
 	handle, err := os.Create(shadowPath)
-	require.NoError(err)
-	require.NoError(handle.Truncate(64 << 20))
-	require.NoError(handle.Close())
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(64<<20))
+	require.NoError(t, handle.Close())
 
 	provider := &reconciliationSourceStateTestProvider{
 		source: parser.SourceRef{
@@ -1487,26 +1431,24 @@ func TestRehydrateStorageShadowRemovesSQLiteMembership(t *testing.T) {
 		},
 		false,
 	)
-	require.NoError(err)
-	require.Len(rehydrated, 1)
-	assert.Equal(63, engine.sqliteContainerDiscoveredMembers(files[0]),
+	require.NoError(t, err)
+	require.Len(t, rehydrated, 1)
+	assert.Equal(t, 63, engine.sqliteContainerDiscoveredMembers(files[0]),
 		"a storage-promoted candidate must leave the remaining SQLite member count")
-	assert.Equal(int64(64<<20), engine.parseRetentionSourceBytes(rehydrated[0]),
+	assert.Equal(t, int64(64<<20), engine.parseRetentionSourceBytes(rehydrated[0]),
 		"a storage-promoted candidate must keep its resolved file size")
 }
 
 func TestParseRetentionFallsBackToContainerSizeWithoutPass(t *testing.T) {
-	require := require.New(t)
-
 	dbPath := filepath.Join(t.TempDir(), "mimocode.db")
 	handle, err := os.Create(dbPath)
-	require.NoError(err)
-	require.NoError(handle.Truncate(67108864))
-	require.NoError(handle.Close())
+	require.NoError(t, err)
+	require.NoError(t, handle.Truncate(67108864))
+	require.NoError(t, handle.Close())
 
-	engine := NewEngine(openTestDB(t), EngineConfig{Machine: "local"})
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{Machine: "local"})
 	t.Cleanup(engine.Close)
-	require.Nil(engine.containerPass)
+	require.Nil(t, engine.containerPass)
 
 	assert.Equal(t, int64(67108864), engine.parseRetentionSourceBytes(
 		parser.DiscoveredFile{

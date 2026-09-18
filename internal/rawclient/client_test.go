@@ -91,27 +91,24 @@ func TestDecodeAPIError(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			t.Parallel()
 			var got APIError
 			err := decodeAPIError(tt.status, json.RawMessage(tt.body))
-			require.Error(err)
+			require.Error(t, err)
 			ok := AsAPIError(err, &got)
-			require.Equal(tt.wantOK, ok)
+			require.Equal(t, tt.wantOK, ok)
 			if tt.want.CurrentUploadOffset == nil {
-				assert.Nil(got.CurrentUploadOffset)
+				assert.Nil(t, got.CurrentUploadOffset)
 			} else {
-				require.NotNil(got.CurrentUploadOffset)
-				assert.Equal(*tt.want.CurrentUploadOffset, *got.CurrentUploadOffset)
+				require.NotNil(t, got.CurrentUploadOffset)
+				assert.Equal(t, *tt.want.CurrentUploadOffset, *got.CurrentUploadOffset)
 			}
-			assert.Equal(tt.want.Status, got.Status)
-			assert.Equal(tt.want.Code, got.Code)
-			assert.Equal(tt.want.Message, got.Message)
-			assert.Equal(tt.want.CurrentManifestID, got.CurrentManifestID)
-			assert.Equal(tt.want.CurrentReceipt, got.CurrentReceipt)
-			assert.Equal(tt.want.CurrentGeneration, got.CurrentGeneration)
+			assert.Equal(t, tt.want.Status, got.Status)
+			assert.Equal(t, tt.want.Code, got.Code)
+			assert.Equal(t, tt.want.Message, got.Message)
+			assert.Equal(t, tt.want.CurrentManifestID, got.CurrentManifestID)
+			assert.Equal(t, tt.want.CurrentReceipt, got.CurrentReceipt)
+			assert.Equal(t, tt.want.CurrentGeneration, got.CurrentGeneration)
 		})
 	}
 }
@@ -174,7 +171,7 @@ func TestClientRefusesCredentialRedirects(t *testing.T) {
 			})
 			require.NoError(t, err)
 			_, err = client.tokens.token(t.Context())
-			assert.Error(t, err)
+			require.Error(t, err)
 			assert.EqualValues(t, 0, redirected.Load(),
 				"redirect target must not receive the device credential")
 		})

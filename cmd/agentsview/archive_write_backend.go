@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go.kenn.io/agentsview/internal/apiclient"
 	"io"
 	"log"
 	"os"
@@ -13,6 +12,8 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/clickhouse"
+	"go.kenn.io/agentsview/internal/apiclient"
+
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
@@ -354,6 +355,7 @@ func configuredWatchPathRelevanceProviders(
 	}
 	return providers
 }
+
 func watchBatchNeedsPushAck(batch syncpkg.WatchBatch) bool {
 	if batch.FullSync || len(batch.ReconcileRoots) > 0 {
 		return true
@@ -814,8 +816,7 @@ func (b daemonArchiveWriteBackend) PGPushWatch(
 		pushCfg.WatchRecovery = watchRecoveryForBatch(b.appCfg, batch)
 		scoped := scopedVectorPush(reason, full, vectorReconcileNeeded)
 		pushCfg.ScopeVectorsToChangedSessions = scoped
-		pushCfg.LastReconciledVectorGeneration =
-			lastReconciledVectorGeneration
+		pushCfg.LastReconciledVectorGeneration = lastReconciledVectorGeneration
 		var res postgres.PushResult
 		var err error
 		if b.watchHooks != nil && b.watchHooks.pgPush != nil {
@@ -840,11 +841,10 @@ func (b daemonArchiveWriteBackend) PGPushWatch(
 			vectorReconcileNeeded = true
 			return err
 		}
-		vectorReconcileNeeded, lastReconciledVectorGeneration =
-			nextVectorReconcile(
-				vectorReconcileNeeded,
-				lastReconciledVectorGeneration, scoped, res,
-			)
+		vectorReconcileNeeded, lastReconciledVectorGeneration = nextVectorReconcile(
+			vectorReconcileNeeded,
+			lastReconciledVectorGeneration, scoped, res,
+		)
 		return completePGWatchPush(res, reason)
 	}
 	loop, stopLoop := newArchivePushLoop(
@@ -1182,7 +1182,7 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 	}
 	cleanResyncTemp(b.appCfg.DBPath)
 
-	engine := syncpkg.NewEngine(b.database, syncpkg.EngineConfig{
+	engine := syncpkg.NewEngine(ctx, b.database, syncpkg.EngineConfig{
 		AgentDirs:               b.appCfg.AgentDirs,
 		SourceMachines:          b.appCfg.SourceMachines,
 		ProviderMetadata:        b.appCfg.ProviderMetadata,
@@ -1441,7 +1441,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 	}
 	cleanResyncTemp(b.appCfg.DBPath)
 
-	engine := syncpkg.NewEngine(b.database, syncpkg.EngineConfig{
+	engine := syncpkg.NewEngine(ctx, b.database, syncpkg.EngineConfig{
 		AgentDirs:               b.appCfg.AgentDirs,
 		SourceMachines:          b.appCfg.SourceMachines,
 		ProviderMetadata:        b.appCfg.ProviderMetadata,

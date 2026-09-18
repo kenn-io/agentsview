@@ -15,11 +15,7 @@ const (
 	pricingRefreshJitter   = 5 * time.Minute
 )
 
-type pricingRefreshExclusiveRunner interface {
-	RunExclusive(func() error) error
-}
-
-func pricingRefreshJob(database *db.DB, runner pricingRefreshExclusiveRunner) poller.Job {
+func pricingRefreshJob(database *db.DB, runner remoteSyncExclusiveRunner) poller.Job {
 	return poller.Job{
 		Name:       pricingRefreshJobName,
 		Interval:   pricingRefreshInterval,
@@ -40,7 +36,7 @@ func pricingRefreshJob(database *db.DB, runner pricingRefreshExclusiveRunner) po
 }
 
 func runPricingExclusive(
-	runner pricingRefreshExclusiveRunner,
+	runner remoteSyncExclusiveRunner,
 	work func() error,
 ) error {
 	if runner == nil {

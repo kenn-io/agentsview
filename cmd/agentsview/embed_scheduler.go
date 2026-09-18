@@ -537,17 +537,17 @@ func (a searcherAdapter) ResolveMessageUnits(
 // db.ErrSemanticTransient so a caller can tell "not configured" apart from
 // "configured, but this request failed and can be retried".
 func translateSearchError(err error) error {
-	var buildingErr *vector.BuildingError
-	var queryEncErr *vector.QueryEncodeError
+	buildingErr, hasBuildingErr := errors.AsType[*vector.BuildingError](err)
+	queryEncErr, hasQueryEncErr := errors.AsType[*vector.QueryEncodeError](err)
 	switch {
-	case errors.As(err, &buildingErr):
+	case hasBuildingErr:
 		return fmt.Errorf("%w: index is building: %d%% complete",
 			db.ErrSemanticUnavailable, buildingErr.Percent)
 	case errors.Is(err, vector.ErrMirrorVersionMismatch):
 		return fmt.Errorf("%w: %w", db.ErrSemanticUnavailable, err)
 	case errors.Is(err, vector.ErrNoActiveGeneration):
 		return db.ErrSemanticUnavailable
-	case errors.As(err, &queryEncErr):
+	case hasQueryEncErr:
 		// Double-wrap so callers can still match the underlying cause —
 		// notably context.Canceled/DeadlineExceeded from a dead client —
 		// alongside the transient sentinel.
@@ -560,9 +560,9 @@ func translateSearchError(err error) error {
 // translateRecallSearchError preserves the shared semantic error taxonomy but
 // replaces message-store build guidance with Recall's explicit store selector.
 func translateRecallSearchError(err error) error {
-	var buildingErr *vector.BuildingError
+	buildingErr, hasBuildingErr := errors.AsType[*vector.BuildingError](err)
 	switch {
-	case errors.As(err, &buildingErr):
+	case hasBuildingErr:
 		return db.NewSemanticUnavailableError(fmt.Sprintf(
 			"recall index is building: %d%% complete", buildingErr.Percent,
 		))

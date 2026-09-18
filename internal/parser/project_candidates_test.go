@@ -12,15 +12,12 @@ import (
 func TestProjectSessionCandidatesKeepNestedSubagentsAndProviderLabels(t *testing.T) {
 	for _, agent := range []AgentType{AgentClaude, AgentIcodemate} {
 		t.Run(string(agent), func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			paths := []string{"project-a/shared.jsonl", "project-b/shared.jsonl", "project-a/unrelated.jsonl", "project-a/shared/subagents/workflows/task/agent-child.jsonl"}
 			for _, name := range paths {
 				path := filepath.Join(root, filepath.FromSlash(name))
-				require.NoError(os.MkdirAll(filepath.Dir(path), 0o700))
-				require.NoError(os.WriteFile(path, nil, 0o600))
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+				require.NoError(t, os.WriteFile(path, nil, 0o600))
 			}
 			for _, tc := range []struct {
 				ids  map[string]struct{}
@@ -31,12 +28,12 @@ func TestProjectSessionCandidatesKeepNestedSubagentsAndProviderLabels(t *testing
 			} {
 				var got []string
 				for _, file := range ProjectJSONLSessionCandidates(root, agent, tc.ids) {
-					assert.Equal(agent, file.Agent)
+					assert.Equal(t, agent, file.Agent)
 					rel, err := filepath.Rel(root, file.Path)
-					require.NoError(err)
+					require.NoError(t, err)
 					got = append(got, filepath.ToSlash(rel))
 				}
-				assert.ElementsMatch(tc.want, got)
+				assert.ElementsMatch(t, tc.want, got)
 			}
 		})
 	}

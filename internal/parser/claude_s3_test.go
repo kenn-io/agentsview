@@ -10,8 +10,6 @@ import (
 )
 
 func TestDiscoverClaudeS3FoldsToolResultMetadata(t *testing.T) {
-	assert := assert.New(t)
-
 	oldList := listS3Objects
 	t.Cleanup(func() { listS3Objects = oldList })
 
@@ -39,14 +37,14 @@ func TestDiscoverClaudeS3FoldsToolResultMetadata(t *testing.T) {
 
 	got := ClaudeProjectSessionFiles("s3://bucket/laptop/raw/claude")
 	require.Len(t, got, 1)
-	assert.Equal(
+	assert.Equal(t,
 		"s3://bucket/laptop/raw/claude/proj/session.jsonl",
 		got[0].Path,
 	)
-	assert.Equal(int64(33), got[0].SourceSize)
-	assert.Equal(sidecarMtime.UnixNano(), got[0].SourceMtime)
-	assert.Contains(got[0].SourceFingerprint, "session")
-	assert.Contains(got[0].SourceFingerprint, "sidecar")
+	assert.Equal(t, int64(33), got[0].SourceSize)
+	assert.Equal(t, sidecarMtime.UnixNano(), got[0].SourceMtime)
+	assert.Contains(t, got[0].SourceFingerprint, "session")
+	assert.Contains(t, got[0].SourceFingerprint, "sidecar")
 }
 
 func TestDiscoverClaudeS3RequiresSubagentsUnderParentSession(t *testing.T) {
@@ -104,6 +102,8 @@ func TestClaudeSubagentTranscriptPathsS3(t *testing.T) {
 			name: "lists the session's subagents prefix",
 			path: sessionPath,
 			list: func(t *testing.T, prefix string) ([]S3Object, error) {
+				t.Helper()
+
 				assert.Equal(t,
 					root+"/-home-proj/sess-1/subagents", prefix)
 				return []S3Object{
@@ -123,6 +123,8 @@ func TestClaudeSubagentTranscriptPathsS3(t *testing.T) {
 			name: "a subagent lists the enclosing root tree",
 			path: root + "/-home-proj/sess-1/subagents/agent-b.jsonl",
 			list: func(t *testing.T, prefix string) ([]S3Object, error) {
+				t.Helper()
+
 				assert.Equal(t,
 					root+"/-home-proj/sess-1/subagents", prefix)
 				return []S3Object{

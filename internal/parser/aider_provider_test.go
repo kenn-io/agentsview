@@ -35,36 +35,30 @@ func TestAiderStreamingDiscoveryReportsTraversalLimits(t *testing.T) {
 		{name: "files", limits: discoveryTraversalLimits{maxFiles: 1}, files: 2, want: "file limit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			for i := range tc.files {
 				writeHistory(t, root, fmt.Sprintf("project-%d", i))
 			}
 			provider, ok := NewProvider(AgentAider, ProviderConfig{Roots: []string{root}})
-			require.True(ok)
+			require.True(t, ok)
 			ctx := withDiscoveryTraversalLimits(t.Context(), tc.limits)
 
 			err := provider.(StreamingDiscoverer).DiscoverEach(ctx, func(SourceRef) error { return nil })
 
 			var incomplete DiscoveryIncompleteError
-			require.ErrorAs(err, &incomplete)
-			assert.Contains(err.Error(), tc.want)
-			assert.NotErrorIs(err, context.Canceled)
+			require.ErrorAs(t, err, &incomplete)
+			assert.Contains(t, err.Error(), tc.want)
+			assert.NotErrorIs(t, err, context.Canceled)
 		})
 	}
 }
 
 func TestAiderProviderFindSourceUsesCanonicalIdentity(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	repo := filepath.Join(root, "repo")
-	require.NoError(os.MkdirAll(repo, 0o755))
+	require.NoError(t, os.MkdirAll(repo, 0o755))
 	historyPath := filepath.Join(repo, AiderHistoryFileName())
-	require.NoError(os.WriteFile(historyPath, []byte(strings.Join([]string{
+	require.NoError(t, os.WriteFile(historyPath, []byte(strings.Join([]string{
 		"# aider chat started at 2026-06-09 14:01:00",
 		"#### canonical prompt",
 		"canonical answer",
@@ -85,16 +79,16 @@ func TestAiderProviderFindSourceUsesCanonicalIdentity(t *testing.T) {
 		Machine:      "remote-host",
 		PathRewriter: rewriter,
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: discovered[0],
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0].Result
 	rawID := strings.TrimPrefix(result.Session.ID, "aider:")
 	localVirtualPath := result.Session.File.Path
@@ -104,23 +98,23 @@ func TestAiderProviderFindSourceUsesCanonicalIdentity(t *testing.T) {
 		t.Context(),
 		FindSourceRequest{RawSessionID: rawID},
 	)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(localVirtualPath, foundByRawID.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, localVirtualPath, foundByRawID.DisplayPath)
 
 	foundByStoredPath, ok, err := provider.FindSource(
 		t.Context(),
 		FindSourceRequest{StoredFilePath: remoteVirtualPath},
 	)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(localVirtualPath, foundByStoredPath.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, localVirtualPath, foundByStoredPath.DisplayPath)
 
 	foundByFingerprintKey, ok, err := provider.FindSource(
 		t.Context(),
 		FindSourceRequest{FingerprintKey: remoteVirtualPath},
 	)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(localVirtualPath, foundByFingerprintKey.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, localVirtualPath, foundByFingerprintKey.DisplayPath)
 }

@@ -181,7 +181,7 @@ func (s *Server) humaDeleteInsight(
 	if _, err := s.insightByID(ctx, in.ID); err != nil {
 		return nil, err
 	}
-	if err := s.db.DeleteInsight(in.ID); err != nil {
+	if err := s.db.DeleteInsight(ctx, in.ID); err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
 		}
@@ -260,7 +260,7 @@ func (s *Server) humaGenerateInsight(
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
 			writeHumaJSON(hctx, http.StatusInternalServerError,
-				apiErrorResponse{Message: "streaming not supported"})
+				apiResponseError{Message: "streaming not supported"})
 			return
 		}
 		var streamMu stdsync.Mutex
@@ -433,9 +433,9 @@ func (s *Server) humaGenerateInsight(
 			promptPtr = &req.Prompt
 		}
 		var id int64
-		err = s.serializeArchiveWrite(func() error {
+		err = s.serializeArchiveWrite(genCtx, func() error {
 			var insertErr error
-			id, insertErr = s.db.InsertInsight(db.Insight{
+			id, insertErr = s.db.InsertInsight(genCtx, db.Insight{
 				Type:     req.Type,
 				DateFrom: req.DateFrom,
 				DateTo:   req.DateTo,

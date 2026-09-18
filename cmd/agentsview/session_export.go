@@ -41,7 +41,7 @@ func newSessionExportCommand() *cobra.Command {
 			if cfg.ArchiveContent.UsageOnly() {
 				return errors.New("session export is unavailable with archive_content=usage")
 			}
-			d, err := openReadOnlyDB(cfg)
+			d, err := openReadOnlyDB(cmd.Context(), cfg)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					return fmt.Errorf(
@@ -70,7 +70,7 @@ func newSessionExportCommand() *cobra.Command {
 					"session not in local archive: %s", args[0],
 				)
 			}
-			storedPath := d.GetSessionFilePath(id)
+			storedPath := d.GetSessionFilePath(cmd.Context(), id)
 			if storedPath == "" {
 				return fmt.Errorf(
 					"source file not found for session %s", id,

@@ -10,11 +10,11 @@ import (
 
 // ErrReadOnly is returned by write methods on read-only store
 // implementations (e.g. the PostgreSQL reader).
-var ErrReadOnly = errReadOnly{}
+var ErrReadOnly = readOnlyError{}
 
-type errReadOnly struct{}
+type readOnlyError struct{}
 
-func (errReadOnly) Error() string { return "not available in remote mode" }
+func (readOnlyError) Error() string { return "not available in remote mode" }
 
 // Store is the interface the HTTP server uses for all data access.
 // Any new server-visible query or mutation belongs here, not only on
@@ -50,7 +50,7 @@ type Store interface {
 	GetSessionTiming(ctx context.Context, sessionID string) (*SessionTiming, error)
 
 	// Search.
-	HasFTS() bool
+	HasFTS(ctx context.Context) bool
 	HasSemantic() bool
 	Search(ctx context.Context, f SearchFilter) (SearchPage, error)
 	SearchSession(ctx context.Context, sessionID, query string) ([]int, error)
@@ -59,7 +59,7 @@ type Store interface {
 	SecretFindingSource(ctx context.Context, f SecretFinding) (string, bool, error)
 
 	// SSE change detection.
-	GetSessionVersion(id string) (count int, version int64, ok bool)
+	GetSessionVersion(ctx context.Context, id string) (count int, version int64, ok bool)
 
 	// Metadata.
 	GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (Stats, error)
@@ -105,22 +105,22 @@ type Store interface {
 	GetSessionUsage(ctx context.Context, sessionID string, includeBreakdown bool) (*SessionUsage, error)
 
 	// Stars.
-	StarSession(sessionID string) (bool, error)
-	UnstarSession(sessionID string) error
+	StarSession(ctx context.Context, sessionID string) (bool, error)
+	UnstarSession(ctx context.Context, sessionID string) error
 	ListStarredSessionIDs(ctx context.Context) ([]string, error)
-	BulkStarSessions(sessionIDs []string) error
+	BulkStarSessions(ctx context.Context, sessionIDs []string) error
 
 	// Pins.
-	PinMessage(sessionID string, messageID int64, note *string) (int64, error)
-	UnpinMessage(sessionID string, messageID int64) error
+	PinMessage(ctx context.Context, sessionID string, messageID int64, note *string) (int64, error)
+	UnpinMessage(ctx context.Context, sessionID string, messageID int64) error
 	ListPinnedMessages(ctx context.Context, sessionID string, project string) ([]PinnedMessage, error)
 
 	// Insights.
 	ListInsights(ctx context.Context, f InsightFilter) ([]Insight, error)
 	GetInsight(ctx context.Context, id int64) (*Insight, error)
 	GetCachedInsight(ctx context.Context, cacheKey string) (*Insight, error)
-	InsertInsight(s Insight) (int64, error)
-	DeleteInsight(id int64) error
+	InsertInsight(ctx context.Context, s Insight) (int64, error)
+	DeleteInsight(ctx context.Context, id int64) error
 
 	// RecallEntries.
 	ListRecallEntries(ctx context.Context, q RecallQuery) ([]RecallEntry, error)
@@ -129,7 +129,7 @@ type Store interface {
 	RecordRecallQueryEvent(
 		ctx context.Context, event RecallQueryEvent,
 	) (string, error)
-	InsertRecallEntry(m RecallEntry) (string, error)
+	InsertRecallEntry(ctx context.Context, m RecallEntry) (string, error)
 	ImportAcceptedRecallEntriesJSONL(ctx context.Context, r io.Reader) (RecallImportResult, error)
 	ImportAcceptedRecallEntriesJSONLWithOptions(
 		ctx context.Context, r io.Reader, opts RecallImportOptions,
@@ -139,18 +139,18 @@ type Store interface {
 	) (EvalTrajectoryIngestResult, error)
 
 	// Session management.
-	RenameSession(id string, displayName *string) error
-	SoftDeleteSession(id string) error
-	SoftDeleteSessions(ids []string) (int, error)
-	RestoreSession(id string) (int64, error)
-	DeleteSessionIfTrashed(id string) (int64, error)
+	RenameSession(ctx context.Context, id string, displayName *string) error
+	SoftDeleteSession(ctx context.Context, id string) error
+	SoftDeleteSessions(ctx context.Context, ids []string) (int, error)
+	RestoreSession(ctx context.Context, id string) (int64, error)
+	DeleteSessionIfTrashed(ctx context.Context, id string) (int64, error)
 	ListTrashedSessions(ctx context.Context) ([]Session, error)
-	EmptyTrash() (int, error)
+	EmptyTrash(ctx context.Context) (int, error)
 
 	// Upload (local-only; PG returns ErrReadOnly).
-	UpsertSession(s Session) error
-	ReplaceSessionMessages(sessionID string, msgs []Message) error
-	WriteSessionBatchAtomic(
+	UpsertSession(ctx context.Context, s Session) error
+	ReplaceSessionMessages(ctx context.Context, sessionID string, msgs []Message) error
+	WriteSessionBatchAtomic(ctx context.Context,
 		writes []SessionBatchWrite,
 		beforeCommit ...func() error,
 	) (SessionBatchResult, error)

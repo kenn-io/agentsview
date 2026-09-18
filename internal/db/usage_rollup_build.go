@@ -545,7 +545,8 @@ func usageRollupExceptionRows(facts []usageRollupFact) []usageExceptionRow {
 		} {
 			if group.key != "" {
 				rows = append(rows, usageExceptionRow{
-					GroupKind: group.kind, GroupKey: group.key, Fact: fact})
+					GroupKind: group.kind, GroupKey: group.key, Fact: fact,
+				})
 			}
 		}
 	}
@@ -577,7 +578,8 @@ func usageRollupActivityContributions(
 		result = append(result, usageActivityContribution{
 			AttributedSessionID: sessionID,
 			LocalDate:           item.date, Model: item.model,
-			UserMessageCount: counts[item]})
+			UserMessageCount: counts[item],
+		})
 	}
 	return result
 }
@@ -613,7 +615,8 @@ func compareUsageRollupFactIdentity(left, right usageRollupFact) int {
 func compareUsageDailyContribution(left, right usageDailyContribution) int {
 	for _, values := range [][2]string{
 		{left.AttributedSessionID, right.AttributedSessionID},
-		{left.LocalDate, right.LocalDate}, {left.ReportedModel, right.ReportedModel},
+		{left.LocalDate, right.LocalDate},
+		{left.ReportedModel, right.ReportedModel},
 		{left.ProviderID, right.ProviderID},
 		{left.RateHash, right.RateHash},
 	} {

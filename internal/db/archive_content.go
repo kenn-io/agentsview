@@ -697,6 +697,7 @@ func redactCopiedToolUseRenderingsTx(
 	if err != nil {
 		return fmt.Errorf("listing copied tool renderings: %w", err)
 	}
+	defer rows.Close()
 	type pending struct {
 		id      int64
 		content string

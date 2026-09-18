@@ -341,7 +341,7 @@ func migrateToolResultImages(content string, put imagePutFunc) (string, error) {
 func migrateToolResultImageArray(content string, put imagePutFunc) (string, error) {
 	var blocks []jsontext.Value
 	if err := json.Unmarshal([]byte(content), &blocks); err != nil || blocks == nil {
-		return content, nil
+		return content, nil //nolint:nilerr // Non-JSON tool output must retain its original content.
 	}
 
 	projected := make([]jsontext.Value, len(blocks))

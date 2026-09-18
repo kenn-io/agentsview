@@ -1,9 +1,8 @@
 package parser
 
-import "context"
-
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
@@ -350,6 +349,8 @@ func resolveOpenCodeFormatWatchRoots(
 		return []string{filepath.Join(root, "storage")}
 	case OpenCodeSourceSQLite:
 		return []string{root}
+	case OpenCodeSourceNone:
+		// Watch the logical root before the provider creates its storage.
 	}
 	if info, err := os.Stat(root); err == nil && info.IsDir() {
 		return []string{root}
@@ -607,7 +608,7 @@ func projectJSONLSessionFiles(
 				subagentsDir,
 				func(path string, sub os.DirEntry, err error) error {
 					if err != nil || sub.IsDir() {
-						return nil
+						return nil //nolint:nilerr // Unavailable optional subagent paths are skipped during discovery.
 					}
 					name := sub.Name()
 					if !strings.HasPrefix(name, "agent-") ||
@@ -668,7 +669,7 @@ func ClaudeSubagentTranscriptPaths(sessionPath string) []string {
 		subagentsDir,
 		func(path string, entry os.DirEntry, err error) error {
 			if err != nil || entry.IsDir() {
-				return nil
+				return nil //nolint:nilerr // Unavailable optional subagent paths are skipped during discovery.
 			}
 			name := entry.Name()
 			if !strings.HasPrefix(name, "agent-") ||
@@ -754,7 +755,7 @@ func claudeFindSourceFile(
 					subagentsDir,
 					func(path string, d os.DirEntry, err error) error {
 						if err != nil || d.IsDir() || d.Name() != target {
-							return nil
+							return nil //nolint:nilerr // Unavailable optional subagent paths are skipped during discovery.
 						}
 						found = path
 						return filepath.SkipAll

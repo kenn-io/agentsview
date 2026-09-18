@@ -165,7 +165,7 @@ func requireWatchEvent(
 			}
 			return ev
 		case <-deadline:
-			t.Fatalf("did not receive %q event within %s", event, timeout)
+			require.FailNowf(t, "test failed", "did not receive %q event within %s", event, timeout)
 		}
 	}
 }
@@ -184,21 +184,18 @@ func requireChannelClosed[T any](
 				return
 			}
 		case <-deadline:
-			t.Fatalf("channel not closed within %s", timeout)
+			require.FailNowf(t, "test failed", "channel not closed within %s", timeout)
 		}
 	}
 }
 
 func TestHTTPBackend_Get_Roundtrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	env.SeedSession(t, "s-1", "my-app", dbtest.WithMessageCount(2))
 	score := 92
 	grade := "A"
-	err := env.DB.UpdateSessionSignals("s-1", db.SessionSignalUpdate{
+	err := env.DB.UpdateSessionSignals(t.Context(), "s-1", db.SessionSignalUpdate{
 		Outcome:           "completed",
 		OutcomeConfidence: "high",
 		EndedWithRole:     "assistant",
@@ -215,22 +212,22 @@ func TestHTTPBackend_Get_Roundtrip(t *testing.T) {
 			RunawayToolLoopCount:        1,
 		},
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	svc := env.Backend("", false)
 	detail, err := svc.Get(t.Context(), "s-1")
-	require.NoError(err)
-	require.NotNil(detail)
-	assert.Equal("s-1", detail.ID)
-	assert.Equal("my-app", detail.Project)
-	assert.Equal(2, detail.MessageCount)
-	assert.Equal(db.CurrentQualitySignalVersion,
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	assert.Equal(t, "s-1", detail.ID)
+	assert.Equal(t, "my-app", detail.Project)
+	assert.Equal(t, 2, detail.MessageCount)
+	assert.Equal(t, db.CurrentQualitySignalVersion,
 		detail.QualitySignalVersion)
-	assert.Equal(2, detail.DuplicatePromptCount)
-	assert.True(detail.UnstructuredStart)
-	assert.Contains(detail.HealthScoreBasis, "prompt_quality")
-	assert.NotContains(detail.HealthPenalties, "repeated_prompts")
-	assert.Equal(4,
+	assert.Equal(t, 2, detail.DuplicatePromptCount)
+	assert.True(t, detail.UnstructuredStart)
+	assert.Contains(t, detail.HealthScoreBasis, "prompt_quality")
+	assert.NotContains(t, detail.HealthPenalties, "repeated_prompts")
+	assert.Equal(t, 4,
 		detail.HealthPenalties["stuck_repeated_prompts"])
 }
 
@@ -258,9 +255,6 @@ func TestHTTPBackend_List_Empty(t *testing.T) {
 }
 
 func TestHTTPBackend_FindSessionIDsByRawSuffix(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	env.SeedSession(t, "host~uuid", "host-project")
@@ -268,17 +262,15 @@ func TestHTTPBackend_FindSessionIDsByRawSuffix(t *testing.T) {
 
 	svc := env.Backend("", false)
 	ids, err := svc.FindSessionIDsByRawSuffix(t.Context(), "uuid", 2)
-	require.NoError(err)
-	assert.Equal([]string{"host~uuid"}, ids)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"host~uuid"}, ids)
 
 	partial, err := svc.FindSessionIDsByPartial(t.Context(), "uuid", 2)
-	require.NoError(err)
-	assert.ElementsMatch([]string{"host~uuid", "host~uuid-fork"}, partial)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"host~uuid", "host~uuid-fork"}, partial)
 }
 
 func TestHTTPBackend_FindSessionIDsByRawSuffixRejectsOldServer(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 	var got url.Values
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -291,17 +283,14 @@ func TestHTTPBackend_FindSessionIDsByRawSuffixRejectsOldServer(t *testing.T) {
 	svc := servicehttp.NewHTTPBackend(ts.URL, "", false, "")
 	ids, err := svc.FindSessionIDsByRawSuffix(t.Context(), "uuid", 2)
 	require.ErrorContains(t, err, "does not acknowledge raw session ID lookup")
-	assert.Nil(ids)
-	assert.Equal("uuid", got.Get("partial"))
-	assert.Equal("true", got.Get("raw_suffix"))
-	assert.Equal("2", got.Get("limit"))
+	assert.Nil(t, ids)
+	assert.Equal(t, "uuid", got.Get("partial"))
+	assert.Equal(t, "true", got.Get("raw_suffix"))
+	assert.Equal(t, "2", got.Get("limit"))
 	t.Logf("head: raw_suffix_query=%s old_server_error=%q", got.Encode(), err)
 }
 
 func TestHTTPBackend_List_FilterRoundtrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	env.SeedSession(t, "a-1", "proj-a", dbtest.WithMessageCount(3))
@@ -313,23 +302,21 @@ func TestHTTPBackend_List_FilterRoundtrip(t *testing.T) {
 		IncludeOneShot: true,
 		Limit:          10,
 	})
-	require.NoError(err)
-	require.NotNil(list)
-	require.Len(list.Sessions, 1)
-	assert.Equal("a-1", list.Sessions[0].ID)
-	assert.Equal("proj-a", list.Sessions[0].Project)
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Len(t, list.Sessions, 1)
+	assert.Equal(t, "a-1", list.Sessions[0].ID)
+	assert.Equal(t, "proj-a", list.Sessions[0].Project)
 }
 
 func TestHTTPBackend_List_StarredFilterRoundtrip(t *testing.T) {
-	require := require.New(t)
-
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	env.SeedSession(t, "starred-1", "proj", dbtest.WithMessageCount(3))
 	env.SeedSession(t, "plain-1", "proj", dbtest.WithMessageCount(3))
-	ok, err := env.DB.StarSession("starred-1")
-	require.NoError(err)
-	require.True(ok)
+	ok, err := env.DB.StarSession(t.Context(), "starred-1")
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	svc := env.Backend("", false)
 	list, err := svc.List(t.Context(), service.ListFilter{
@@ -337,9 +324,9 @@ func TestHTTPBackend_List_StarredFilterRoundtrip(t *testing.T) {
 		Starred:        true,
 		Limit:          10,
 	})
-	require.NoError(err)
-	require.NotNil(list)
-	require.Len(list.Sessions, 1)
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Len(t, list.Sessions, 1)
 	assert.Equal(t, "starred-1", list.Sessions[0].ID)
 }
 
@@ -366,7 +353,9 @@ func TestHTTPBackend_ListRecallEntriesRejectsNegativeLimitLocally(t *testing.T) 
 func TestHTTPBackend_ListRecallEntriesIncludesSourceEpisodeIDParam(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/recall/entries", r.URL.Path)
+		if !assert.Equal(t, "/api/v1/recall/entries", r.URL.Path) {
+			return
+		}
 		assert.Equal(t, "recall-session:chunk:0001", r.URL.Query().Get("source_episode_id"))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"entries":[]}`))
@@ -382,11 +371,11 @@ func TestHTTPBackend_ListRecallEntriesIncludesSourceEpisodeIDParam(t *testing.T)
 }
 
 func TestHTTPBackend_ListRecallEntriesIncludesTrustedOnlyParam(t *testing.T) {
-	require := require.New(t)
-
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal("/api/v1/recall/entries", r.URL.Path)
+		if !assert.Equal(t, "/api/v1/recall/entries", r.URL.Path) {
+			return
+		}
 		assert.Equal(t, "true", r.URL.Query().Get("trusted_only"))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"entries":[]}`))
@@ -398,14 +387,14 @@ func TestHTTPBackend_ListRecallEntriesIncludesTrustedOnlyParam(t *testing.T) {
 		TrustedOnly: true,
 	})
 
-	require.NoError(err)
+	require.NoError(t, err)
 	encoded, err := json.Marshal(list)
-	require.NoError(err)
+	require.NoError(t, err)
 	var raw map[string]jsontext.Value
-	require.NoError(json.Unmarshal(encoded, &raw))
-	require.Contains(raw, "trusted_only")
+	require.NoError(t, json.Unmarshal(encoded, &raw))
+	require.Contains(t, raw, "trusted_only")
 	var trustedOnly bool
-	require.NoError(json.Unmarshal(raw["trusted_only"], &trustedOnly))
+	require.NoError(t, json.Unmarshal(raw["trusted_only"], &trustedOnly))
 	assert.True(t, trustedOnly)
 }
 
@@ -433,9 +422,13 @@ func TestHTTPBackend_QueryRecallEntriesRejectsNegativeLimitLocally(t *testing.T)
 func TestHTTPBackend_QueryRecallEntriesIncludesSourceEpisodeID(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/recall/query", r.URL.Path)
+		if !assert.Equal(t, "/api/v1/recall/query", r.URL.Path) {
+			return
+		}
 		var got service.RecallQuery
-		require.NoError(t, json.UnmarshalRead(r.Body, &got))
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &got)) {
+			return
+		}
 		assert.Equal(t, "recall-session:chunk:0001", got.SourceEpisodeID)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"entries":[]}`))
@@ -455,10 +448,12 @@ func TestHTTPBackend_QueryRecallEntriesTransportsSkipRecording(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var got service.RecallQuery
-		require.NoError(t, json.UnmarshalRead(r.Body, &got))
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &got)) {
+			return
+		}
 		assert.True(t, got.SkipRecording)
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
+		assert.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
 			Mode: db.RecallQueryModeLexical, RecallEntries: []db.RecallResult{},
 		}))
 	}))
@@ -496,14 +491,13 @@ func TestHTTPBackend_QueryRecallEntriesRejectsNegativeContextMaxBytesLocally(t *
 }
 
 func TestHTTPBackend_QueryRecallEntriesBuildsMissingSummaries(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal("/api/v1/recall/query", r.URL.Path)
+		if !assert.Equal(t, "/api/v1/recall/query", r.URL.Path) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(json.MarshalWrite(w, service.RecallQueryResult{
+		assert.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
 			RecallEntries: []db.RecallResult{{
 				ID:              "m-http-summary",
 				Type:            "procedure",
@@ -531,28 +525,30 @@ func TestHTTPBackend_QueryRecallEntriesBuildsMissingSummaries(t *testing.T) {
 		IncludeContext: true,
 	})
 
-	require.NoError(err)
-	require.NotNil(got.Summary)
-	assert.Equal(1, got.Summary.Count)
-	assert.Equal(1, got.Summary.ByType["procedure"])
-	assert.Equal(1, got.Summary.ByMatchReason["keyword"])
-	assert.Equal(1, got.Summary.ByMatchReason["evidence"])
-	assert.Equal(1, got.Summary.BySourceRun["smoke-run"])
-	assert.Equal(1, got.Summary.BySourceEpisode["recall-session:chunk:0001"])
-	require.Len(got.ContextEntries, 1)
-	assert.Equal("m-http-summary", got.ContextEntries[0].ID)
-	require.NotNil(got.ContextSummary)
-	assert.Equal(1, got.ContextSummary.Count)
-	assert.Equal(1, got.ContextSummary.BySourceSession["recall-session"])
-	assert.Equal(1, got.ContextSummary.BySourceEpisode["recall-session:chunk:0001"])
+	require.NoError(t, err)
+	require.NotNil(t, got.Summary)
+	assert.Equal(t, 1, got.Summary.Count)
+	assert.Equal(t, 1, got.Summary.ByType["procedure"])
+	assert.Equal(t, 1, got.Summary.ByMatchReason["keyword"])
+	assert.Equal(t, 1, got.Summary.ByMatchReason["evidence"])
+	assert.Equal(t, 1, got.Summary.BySourceRun["smoke-run"])
+	assert.Equal(t, 1, got.Summary.BySourceEpisode["recall-session:chunk:0001"])
+	require.Len(t, got.ContextEntries, 1)
+	assert.Equal(t, "m-http-summary", got.ContextEntries[0].ID)
+	require.NotNil(t, got.ContextSummary)
+	assert.Equal(t, 1, got.ContextSummary.Count)
+	assert.Equal(t, 1, got.ContextSummary.BySourceSession["recall-session"])
+	assert.Equal(t, 1, got.ContextSummary.BySourceEpisode["recall-session:chunk:0001"])
 }
 
 func TestHTTPBackend_QueryRecallEntriesRejectsInconsistentContextEntries(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/recall/query", r.URL.Path)
+		if !assert.Equal(t, "/api/v1/recall/query", r.URL.Path) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
+		assert.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
 			RecallEntries: []db.RecallResult{
 				{ID: "m-packed"},
 				{ID: "m-other"},
@@ -583,9 +579,11 @@ func TestHTTPBackend_QueryRecallEntriesRejectsInconsistentContextEntries(t *test
 func TestHTTPBackend_QueryRecallEntriesRejectsMissingContextRecallEntryRows(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/recall/query", r.URL.Path)
+		if !assert.Equal(t, "/api/v1/recall/query", r.URL.Path) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
+		assert.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
 			RecallEntries: []db.RecallResult{},
 			Context:       "Relevant prior agentsview entries",
 			ContextMeta: &service.RecallContextMeta{
@@ -608,16 +606,18 @@ func TestHTTPBackend_QueryRecallEntriesRejectsMissingContextRecallEntryRows(t *t
 }
 
 func TestHTTPBackend_QueryRecallEntriesReportsTrustedOnlyFallback(t *testing.T) {
-	require := require.New(t)
-
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal("/api/v1/recall/query", r.URL.Path)
+		if !assert.Equal(t, "/api/v1/recall/query", r.URL.Path) {
+			return
+		}
 		var req service.RecallQuery
-		require.NoError(json.UnmarshalRead(r.Body, &req))
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+			return
+		}
 		assert.True(t, req.TrustedOnly)
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(json.MarshalWrite(w, service.RecallQueryResult{
+		assert.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
 			RecallEntries: []db.RecallResult{},
 		}))
 	}))
@@ -629,14 +629,14 @@ func TestHTTPBackend_QueryRecallEntriesReportsTrustedOnlyFallback(t *testing.T) 
 		TrustedOnly: true,
 	})
 
-	require.NoError(err)
+	require.NoError(t, err)
 	encoded, err := json.Marshal(got)
-	require.NoError(err)
+	require.NoError(t, err)
 	var raw map[string]jsontext.Value
-	require.NoError(json.Unmarshal(encoded, &raw))
-	require.Contains(raw, "trusted_only")
+	require.NoError(t, json.Unmarshal(encoded, &raw))
+	require.Contains(t, raw, "trusted_only")
 	var trustedOnly bool
-	require.NoError(json.Unmarshal(raw["trusted_only"], &trustedOnly))
+	require.NoError(t, json.Unmarshal(raw["trusted_only"], &trustedOnly))
 	assert.True(t, trustedOnly)
 }
 
@@ -656,9 +656,6 @@ func TestHTTPBackend_List_InvalidDate(t *testing.T) {
 }
 
 func TestHTTPBackend_Messages_Roundtrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	const sid = "msg-session"
@@ -674,18 +671,16 @@ func TestHTTPBackend_Messages_Roundtrip(t *testing.T) {
 		From:  &zero,
 		Limit: 100,
 	})
-	require.NoError(err)
-	require.NotNil(list)
-	require.Equal(3, list.Count)
-	assert.Equal(0, list.Messages[0].Ordinal)
-	assert.Equal("hello", list.Messages[0].Content)
-	assert.Equal(2, list.Messages[2].Ordinal)
-	assert.Equal("bye", list.Messages[2].Content)
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Equal(t, 3, list.Count)
+	assert.Equal(t, 0, list.Messages[0].Ordinal)
+	assert.Equal(t, "hello", list.Messages[0].Content)
+	assert.Equal(t, 2, list.Messages[2].Ordinal)
+	assert.Equal(t, "bye", list.Messages[2].Content)
 }
 
 func TestHTTPBackend_Messages_DescDirection(t *testing.T) {
-	require := require.New(t)
-
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	const sid = "msg-desc"
@@ -697,17 +692,14 @@ func TestHTTPBackend_Messages_DescDirection(t *testing.T) {
 		Direction: "desc",
 		Limit:     100,
 	})
-	require.NoError(err)
-	require.NotNil(list)
-	require.Equal(3, list.Count)
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Equal(t, 3, list.Count)
 	assert.Equal(t, 2, list.Messages[0].Ordinal,
 		"desc iteration should return highest ordinal first")
 }
 
 func TestHTTPBackend_Messages_AroundRoundtrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	const sid = "msg-around"
@@ -719,21 +711,19 @@ func TestHTTPBackend_Messages_AroundRoundtrip(t *testing.T) {
 	list, err := svc.Messages(t.Context(), sid, service.MessageFilter{
 		Around: &around,
 	})
-	require.NoError(err)
-	require.NotNil(list)
-	require.Equal(11, list.Count,
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Equal(t, 11, list.Count,
 		"default before=5/after=5 around ordinal 6 spans ordinals 1..11")
-	assert.Equal(1, list.Messages[0].Ordinal)
-	assert.Equal(11, list.Messages[len(list.Messages)-1].Ordinal)
-	require.NotNil(list.FirstOrdinal)
-	require.NotNil(list.LastOrdinal)
-	assert.Equal(1, *list.FirstOrdinal)
-	assert.Equal(11, *list.LastOrdinal)
+	assert.Equal(t, 1, list.Messages[0].Ordinal)
+	assert.Equal(t, 11, list.Messages[len(list.Messages)-1].Ordinal)
+	require.NotNil(t, list.FirstOrdinal)
+	require.NotNil(t, list.LastOrdinal)
+	assert.Equal(t, 1, *list.FirstOrdinal)
+	assert.Equal(t, 11, *list.LastOrdinal)
 }
 
 func TestHTTPBackend_Messages_RolesRoundtrip(t *testing.T) {
-	require := require.New(t)
-
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	const sid = "msg-roles"
@@ -750,9 +740,9 @@ func TestHTTPBackend_Messages_RolesRoundtrip(t *testing.T) {
 		Limit: 100,
 		Roles: []string{"user"},
 	})
-	require.NoError(err)
-	require.NotNil(list)
-	require.Equal(2, list.Count)
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Equal(t, 2, list.Count)
 	for _, m := range list.Messages {
 		assert.Equal(t, "user", m.Role)
 	}
@@ -775,9 +765,6 @@ func TestHTTPBackend_Messages_AroundValidationErrorSurfaces(t *testing.T) {
 }
 
 func TestHTTPBackend_ToolCalls_Empty(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	const sid = "tc-empty"
@@ -787,10 +774,10 @@ func TestHTTPBackend_ToolCalls_Empty(t *testing.T) {
 
 	svc := env.Backend("", false)
 	list, err := svc.ToolCalls(t.Context(), sid)
-	require.NoError(err)
-	require.NotNil(list)
-	assert.Equal(0, list.Count)
-	assert.Empty(list.ToolCalls)
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	assert.Equal(t, 0, list.Count)
+	assert.Empty(t, list.ToolCalls)
 }
 
 func TestHTTPBackend_Sync_ReadOnly(t *testing.T) {
@@ -837,7 +824,7 @@ func TestHTTPBackend_ImportRecallEntries_ReadOnly(t *testing.T) {
 	require.Error(t, err)
 	// Mirrors Sync/ScanSecrets: a read-only backend short-circuits to the
 	// shared sentinel instead of posting to the import endpoint.
-	assert.ErrorIs(t, err, db.ErrReadOnly,
+	require.ErrorIs(t, err, db.ErrReadOnly,
 		"want db.ErrReadOnly, got %v", err)
 	assert.Contains(t, err.Error(), env.BaseURL)
 }
@@ -860,7 +847,7 @@ func TestHTTPBackend_ImportRecallEntries_RemoteReadOnly(t *testing.T) {
 		db.RecallImportOptions{},
 	)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, db.ErrReadOnly,
+	require.ErrorIs(t, err, db.ErrReadOnly,
 		"want db.ErrReadOnly, got %v", err)
 	assert.Contains(t, err.Error(), srv.URL)
 }
@@ -904,6 +891,7 @@ func TestHTTPBackend_RecallReads_RemoteReadOnly(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := tt.run()
 			require.ErrorIs(t, err, db.ErrReadOnly)
 			assert.Contains(t, err.Error(), env.BaseURL)
@@ -917,7 +905,7 @@ func TestHTTPBackend_QueryRecallVector501PreservesSemanticCause(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotImplemented)
-		require.NoError(t, json.MarshalWrite(w, map[string]string{
+		assert.NoError(t, json.MarshalWrite(w, map[string]string{
 			"error": body,
 		}))
 	}))
@@ -929,7 +917,7 @@ func TestHTTPBackend_QueryRecallVector501PreservesSemanticCause(t *testing.T) {
 		Mode:  "VECTOR",
 	})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, service.ErrSemanticUnavailable)
+	require.ErrorIs(t, err, service.ErrSemanticUnavailable)
 	assert.Equal(t, body, err.Error())
 }
 
@@ -944,7 +932,7 @@ func TestHTTPBackend_QueryRecallVector503PreservesTransientCause(t *testing.T) {
 	)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, db.ErrSemanticTransient)
+	require.ErrorIs(t, err, db.ErrSemanticTransient)
 	assert.Contains(t, err.Error(), "embedding endpoint unavailable")
 }
 
@@ -952,7 +940,7 @@ func TestHTTPBackend_QueryRecallRejectsResponseModeMismatch(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
+		assert.NoError(t, json.MarshalWrite(w, service.RecallQueryResult{
 			Mode:          db.RecallQueryModeLexical,
 			RecallEntries: []db.RecallResult{},
 		}))
@@ -1023,13 +1011,13 @@ func TestHTTPSearchContent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/api/v1/search/content" {
-				t.Errorf("path = %s", r.URL.Path)
+				assert.Failf(t, "test failed", "path = %s", r.URL.Path)
 			}
 			if r.URL.Query().Get("pattern") != "needle" {
-				t.Errorf("pattern = %s", r.URL.Query().Get("pattern"))
+				assert.Failf(t, "test failed", "pattern = %s", r.URL.Query().Get("pattern"))
 			}
 			if r.URL.Query().Get("timezone") != "America/New_York" {
-				t.Errorf("timezone = %s", r.URL.Query().Get("timezone"))
+				assert.Failf(t, "test failed", "timezone = %s", r.URL.Query().Get("timezone"))
 			}
 			assert.ElementsMatch(t, []string{"live", "echo"}, r.URL.Query()["exclude_session"])
 			w.Header().Set("Content-Type", "application/json")
@@ -1089,9 +1077,6 @@ func TestHTTPImportRecallEntriesPassesAllowProductionImport(t *testing.T) {
 }
 
 func TestHTTPSearchContent_RealServer(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	// Seed a session with UserMessageCount=2 so content search includes it.
@@ -1104,11 +1089,11 @@ func TestHTTPSearchContent_RealServer(t *testing.T) {
 	res, err := svc.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "needle", Limit: 10,
 	})
-	require.NoError(err)
-	require.NotNil(res)
-	require.Len(res.Matches, 1)
-	assert.Equal("cs-1", res.Matches[0].SessionID)
-	assert.Equal("message", res.Matches[0].Location)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.Len(t, res.Matches, 1)
+	assert.Equal(t, "cs-1", res.Matches[0].SessionID)
+	assert.Equal(t, "message", res.Matches[0].Location)
 }
 
 func TestHTTPSearchContent_ExcludeSession(t *testing.T) {
@@ -1151,7 +1136,7 @@ func TestHTTPSearchContent_501PreservesCauseDetail(t *testing.T) {
 	be := servicehttp.NewHTTPBackend(srv.URL, "", true, "")
 	_, err := be.SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "needle"})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, service.ErrSemanticUnavailable)
+	require.ErrorIs(t, err, service.ErrSemanticUnavailable)
 	assert.Contains(t, err.Error(), "index is building: 40% complete")
 }
 
@@ -1175,13 +1160,13 @@ func TestHTTPSearchContent_501PreservesBackendSpecificReason(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
+			t.Parallel()
 
 			srv := httptest.NewServer(http.HandlerFunc(
 				func(w http.ResponseWriter, r *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusNotImplemented)
-					assert.NoError(json.MarshalWrite(w, map[string]string{
+					assert.NoError(t, json.MarshalWrite(w, map[string]string{
 						"error": tt.body,
 					}))
 				}))
@@ -1192,9 +1177,9 @@ func TestHTTPSearchContent_501PreservesBackendSpecificReason(t *testing.T) {
 				Pattern: "needle", Mode: "semantic",
 			})
 			require.Error(t, err)
-			assert.ErrorIs(err, service.ErrSemanticUnavailable)
-			assert.Equal(tt.body, err.Error())
-			assert.NotContains(err.Error(), "agentsview embeddings build")
+			require.ErrorIs(t, err, service.ErrSemanticUnavailable)
+			assert.Equal(t, tt.body, err.Error())
+			assert.NotContains(t, err.Error(), "agentsview embeddings build")
 		})
 	}
 }
@@ -1216,7 +1201,7 @@ func TestHTTPSearchContent_501IdenticalToSentinelDoesNotDuplicate(t *testing.T) 
 	be := servicehttp.NewHTTPBackend(srv.URL, "", true, "")
 	_, err := be.SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "needle"})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, service.ErrSemanticUnavailable)
+	require.ErrorIs(t, err, service.ErrSemanticUnavailable)
 	assert.Equal(t, service.ErrSemanticUnavailable.Error(), err.Error(),
 		"the sentinel text must not be duplicated when the body carries no extra cause")
 }
@@ -1249,6 +1234,7 @@ func TestHTTPBackend_AuthToken(t *testing.T) {
 	env.SeedSession(t, "auth-s", "p1")
 
 	t.Run("good token succeeds", func(t *testing.T) {
+		t.Parallel()
 		svc := env.Backend(goodToken, false)
 		detail, err := svc.Get(t.Context(), "auth-s")
 		require.NoError(t, err)
@@ -1257,6 +1243,7 @@ func TestHTTPBackend_AuthToken(t *testing.T) {
 	})
 
 	t.Run("missing token returns 401 error", func(t *testing.T) {
+		t.Parallel()
 		svc := env.Backend("", false)
 		_, err := svc.Get(t.Context(), "auth-s")
 		require.Error(t, err)
@@ -1264,6 +1251,7 @@ func TestHTTPBackend_AuthToken(t *testing.T) {
 	})
 
 	t.Run("wrong token returns 401 error", func(t *testing.T) {
+		t.Parallel()
 		svc := env.Backend("wrong-token", false)
 		_, err := svc.Get(t.Context(), "auth-s")
 		require.Error(t, err)
@@ -1272,9 +1260,6 @@ func TestHTTPBackend_AuthToken(t *testing.T) {
 }
 
 func TestHTTPBackendSessionBrowserLinks(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -1283,7 +1268,7 @@ func TestHTTPBackendSessionBrowserLinks(t *testing.T) {
 		case "/base/api/v1/sessions/codex:session:42":
 			fmt.Fprint(w, `{"id":"codex:session:42"}`)
 		case "/base/api/v1/sessions/sync":
-			assert.Equal(server.URL, r.Header.Get("Origin"))
+			assert.Equal(t, server.URL, r.Header.Get("Origin"))
 			fmt.Fprint(w, `{"id":"codex:session:42"}`)
 		case "/base/api/v1/search":
 			fmt.Fprint(w, `{"results":[{"session_id":"codex:session:42"}]}`)
@@ -1297,23 +1282,23 @@ func TestHTTPBackendSessionBrowserLinks(t *testing.T) {
 	svc := servicehttp.NewHTTPBackend(server.URL+"/base", "", false, "")
 	want := server.URL + "/base/sessions/codex/session:42"
 	detail, err := svc.Get(t.Context(), "codex:session:42")
-	require.NoError(err)
-	assert.Equal(want, detail.WebURL)
+	require.NoError(t, err)
+	assert.Equal(t, want, detail.WebURL)
 	synced, err := svc.Sync(t.Context(), service.SyncInput{ID: "codex:session:42"})
-	require.NoError(err)
-	assert.Equal(want, synced.WebURL)
+	require.NoError(t, err)
+	assert.Equal(t, want, synced.WebURL)
 	list, err := svc.List(t.Context(), service.ListFilter{})
-	require.NoError(err)
-	require.Len(list.Sessions, 1)
-	assert.Equal(want, list.Sessions[0].WebURL)
+	require.NoError(t, err)
+	require.Len(t, list.Sessions, 1)
+	assert.Equal(t, want, list.Sessions[0].WebURL)
 	hits, err := svc.Search(t.Context(), service.SearchRequest{Query: "example"})
-	require.NoError(err)
-	require.Len(hits.Results, 1)
-	assert.Equal(want, hits.Results[0].WebURL)
+	require.NoError(t, err)
+	require.Len(t, hits.Results, 1)
+	assert.Equal(t, want, hits.Results[0].WebURL)
 	content, err := svc.SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "example"})
-	require.NoError(err)
-	require.Len(content.Matches, 1)
-	assert.Equal(want, content.Matches[0].WebURL)
+	require.NoError(t, err)
+	require.Len(t, content.Matches, 1)
+	assert.Equal(t, want, content.Matches[0].WebURL)
 }
 
 func TestHTTPBackendBrowserLinksOmitCredentials(t *testing.T) {
@@ -1353,6 +1338,6 @@ func TestHTTPWatchGeneratedClientPreservesTransport(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, service.Event{Event: "messages", Data: "session/one"}, event)
 	case <-ctx.Done():
-		t.Fatal("watch did not deliver its event")
+		require.FailNow(t, "watch did not deliver its event")
 	}
 }

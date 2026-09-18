@@ -22,13 +22,10 @@ import (
 )
 
 func TestProviderParserUsesProviderCaptureContractAndStablePaths(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	root := t.TempDir()
 	localPath := filepath.Join(root, "session.jsonl")
-	require.NoError(os.WriteFile(localPath, []byte("session"), 0o400))
+	require.NoError(t, os.WriteFile(localPath, []byte("session"), 0o400))
 	stablePath := "/canonical/claude/session.jsonl"
 	manifest := parserTestManifest(t, parser.AgentClaude, stablePath, []rawsync.Entry{{
 		Path: "session.jsonl", Type: "file", Length: 7,
@@ -37,33 +34,31 @@ func TestProviderParserUsesProviderCaptureContractAndStablePaths(t *testing.T) {
 	provider := &providerParserFixture{root: root, localPath: localPath}
 	factory := &providerParserFixtureFactory{provider: provider}
 	dispatch, err := NewProviderParser([]parser.ProviderFactory{factory}, "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	parsed, err := dispatch.Parse(t.Context(), manifest, &Materialization{
 		root: root, entries: map[string]string{"session.jsonl": localPath},
 	})
-	require.NoError(err)
-	assert.False(parsed.Tombstone)
-	require.Len(parsed.Outcome.Results, 1)
-	assert.Equal(stablePath, parsed.Outcome.Results[0].Result.Session.File.Path)
-	assert.Equal("hosted-worker", factory.config.Machine)
-	assert.True(factory.config.StableSourceSnapshots)
-	assert.Equal([]string{root}, factory.config.Roots)
-	assert.Equal(stablePath, factory.config.PathRewriter(localPath))
-	assert.Equal(stablePath, provider.request.Source.Key)
-	assert.Equal(stablePath, provider.request.Fingerprint.Key)
+	require.NoError(t, err)
+	assert.False(t, parsed.Tombstone)
+	require.Len(t, parsed.Outcome.Results, 1)
+	assert.Equal(t, stablePath, parsed.Outcome.Results[0].Result.Session.File.Path)
+	assert.Equal(t, "hosted-worker", factory.config.Machine)
+	assert.True(t, factory.config.StableSourceSnapshots)
+	assert.Equal(t, []string{root}, factory.config.Roots)
+	assert.Equal(t, stablePath, factory.config.PathRewriter(localPath))
+	assert.Equal(t, stablePath, provider.request.Source.Key)
+	assert.Equal(t, stablePath, provider.request.Fingerprint.Key)
 	resolved, ok := provider.request.StoredPathResolver(stablePath)
-	assert.True(ok)
-	assert.Equal(localPath, resolved)
+	assert.True(t, ok)
+	assert.Equal(t, localPath, resolved)
 }
 
 func TestProviderParserAcceptsPortableClaudeSourceIdentity(t *testing.T) {
-	require := require.New(t)
-
 	t.Parallel()
 	root := t.TempDir()
 	localPath := filepath.Join(root, "session.jsonl")
-	require.NoError(os.WriteFile(localPath, []byte("session"), 0o400))
+	require.NoError(t, os.WriteFile(localPath, []byte("session"), 0o400))
 	manifest := parserTestManifest(
 		t, parser.AgentClaude, `C:\Users\agent\projects\session.jsonl`,
 		[]rawsync.Entry{{
@@ -76,21 +71,18 @@ func TestProviderParserAcceptsPortableClaudeSourceIdentity(t *testing.T) {
 		[]parser.ProviderFactory{&providerParserFixtureFactory{provider: provider}},
 		"hosted-worker",
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	parsed, err := dispatch.Parse(t.Context(), manifest, &Materialization{
 		root: root, entries: map[string]string{"session.jsonl": localPath},
 	})
 
-	require.NoError(err)
-	require.Len(parsed.Outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, parsed.Outcome.Results, 1)
 	assert.Equal(t, manifest.Manifest.SourceKey, provider.request.Source.Key)
 }
 
 func TestProviderParserRunsRegisteredClaudeParserWithoutLeakingMaterializedPath(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	contents := []byte(
 		`{"type":"user","timestamp":"2026-08-13T12:00:00Z","uuid":"u1",` +
@@ -112,19 +104,19 @@ func TestProviderParserRunsRegisteredClaudeParserWithoutLeakingMaterializedPath(
 		BaseDir:       t.TempDir(),
 		MaxTotalBytes: 1 << 20,
 	}).Materialize(t.Context(), manifest)
-	require.NoError(err)
-	defer func() { require.NoError(materialized.Cleanup()) }()
+	require.NoError(t, err)
+	defer func() { require.NoError(t, materialized.Cleanup()) }()
 	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	parsed, err := dispatch.Parse(t.Context(), manifest, materialized)
 
-	require.NoError(err)
-	require.Len(parsed.Outcome.Results, 1)
-	assert.Equal(stablePath, parsed.Outcome.Results[0].Result.Session.File.Path)
-	assert.NotContains(parsed.Outcome.Results[0].Result.Session.File.Path, materialized.Root())
-	assert.Equal(parser.AgentClaude, parsed.Outcome.Results[0].Result.Session.Agent)
-	assert.Equal(sourceModTime.UnixNano(), parsed.Outcome.Results[0].Result.Session.File.Mtime,
+	require.NoError(t, err)
+	require.Len(t, parsed.Outcome.Results, 1)
+	assert.Equal(t, stablePath, parsed.Outcome.Results[0].Result.Session.File.Path)
+	assert.NotContains(t, parsed.Outcome.Results[0].Result.Session.File.Path, materialized.Root())
+	assert.Equal(t, parser.AgentClaude, parsed.Outcome.Results[0].Result.Session.Agent)
+	assert.Equal(t, sourceModTime.UnixNano(), parsed.Outcome.Results[0].Result.Session.File.Mtime,
 		"parser output must inherit the captured source mod time, not the worker clock")
 }
 
@@ -148,9 +140,6 @@ func hostileServerRepo(t *testing.T, repoName string) string {
 // the lexical cwd base name and never leaks the server-side repository name
 // a git-root walk would find.
 func TestProviderParserHostedParseKeepsClaudeProjectLexicalForHostileCwd(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	hostileCwd := hostileServerRepo(t, "server-secret-claude")
 	contents := []byte(
@@ -170,19 +159,19 @@ func TestProviderParserHostedParseKeepsClaudeProjectLexicalForHostileCwd(t *test
 		Store:   &materializerStore{objects: map[rawsync.ObjectRef][]byte{object: contents}},
 		BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
 	}).Materialize(t.Context(), manifest)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(materialized.Cleanup()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
 	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	parsed, err := dispatch.Parse(t.Context(), manifest, materialized)
 
-	require.NoError(err)
-	require.Len(parsed.Outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, parsed.Outcome.Results, 1)
 	project := parsed.Outcome.Results[0].Result.Session.Project
-	assert.Equal("workdir", project,
+	assert.Equal(t, "workdir", project,
 		"hosted project attribution must stay lexical for a hostile recorded cwd")
-	assert.NotContains(project, "secret",
+	assert.NotContains(t, project, "secret",
 		"the server-side repository name must not leak through project attribution")
 }
 
@@ -192,9 +181,6 @@ func TestProviderParserHostedParseKeepsClaudeProjectLexicalForHostileCwd(t *test
 // materialized provider database must stay lexical metadata and must not
 // walk this worker's filesystem.
 func TestProviderParserHostedParseKeepsDBBackedProjectLexicalForHostileCwd(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	hostileCwd := hostileServerRepo(t, "server-secret-forge")
 	dbBytes := forgeSnapshotFixtureWithCwd(t, map[string]string{
@@ -209,19 +195,19 @@ func TestProviderParserHostedParseKeepsDBBackedProjectLexicalForHostileCwd(t *te
 		Store:   &materializerStore{objects: map[rawsync.ObjectRef][]byte{dbRef: dbBytes}},
 		BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
 	}).Materialize(t.Context(), manifest)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(materialized.Cleanup()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
 	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	parsed, err := dispatch.Parse(t.Context(), manifest, materialized)
 
-	require.NoError(err)
-	require.Len(parsed.Outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, parsed.Outcome.Results, 1)
 	project := parsed.Outcome.Results[0].Result.Session.Project
-	assert.Equal("workdir", project,
+	assert.Equal(t, "workdir", project,
 		"db-backed hosted attribution must stay lexical for a hostile recorded cwd")
-	assert.NotContains(project, "secret",
+	assert.NotContains(t, project, "secret",
 		"the server-side repository name must not leak through project attribution")
 }
 
@@ -230,13 +216,10 @@ func TestProviderParserHostedParseKeepsDBBackedProjectLexicalForHostileCwd(t *te
 // the parse itself -- carries the hosted filesystem-project-discovery guard,
 // by probing through the same context-honoring helper providers use.
 func TestProviderParserAppliesHostedProjectPolicyToDiscoveryAndParse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	root := t.TempDir()
 	localPath := filepath.Join(root, "session.jsonl")
-	require.NoError(os.WriteFile(localPath, []byte("session"), 0o400))
+	require.NoError(t, os.WriteFile(localPath, []byte("session"), 0o400))
 	hostileCwd := hostileServerRepo(t, "server-secret-policy")
 	manifest := parserTestManifest(t, parser.AgentClaude, "/canonical/claude/session.jsonl", []rawsync.Entry{{
 		Path: "session.jsonl", Type: "file", Length: 7,
@@ -248,28 +231,25 @@ func TestProviderParserAppliesHostedProjectPolicyToDiscoveryAndParse(t *testing.
 	dispatch, err := NewProviderParser(
 		[]parser.ProviderFactory{&projectPolicyProbingFactory{provider: fixture}}, "hosted-worker",
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	parsed, err := dispatch.Parse(t.Context(), manifest, &Materialization{
 		root: root, entries: map[string]string{"session.jsonl": localPath},
 	})
 
-	require.NoError(err)
-	require.Len(parsed.Outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, parsed.Outcome.Results, 1)
 	for _, probe := range []struct {
 		name    string
 		project string
 	}{{"discovery", fixture.discoveryProject}, {"parse", fixture.parseProject}} {
-		assert.Equal("workdir", probe.project,
+		assert.Equal(t, "workdir", probe.project,
 			"the hosted %s context must disable filesystem project discovery", probe.name)
-		assert.NotContains(probe.project, "secret", probe.name)
+		assert.NotContains(t, probe.project, "secret", probe.name)
 	}
 }
 
 func TestStablePathMapUsesLongestSourceKeySuffix(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "worker#root")
 	deepPath := filepath.Join(root, "x", "y", "file.jsonl")
@@ -296,16 +276,16 @@ func TestStablePathMapUsesLongestSourceKeySuffix(t *testing.T) {
 	})
 
 	resolved, ok := paths.resolve(stablePath)
-	require.True(ok)
-	assert.Equal(deepPath, resolved)
-	assert.Equal(stablePath, paths.rewrite(deepPath))
-	assert.Equal(paths.prefix+"y/file.jsonl", paths.rewrite(shallowPath))
+	require.True(t, ok)
+	assert.Equal(t, deepPath, resolved)
+	assert.Equal(t, stablePath, paths.rewrite(deepPath))
+	assert.Equal(t, paths.prefix+"y/file.jsonl", paths.rewrite(shallowPath))
 	stableVirtual := parser.VirtualSourcePath(stablePath, "conversation-1")
-	assert.Equal(stableVirtual,
+	assert.Equal(t, stableVirtual,
 		paths.rewrite(parser.VirtualSourcePath(deepPath, "conversation-1")))
 	resolved, ok = paths.resolve(stableVirtual)
-	require.True(ok)
-	assert.Equal(deepPath, resolved)
+	require.True(t, ok)
+	assert.Equal(t, deepPath, resolved)
 }
 
 func TestStablePathMapResolvesOriginalClientPathAliases(t *testing.T) {
@@ -333,9 +313,6 @@ func TestStablePathMapResolvesOriginalClientPathAliases(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			t.Parallel()
 			manifest := parserTestManifest(t, parser.AgentClaude, tc.sourceKey, []rawsync.Entry{
 				{
@@ -356,17 +333,17 @@ func TestStablePathMapResolvesOriginalClientPathAliases(t *testing.T) {
 			})
 
 			resolved, ok := paths.resolve(tc.embeddedPath)
-			require.True(ok,
+			require.True(t, ok,
 				"an original client path embedded in a transcript must resolve to its materialized companion")
-			assert.Equal(sidecar, resolved)
+			assert.Equal(t, sidecar, resolved)
 			resolved, ok = paths.resolve(tc.sourceKey)
-			require.True(ok)
-			assert.Equal(transcript, resolved)
+			require.True(t, ok)
+			assert.Equal(t, transcript, resolved)
 
 			// Aliases are lookup keys only: they must never become rewrite
 			// targets for worker-local paths.
-			assert.Equal(tc.sourceKey, paths.rewrite(transcript))
-			assert.Equal(tc.embeddedPath, paths.rewrite(tc.embeddedPath))
+			assert.Equal(t, tc.sourceKey, paths.rewrite(transcript))
+			assert.Equal(t, tc.embeddedPath, paths.rewrite(tc.embeddedPath))
 		})
 	}
 }
@@ -405,6 +382,8 @@ func TestProviderParserMatchesPlanEntriesAcrossEquivalentPathSpellings(t *testin
 		{
 			name: "materialization root contains a symlinked directory",
 			prepare: func(t *testing.T, base string) (string, string, string, bool) {
+				t.Helper()
+
 				realDir := filepath.Join(base, "real")
 				if err := os.MkdirAll(realDir, 0o700); err != nil {
 					return "", "", "", false
@@ -423,6 +402,8 @@ func TestProviderParserMatchesPlanEntriesAcrossEquivalentPathSpellings(t *testin
 		{
 			name: "plan entry reaches the materialized file through a symlink",
 			prepare: func(t *testing.T, base string) (string, string, string, bool) {
+				t.Helper()
+
 				root := filepath.Join(base, "mat")
 				if err := os.MkdirAll(root, 0o700); err != nil {
 					return "", "", "", false
@@ -439,8 +420,6 @@ func TestProviderParserMatchesPlanEntriesAcrossEquivalentPathSpellings(t *testin
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require := require.New(t)
-
 			t.Parallel()
 			root, materializedPath, planPath, ok := tc.prepare(t, t.TempDir())
 			if !ok {
@@ -457,23 +436,21 @@ func TestProviderParserMatchesPlanEntriesAcrossEquivalentPathSpellings(t *testin
 			dispatch, err := NewProviderParser(
 				[]parser.ProviderFactory{&providerParserFixtureFactory{provider: provider}}, "hosted-worker",
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 
 			parsed, err := dispatch.Parse(t.Context(), manifest, &Materialization{
 				root: root, entries: map[string]string{"session.jsonl": materializedPath},
 			})
 
-			require.NoError(err,
+			require.NoError(t, err,
 				"the same regular file must match across equivalent path spellings")
-			require.Len(parsed.Outcome.Results, 1)
+			require.Len(t, parsed.Outcome.Results, 1)
 			assert.Equal(t, stablePath, parsed.Outcome.Results[0].Result.Session.File.Path)
 		})
 	}
 }
-func TestProviderParserHostedParseMatchesLocalPersistedToolResults(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
 
+func TestProviderParserHostedParseMatchesLocalPersistedToolResults(t *testing.T) {
 	t.Parallel()
 	clientRoot := t.TempDir()
 	projectDir := "demo-project"
@@ -482,9 +459,9 @@ func TestProviderParserHostedParseMatchesLocalPersistedToolResults(t *testing.T)
 	sidecarPath := filepath.Join(
 		clientRoot, projectDir, sessionID, "tool-results", "r1.txt",
 	)
-	require.NoError(os.MkdirAll(filepath.Dir(sidecarPath), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(sidecarPath), 0o755))
 	fullOutput := "hosted parity full output line 1\nhosted parity full output line 2\n"
-	require.NoError(os.WriteFile(sidecarPath, []byte(fullOutput), 0o644))
+	require.NoError(t, os.WriteFile(sidecarPath, []byte(fullOutput), 0o644))
 	persistedNotice := "<persisted-output>\nOutput too large (48B). Full output saved to: " +
 		sidecarPath + "\n</persisted-output>"
 	transcript := strings.Join([]string{
@@ -492,26 +469,26 @@ func TestProviderParserHostedParseMatchesLocalPersistedToolResults(t *testing.T)
 		`{"type":"assistant","timestamp":"2026-08-13T12:00:01Z","uuid":"a1","parentUuid":"u1","sessionId":"` + sessionID + `","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make"}}]}}`,
 		`{"type":"user","timestamp":"2026-08-13T12:00:02Z","uuid":"u2","parentUuid":"a1","sessionId":"` + sessionID + `","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + strconv.Quote(persistedNotice) + `,"is_error":false}]},"toolUseResult":{"persistedOutputPath":` + strconv.Quote(sidecarPath) + `,"persistedOutputSize":48}}`,
 	}, "\n") + "\n"
-	require.NoError(os.WriteFile(transcriptPath, []byte(transcript), 0o644))
+	require.NoError(t, os.WriteFile(transcriptPath, []byte(transcript), 0o644))
 
 	localProvider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{
 		Roots: []string{clientRoot}, Machine: "hosted-worker",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := localProvider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 	localOutcome, err := localProvider.Parse(t.Context(), parser.ParseRequest{
 		Source: sources[0], Fingerprint: parser.SourceFingerprint{Key: transcriptPath},
 		Machine: "hosted-worker",
 	})
-	require.NoError(err)
-	require.Len(localOutcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, localOutcome.Results, 1)
 	localMessages := localOutcome.Results[0].Result.Messages
-	require.Len(localMessages, 3)
+	require.Len(t, localMessages, 3)
 	localToolResults := localMessages[2].ToolResults
-	require.Len(localToolResults, 1)
-	assert.Equal(fullOutput, parser.DecodeContent(localToolResults[0].ContentRaw),
+	require.Len(t, localToolResults, 1)
+	assert.Equal(t, fullOutput, parser.DecodeContent(localToolResults[0].ContentRaw),
 		"local parse must resolve the persisted tool result from its sidecar")
 
 	manifest, objects := manifestFromCapturePlan(t, parser.AgentClaude, localProvider, sources[0])
@@ -519,23 +496,23 @@ func TestProviderParserHostedParseMatchesLocalPersistedToolResults(t *testing.T)
 		Store:   &materializerStore{objects: objects},
 		BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
 	}).Materialize(t.Context(), manifest)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(materialized.Cleanup()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
 	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	hosted, err := dispatch.Parse(t.Context(), manifest, materialized)
 
-	require.NoError(err)
-	require.Len(hosted.Outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, hosted.Outcome.Results, 1)
 	hostedMessages := hosted.Outcome.Results[0].Result.Messages
-	require.Len(hostedMessages, 3)
+	require.Len(t, hostedMessages, 3)
 	hostedToolResults := hostedMessages[2].ToolResults
-	require.Len(hostedToolResults, 1)
-	assert.Equal(localToolResults[0].ContentLength, hostedToolResults[0].ContentLength)
-	assert.Equal(fullOutput, parser.DecodeContent(hostedToolResults[0].ContentRaw),
+	require.Len(t, hostedToolResults, 1)
+	assert.Equal(t, localToolResults[0].ContentLength, hostedToolResults[0].ContentLength)
+	assert.Equal(t, fullOutput, parser.DecodeContent(hostedToolResults[0].ContentRaw),
 		"materialized parse must resolve persisted tool results exactly like local parse")
-	assert.Equal(localOutcome.Results[0].Result.Session.File.Path,
+	assert.Equal(t, localOutcome.Results[0].Result.Session.File.Path,
 		hosted.Outcome.Results[0].Result.Session.File.Path,
 		"the hosted session must keep the captured client path")
 }
@@ -551,6 +528,7 @@ func manifestFromCapturePlan(
 	source parser.SourceRef,
 ) (rawsync.CanonicalManifest, map[rawsync.ObjectRef][]byte) {
 	t.Helper()
+
 	plan, supported, err := parser.ResolveRawCapturePlan(t.Context(), provider, source)
 	require.NoError(t, err)
 	require.True(t, supported)
@@ -573,13 +551,10 @@ func manifestFromCapturePlan(
 }
 
 func TestProviderParserHostedParseMatchesLocalBackgroundForkLineage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	clientRoot := t.TempDir()
 	projectDir := filepath.Join(clientRoot, "demo-project")
-	require.NoError(os.MkdirAll(projectDir, 0o755))
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
 	origLine := func(uuid, parent, ts, sessionID, kind, content string) string {
 		parentJSON := "null"
 		if parent != "" {
@@ -614,72 +589,73 @@ func TestProviderParserHostedParseMatchesLocalBackgroundForkLineage(t *testing.T
 	}, "\n") + "\n"
 	origPath := filepath.Join(projectDir, "orig-1111.jsonl")
 	forkPath := filepath.Join(projectDir, "fork-2222.jsonl")
-	require.NoError(os.WriteFile(origPath, []byte(origContent), 0o644))
-	require.NoError(os.WriteFile(forkPath, []byte(forkContent), 0o644))
+	require.NoError(t, os.WriteFile(origPath, []byte(origContent), 0o644))
+	require.NoError(t, os.WriteFile(forkPath, []byte(forkContent), 0o644))
 
 	localProvider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{
 		Roots: []string{clientRoot}, Machine: "hosted-worker",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := localProvider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 2)
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
 	var forkSource parser.SourceRef
 	for _, source := range sources {
 		if strings.HasSuffix(source.Key, "fork-2222.jsonl") {
 			forkSource = source
 		}
 	}
-	require.NotEmpty(forkSource.Key)
+	require.NotEmpty(t, forkSource.Key)
 	localOutcome, err := localProvider.Parse(t.Context(), parser.ParseRequest{
 		Source: forkSource, Fingerprint: parser.SourceFingerprint{Key: forkPath},
 		Machine: "hosted-worker",
 	})
-	require.NoError(err)
-	require.Len(localOutcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, localOutcome.Results, 1)
 	localSession := localOutcome.Results[0].Result.Session
-	require.Equal("orig-1111", localSession.ParentSessionID,
+	require.Equal(t, "orig-1111", localSession.ParentSessionID,
 		"local parse must link the background fork to its parent")
-	require.Len(localOutcome.Results[0].Result.Messages, 2,
+	require.Len(t, localOutcome.Results[0].Result.Messages, 2,
 		"local parse must trim the replayed prefix")
 
 	manifest, objects := manifestFromCapturePlan(t, parser.AgentClaude, localProvider, forkSource)
-	require.Len(manifest.Manifest.Entries, 2,
+	require.Len(t, manifest.Manifest.Entries, 2,
 		"the fork generation must carry its lineage sibling transcript")
 	materialized, err := (Materializer{
 		Store:   &materializerStore{objects: objects},
 		BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
 	}).Materialize(t.Context(), manifest)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(materialized.Cleanup()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
 	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	hosted, err := dispatch.Parse(t.Context(), manifest, materialized)
 
-	require.NoError(err)
-	require.Len(hosted.Outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, hosted.Outcome.Results, 1)
 	hostedResult := hosted.Outcome.Results[0].Result
 	hostedSession := hostedResult.Session
-	assert.Equal(localSession.ParentSessionID, hostedSession.ParentSessionID,
+	assert.Equal(t, localSession.ParentSessionID, hostedSession.ParentSessionID,
 		"materialized parse must reproduce background-fork parent linkage")
-	assert.Equal(localSession.RelationshipType, hostedSession.RelationshipType)
-	assert.Equal(localSession.MessageCount, hostedSession.MessageCount)
-	require.Len(hostedResult.Messages, 2,
+	assert.Equal(t, localSession.RelationshipType, hostedSession.RelationshipType)
+	assert.Equal(t, localSession.MessageCount, hostedSession.MessageCount)
+	require.Len(t, hostedResult.Messages, 2,
 		"materialized parse must trim the replayed prefix like local parse")
 	for i := range hostedResult.Messages {
-		assert.Equal(localOutcome.Results[0].Result.Messages[i].Content,
+		assert.Equal(t, localOutcome.Results[0].Result.Messages[i].Content,
 			hostedResult.Messages[i].Content)
-		assert.Equal(localOutcome.Results[0].Result.Messages[i].Role,
+		assert.Equal(t, localOutcome.Results[0].Result.Messages[i].Role,
 			hostedResult.Messages[i].Role)
-		assert.Equal(localOutcome.Results[0].Result.Messages[i].Timestamp,
+		assert.Equal(t, localOutcome.Results[0].Result.Messages[i].Timestamp,
 			hostedResult.Messages[i].Timestamp)
 	}
-	assert.Equal(forkPath, hostedSession.File.Path,
+	assert.Equal(t, forkPath, hostedSession.File.Path,
 		"the hosted session must keep the captured client path")
 }
 
 func TestProviderParserHostedParseMatchesLocalCodexForkLineage(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		layout       string
@@ -704,6 +680,7 @@ func TestProviderParserHostedParseMatchesLocalCodexForkLineage(t *testing.T) {
 }
 
 func TestProviderParserHostedCodexAliasHomeMetadata(t *testing.T) {
+	t.Parallel()
 	const id = "11111111-1111-4111-8111-111111111111"
 	type index struct {
 		home   int
@@ -722,9 +699,6 @@ func TestProviderParserHostedCodexAliasHomeMetadata(t *testing.T) {
 		{"sparse aliases with equal mtimes", []index{{2, id, "Earlier alias", 1}, {10, id, "Later alias", 1}}, "Later alias"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			t.Parallel()
 			clientBase := t.TempDir()
 			dirs := []string{filepath.Join(clientBase, "primary")}
@@ -733,91 +707,88 @@ func TestProviderParserHostedCodexAliasHomeMetadata(t *testing.T) {
 			}
 			root := filepath.Join(dirs[0], "sessions")
 			rollout := filepath.Join(root, "2026", "09", "10", "rollout-2026-09-10T10-00-00-"+id+".jsonl")
-			require.NoError(os.MkdirAll(filepath.Dir(rollout), 0o700))
-			require.NoError(os.WriteFile(rollout, []byte(testjsonl.JoinJSONL(
+			require.NoError(t, os.MkdirAll(filepath.Dir(rollout), 0o700))
+			require.NoError(t, os.WriteFile(rollout, []byte(testjsonl.JoinJSONL(
 				testjsonl.CodexSessionMetaJSON(id, "/workspace/project", "codex_cli_rs", "2026-09-10T10:00:00Z"),
 				testjsonl.CodexMsgJSON("user", "Session prompt", "2026-09-10T10:00:01Z"),
 			)), 0o600))
 			mtime := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
-			require.NoError(os.Chtimes(rollout, mtime, mtime))
+			require.NoError(t, os.Chtimes(rollout, mtime, mtime))
 			for _, idx := range tc.indexes {
-				require.NoError(os.MkdirAll(dirs[idx.home], 0o700))
+				require.NoError(t, os.MkdirAll(dirs[idx.home], 0o700))
 				indexPath := filepath.Join(dirs[idx.home], parser.CodexSessionIndexFilename)
-				require.NoError(os.WriteFile(indexPath, []byte(fmt.Sprintf(
+				require.NoError(t, os.WriteFile(indexPath, []byte(fmt.Sprintf(
 					"{\"id\":%q,\"thread_name\":%q}\n", idx.id, idx.title,
 				)), 0o600))
 				indexMtime := mtime.Add(time.Duration(idx.minute) * time.Minute)
-				require.NoError(os.Chtimes(indexPath, indexMtime, indexMtime))
+				require.NoError(t, os.Chtimes(indexPath, indexMtime, indexMtime))
 			}
 			provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{
 				Roots: []string{root}, MetadataDirs: map[string][]string{root: dirs},
 			})
-			require.True(ok)
+			require.True(t, ok)
 			sources, err := provider.Discover(t.Context())
-			require.NoError(err)
-			require.Len(sources, 1)
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
 			local, err := provider.Parse(t.Context(), parser.ParseRequest{Source: sources[0]})
-			require.NoError(err)
-			require.Len(local.Results, 1)
-			assert.Equal(tc.want, local.Results[0].Result.Session.SessionName)
+			require.NoError(t, err)
+			require.Len(t, local.Results, 1)
+			assert.Equal(t, tc.want, local.Results[0].Result.Session.SessionName)
 			manifest, objects := manifestFromCapturePlan(t, parser.AgentCodex, provider, sources[0])
 			materialized, err := (Materializer{
 				Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
 			}).Materialize(t.Context(), manifest)
-			require.NoError(err)
-			t.Cleanup(func() { require.NoError(materialized.Cleanup()) })
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
 			dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-			require.NoError(err)
+			require.NoError(t, err)
 
 			hosted, err := dispatch.Parse(t.Context(), manifest, materialized)
 
-			require.NoError(err)
-			require.Len(hosted.Outcome.Results, 1)
-			assert.Equal(tc.want, hosted.Outcome.Results[0].Result.Session.SessionName)
-			assert.Equal(local.Results[0].Result.Session.File.Mtime, hosted.Outcome.Results[0].Result.Session.File.Mtime)
+			require.NoError(t, err)
+			require.Len(t, hosted.Outcome.Results, 1)
+			assert.Equal(t, tc.want, hosted.Outcome.Results[0].Result.Session.SessionName)
+			assert.Equal(t, local.Results[0].Result.Session.File.Mtime, hosted.Outcome.Results[0].Result.Session.File.Mtime)
 		})
 	}
 }
 
 func TestProviderParserHostedCodexOrphanPreservesHistory(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "sessions")
 	const childID = "22222222-2222-4222-8222-222222222222"
 	const parentID = "11111111-1111-4111-8111-111111111111"
 	path := filepath.Join(root, "2026", "01", "01", "rollout-2026-01-01T10-00-00-"+childID+".jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 	content := testjsonl.JoinJSONL(
 		testjsonl.CodexForkedSessionMetaJSON(childID, parentID, "/workspace/project", "codex_cli_rs", "2026-01-01T10:00:00Z"),
 		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", "child-turn", "2026-01-01T10:00:01Z"),
 		testjsonl.CodexMsgJSON("user", "child task", "2026-01-01T10:00:01Z"),
 		testjsonl.CodexMsgJSON("assistant", "child answer", "2026-01-01T10:00:02Z"),
 	)
-	require.NoError(os.WriteFile(path, []byte(content), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 	manifest, objects := manifestFromCapturePlan(t, parser.AgentCodex, provider, sources[0])
 	materialized, err := (Materializer{
 		Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
 	}).Materialize(t.Context(), manifest)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(materialized.Cleanup()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
 	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	hosted, err := dispatch.Parse(t.Context(), manifest, materialized)
-	require.NoError(err)
-	require.Len(hosted.Outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, hosted.Outcome.Results, 1)
 	result := hosted.Outcome.Results[0]
-	assert.Equal(parser.DataVersionNeedsRetry, result.DataVersion)
-	require.Len(result.Result.Messages, 2)
-	assert.Equal("child task", result.Result.Messages[0].Content)
-	assert.Equal("child answer", result.Result.Messages[1].Content)
+	assert.Equal(t, parser.DataVersionNeedsRetry, result.DataVersion)
+	require.Len(t, result.Result.Messages, 2)
+	assert.Equal(t, "child task", result.Result.Messages[0].Content)
+	assert.Equal(t, "child answer", result.Result.Messages[1].Content)
 }
 
 func testProviderParserHostedCodexForkLineage(
@@ -828,6 +799,7 @@ func testProviderParserHostedCodexForkLineage(
 	shadowParent bool,
 ) {
 	t.Helper()
+
 	clientBase := t.TempDir()
 	clientRoot := filepath.Join(clientBase, layout)
 	parentRoot := clientRoot
@@ -920,12 +892,10 @@ func testProviderParserHostedCodexForkLineage(
 	hostedResult := hosted.Outcome.Results[0]
 	assert.Equal(t, parser.DataVersionCurrent, hostedResult.DataVersion)
 	assert.Empty(t, hostedResult.RetryReason)
-	assert.Equal(t,
-		localOutcome.Results[0].Result.Session.ParentSessionID,
+	assert.Equal(t, localOutcome.Results[0].Result.Session.ParentSessionID,
 		hostedResult.Result.Session.ParentSessionID,
 	)
-	assert.Equal(t,
-		localOutcome.Results[0].Result.Session.SessionName,
+	assert.Equal(t, localOutcome.Results[0].Result.Session.SessionName,
 		hostedResult.Result.Session.SessionName,
 		"the parent-side session index must remain visible from the sessions root",
 	)
@@ -940,9 +910,6 @@ func testProviderParserHostedCodexForkLineage(
 }
 
 func TestProviderParserRejectsMiskeyedCodexManifest(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	clientRoot := t.TempDir()
 	const sourceID = "11111111-1111-4111-8111-111111111111"
@@ -952,14 +919,14 @@ func TestProviderParserRejectsMiskeyedCodexManifest(t *testing.T) {
 	contents := []byte(testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(
 		sourceID, "/work/project", "codex_cli_rs", "2026-09-09T10:00:00Z",
 	)))
-	require.NoError(os.WriteFile(sourcePath, contents, 0o600))
+	require.NoError(t, os.WriteFile(sourcePath, contents, 0o600))
 	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{
 		Roots: []string{clientRoot},
 	})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 	manifest, objects := manifestFromCapturePlan(t, parser.AgentCodex, provider, sources[0])
 	manifest = parserTestManifest(
 		t, parser.AgentCodex, parser.CodexSourceKey(parser.AgentCodex, wrongID),
@@ -969,38 +936,35 @@ func TestProviderParserRejectsMiskeyedCodexManifest(t *testing.T) {
 		Store:   &materializerStore{objects: objects},
 		BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
 	}).Materialize(t.Context(), manifest)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(materialized.Cleanup()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
 	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	_, err = dispatch.Parse(t.Context(), manifest, materialized)
 
-	require.Error(err)
-	assert.ErrorIs(err, rawsync.ErrInvalid)
-	assert.Contains(err.Error(), "manifest matched 0 provider sources")
-	assert.NotContains(err.Error(), materialized.Root())
+	require.Error(t, err)
+	require.ErrorIs(t, err, rawsync.ErrInvalid)
+	assert.Contains(t, err.Error(), "manifest matched 0 provider sources")
+	assert.NotContains(t, err.Error(), materialized.Root())
 }
 
 func TestProviderParserRejectsMiskeyedDatabaseManifest(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	clientRoot := t.TempDir()
 	contents := forgeSnapshotFixture(t, map[string]string{
 		"conv-001": "2026-05-02 09:58:15",
 	})
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(clientRoot, parser.ForgeDBFilename), contents, 0o600,
 	))
 	provider, ok := parser.NewProvider(parser.AgentForge, parser.ProviderConfig{
 		Roots: []string{clientRoot},
 	})
-	require.True(ok)
+	require.True(t, ok)
 	discovery, err := parser.DiscoverRawCaptureSources(t.Context(), provider)
-	require.NoError(err)
-	require.Len(discovery.Sources, 1)
+	require.NoError(t, err)
+	require.Len(t, discovery.Sources, 1)
 	manifest, objects := manifestFromCapturePlan(
 		t, parser.AgentForge, provider, discovery.Sources[0],
 	)
@@ -1011,27 +975,24 @@ func TestProviderParserRejectsMiskeyedDatabaseManifest(t *testing.T) {
 		Store:   &materializerStore{objects: objects},
 		BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
 	}).Materialize(t.Context(), manifest)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(materialized.Cleanup()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
 	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	_, err = dispatch.Parse(t.Context(), manifest, materialized)
 
-	require.Error(err)
-	assert.ErrorIs(err, rawsync.ErrInvalid)
-	assert.Contains(err.Error(), "manifest matched 0 provider sources")
-	assert.NotContains(err.Error(), materialized.Root())
+	require.Error(t, err)
+	require.ErrorIs(t, err, rawsync.ErrInvalid)
+	assert.Contains(t, err.Error(), "manifest matched 0 provider sources")
+	assert.NotContains(t, err.Error(), materialized.Root())
 }
 
 func TestProviderParserMatchSelectsPrimarySourceWhenSiblingPlansShareEntries(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	clientRoot := t.TempDir()
 	projectDir := filepath.Join(clientRoot, "demo-project")
-	require.NoError(os.MkdirAll(projectDir, 0o755))
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
 	line := func(kind, uuid, parent, ts, sessionID, mark, content string) string {
 		parentJSON := "null"
 		if parent != "" {
@@ -1062,11 +1023,11 @@ func TestProviderParserMatchSelectsPrimarySourceWhenSiblingPlansShareEntries(t *
 	// A chained background fork: fork-2222 and fork-3333 are both bg-marked
 	// and share one root uuid, so each one's capture plan carries the other as
 	// an appendable lineage input and both plans cover the same entry set.
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(projectDir, "fork-2222.jsonl"),
 		[]byte(chain("fork-2222", "continued question", "continued answer")), 0o644,
 	))
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(projectDir, "fork-3333.jsonl"),
 		[]byte(chain("fork-3333", "later question", "later answer")), 0o644,
 	))
@@ -1074,38 +1035,38 @@ func TestProviderParserMatchSelectsPrimarySourceWhenSiblingPlansShareEntries(t *
 	localProvider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{
 		Roots: []string{clientRoot}, Machine: "hosted-worker",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := localProvider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 2)
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
 	var primary parser.SourceRef
 	for _, source := range sources {
 		if strings.HasSuffix(source.Key, "fork-2222.jsonl") {
 			primary = source
 		}
 	}
-	require.NotEmpty(primary.Key)
+	require.NotEmpty(t, primary.Key)
 
 	manifest, objects := manifestFromCapturePlan(t, parser.AgentClaude, localProvider, primary)
-	require.Len(manifest.Manifest.Entries, 2)
+	require.Len(t, manifest.Manifest.Entries, 2)
 	materialized, err := (Materializer{
 		Store:   &materializerStore{objects: objects},
 		BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
 	}).Materialize(t.Context(), manifest)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(materialized.Cleanup()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
 	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	hosted, err := dispatch.Parse(t.Context(), manifest, materialized)
 
-	require.NoError(err,
+	require.NoError(t, err,
 		"shared sibling entries must not make source matching ambiguous")
-	require.Len(hosted.Outcome.Results, 1)
-	assert.True(strings.HasSuffix(
+	require.Len(t, hosted.Outcome.Results, 1)
+	assert.True(t, strings.HasSuffix(
 		hosted.Outcome.Results[0].Result.Session.File.Path, "fork-2222.jsonl"),
 		"the manifest's primary transcript must be the parsed source")
-	assert.Equal("fork-2222", hosted.Outcome.Results[0].Result.Session.ID)
+	assert.Equal(t, "fork-2222", hosted.Outcome.Results[0].Result.Session.ID)
 }
 
 // TestProviderParserRejectsProviderWithoutRawCaptureSupportBeforeDiscovery
@@ -1114,43 +1075,37 @@ func TestProviderParserMatchSelectsPrimarySourceWhenSiblingPlansShareEntries(t *
 // discovery runs: unsupported providers would otherwise fall back to their
 // ordinary normalized discovery over untrusted materialized data.
 func TestProviderParserRejectsProviderWithoutRawCaptureSupportBeforeDiscovery(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	root := t.TempDir()
 	localPath := filepath.Join(root, "session.jsonl")
-	require.NoError(os.WriteFile(localPath, []byte("session"), 0o400))
+	require.NoError(t, os.WriteFile(localPath, []byte("session"), 0o400))
 	manifest := parserTestManifest(t, parser.AgentClaude, "/canonical/claude/session.jsonl", []rawsync.Entry{{
 		Path: "session.jsonl", Type: "file", Length: 7,
 		Objects: []rawsync.ObjectRef{objectRefForBytes(t, []byte("session"))},
 	}})
 	factory := &unsupportedRawCaptureFactory{provider: &unsupportedRawCaptureProvider{}}
 	dispatch, err := NewProviderParser([]parser.ProviderFactory{factory}, "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	parsed, err := dispatch.Parse(t.Context(), manifest, &Materialization{
 		root: root, entries: map[string]string{"session.jsonl": localPath},
 	})
 
-	require.Error(err)
-	assert.ErrorIs(err, rawsync.ErrInvalid)
-	assert.Contains(err.Error(), parser.ProviderFeatureRawCapture)
-	assert.False(parsed.Tombstone)
-	assert.Empty(parsed.Outcome.Results)
-	assert.False(factory.constructed,
+	require.Error(t, err)
+	require.ErrorIs(t, err, rawsync.ErrInvalid)
+	assert.Contains(t, err.Error(), parser.ProviderFeatureRawCapture)
+	assert.False(t, parsed.Tombstone)
+	assert.Empty(t, parsed.Outcome.Results)
+	assert.False(t, factory.constructed,
 		"an unsupported provider must be rejected before construction")
-	assert.False(factory.provider.discoverInvoked,
+	assert.False(t, factory.provider.discoverInvoked,
 		"an unsupported provider must be rejected before discovery runs")
 }
 
 func TestProviderParserHandlesTombstoneWithoutInvokingProvider(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	identity, err := rawsync.NewAuthIdentity("tenant-a", "device-a")
-	require.NoError(err)
+	require.NoError(t, err)
 	manifest, err := rawsync.ValidateAndCanonicalize(identity, rawsync.Manifest{
 		SchemaVersion:    rawsync.ManifestSchemaVersion,
 		Provider:         parser.AgentClaude,
@@ -1160,14 +1115,14 @@ func TestProviderParserHandlesTombstoneWithoutInvokingProvider(t *testing.T) {
 		CapturedAt:       time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC),
 		Kind:             rawsync.ManifestTombstone,
 	}, rawsync.DefaultManifestLimits())
-	require.NoError(err)
+	require.NoError(t, err)
 	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	parsed, err := dispatch.Parse(t.Context(), manifest, nil)
-	require.NoError(err)
-	assert.True(parsed.Tombstone)
-	assert.Empty(parsed.Outcome.Results)
+	require.NoError(t, err)
+	assert.True(t, parsed.Tombstone)
+	assert.Empty(t, parsed.Outcome.Results)
 }
 
 type providerParserFixtureFactory struct {
@@ -1436,9 +1391,6 @@ func parserTestManifest(
 }
 
 func TestProviderParserParsesEveryForgeSessionFromMaterializedSnapshot(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	dbBytes := forgeSnapshotFixture(t, map[string]string{
 		"conv-001": "2026-05-02 09:58:15",
@@ -1455,46 +1407,43 @@ func TestProviderParserParsesEveryForgeSessionFromMaterializedSnapshot(t *testin
 	}})
 	store := &materializerStore{objects: map[rawsync.ObjectRef][]byte{dbRef: dbBytes}}
 	materializationBase := filepath.Join(t.TempDir(), "hosted#worker")
-	require.NoError(os.Mkdir(materializationBase, 0o700))
+	require.NoError(t, os.Mkdir(materializationBase, 0o700))
 	materialized, err := (Materializer{
 		Store: store, BaseDir: materializationBase, MaxTotalBytes: 1 << 20,
 	}).Materialize(t.Context(), manifest)
-	require.NoError(err)
-	defer func() { require.NoError(materialized.Cleanup()) }()
+	require.NoError(t, err)
+	defer func() { require.NoError(t, materialized.Cleanup()) }()
 	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	parsed, err := dispatch.Parse(t.Context(), manifest, materialized)
 
-	require.NoError(err)
-	assert.False(parsed.Tombstone)
-	require.Len(parsed.Outcome.Results, 2)
-	assert.True(parsed.Outcome.ResultSetComplete)
-	assert.True(parsed.Outcome.ForceReplace)
-	assert.Empty(parsed.Outcome.SourceErrors)
+	require.NoError(t, err)
+	assert.False(t, parsed.Tombstone)
+	require.Len(t, parsed.Outcome.Results, 2)
+	assert.True(t, parsed.Outcome.ResultSetComplete)
+	assert.True(t, parsed.Outcome.ForceReplace)
+	assert.Empty(t, parsed.Outcome.SourceErrors)
 	first := parsed.Outcome.Results[0].Result
 	second := parsed.Outcome.Results[1].Result
-	assert.Equal("forge:conv-001", first.Session.ID)
-	assert.Equal("forge:conv-002", second.Session.ID)
-	assert.Equal(parser.AgentForge, first.Session.Agent)
-	assert.Equal(parser.ForgeDBFilename+"#conv-001", first.Session.File.Path,
+	assert.Equal(t, "forge:conv-001", first.Session.ID)
+	assert.Equal(t, "forge:conv-002", second.Session.ID)
+	assert.Equal(t, parser.AgentForge, first.Session.Agent)
+	assert.Equal(t, parser.ForgeDBFilename+"#conv-001", first.Session.File.Path,
 		"each logical session must keep a stable per-session virtual identity")
-	assert.Equal(parser.ForgeDBFilename+"#conv-002", second.Session.File.Path)
-	assert.NotContains(first.Session.File.Path, materialized.Root())
-	assert.Equal(int(2), first.Session.MessageCount)
-	assert.Equal(int(2), second.Session.MessageCount)
-	assert.Equal(time.Date(2026, 5, 2, 10, 0, 16, 848497543, time.UTC).UnixNano(),
+	assert.Equal(t, parser.ForgeDBFilename+"#conv-002", second.Session.File.Path)
+	assert.NotContains(t, first.Session.File.Path, materialized.Root())
+	assert.Equal(t, int(2), first.Session.MessageCount)
+	assert.Equal(t, int(2), second.Session.MessageCount)
+	assert.Equal(t, time.Date(2026, 5, 2, 10, 0, 16, 848497543, time.UTC).UnixNano(),
 		first.Session.File.Mtime,
 		"database-derived session timestamps must stay source-derived")
-	assert.Equal(time.Date(2026, 5, 3, 10, 00, 16, 848497543, time.UTC).UnixNano(),
+	assert.Equal(t, time.Date(2026, 5, 3, 10, 0o0, 16, 848497543, time.UTC).UnixNano(),
 		second.Session.File.Mtime)
-	assert.NotEqual(sourceModTime.UnixNano(), first.Session.File.Mtime)
+	assert.NotEqual(t, sourceModTime.UnixNano(), first.Session.File.Mtime)
 }
 
 func TestProviderParserHandlesEmptyForgeSnapshot(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	dbBytes := forgeSnapshotFixture(t, nil)
 	dbRef := objectRefForBytes(t, dbBytes)
@@ -1508,30 +1457,27 @@ func TestProviderParserHandlesEmptyForgeSnapshot(t *testing.T) {
 	materialized, err := (Materializer{
 		Store: store, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
 	}).Materialize(t.Context(), manifest)
-	require.NoError(err)
-	defer func() { require.NoError(materialized.Cleanup()) }()
+	require.NoError(t, err)
+	defer func() { require.NoError(t, materialized.Cleanup()) }()
 	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	parsed, err := dispatch.Parse(t.Context(), manifest, materialized)
 
-	require.NoError(err)
-	assert.False(parsed.Tombstone)
-	assert.Empty(parsed.Outcome.Results)
-	assert.True(parsed.Outcome.ResultSetComplete)
-	assert.True(parsed.Outcome.ForceReplace)
-	assert.Equal(parser.SkipNoSession, parsed.Outcome.SkipReason)
+	require.NoError(t, err)
+	assert.False(t, parsed.Tombstone)
+	assert.Empty(t, parsed.Outcome.Results)
+	assert.True(t, parsed.Outcome.ResultSetComplete)
+	assert.True(t, parsed.Outcome.ForceReplace)
+	assert.Equal(t, parser.SkipNoSession, parsed.Outcome.SkipReason)
 }
 
 func TestProviderParserPreservesCrushProjectAndArchivePolicy(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := filepath.Join(t.TempDir(), "external-crush-data")
-	require.NoError(os.MkdirAll(dataDir, 0o700))
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
 	dbPath := filepath.Join(dataDir, parser.CrushDBName)
 	db, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = db.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY, parent_session_id TEXT, title TEXT NOT NULL,
@@ -1552,24 +1498,24 @@ func TestProviderParserPreservesCrushProjectAndArchivePolicy(t *testing.T) {
 		VALUES ('message-1', 'session-1', 'user',
 			'[{"type":"text","data":{"text":"hello"}}]', 1789093626, 1789093626);
 	`)
-	require.NoError(err)
-	require.NoError(db.Close())
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
 
 	projectDir := filepath.Join(t.TempDir(), "client-project")
 	registryDir := t.TempDir()
 	registry := fmt.Sprintf(`{"projects":[{"path":%q,"data_dir":%q}]}`,
 		filepath.ToSlash(projectDir), filepath.ToSlash(dataDir))
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(registryDir, parser.CrushProjectsFileName),
 		[]byte(registry), 0o600,
 	))
 	provider, ok := parser.NewProvider(parser.AgentCrush, parser.ProviderConfig{
 		Roots: []string{registryDir}, Machine: "hosted-worker",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	discovery, err := parser.DiscoverRawCaptureSources(t.Context(), provider)
-	require.NoError(err)
-	require.Len(discovery.Sources, 1)
+	require.NoError(t, err)
+	require.Len(t, discovery.Sources, 1)
 	manifest, objects := manifestFromCapturePlan(
 		t, parser.AgentCrush, provider, discovery.Sources[0],
 	)
@@ -1577,68 +1523,68 @@ func TestProviderParserPreservesCrushProjectAndArchivePolicy(t *testing.T) {
 		Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(),
 		MaxTotalBytes: 1 << 20,
 	}).Materialize(t.Context(), manifest)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(materialized.Cleanup()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
 	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	hosted, err := dispatch.Parse(t.Context(), manifest, materialized)
 
-	require.NoError(err)
-	require.Len(hosted.Outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, hosted.Outcome.Results, 1)
 	session := hosted.Outcome.Results[0].Result.Session
-	assert.Equal(projectDir, session.Cwd)
-	assert.Equal("client_project", session.Project)
-	assert.NotContains(session.Cwd, materialized.Root())
-	assert.False(hosted.Outcome.ForceReplace,
+	assert.Equal(t, projectDir, session.Cwd)
+	assert.Equal(t, "client_project", session.Project)
+	assert.NotContains(t, session.Cwd, materialized.Root())
+	assert.False(t, hosted.Outcome.ForceReplace,
 		"a Crush snapshot must not replace archived session membership")
-	assert.True(hosted.ReplaceSessionContent)
+	assert.True(t, hosted.ReplaceSessionContent)
 
 	// Crush's session service physically deletes messages and the session row.
 	// Recapture that source, including the final empty database.
 	db, err = sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer db.Close()
 	_, err = db.ExecContext(t.Context(), `INSERT INTO sessions (id, title, updated_at, created_at)
 		VALUES ('session-2', 'Second session', 1789093626, 1789093626)`)
-	require.NoError(err)
+	require.NoError(t, err)
 	for _, remaining := range []int{2, 1, 0} {
 		if remaining < 2 {
 			id := fmt.Sprintf("session-%d", remaining+1)
 			_, err = db.ExecContext(t.Context(), "DELETE FROM messages WHERE session_id = ?", id)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = db.ExecContext(t.Context(), "DELETE FROM sessions WHERE id = ?", id)
-			require.NoError(err)
+			require.NoError(t, err)
 		}
 		if remaining == 1 {
 			_, err = db.ExecContext(t.Context(), `UPDATE messages SET parts =
 				'[{"type":"text","data":{"text":"updated"}}]' WHERE id = 'message-1'`)
-			require.NoError(err)
+			require.NoError(t, err)
 		}
 		manifest, objects := manifestFromCapturePlan(t, parser.AgentCrush, provider, discovery.Sources[0])
 		snapshot, err := (Materializer{
 			Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(),
 			MaxTotalBytes: 1 << 20,
 		}).Materialize(t.Context(), manifest)
-		require.NoError(err)
+		require.NoError(t, err)
 		parsed, err := dispatch.Parse(t.Context(), manifest, snapshot)
-		require.NoError(err)
-		require.Len(parsed.Outcome.Results, remaining)
-		assert.False(parsed.Tombstone)
-		assert.True(parsed.Outcome.ResultSetComplete)
-		assert.False(parsed.Outcome.ForceReplace,
+		require.NoError(t, err)
+		require.Len(t, parsed.Outcome.Results, remaining)
+		assert.False(t, parsed.Tombstone)
+		assert.True(t, parsed.Outcome.ResultSetComplete)
+		assert.False(t, parsed.Outcome.ForceReplace,
 			"missing source sessions must not request archive deletion")
-		assert.Equal(remaining > 0, parsed.ReplaceSessionContent)
+		assert.Equal(t, remaining > 0, parsed.ReplaceSessionContent)
 		if remaining > 0 {
-			assert.Equal("crush:session-1", parsed.Outcome.Results[0].Result.Session.ID)
+			assert.Equal(t, "crush:session-1", parsed.Outcome.Results[0].Result.Session.ID)
 			wantContent := "hello"
 			if remaining == 1 {
 				wantContent = "updated"
 			}
-			require.Len(parsed.Outcome.Results[0].Result.Messages, 1)
-			assert.Equal(wantContent, parsed.Outcome.Results[0].Result.Messages[0].Content)
+			require.Len(t, parsed.Outcome.Results[0].Result.Messages, 1)
+			assert.Equal(t, wantContent, parsed.Outcome.Results[0].Result.Messages[0].Content)
 		}
-		require.NoError(snapshot.Cleanup())
+		require.NoError(t, snapshot.Cleanup())
 	}
 }
 
@@ -1655,6 +1601,7 @@ func forgeSnapshotFixtureWithCwd(
 	t *testing.T, conversations map[string]string, cwd string,
 ) []byte {
 	t.Helper()
+
 	dbPath := filepath.Join(t.TempDir(), parser.ForgeDBFilename)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
@@ -1725,98 +1672,92 @@ func TestProviderParserHostedEvenerMatchesLocal(t *testing.T) {
 	for _, directSessionsRoot := range []bool{false, true} {
 		for _, parentState := range []string{"missing", "present", "invalid_metadata"} {
 			t.Run(fmt.Sprintf("direct_sessions_root_%t/parent_%s", directSessionsRoot, parentState), func(t *testing.T) {
-				assert := assert.New(t)
-				require := require.New(t)
-
 				root := t.TempDir()
 				sessions := filepath.Join(root, "sessions")
-				require.NoError(os.MkdirAll(sessions, 0o700))
+				require.NoError(t, os.MkdirAll(sessions, 0o700))
 				header := `{"kind":"header","format_version":2,"session_id":"session","created_at":"2026-01-01T00:00:00Z","working_dir":"/work/project"}` + "\n"
 				replayed := `{"kind":"entry","seq":0,"turn":{"kind":"USER_INPUT","timestamp":"2026-01-01T00:01:00Z","message":{"role":"user","content":[{"kind":"text","text":"Shared history"}]}}}` + "\n"
 				child := `{"kind":"entry","seq":1,"turn":{"kind":"USER_INPUT","timestamp":"2026-01-01T00:02:00Z","message":{"role":"user","content":[{"kind":"text","text":"Hello"}]}}}` + "\n"
-				require.NoError(os.WriteFile(filepath.Join(sessions, "session.transcript.jsonl"), []byte(header+replayed+child), 0o600))
-				require.NoError(os.WriteFile(filepath.Join(sessions, "session.meta.json"), []byte(`{"id":"session","name":"Child session","parent_session_id":"parent","divergence_turn":2}`), 0o600))
+				require.NoError(t, os.WriteFile(filepath.Join(sessions, "session.transcript.jsonl"), []byte(header+replayed+child), 0o600))
+				require.NoError(t, os.WriteFile(filepath.Join(sessions, "session.meta.json"), []byte(`{"id":"session","name":"Child session","parent_session_id":"parent","divergence_turn":2}`), 0o600))
 				if parentState != "missing" {
 					parentHeader := strings.Replace(header, `"session_id":"session"`, `"session_id":"parent"`, 1)
-					require.NoError(os.WriteFile(filepath.Join(sessions, "parent.transcript.jsonl"), []byte(parentHeader+replayed), 0o600))
+					require.NoError(t, os.WriteFile(filepath.Join(sessions, "parent.transcript.jsonl"), []byte(parentHeader+replayed), 0o600))
 					parentMeta := `{"id":"parent","name":"Parent session"}`
 					if parentState == "invalid_metadata" {
 						parentMeta = `{"id":"different-parent"}`
 					}
-					require.NoError(os.WriteFile(filepath.Join(sessions, "parent.meta.json"), []byte(parentMeta), 0o600))
+					require.NoError(t, os.WriteFile(filepath.Join(sessions, "parent.meta.json"), []byte(parentMeta), 0o600))
 				}
 				if directSessionsRoot {
 					root = sessions
 				}
 				provider, ok := parser.NewProvider(parser.AgentEvener, parser.ProviderConfig{Roots: []string{root}})
-				require.True(ok)
+				require.True(t, ok)
 				source, found, err := provider.FindSource(t.Context(), parser.FindSourceRequest{RawSessionID: "session"})
-				require.NoError(err)
-				require.True(found)
+				require.NoError(t, err)
+				require.True(t, found)
 				local, err := provider.Parse(t.Context(), parser.ParseRequest{Source: source})
-				require.NoError(err)
-				require.Len(local.Results, 1)
+				require.NoError(t, err)
+				require.Len(t, local.Results, 1)
 				if parentState == "present" {
-					require.Len(local.Results[0].Result.Messages, 1)
-					assert.Equal("Hello", local.Results[0].Result.Messages[0].Content)
+					require.Len(t, local.Results[0].Result.Messages, 1)
+					assert.Equal(t, "Hello", local.Results[0].Result.Messages[0].Content)
 				} else {
-					require.Len(local.Results[0].Result.Messages, 2)
-					assert.Equal("Shared history", local.Results[0].Result.Messages[0].Content)
+					require.Len(t, local.Results[0].Result.Messages, 2)
+					assert.Equal(t, "Shared history", local.Results[0].Result.Messages[0].Content)
 				}
 				manifest, objects := manifestFromCapturePlan(t, parser.AgentEvener, provider, source)
 				materialized, err := (Materializer{Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20}).Materialize(t.Context(), manifest)
-				require.NoError(err)
-				t.Cleanup(func() { require.NoError(materialized.Cleanup()) })
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
 				dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-				require.NoError(err)
+				require.NoError(t, err)
 				hosted, err := dispatch.Parse(t.Context(), manifest, materialized)
-				require.NoError(err)
-				require.Len(hosted.Outcome.Results, 1)
-				assert.Equal(local.Results[0].Result.Messages, hosted.Outcome.Results[0].Result.Messages)
-				assert.Equal(source.DisplayPath, hosted.Outcome.Results[0].Result.Session.File.Path)
-				assert.Equal("Child session", hosted.Outcome.Results[0].Result.Session.SessionName)
-				assert.Equal("evener:parent", hosted.Outcome.Results[0].Result.Session.ParentSessionID)
+				require.NoError(t, err)
+				require.Len(t, hosted.Outcome.Results, 1)
+				assert.Equal(t, local.Results[0].Result.Messages, hosted.Outcome.Results[0].Result.Messages)
+				assert.Equal(t, source.DisplayPath, hosted.Outcome.Results[0].Result.Session.File.Path)
+				assert.Equal(t, "Child session", hosted.Outcome.Results[0].Result.Session.SessionName)
+				assert.Equal(t, "evener:parent", hosted.Outcome.Results[0].Result.Session.ParentSessionID)
 			})
 		}
 	}
 }
 
 func TestProviderParserHostedCodexSkillNameStaysLexical(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	serverDir := filepath.Join(t.TempDir(), "visible-folder")
-	require.NoError(os.MkdirAll(serverDir, 0o700))
-	require.NoError(os.WriteFile(filepath.Join(serverDir, "SKILL.md"), []byte("---\nname: server-only-frontmatter-name\n---\n"), 0o600))
+	require.NoError(t, os.MkdirAll(serverDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(serverDir, "SKILL.md"), []byte("---\nname: server-only-frontmatter-name\n---\n"), 0o600))
 	root := filepath.Join(t.TempDir(), "sessions")
-	require.NoError(os.MkdirAll(root, 0o700))
+	require.NoError(t, os.MkdirAll(root, 0o700))
 	const id = "11111111-1111-4111-8111-111111111111"
 	args := `{"cmd":"cat SKILL.md"}`
 	content := testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON(id, serverDir, "codex_cli_rs", "2026-09-08T10:00:00Z"),
 		`{"type":"response_item","timestamp":"2026-09-08T10:00:01Z","payload":{"type":"function_call","name":"exec_command","call_id":"call-1","arguments":`+strconv.Quote(args)+`}}`,
 	)
-	require.NoError(os.WriteFile(filepath.Join(root, "rollout-2026-09-08T10-00-00-"+id+".jsonl"), []byte(content), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "rollout-2026-09-08T10-00-00-"+id+".jsonl"), []byte(content), 0o600))
 	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 	discovery, err := parser.DiscoverRawCaptureSources(t.Context(), provider)
-	require.NoError(err)
-	require.Len(discovery.Sources, 1)
+	require.NoError(t, err)
+	require.Len(t, discovery.Sources, 1)
 	local, err := provider.Parse(t.Context(), parser.ParseRequest{Source: discovery.Sources[0]})
-	require.NoError(err)
-	require.Len(local.Results, 1)
-	require.Len(local.Results[0].Result.Messages, 1)
-	assert.Equal("server-only-frontmatter-name", local.Results[0].Result.Messages[0].ToolCalls[0].SkillName)
+	require.NoError(t, err)
+	require.Len(t, local.Results, 1)
+	require.Len(t, local.Results[0].Result.Messages, 1)
+	assert.Equal(t, "server-only-frontmatter-name", local.Results[0].Result.Messages[0].ToolCalls[0].SkillName)
 	manifest, objects := manifestFromCapturePlan(t, parser.AgentCodex, provider, discovery.Sources[0])
 	materialized, err := (Materializer{Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20}).Materialize(t.Context(), manifest)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(materialized.Cleanup()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, materialized.Cleanup()) })
 	dispatch, err := NewProviderParser(parser.ProviderFactories(), "hosted-worker")
-	require.NoError(err)
+	require.NoError(t, err)
 	out, err := dispatch.Parse(t.Context(), manifest, materialized)
-	require.NoError(err)
-	require.Len(out.Outcome.Results, 1)
-	require.Len(out.Outcome.Results[0].Result.Messages, 1)
-	require.Len(out.Outcome.Results[0].Result.Messages[0].ToolCalls, 1)
-	assert.Empty(out.Outcome.Results[0].Result.Messages[0].ToolCalls[0].SkillName)
+	require.NoError(t, err)
+	require.Len(t, out.Outcome.Results, 1)
+	require.Len(t, out.Outcome.Results[0].Result.Messages, 1)
+	require.Len(t, out.Outcome.Results[0].Result.Messages[0].ToolCalls, 1)
+	assert.Empty(t, out.Outcome.Results[0].Result.Messages[0].ToolCalls[0].SkillName)
 }

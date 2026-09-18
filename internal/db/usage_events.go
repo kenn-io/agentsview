@@ -31,8 +31,8 @@ type UsageEvent struct {
 	DedupKey                 string
 }
 
-func (db *DB) ensureUsageEventsSchemaLocked(w *writerHandle) error {
-	if _, err := w.Exec(`
+func (db *DB) ensureUsageEventsSchemaLocked(ctx context.Context, w *writerHandle) error {
+	if _, err := w.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS usage_events (
 			id INTEGER PRIMARY KEY,
 			session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -62,14 +62,14 @@ func (db *DB) ensureUsageEventsSchemaLocked(w *writerHandle) error {
 		return fmt.Errorf("creating usage_events: %w", err)
 	}
 	var hasProviderID bool
-	if err := w.QueryRow(
+	if err := w.QueryRow(ctx,
 		`SELECT EXISTS(SELECT 1 FROM pragma_table_info('usage_events') WHERE name = ?)`,
 		"provider_id",
 	).Scan(&hasProviderID); err != nil {
 		return fmt.Errorf("checking usage_events.provider_id: %w", err)
 	}
 	if !hasProviderID {
-		if _, err := w.Exec(
+		if _, err := w.Exec(ctx,
 			`ALTER TABLE usage_events ADD COLUMN provider_id TEXT NOT NULL DEFAULT ''`,
 		); err != nil {
 			return fmt.Errorf("adding usage_events.provider_id: %w", err)
@@ -80,13 +80,13 @@ func (db *DB) ensureUsageEventsSchemaLocked(w *writerHandle) error {
 
 // ReplaceSessionUsageEvents replaces all usage events for one session
 // in a single transaction.
-func (db *DB) ReplaceSessionUsageEvents(
+func (db *DB) ReplaceSessionUsageEvents(ctx context.Context,
 	sessionID string, events []UsageEvent,
 ) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning usage events tx: %w", err)
 	}

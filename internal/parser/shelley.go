@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"hash"
 	"hash/fnv"
@@ -404,7 +405,7 @@ func parseShelleyConversationFromDB(ctx context.Context,
 	conn *sql.DB, dbPath, rawID, machine string, dbInfo os.FileInfo,
 ) (*ParseResult, error) {
 	conv, err := loadShelleyConversation(ctx, conn, rawID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

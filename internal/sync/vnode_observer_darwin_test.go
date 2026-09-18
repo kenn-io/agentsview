@@ -29,22 +29,20 @@ func TestVnodeObserverWakesOnEntryCreation(t *testing.T) {
 	select {
 	case <-woke:
 	case <-time.After(30 * time.Second):
-		t.Fatal("no wake after directory entry creation")
+		require.FailNow(t, "no wake after directory entry creation")
 	}
 }
 
 func TestVnodeObserverUsesOneDescriptorRegardlessOfEntries(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	for i := range 200 {
-		require.NoError(os.WriteFile(
+		require.NoError(t, os.WriteFile(
 			filepath.Join(dir, fmt.Sprintf("f%03d", i)), nil, 0o644))
 	}
 	o, err := newVnodeObserver(func() {})
-	require.NoError(err)
+	require.NoError(t, err)
 	defer o.Close()
-	require.NoError(o.Add(dir))
+	require.NoError(t, o.Add(dir))
 	assert.Equal(t, 1, o.watchedCount(),
 		"observer must hold one descriptor per directory, not per entry")
 }
@@ -64,12 +62,12 @@ func TestVnodeObserverCloseInterruptsBlockedRun(t *testing.T) {
 	case err := <-closeDone:
 		require.NoError(t, err)
 	case <-time.After(10 * time.Second):
-		t.Fatal("Close did not return; the blocked run loop was not interrupted")
+		require.FailNow(t, "Close did not return; the blocked run loop was not interrupted")
 	}
 	select {
 	case <-o.done:
 	case <-time.After(time.Second):
-		t.Fatal("run loop still active after Close returned")
+		require.FailNow(t, "run loop still active after Close returned")
 	}
 }
 
@@ -77,12 +75,10 @@ func TestVnodeObserverCloseInterruptsBlockedRun(t *testing.T) {
 // Close does not return before the first finishes: every Close returns only
 // after run() exited and the descriptors are torn down.
 func TestVnodeObserverConcurrentCloseWaitsForTeardown(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	o, err := newVnodeObserver(func() {})
-	require.NoError(err)
-	require.NoError(o.Add(dir))
+	require.NoError(t, err)
+	require.NoError(t, o.Add(dir))
 
 	const closers = 4
 	results := make(chan error, closers)
@@ -92,33 +88,31 @@ func TestVnodeObserverConcurrentCloseWaitsForTeardown(t *testing.T) {
 	for range closers {
 		select {
 		case err := <-results:
-			require.NoError(err)
+			require.NoError(t, err)
 			select {
 			case <-o.done:
 			default:
-				t.Fatal("Close returned while the run loop was still active")
+				require.FailNow(t, "Close returned while the run loop was still active")
 			}
 			select {
 			case <-o.closeDone:
 			default:
-				t.Fatal("Close returned before teardown completed")
+				require.FailNow(t, "Close returned before teardown completed")
 			}
 		case <-time.After(10 * time.Second):
-			t.Fatal("concurrent Close did not return")
+			require.FailNow(t, "concurrent Close did not return")
 		}
 	}
 	assert.Equal(t, 0, o.watchedCount())
 }
 
 func TestVnodeObserverRemoveAndCloseAreIdempotent(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	o, err := newVnodeObserver(func() {})
-	require.NoError(err)
-	require.NoError(o.Add(dir))
-	require.NoError(o.Remove(dir))
-	require.NoError(o.Remove(dir)) // second remove is a no-op
-	require.NoError(o.Close())
-	require.NoError(o.Close())
+	require.NoError(t, err)
+	require.NoError(t, o.Add(dir))
+	require.NoError(t, o.Remove(dir))
+	require.NoError(t, o.Remove(dir)) // second remove is a no-op
+	require.NoError(t, o.Close())
+	require.NoError(t, o.Close())
 }

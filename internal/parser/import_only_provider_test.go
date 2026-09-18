@@ -8,24 +8,21 @@ import (
 )
 
 func TestImportOnlyProviderExportCapabilitiesAreAgentSpecific(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	chatGPTProvider, ok := NewProvider(AgentChatGPT, ProviderConfig{})
-	require.True(ok)
-	assert.Implements((*ChatGPTExportParser)(nil), chatGPTProvider)
-	assert.NotImplements((*ClaudeAIExportParser)(nil), chatGPTProvider)
-	assert.NotImplements((*GeminiAppsExportParser)(nil), chatGPTProvider)
+	require.True(t, ok)
+	assert.Implements(t, (*ChatGPTExportParser)(nil), chatGPTProvider)
+	assert.NotImplements(t, (*ClaudeAIExportParser)(nil), chatGPTProvider)
+	assert.NotImplements(t, (*GeminiAppsExportParser)(nil), chatGPTProvider)
 
 	claudeAIProvider, ok := NewProvider(AgentClaudeAI, ProviderConfig{})
-	require.True(ok)
-	assert.Implements((*ClaudeAIExportParser)(nil), claudeAIProvider)
-	assert.NotImplements((*ChatGPTExportParser)(nil), claudeAIProvider)
-	assert.NotImplements((*GeminiAppsExportParser)(nil), claudeAIProvider)
+	require.True(t, ok)
+	assert.Implements(t, (*ClaudeAIExportParser)(nil), claudeAIProvider)
+	assert.NotImplements(t, (*ChatGPTExportParser)(nil), claudeAIProvider)
+	assert.NotImplements(t, (*GeminiAppsExportParser)(nil), claudeAIProvider)
 
 	geminiAppsProvider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(ok)
-	assert.Implements((*GeminiAppsExportParser)(nil), geminiAppsProvider)
-	assert.NotImplements((*ClaudeAIExportParser)(nil), geminiAppsProvider)
-	assert.NotImplements((*ChatGPTExportParser)(nil), geminiAppsProvider)
+	require.True(t, ok)
+	assert.Implements(t, (*GeminiAppsExportParser)(nil), geminiAppsProvider)
+	assert.NotImplements(t, (*ClaudeAIExportParser)(nil), geminiAppsProvider)
+	assert.NotImplements(t, (*ChatGPTExportParser)(nil), geminiAppsProvider)
 }

@@ -102,6 +102,7 @@ func (db *DB) LoadWorktreeMappingPublicationDelta(
 		return WorktreeMappingPublicationDelta{}, fmt.Errorf(
 			"loading worktree mapping tombstones: %w", err)
 	}
+	defer deleteRows.Close()
 	defer func() { _ = deleteRows.Close() }()
 	var deletes []WorktreeMappingKey
 	for deleteRows.Next() {

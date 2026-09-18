@@ -27,16 +27,13 @@ func TestSessionMessagesFlags_InvalidDirection(t *testing.T) {
 }
 
 func TestSessionMessagesFlags_BeforeAfterRequireAround(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	_, err := parseMessagesFlags(t, []string{"--before", "2"})
-	require.Error(err)
-	assert.Contains(err.Error(), "--around")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--around")
 
 	_, err = parseMessagesFlags(t, []string{"--after", "2"})
-	require.Error(err)
-	assert.Contains(err.Error(), "--around")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--around")
 }
 
 // TestSessionMessagesFlags_AroundOnlyOmitsDirectionAndFrom is the CRITICAL
@@ -46,20 +43,17 @@ func TestSessionMessagesFlags_BeforeAfterRequireAround(t *testing.T) {
 // check on every plain `--around N` call. With only --around set, the
 // built filter must leave Direction empty and From nil.
 func TestSessionMessagesFlags_AroundOnlyOmitsDirectionAndFrom(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	filter, err := parseMessagesFlags(t, []string{"--around", "5"})
-	require.NoError(err)
-	require.NotNil(filter.Around)
-	assert.Equal(5, *filter.Around)
-	assert.Empty(filter.Direction,
+	require.NoError(t, err)
+	require.NotNil(t, filter.Around)
+	assert.Equal(t, 5, *filter.Around)
+	assert.Empty(t, filter.Direction,
 		"Direction must stay empty when --direction was never set, "+
 			"even though the flag default is asc")
-	assert.Nil(filter.From,
+	assert.Nil(t, filter.From,
 		"From must stay nil when --from was never set")
-	assert.Nil(filter.Before, "Before must stay nil when --before was never set")
-	assert.Nil(filter.After, "After must stay nil when --after was never set")
+	assert.Nil(t, filter.Before, "Before must stay nil when --before was never set")
+	assert.Nil(t, filter.After, "After must stay nil when --after was never set")
 }
 
 // TestSessionMessagesFlags_AroundWithExplicitFromForwardsIt verifies that
@@ -82,17 +76,14 @@ func TestSessionMessagesFlags_AroundWithExplicitDirectionForwardsIt(t *testing.T
 }
 
 func TestSessionMessagesFlags_AroundWithBeforeAfter(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	filter, err := parseMessagesFlags(t, []string{
 		"--around", "5", "--before", "2", "--after", "3",
 	})
-	require.NoError(err)
-	require.NotNil(filter.Before)
-	require.NotNil(filter.After)
-	assert.Equal(2, *filter.Before)
-	assert.Equal(3, *filter.After)
+	require.NoError(t, err)
+	require.NotNil(t, filter.Before)
+	require.NotNil(t, filter.After)
+	assert.Equal(t, 2, *filter.Before)
+	assert.Equal(t, 3, *filter.After)
 }
 
 func TestSessionMessagesFlags_RoleSplitsOnComma(t *testing.T) {
@@ -119,8 +110,6 @@ func TestSessionMessagesFlags_RoleTrimsSpacesAndDropsEmpty(t *testing.T) {
 // Direction (flag default "asc"), which would have tripped the
 // around-vs-direction validation on every default `--around` call.
 func TestSessionMessagesAroundNoOtherFlagsSucceeds(t *testing.T) {
-	assert := assert.New(t)
-
 	dataDir := newAgentDataDir(t)
 	seedSession(t, dataDir, "s-around", "proj")
 	seedMessages(t, dataDir, "s-around", 12) // ordinals 1..12
@@ -133,8 +122,8 @@ func TestSessionMessagesAroundNoOtherFlagsSucceeds(t *testing.T) {
 	// Ordinals start at 1 (seedMessages convention): only 4 messages exist
 	// below ordinal 5, so before-window is capped at 4 even though the
 	// default asks for 5; after-window gets the full 5 (6..10).
-	assert.Equal(10, got.Count,
+	assert.Equal(t, 10, got.Count,
 		"before is capped at 4 available messages; after takes the full 5")
-	assert.Equal(float64(1), got.Messages[0]["ordinal"])
-	assert.Equal(float64(10), got.Messages[len(got.Messages)-1]["ordinal"])
+	assert.InDelta(t, float64(1), got.Messages[0]["ordinal"], 0)
+	assert.InDelta(t, float64(10), got.Messages[len(got.Messages)-1]["ordinal"], 0)
 }

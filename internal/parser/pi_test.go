@@ -63,8 +63,6 @@ func parsePiTestSession(
 // TestPiProviderParsesSessionHeader verifies that the session-level fields are
 // populated correctly from the pi fixture header (PRSR-01, PRSR-11, PRSR-10).
 func TestPiProviderParsesSessionHeader(t *testing.T) {
-	assert := assert.New(t)
-
 	fixturePath := createTestFile(
 		t, "pi-test-session-uuid.jsonl",
 		loadFixture(t, "pi/session.jsonl"),
@@ -72,31 +70,29 @@ func TestPiProviderParsesSessionHeader(t *testing.T) {
 	sess, msgs, err := parsePiTestSession(t, fixturePath, "", "local")
 	require.NoError(t, err)
 
-	assert.Equal("pi:pi-test-session-uuid", sess.ID, "PRSR-01: session ID")
-	assert.Equal(AgentPi, sess.Agent, "PRSR-11: agent type")
+	assert.Equal(t, "pi:pi-test-session-uuid", sess.ID, "PRSR-01: session ID")
+	assert.Equal(t, AgentPi, sess.Agent, "PRSR-11: agent type")
 
-	assert.Equal("/Users/alice/code/my-project", sess.Cwd,
+	assert.Equal(t, "/Users/alice/code/my-project", sess.Cwd,
 		"PRSR-01: cwd from session header")
 
 	// ExtractProjectFromCwd("/Users/alice/code/my-project") -> "my_project"
-	assert.Equal("my_project", sess.Project, "PRSR-01: project from cwd")
+	assert.Equal(t, "my_project", sess.Project, "PRSR-01: project from cwd")
 
 	// branchedFrom basename without extension, prefixed (PRSR-10)
-	assert.Equal(
+	assert.Equal(t,
 		"pi:2025-01-01T09-00-00-000Z_parent-uuid",
 		sess.ParentSessionID,
 		"PRSR-10: parent session ID",
 	)
 
-	assert.Positive(sess.MessageCount, "PRSR-01: message count > 0")
-	assert.False(sess.StartedAt.IsZero(), "PRSR-01: StartedAt non-zero")
+	assert.Positive(t, sess.MessageCount, "PRSR-01: message count > 0")
+	assert.False(t, sess.StartedAt.IsZero(), "PRSR-01: StartedAt non-zero")
 
 	_ = msgs // not the focus of this sub-test
 }
 
 func TestPiProviderParsesSessionInfoName(t *testing.T) {
-	assert := assert.New(t)
-
 	content := strings.Join([]string{
 		`{"type":"session","version":3,"id":"named-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/my-project"}`,
 		`{"type":"session_info","id":"info-1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","name":"Original name"}`,
@@ -107,11 +103,11 @@ func TestPiProviderParsesSessionInfoName(t *testing.T) {
 
 	sess, msgs := runPiParserTest(t, content)
 
-	assert.Equal("Renamed session", sess.SessionName)
-	assert.Equal(1, sess.MessageCount,
+	assert.Equal(t, "Renamed session", sess.SessionName)
+	assert.Equal(t, 1, sess.MessageCount,
 		"session_info entries must not count as messages")
 	require.Len(t, msgs, 1)
-	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal(t, RoleUser, msgs[0].Role)
 }
 
 func TestPiProviderParsesSessionInfoLastNameWins(t *testing.T) {
@@ -134,8 +130,6 @@ func TestPiProviderParsesSessionInfoLastNameWins(t *testing.T) {
 // session name (issue #959: OMP v16.3+ session files start with the slot,
 // not the session header).
 func TestPiProviderParsesOMPTitleSlot(t *testing.T) {
-	assert := assert.New(t)
-
 	content := strings.Join([]string{
 		`{"type":"title","v":1,"title":"Build Bloom filter research artifact","source":"auto","updatedAt":"2026-07-03T06:32:44.479Z","pad":"    "}`,
 		`{"type":"session","version":3,"id":"omp-sess","timestamp":"2026-07-03T06:30:58.508Z","cwd":"/Users/alice/code/my-project","title":"Follow PROJECT.md instructions","titleSource":"auto"}`,
@@ -148,14 +142,14 @@ func TestPiProviderParsesOMPTitleSlot(t *testing.T) {
 
 	sess, msgs := runPiParserTest(t, content)
 
-	assert.Equal("pi:omp-sess", sess.ID)
-	assert.Equal("/Users/alice/code/my-project", sess.Cwd)
-	assert.Equal("Build Bloom filter research artifact", sess.SessionName,
+	assert.Equal(t, "pi:omp-sess", sess.ID)
+	assert.Equal(t, "/Users/alice/code/my-project", sess.Cwd)
+	assert.Equal(t, "Build Bloom filter research artifact", sess.SessionName,
 		"title slot title should become the session name")
-	assert.Equal(2, sess.MessageCount,
+	assert.Equal(t, 2, sess.MessageCount,
 		"the title slot must not count as a message")
 	require.Len(t, msgs, 2)
-	assert.Equal("hello", sess.FirstMessage)
+	assert.Equal(t, "hello", sess.FirstMessage)
 }
 
 // TestPiProviderParsesOMPHeaderTitleFallback verifies that when the title
@@ -204,37 +198,31 @@ func TestPiProviderParsesOMPTitleSlotWithoutHeader(t *testing.T) {
 // TestPiProviderParsesUserMessages verifies user message content and ordinals
 // (PRSR-02, PRSR-01).
 func TestPiProviderParsesUserMessages(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	fixturePath := createTestFile(
 		t, "pi-session.jsonl",
 		loadFixture(t, "pi/session.jsonl"),
 	)
 	sess, msgs, err := parsePiTestSession(t, fixturePath, "", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// First non-toolResult user message at index 0.
-	require.NotEmpty(msgs, "expected at least one message")
+	require.NotEmpty(t, msgs, "expected at least one message")
 	assertMessage(t, msgs[0], RoleUser, "Fix the login bug")
-	assert.Equal(0, msgs[0].Ordinal, "first user message ordinal == 0")
+	assert.Equal(t, 0, msgs[0].Ordinal, "first user message ordinal == 0")
 
 	// sess.FirstMessage should reflect first user text.
-	assert.Contains(sess.FirstMessage, "Fix the login bug", "PRSR-01: FirstMessage")
+	assert.Contains(t, sess.FirstMessage, "Fix the login bug", "PRSR-01: FirstMessage")
 }
 
 // TestPiProviderParsesAssistantMessages verifies the assistant message with
 // thinking, text, and tool call (PRSR-03, PRSR-04, PRSR-06).
 func TestPiProviderParsesAssistantMessages(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	fixturePath := createTestFile(
 		t, "pi-session.jsonl",
 		loadFixture(t, "pi/session.jsonl"),
 	)
 	_, msgs, err := parsePiTestSession(t, fixturePath, "", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// entry-2 is the second entry overall (index 1 in messages).
 	var assistantMsg *ParsedMessage
@@ -244,39 +232,36 @@ func TestPiProviderParsesAssistantMessages(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(assistantMsg, "expected assistant message with tool use")
+	require.NotNil(t, assistantMsg, "expected assistant message with tool use")
 
-	assert.Equal(RoleAssistant, assistantMsg.Role, "PRSR-03: role")
-	assert.True(assistantMsg.HasThinking, "PRSR-06: HasThinking")
-	assert.True(assistantMsg.HasToolUse, "PRSR-03/PRSR-04: HasToolUse")
-	require.Len(assistantMsg.ToolCalls, 1, "PRSR-04: one tool call")
+	assert.Equal(t, RoleAssistant, assistantMsg.Role, "PRSR-03: role")
+	assert.True(t, assistantMsg.HasThinking, "PRSR-06: HasThinking")
+	assert.True(t, assistantMsg.HasToolUse, "PRSR-03/PRSR-04: HasToolUse")
+	require.Len(t, assistantMsg.ToolCalls, 1, "PRSR-04: one tool call")
 
 	tc := assistantMsg.ToolCalls[0]
-	assert.Equal("read", tc.ToolName, "PRSR-04: tool name")
-	assert.Equal("Read", tc.Category, "PRSR-04: normalized category via NormalizeToolCategory")
-	assert.Equal("toolu_01", tc.ToolUseID, "PRSR-04: tool use ID")
-	assert.Contains(tc.InputJSON, "auth.go", "PRSR-04: input JSON contains file path")
-	assert.Contains(assistantMsg.Content, "Looking at the auth module.", "assistant text content")
+	assert.Equal(t, "read", tc.ToolName, "PRSR-04: tool name")
+	assert.Equal(t, "Read", tc.Category, "PRSR-04: normalized category via NormalizeToolCategory")
+	assert.Equal(t, "toolu_01", tc.ToolUseID, "PRSR-04: tool use ID")
+	assert.Contains(t, tc.InputJSON, "auth.go", "PRSR-04: input JSON contains file path")
+	assert.Contains(t, assistantMsg.Content, "Looking at the auth module.", "assistant text content")
 
 	// Thinking and tool markers are now emitted inline in Content.
-	assert.Contains(assistantMsg.Content, "[Thinking]", "thinking marker in Content")
-	assert.Contains(assistantMsg.Content, "[/Thinking]", "thinking end marker in Content")
-	assert.Contains(assistantMsg.Content, "Let me analyze this carefully.", "thinking text in Content")
-	assert.Contains(assistantMsg.Content, "[Read: auth.go]", "tool use marker in Content")
+	assert.Contains(t, assistantMsg.Content, "[Thinking]", "thinking marker in Content")
+	assert.Contains(t, assistantMsg.Content, "[/Thinking]", "thinking end marker in Content")
+	assert.Contains(t, assistantMsg.Content, "Let me analyze this carefully.", "thinking text in Content")
+	assert.Contains(t, assistantMsg.Content, "[Read: auth.go]", "tool use marker in Content")
 }
 
 // TestPiProviderParsesToolResults verifies tool result entries are parsed
 // correctly (PRSR-05).
 func TestPiProviderParsesToolResults(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	fixturePath := createTestFile(
 		t, "pi-session.jsonl",
 		loadFixture(t, "pi/session.jsonl"),
 	)
 	_, msgs, err := parsePiTestSession(t, fixturePath, "", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var toolResultMsg *ParsedMessage
 	for i := range msgs {
@@ -285,47 +270,41 @@ func TestPiProviderParsesToolResults(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(toolResultMsg, "expected a message with ToolResults")
+	require.NotNil(t, toolResultMsg, "expected a message with ToolResults")
 
-	assert.Equal(RoleUser, toolResultMsg.Role, "tool result messages use RoleUser")
-	require.Len(toolResultMsg.ToolResults, 1, "PRSR-05: one tool result")
-	assert.Equal("toolu_01", toolResultMsg.ToolResults[0].ToolUseID, "PRSR-05: tool use ID")
-	assert.Positive(toolResultMsg.ToolResults[0].ContentLength, "PRSR-05: content length > 0")
-	assert.NotEmpty(toolResultMsg.ToolResults[0].ContentRaw, "tool result must populate ContentRaw")
+	assert.Equal(t, RoleUser, toolResultMsg.Role, "tool result messages use RoleUser")
+	require.Len(t, toolResultMsg.ToolResults, 1, "PRSR-05: one tool result")
+	assert.Equal(t, "toolu_01", toolResultMsg.ToolResults[0].ToolUseID, "PRSR-05: tool use ID")
+	assert.Positive(t, toolResultMsg.ToolResults[0].ContentLength, "PRSR-05: content length > 0")
+	assert.NotEmpty(t, toolResultMsg.ToolResults[0].ContentRaw, "tool result must populate ContentRaw")
 	decoded := DecodeContent(toolResultMsg.ToolResults[0].ContentRaw)
-	assert.Contains(decoded, "package auth", "ContentRaw must decode to tool output text")
+	assert.Contains(t, decoded, "package auth", "ContentRaw must decode to tool output text")
 }
 
 func TestPiProviderParsesStringContent(t *testing.T) {
 	header := `{"type":"session","id":"str-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
 
 	t.Run("assistant string content", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		sess, msgs := runPiParserTest(t,
 			header+`{"type":"message","id":"e1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"assistant","content":"plain string response","model":"claude-opus-4-5","provider":"anthropic","stopReason":"stop","timestamp":1735725601000}}`,
 		)
-		require.NotNil(sess)
-		require.Len(msgs, 1)
-		assert.Equal(RoleAssistant, msgs[0].Role)
-		assert.Equal("plain string response", msgs[0].Content)
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, RoleAssistant, msgs[0].Role)
+		assert.Equal(t, "plain string response", msgs[0].Content)
 	})
 
 	t.Run("tool result string content", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		sess, msgs := runPiParserTest(t,
 			header+`{"type":"message","id":"e1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"toolResult","toolCallId":"toolu_99","content":"file contents here","timestamp":1735725601000}}`,
 		)
-		require.NotNil(sess)
-		require.Len(msgs, 1)
-		require.Len(msgs[0].ToolResults, 1)
-		assert.Equal("toolu_99", msgs[0].ToolResults[0].ToolUseID)
-		assert.Equal(len("file contents here"), msgs[0].ToolResults[0].ContentLength)
-		assert.NotEmpty(msgs[0].ToolResults[0].ContentRaw)
-		assert.Equal("file contents here", DecodeContent(msgs[0].ToolResults[0].ContentRaw))
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 1)
+		require.Len(t, msgs[0].ToolResults, 1)
+		assert.Equal(t, "toolu_99", msgs[0].ToolResults[0].ToolUseID)
+		assert.Equal(t, len("file contents here"), msgs[0].ToolResults[0].ContentLength)
+		assert.NotEmpty(t, msgs[0].ToolResults[0].ContentRaw)
+		assert.Equal(t, "file contents here", DecodeContent(msgs[0].ToolResults[0].ContentRaw))
 	})
 }
 
@@ -433,9 +412,6 @@ func TestPiProviderParsesV1Session(t *testing.T) {
 }
 
 func TestParsePiSession_V1MessageLineageStaysEmpty(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	content := strings.Join([]string{
 		`{"type":"session","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/v1-project"}`,
 		`{"type":"message","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
@@ -445,13 +421,13 @@ func TestParsePiSession_V1MessageLineageStaysEmpty(t *testing.T) {
 
 	path := createTestFile(t, "v1-lineage.jsonl", content)
 	sess, msgs, err := parsePiTestSession(t, path, "v1_project", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.Equal("pi:v1-lineage", sess.ID)
-	require.Len(msgs, 2)
+	assert.Equal(t, "pi:v1-lineage", sess.ID)
+	require.Len(t, msgs, 2)
 	for _, msg := range msgs {
-		assert.Empty(msg.SourceUUID)
-		assert.Empty(msg.SourceParentUUID)
+		assert.Empty(t, msg.SourceUUID)
+		assert.Empty(t, msg.SourceParentUUID)
 	}
 }
 
@@ -485,6 +461,7 @@ func parsePiLikeTestSession(
 	t *testing.T, agent AgentType, content string,
 ) (*ParsedSession, []ParsedMessage) {
 	t.Helper()
+
 	path := createTestFile(t, "pilike-session.jsonl", content)
 	provider, ok := NewProvider(agent, ProviderConfig{
 		Roots:   []string{filepath.Dir(filepath.Dir(path))},
@@ -588,30 +565,27 @@ func TestPiProviderParsesOMPParentSession(t *testing.T) {
 // Pi parentSession paths resolve to the parent's persisted header ID when the
 // filename stem and header ID differ.
 func TestPiProviderNativeParentSessionUsesHeaderIdentity(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	parentPath := filepath.Join(root, "2026-07-03T06-00-00-000Z_parent-file.jsonl")
 	childPath := filepath.Join(root, "2026-07-03T06-30-00-000Z_child-file.jsonl")
 	parentPathJSON, err := json.Marshal(parentPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	parentContent := `{"type":"session","version":3,"id":"header-id-does-not-match-filename","timestamp":"2026-07-03T06:00:00.000Z","cwd":"/repos/x"}` + "\n"
 	childContent := `{"type":"session","version":3,"id":"child","timestamp":"2026-07-03T06:30:00.000Z","cwd":"/repos/x","parentSession":` + string(parentPathJSON) + `}` + "\n"
-	require.NoError(os.WriteFile(parentPath, []byte(parentContent), 0o644))
-	require.NoError(os.WriteFile(childPath, []byte(childContent), 0o644))
+	require.NoError(t, os.WriteFile(parentPath, []byte(parentContent), 0o644))
+	require.NoError(t, os.WriteFile(childPath, []byte(childContent), 0o644))
 
 	parent, _, err := parsePiLikeSession(parentPath, "my_project", "local", AgentPi, "pi:")
-	require.NoError(err)
+	require.NoError(t, err)
 	child, _, err := parsePiLikeSession(childPath, "my_project", "local", AgentPi, "pi:")
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.Equal("pi:header-id-does-not-match-filename", parent.ID)
-	assert.Equal(parent.ID, child.ParentSessionID,
+	assert.Equal(t, "pi:header-id-does-not-match-filename", parent.ID)
+	assert.Equal(t, parent.ID, child.ParentSessionID,
 		"native parentSession must resolve to the parent's stored header ID")
-	assert.Empty(parent.RelationshipType,
+	assert.Empty(t, parent.RelationshipType,
 		"native Pi parent session has no relationship")
-	assert.Equal(RelFork, child.RelationshipType,
+	assert.Equal(t, RelFork, child.RelationshipType,
 		"native Pi parented session is classified as a fork")
 }
 
@@ -641,46 +615,40 @@ func TestPiProviderOMPParentSessionMatchesParentID(t *testing.T) {
 }
 
 func TestPiProviderOMPSubagentUsesV1ParentFilenameID(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "project")
 	parentPath := filepath.Join(projectDir, "parent-v1.jsonl")
 	childDir := filepath.Join(projectDir, "parent-v1")
 	childPath := filepath.Join(childDir, "agent-worker.jsonl")
-	require.NoError(os.MkdirAll(childDir, 0o755))
-	require.NoError(os.WriteFile(parentPath, []byte(strings.Join([]string{
+	require.NoError(t, os.MkdirAll(childDir, 0o755))
+	require.NoError(t, os.WriteFile(parentPath, []byte(strings.Join([]string{
 		`{"type":"session","version":1,"timestamp":"2026-07-03T06:00:00.000Z","cwd":"/repos/x"}`,
 		`{"type":"message","timestamp":"2026-07-03T06:00:01.000Z","message":{"role":"user","content":"root"}}`,
 		"",
 	}, "\n")), 0o644))
-	require.NoError(os.WriteFile(childPath, []byte(strings.Join([]string{
+	require.NoError(t, os.WriteFile(childPath, []byte(strings.Join([]string{
 		`{"type":"session","version":3,"id":"child-def","timestamp":"2026-07-03T06:30:00.000Z","cwd":"/repos/x"}`,
 		`{"type":"message","id":"c1","parentId":null,"timestamp":"2026-07-03T06:30:01.000Z","message":{"role":"user","content":"branch"}}`,
 		"",
 	}, "\n")), 0o644))
 
 	child, _, err := parsePiLikeSession(childPath, "my_project", "local", AgentOMP, "omp:")
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.Equal("omp:child-def", child.ID)
-	assert.Equal("omp:parent-v1", child.ParentSessionID)
-	assert.Equal(RelSubagent, child.RelationshipType)
+	assert.Equal(t, "omp:child-def", child.ID)
+	assert.Equal(t, "omp:parent-v1", child.ParentSessionID)
+	assert.Equal(t, RelSubagent, child.RelationshipType)
 }
 
 func TestPiProviderOMPSubagentFollowsSymlinkedParent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "project")
 	realParent := filepath.Join(root, "real-parent.jsonl")
 	parentLink := filepath.Join(projectDir, "linked-parent.jsonl")
 	childDir := filepath.Join(projectDir, "linked-parent")
 	childPath := filepath.Join(childDir, "agent-worker.jsonl")
-	require.NoError(os.MkdirAll(childDir, 0o755))
-	require.NoError(os.WriteFile(realParent, []byte(strings.Join([]string{
+	require.NoError(t, os.MkdirAll(childDir, 0o755))
+	require.NoError(t, os.WriteFile(realParent, []byte(strings.Join([]string{
 		`{"type":"session","version":3,"id":"real-parent-id","timestamp":"2026-07-03T06:00:00.000Z","cwd":"/repos/x"}`,
 		`{"type":"message","id":"p1","parentId":null,"timestamp":"2026-07-03T06:00:01.000Z","message":{"role":"user","content":"root"}}`,
 		"",
@@ -688,24 +656,21 @@ func TestPiProviderOMPSubagentFollowsSymlinkedParent(t *testing.T) {
 	if err := os.Symlink(realParent, parentLink); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
-	require.NoError(os.WriteFile(childPath, []byte(strings.Join([]string{
+	require.NoError(t, os.WriteFile(childPath, []byte(strings.Join([]string{
 		`{"type":"session","version":3,"id":"child-def","timestamp":"2026-07-03T06:30:00.000Z","cwd":"/repos/x"}`,
 		`{"type":"message","id":"c1","parentId":null,"timestamp":"2026-07-03T06:30:01.000Z","message":{"role":"user","content":"branch"}}`,
 		"",
 	}, "\n")), 0o644))
 
 	child, _, err := parsePiLikeSession(childPath, "my_project", "local", AgentOMP, "omp:")
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.Equal("omp:child-def", child.ID)
-	assert.Equal("omp:real-parent-id", child.ParentSessionID)
-	assert.Equal(RelSubagent, child.RelationshipType)
+	assert.Equal(t, "omp:child-def", child.ID)
+	assert.Equal(t, "omp:real-parent-id", child.ParentSessionID)
+	assert.Equal(t, RelSubagent, child.RelationshipType)
 }
 
 func TestParsePiSession_MessageLineageContinuity(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	content := strings.Join([]string{
 		`{"type":"session","version":3,"id":"tree-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/my-project"}`,
 		`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"root"}}`,
@@ -721,38 +686,38 @@ func TestParsePiSession_MessageLineageContinuity(t *testing.T) {
 
 	sess, msgs := runPiParserTest(t, content)
 
-	assert.Equal("Checkpoint", sess.SessionName)
-	require.Len(msgs, 6)
+	assert.Equal(t, "Checkpoint", sess.SessionName)
+	require.Len(t, msgs, 6)
 
-	assert.Equal("u1", msgs[0].SourceUUID)
-	assert.Empty(msgs[0].SourceParentUUID)
-	assert.Equal("user", msgs[0].SourceType)
+	assert.Equal(t, "u1", msgs[0].SourceUUID)
+	assert.Empty(t, msgs[0].SourceParentUUID)
+	assert.Equal(t, "user", msgs[0].SourceType)
 
-	assert.Equal("cmp-1", msgs[1].SourceUUID)
-	assert.Equal("u1", msgs[1].SourceParentUUID)
-	assert.Equal("system", msgs[1].SourceType)
-	assert.Equal("compact_boundary", msgs[1].SourceSubtype)
-	assert.True(msgs[1].IsSystem)
-	assert.True(msgs[1].IsCompactBoundary)
-	assert.Equal("# compacted", msgs[1].Content)
+	assert.Equal(t, "cmp-1", msgs[1].SourceUUID)
+	assert.Equal(t, "u1", msgs[1].SourceParentUUID)
+	assert.Equal(t, "system", msgs[1].SourceType)
+	assert.Equal(t, "compact_boundary", msgs[1].SourceSubtype)
+	assert.True(t, msgs[1].IsSystem)
+	assert.True(t, msgs[1].IsCompactBoundary)
+	assert.Equal(t, "# compacted", msgs[1].Content)
 
-	assert.Equal("u2", msgs[2].SourceUUID)
-	assert.Equal("cmp-1", msgs[2].SourceParentUUID)
-	assert.Equal("user", msgs[2].SourceType)
+	assert.Equal(t, "u2", msgs[2].SourceUUID)
+	assert.Equal(t, "cmp-1", msgs[2].SourceParentUUID)
+	assert.Equal(t, "user", msgs[2].SourceType)
 
-	assert.Equal("a2", msgs[3].SourceUUID)
-	assert.Equal("u2", msgs[3].SourceParentUUID)
-	assert.Equal("assistant", msgs[3].SourceType)
+	assert.Equal(t, "a2", msgs[3].SourceUUID)
+	assert.Equal(t, "u2", msgs[3].SourceParentUUID)
+	assert.Equal(t, "assistant", msgs[3].SourceType)
 
-	assert.Equal("t1", msgs[4].SourceUUID)
-	assert.Equal("a2", msgs[4].SourceParentUUID)
-	assert.Equal("toolResult", msgs[4].SourceType)
-	require.Len(msgs[4].ToolResults, 1)
-	assert.Equal("toolu_42", msgs[4].ToolResults[0].ToolUseID)
+	assert.Equal(t, "t1", msgs[4].SourceUUID)
+	assert.Equal(t, "a2", msgs[4].SourceParentUUID)
+	assert.Equal(t, "toolResult", msgs[4].SourceType)
+	require.Len(t, msgs[4].ToolResults, 1)
+	assert.Equal(t, "toolu_42", msgs[4].ToolResults[0].ToolUseID)
 
-	assert.Equal("a3", msgs[5].SourceUUID)
-	assert.Equal("a2", msgs[5].SourceParentUUID)
-	assert.Equal("assistant", msgs[5].SourceType)
+	assert.Equal(t, "a3", msgs[5].SourceUUID)
+	assert.Equal(t, "a2", msgs[5].SourceParentUUID)
+	assert.Equal(t, "assistant", msgs[5].SourceType)
 }
 
 // TestPiProviderParsesIOError verifies that I/O errors encountered after the
@@ -766,28 +731,22 @@ func TestPiProviderParsesIOError(t *testing.T) {
 	})
 
 	t.Run("lr.Err check does not fire on clean read", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		header := `{"type":"session","id":"pipe-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/my-project"}` + "\n"
 		msg := `{"type":"message","id":"entry-1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}` + "\n"
 
 		path := createTestFile(t, "pi-clean-read.jsonl", header+msg)
 		sess, msgs, parseErr := parsePiTestSession(t, path, "my_project", "local")
 
-		require.NoError(parseErr, "clean read must not produce an error")
-		require.NotNil(sess)
-		assert.Equal("pi:pipe-sess", sess.ID)
-		assert.Len(msgs, 1)
+		require.NoError(t, parseErr, "clean read must not produce an error")
+		require.NotNil(t, sess)
+		assert.Equal(t, "pi:pipe-sess", sess.ID)
+		assert.Len(t, msgs, 1)
 	})
 }
 
 // TestParsePiAssistantMessage_BlockOrder verifies that interleaved thinking,
 // text, and tool blocks preserve their order in Content.
 func TestParsePiAssistantMessage_BlockOrder(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	header := `{"type":"session","id":"order-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
 	// Assistant message with thinking -> text -> toolCall -> text order.
 	assistant := `{"type":"message","id":"e1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"assistant","content":[` +
@@ -798,7 +757,7 @@ func TestParsePiAssistantMessage_BlockOrder(t *testing.T) {
 		`],"model":"claude-opus-4-5","provider":"anthropic","stopReason":"stop","timestamp":1735725601000}}`
 
 	_, msgs := runPiParserTest(t, header+assistant)
-	require.Len(msgs, 1)
+	require.Len(t, msgs, 1)
 
 	content := msgs[0].Content
 	// Verify ordering: thinking marker comes before first text,
@@ -808,14 +767,14 @@ func TestParsePiAssistantMessage_BlockOrder(t *testing.T) {
 	toolIdx := strings.Index(content, "[Bash]")
 	secondTextIdx := strings.Index(content, "second text")
 
-	require.NotEqual(-1, thinkIdx, "thinking marker present")
-	require.NotEqual(-1, firstTextIdx, "first text present")
-	require.NotEqual(-1, toolIdx, "tool marker present")
-	require.NotEqual(-1, secondTextIdx, "second text present")
+	require.NotEqual(t, -1, thinkIdx, "thinking marker present")
+	require.NotEqual(t, -1, firstTextIdx, "first text present")
+	require.NotEqual(t, -1, toolIdx, "tool marker present")
+	require.NotEqual(t, -1, secondTextIdx, "second text present")
 
-	assert.Less(thinkIdx, firstTextIdx, "thinking before first text")
-	assert.Less(firstTextIdx, toolIdx, "first text before tool")
-	assert.Less(toolIdx, secondTextIdx, "tool before second text")
+	assert.Less(t, thinkIdx, firstTextIdx, "thinking before first text")
+	assert.Less(t, firstTextIdx, toolIdx, "first text before tool")
+	assert.Less(t, toolIdx, secondTextIdx, "tool before second text")
 }
 
 func TestFormatPiToolUse(t *testing.T) {
@@ -1008,15 +967,12 @@ func TestPiProviderParsesErrorCases(t *testing.T) {
 // populated from the inline message.model and message.usage fields.
 // Without this, the usage dashboard reports $0 for pi sessions.
 func TestPiProviderParsesTokenUsageFromFixture(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	fixturePath := createTestFile(
 		t, "pi-session.jsonl",
 		loadFixture(t, "pi/session.jsonl"),
 	)
 	sess, msgs, err := parsePiTestSession(t, fixturePath, "", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var assistants []ParsedMessage
 	for _, m := range msgs {
@@ -1024,13 +980,13 @@ func TestPiProviderParsesTokenUsageFromFixture(t *testing.T) {
 			assistants = append(assistants, m)
 		}
 	}
-	require.GreaterOrEqual(len(assistants), 2,
+	require.GreaterOrEqual(t, len(assistants), 2,
 		"fixture has at least two assistant messages")
 
 	for i, m := range assistants {
-		assert.Equal("claude-opus-4-5", m.Model,
+		assert.Equal(t, "claude-opus-4-5", m.Model,
 			"assistant[%d] model populated from message.model", i)
-		require.NotEmpty(m.TokenUsage,
+		require.NotEmpty(t, m.TokenUsage,
 			"assistant[%d] TokenUsage populated from message.usage", i)
 	}
 
@@ -1040,20 +996,20 @@ func TestPiProviderParsesTokenUsageFromFixture(t *testing.T) {
 	for i, m := range assistants[:2] {
 		gotIn := gjson.GetBytes(m.TokenUsage, "input_tokens").Int()
 		gotOut := gjson.GetBytes(m.TokenUsage, "output_tokens").Int()
-		assert.Equal(wantInputs[i], gotIn,
+		assert.Equal(t, wantInputs[i], gotIn,
 			"assistant[%d] input_tokens", i)
-		assert.Equal(wantOutputs[i], gotOut,
+		assert.Equal(t, wantOutputs[i], gotOut,
 			"assistant[%d] output_tokens", i)
 	}
 
 	// Session totals roll up from per-message HasOutputTokens.
-	assert.True(sess.HasTotalOutputTokens,
+	assert.True(t, sess.HasTotalOutputTokens,
 		"session has rolled up output tokens")
-	assert.Equal(60, sess.TotalOutputTokens,
+	assert.Equal(t, 60, sess.TotalOutputTokens,
 		"session TotalOutputTokens = 50 + 10")
-	assert.True(sess.HasPeakContextTokens,
+	assert.True(t, sess.HasPeakContextTokens,
 		"session has rolled up context tokens")
-	assert.Equal(200, sess.PeakContextTokens,
+	assert.Equal(t, 200, sess.PeakContextTokens,
 		"session PeakContextTokens = max(100, 200)")
 }
 
@@ -1101,19 +1057,17 @@ func TestPiProviderParsesUnknownUsageShape(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			asst := `{"type":"message","id":"a1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"assistant","content":"hi","model":"gpt-5.4","usage":` + tc.usageRaw + `}}`
 			_, msgs := runPiParserTest(t, header+asst)
 			require.Len(t, msgs, 1)
 			m := msgs[0]
 
-			assert.Equal("gpt-5.4", m.Model,
+			assert.Equal(t, "gpt-5.4", m.Model,
 				"model still populated from message.model")
-			assert.Empty(m.TokenUsage,
+			assert.Empty(t, m.TokenUsage,
 				"unrecognized usage shape must leave TokenUsage empty")
-			assert.False(m.HasOutputTokens)
-			assert.False(m.HasContextTokens)
+			assert.False(t, m.HasOutputTokens)
+			assert.False(t, m.HasContextTokens)
 		})
 	}
 }
@@ -1126,44 +1080,39 @@ func TestPiProviderParsesUnknownUsageShape(t *testing.T) {
 // downstream rollups distinguish an errored request from a
 // missing usage blob.
 func TestPiProviderParsesZeroUsage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	header := `{"type":"session","id":"zu-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
 	asst := `{"type":"message","id":"a1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"assistant","content":"oops","model":"gpt-5.4","usage":{"input":0,"output":0}}}`
 
 	_, msgs := runPiParserTest(t, header+asst)
-	require.Len(msgs, 1)
+	require.Len(t, msgs, 1)
 	m := msgs[0]
 
-	assert.Equal("gpt-5.4", m.Model)
-	require.NotEmpty(m.TokenUsage,
+	assert.Equal(t, "gpt-5.4", m.Model)
+	require.NotEmpty(t, m.TokenUsage,
 		"zero-valued usage object must still write token_usage")
 
-	assert.Equal(int64(0),
+	assert.Equal(t, int64(0),
 		gjson.GetBytes(m.TokenUsage, "input_tokens").Int())
-	assert.Equal(int64(0),
+	assert.Equal(t, int64(0),
 		gjson.GetBytes(m.TokenUsage, "output_tokens").Int())
 
-	assert.True(m.HasOutputTokens,
+	assert.True(t, m.HasOutputTokens,
 		"output field present => HasOutputTokens true even at zero")
-	assert.True(m.HasContextTokens,
+	assert.True(t, m.HasContextTokens,
 		"input field present => HasContextTokens true even at zero")
-	assert.Equal(0, m.OutputTokens)
-	assert.Equal(0, m.ContextTokens)
+	assert.Equal(t, 0, m.OutputTokens)
+	assert.Equal(t, 0, m.ContextTokens)
 }
 
 func TestPiProviderParsesFlatCacheWriteUsage(t *testing.T) {
-	assert := assert.New(t)
-
 	header := `{"type":"session","id":"cache-write-session","timestamp":"2026-08-06T12:00:00Z","cwd":"/tmp"}` + "\n"
 	assistant := `{"type":"message","id":"assistant-1","timestamp":"2026-08-06T12:00:01Z","message":{"role":"assistant","content":"done","model":"claude-opus-4-5","usage":{"input":10,"output":3,"cacheRead":4,"cacheWrite":2}}}`
 
 	_, messages := runPiParserTest(t, header+assistant)
 	require.Len(t, messages, 1)
-	assert.Equal(16, messages[0].ContextTokens)
-	assert.Equal(3, messages[0].OutputTokens)
-	assert.JSONEq(`{
+	assert.Equal(t, 16, messages[0].ContextTokens)
+	assert.Equal(t, 3, messages[0].OutputTokens)
+	assert.JSONEq(t, `{
 		"input_tokens": 10,
 		"output_tokens": 3,
 		"cache_read_input_tokens": 4,

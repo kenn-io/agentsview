@@ -2,6 +2,7 @@ package remotesync
 
 import (
 	"bytes"
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -11,9 +12,11 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/jsonutil"
 	"go.kenn.io/agentsview/internal/parser"
+
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
+//nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type SyncStats struct {
 	SessionsSynced       int              `json:"sessions_synced"`
 	SessionsTotal        int              `json:"sessions_total"`
@@ -346,7 +349,7 @@ type Importer struct {
 	Progress                  syncpkg.ProgressFunc
 	Targets                   TargetSet
 	Root                      string
-	replaceRemoteSkippedFiles func(string, map[string]int64) error
-	applyRemoteSkippedChanges func(string, []string, map[string]int64) error
+	replaceRemoteSkippedFiles func(context.Context, string, map[string]int64) error
+	applyRemoteSkippedChanges func(context.Context, string, []string, map[string]int64) error
 	saveSkipCache             func(*db.DB, *syncpkg.Engine, remotePathMap) error
 }

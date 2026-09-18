@@ -83,7 +83,7 @@ func newParseDiffCommand() *cobra.Command {
 			cfg.JSON = outputFormat(cmd) == "json"
 			cfg.Stdout = cmd.OutOrStdout()
 			cfg.Stderr = cmd.ErrOrStderr()
-			runParseDiff(cfg)
+			runParseDiff(cmd.Context(), cfg)
 		},
 	}
 	cmd.Flags().StringArrayVar(&cfg.Agents, "agent", nil,
@@ -98,8 +98,8 @@ func newParseDiffCommand() *cobra.Command {
 	return cmd
 }
 
-func runParseDiff(cfg ParseDiffConfig) {
-	if doParseDiff(cfg) {
+func runParseDiff(ctx context.Context, cfg ParseDiffConfig) {
+	if doParseDiff(ctx, cfg) {
 		os.Exit(1)
 	}
 }
@@ -110,7 +110,7 @@ func runParseDiff(cfg ParseDiffConfig) {
 // an exit code without skipping cleanup. It deliberately skips
 // setupLogFile: stdout owns the report and engine warnings belong on
 // stderr, matching the health command's diagnostic style.
-func doParseDiff(cfg ParseDiffConfig) (failed bool) {
+func doParseDiff(ctx context.Context, cfg ParseDiffConfig) (failed bool) {
 	agents, err := parseDiffAgentTypes(cfg.Agents)
 	if err != nil {
 		fatal("%v", err)
@@ -124,10 +124,10 @@ func doParseDiff(cfg ParseDiffConfig) (failed bool) {
 		fatal("creating data dir: %v", err)
 	}
 
-	database, writeLock := mustOpenWriteDB(context.Background(), appCfg)
+	database, writeLock := mustOpenWriteDB(ctx, appCfg)
 	defer closeWriteDB(database, writeLock)
 
-	engine := sync.NewDiffEngine(database, sync.EngineConfig{
+	engine := sync.NewDiffEngine(ctx, database, sync.EngineConfig{
 		AgentDirs:               appCfg.AgentDirs,
 		SourceMachines:          appCfg.SourceMachines,
 		ProviderMetadata:        appCfg.ProviderMetadata,
@@ -144,7 +144,7 @@ func doParseDiff(cfg ParseDiffConfig) (failed bool) {
 		opts.Progress = parseDiffProgress(cfg.stderr())
 	}
 
-	report, err := engine.ParseDiff(context.Background(), opts)
+	report, err := engine.ParseDiff(ctx, opts)
 	if err != nil {
 		fatal("parse-diff: %v", err)
 	}

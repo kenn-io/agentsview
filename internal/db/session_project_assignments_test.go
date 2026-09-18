@@ -11,9 +11,6 @@ import (
 )
 
 func TestAssignSessionProjectOverridesSyncAndFolderRules(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := testDB(t)
 	ctx := t.Context()
 
@@ -25,15 +22,15 @@ func TestAssignSessionProjectOverridesSyncAndFolderRules(t *testing.T) {
 		Machine: "host-a.example", PathPrefix: "/tmp",
 		Project: "folder_project", Enabled: true,
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	assignment, err := database.AssignSessionProject(ctx, "session-a", "target-project")
-	require.NoError(err)
-	assert.Equal("target_project", assignment.Project)
+	require.NoError(t, err)
+	assert.Equal(t, "target_project", assignment.Project)
 
 	result, err := database.ApplyWorktreeProjectMappings(ctx, "host-a.example")
-	require.NoError(err)
-	assert.Zero(result.MatchedSessions,
+	require.NoError(t, err)
+	assert.Zero(t, result.MatchedSessions,
 		"folder rules must not claim sessions with explicit assignments")
 
 	insertSession(t, database, "session-a", "temp_project", func(session *Session) {
@@ -41,17 +38,14 @@ func TestAssignSessionProjectOverridesSyncAndFolderRules(t *testing.T) {
 		session.Cwd = "/tmp/agent-run"
 	})
 	stored, err := database.GetSession(ctx, "session-a")
-	require.NoError(err)
-	require.NotNil(stored)
-	assert.Equal("target_project", stored.Project,
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "target_project", stored.Project,
 		"a parser upsert must preserve the explicit assignment")
-	assert.True(stored.ProjectAssigned)
+	assert.True(t, stored.ProjectAssigned)
 }
 
 func TestClearSessionProjectAssignmentRestoresAutomaticFolderMapping(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := testDB(t)
 	ctx := t.Context()
 
@@ -63,55 +57,50 @@ func TestClearSessionProjectAssignmentRestoresAutomaticFolderMapping(t *testing.
 		Machine: "host-a.example", PathPrefix: "/work/project",
 		Project: "folder-project", Enabled: true,
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	first, err := database.AssignSessionProject(ctx, "session-a", "first-project")
-	require.NoError(err)
-	assert.Equal("temporary", first.OriginalProject)
+	require.NoError(t, err)
+	assert.Equal(t, "temporary", first.OriginalProject)
 	second, err := database.AssignSessionProject(ctx, "session-a", "second-project")
-	require.NoError(err)
-	assert.Equal("temporary", second.OriginalProject,
+	require.NoError(t, err)
+	assert.Equal(t, "temporary", second.OriginalProject,
 		"reassigning must preserve the initial automatic project")
 
 	cleared, err := database.ClearSessionProjectAssignment(ctx, "session-a")
-	require.NoError(err)
-	assert.Equal("folder_project", cleared.Project)
+	require.NoError(t, err)
+	assert.Equal(t, "folder_project", cleared.Project)
 	stored, err := database.GetSession(ctx, "session-a")
-	require.NoError(err)
-	require.NotNil(stored)
-	assert.Equal("folder_project", stored.Project)
-	assert.False(stored.ProjectAssigned)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "folder_project", stored.Project)
+	assert.False(t, stored.ProjectAssigned)
 }
 
 func TestSessionProjectAssignmentMigrationBackfillsAutomaticProject(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "sessions.db")
-	database, err := Open(path)
-	require.NoError(err)
+	database, err := Open(ctx, path)
+	require.NoError(t, err)
 	insertSession(t, database, "session-a", "automatic_project", func(session *Session) {
 		session.Machine = "host-a.example"
 	})
 	_, err = database.AssignSessionProject(ctx, "session-a", "manual-project")
-	require.NoError(err)
-	require.NoError(database.Close())
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
 
 	execRawSQLite(t, path,
 		`ALTER TABLE session_project_assignments DROP COLUMN original_project`)
-	database, err = Open(path)
-	require.NoError(err)
+	database, err = Open(ctx, path)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = database.Close() })
 
 	cleared, err := database.ClearSessionProjectAssignment(ctx, "session-a")
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Equal(t, "automatic_project", cleared.Project)
 }
 
 func TestAssignedSessionProvidesSiblingFolderEvidence(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := testDB(t)
 	ctx := t.Context()
 	sharedPath := filepath.Join(t.TempDir(), "sessions.jsonl")
@@ -129,34 +118,31 @@ func TestAssignedSessionProvidesSiblingFolderEvidence(t *testing.T) {
 		Machine: "host-a.example", PathPrefix: "/work/project",
 		Project: "folder-project", Enabled: true,
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = database.AssignSessionProject(
 		ctx, "assigned-reference", "assigned-project",
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	result, err := database.ApplyWorktreeProjectMappings(ctx, "host-a.example")
-	require.NoError(err)
-	assert.Equal(1, result.MatchedSessions)
-	assert.Equal(1, result.UpdatedSessions)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.MatchedSessions)
+	assert.Equal(t, 1, result.UpdatedSessions)
 	assertSessionProject(t, database, "assigned-reference", "assigned_project")
 	assertSessionProject(t, database, "empty-cwd-sibling", "folder_project")
 }
 
 func TestCopySessionMetadataFromPreservesSessionProjectAssignment(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
-	source, err := Open(sourcePath)
-	require.NoError(err)
+	source, err := Open(ctx, sourcePath)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = source.Close() })
 	insertSession(t, source, "session-a", "temporary", func(session *Session) {
 		session.Machine = "host-a.example"
 	})
-	require.NoError(source.UpsertProjectIdentityObservation(
+	require.NoError(t, source.UpsertProjectIdentityObservation(
 		ctx, export.ProjectIdentityObservation{
 			SessionID: "session-a", Project: "temporary", Machine: "host-a.example",
 			RootPath: "/work/project", GitRemote: "https://example.com/repository.git",
@@ -164,16 +150,16 @@ func TestCopySessionMetadataFromPreservesSessionProjectAssignment(t *testing.T) 
 		},
 	))
 	_, err = source.AssignSessionProject(ctx, "session-a", "target-project")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	destinationPath := filepath.Join(dir, "destination.db")
-	destination, err := Open(destinationPath)
-	require.NoError(err)
+	destination, err := Open(ctx, destinationPath)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = destination.Close() })
 	insertSession(t, destination, "session-a", "reparsed", func(session *Session) {
 		session.Machine = "host-a.example"
 	})
-	require.NoError(destination.UpsertProjectIdentityObservation(
+	require.NoError(t, destination.UpsertProjectIdentityObservation(
 		ctx, export.ProjectIdentityObservation{
 			SessionID: "session-a", Project: "reparsed", Machine: "host-a.example",
 			RootPath: "/work/project", GitRemote: "https://example.com/repository.git",
@@ -181,18 +167,18 @@ func TestCopySessionMetadataFromPreservesSessionProjectAssignment(t *testing.T) 
 		},
 	))
 
-	require.NoError(destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
 	assertSessionProject(t, destination, "session-a", "target_project")
 	observations, err := destination.ListProjectIdentityObservations(
 		ctx, []string{"reparsed", "target_project"},
 	)
-	require.NoError(err)
-	require.Len(observations, 1)
-	assert.Equal("target_project", observations[0].Project)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Equal(t, "target_project", observations[0].Project)
 
 	insertSession(t, destination, "session-a", "reparsed")
 	assertSessionProject(t, destination, "session-a", "target_project")
 	cleared, err := destination.ClearSessionProjectAssignment(ctx, "session-a")
-	require.NoError(err)
-	assert.Equal("temporary", cleared.Project)
+	require.NoError(t, err)
+	assert.Equal(t, "temporary", cleared.Project)
 }

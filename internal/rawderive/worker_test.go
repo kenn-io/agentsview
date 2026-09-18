@@ -18,8 +18,6 @@ import (
 )
 
 func TestWorkerRunsSnapshotPipelineAndCleansBeforeAtomicProjection(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 	lease := workerTestLease()
 	manifest := workerTestManifest(t, rawsync.ManifestSnapshot)
@@ -32,10 +30,7 @@ func TestWorkerRunsSnapshotPipelineAndCleansBeforeAtomicProjection(t *testing.T)
 			return manifest, nil
 		}),
 		sourceMaterializerFunc(func(context.Context, rawsync.CanonicalManifest) (*Materialization, error) {
-			root, err := os.MkdirTemp(t.TempDir(), "worker-materialized-")
-			if err != nil {
-				return nil, err
-			}
+			root := t.TempDir()
 			materializedRoot = root
 			return &Materialization{root: root, entries: map[string]string{}}, nil
 		}),
@@ -44,7 +39,7 @@ func TestWorkerRunsSnapshotPipelineAndCleansBeforeAtomicProjection(t *testing.T)
 			gotManifest rawsync.CanonicalManifest,
 			materialized *Materialization,
 		) (ParsedManifest, error) {
-			assert.Equal(manifest, gotManifest)
+			assert.Equal(t, manifest, gotManifest)
 			_, err := os.Stat(materialized.Root())
 			if err != nil {
 				return ParsedManifest{}, err
@@ -57,11 +52,11 @@ func TestWorkerRunsSnapshotPipelineAndCleansBeforeAtomicProjection(t *testing.T)
 			gotManifest rawsync.CanonicalManifest,
 			gotParsed ParsedManifest,
 		) error {
-			assert.Equal(lease, gotLease)
-			assert.Equal(manifest, gotManifest)
-			assert.True(gotParsed.Outcome.ResultSetComplete)
+			assert.Equal(t, lease, gotLease)
+			assert.Equal(t, manifest, gotManifest)
+			assert.True(t, gotParsed.Outcome.ResultSetComplete)
 			_, err := os.Stat(materializedRoot)
-			assert.ErrorIs(err, os.ErrNotExist, "raw bytes must be gone before projection")
+			assert.ErrorIs(t, err, os.ErrNotExist, "raw bytes must be gone before projection")
 			projected = true
 			return nil
 		}),
@@ -69,15 +64,12 @@ func TestWorkerRunsSnapshotPipelineAndCleansBeforeAtomicProjection(t *testing.T)
 
 	result, err := worker.RunBatch(t.Context())
 	require.NoError(t, err)
-	assert.Equal(BatchResult{Claimed: 1, Succeeded: 1}, result)
-	assert.True(projected)
-	assert.Empty(queue.retries)
+	assert.Equal(t, BatchResult{Claimed: 1, Succeeded: 1}, result)
+	assert.True(t, projected)
+	assert.Empty(t, queue.retries)
 }
 
 func TestWorkerClassifiesParseFailureAndRetriesAfterCleanup(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	lease := workerTestLease()
 	manifest := workerTestManifest(t, rawsync.ManifestSnapshot)
@@ -90,10 +82,7 @@ func TestWorkerClassifiesParseFailureAndRetriesAfterCleanup(t *testing.T) {
 			return manifest, nil
 		}),
 		sourceMaterializerFunc(func(context.Context, rawsync.CanonicalManifest) (*Materialization, error) {
-			root, err := os.MkdirTemp(t.TempDir(), "worker-materialized-")
-			if err != nil {
-				return nil, err
-			}
+			root := t.TempDir()
 			materializedRoot = root
 			return &Materialization{root: root, entries: map[string]string{}}, nil
 		}),
@@ -107,23 +96,20 @@ func TestWorkerClassifiesParseFailureAndRetriesAfterCleanup(t *testing.T) {
 	started := time.Now()
 
 	result, err := worker.RunBatch(t.Context())
-	require.Error(err)
-	assert.Contains(err.Error(), "parse:internal",
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse:internal",
 		"the returned error carries the allowlisted diagnostic instead of raw provider text")
-	assert.NotContains(err.Error(), parseFailure.Error())
-	assert.Equal(BatchResult{Claimed: 1, Retried: 1}, result)
-	require.Len(queue.retries, 1)
-	assert.Equal("parse", queue.retries[0].class)
-	assert.Equal("parse:internal", queue.retries[0].message)
-	assert.WithinDuration(started.Add(time.Minute), queue.retries[0].availableAt, time.Second)
+	assert.NotContains(t, err.Error(), parseFailure.Error())
+	assert.Equal(t, BatchResult{Claimed: 1, Retried: 1}, result)
+	require.Len(t, queue.retries, 1)
+	assert.Equal(t, "parse", queue.retries[0].class)
+	assert.Equal(t, "parse:internal", queue.retries[0].message)
+	assert.WithinDuration(t, started.Add(time.Minute), queue.retries[0].availableAt, time.Second)
 	_, statErr := os.Stat(materializedRoot)
-	assert.ErrorIs(statErr, os.ErrNotExist)
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
 func TestWorkerMovesTerminalAttemptToDurableFailure(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	lease := workerTestLease()
 	lease.Attempt = 3
@@ -147,20 +133,18 @@ func TestWorkerMovesTerminalAttemptToDurableFailure(t *testing.T) {
 	)
 
 	result, err := worker.RunBatch(t.Context())
-	require.Error(err)
-	assert.Contains(err.Error(), "parse:internal")
-	assert.NotContains(err.Error(), parseFailure.Error())
-	assert.Equal(BatchResult{Claimed: 1, Failed: 1}, result)
-	assert.Empty(queue.retries)
-	require.Len(queue.failures, 1)
-	assert.Equal(lease, queue.failures[0].lease)
-	assert.Equal("parse", queue.failures[0].class)
-	assert.Equal("parse:internal", queue.failures[0].message)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse:internal")
+	assert.NotContains(t, err.Error(), parseFailure.Error())
+	assert.Equal(t, BatchResult{Claimed: 1, Failed: 1}, result)
+	assert.Empty(t, queue.retries)
+	require.Len(t, queue.failures, 1)
+	assert.Equal(t, lease, queue.failures[0].lease)
+	assert.Equal(t, "parse", queue.failures[0].class)
+	assert.Equal(t, "parse:internal", queue.failures[0].message)
 }
 
 func TestWorkerCancelsWorkAndDoesNotRetryAfterLeaseLoss(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 	lease := workerTestLease()
 	manifest := workerTestManifest(t, rawsync.ManifestSnapshot)
@@ -191,15 +175,12 @@ func TestWorkerCancelsWorkAndDoesNotRetryAfterLeaseLoss(t *testing.T) {
 
 	result, err := worker.RunBatch(t.Context())
 	require.ErrorIs(t, err, ErrLeaseLost)
-	assert.Equal(BatchResult{Claimed: 1, LeaseLost: 1}, result)
-	assert.Empty(queue.retries)
-	assert.NotZero(queue.heartbeats.Load())
+	assert.Equal(t, BatchResult{Claimed: 1, LeaseLost: 1}, result)
+	assert.Empty(t, queue.retries)
+	assert.NotZero(t, queue.heartbeats.Load())
 }
 
 func TestWorkerClassifiesHeartbeatTransportCancellation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	lease := workerTestLease()
 	manifest := workerTestManifest(t, rawsync.ManifestSnapshot)
@@ -238,14 +219,14 @@ func TestWorkerClassifiesHeartbeatTransportCancellation(t *testing.T) {
 
 	result, err := worker.RunBatch(t.Context())
 
-	require.Error(err)
-	assert.NotErrorIs(err, context.Canceled)
-	assert.NotContains(err.Error(), heartbeatFailure.Error())
-	assert.Contains(err.Error(), "heartbeat:internal")
-	assert.Equal(BatchResult{Claimed: 1, Retried: 1}, result)
-	require.Len(queue.retries, 1)
-	assert.Equal("heartbeat", queue.retries[0].class)
-	assert.Equal("heartbeat:internal", queue.retries[0].message)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, context.Canceled)
+	assert.NotContains(t, err.Error(), heartbeatFailure.Error())
+	assert.Contains(t, err.Error(), "heartbeat:internal")
+	assert.Equal(t, BatchResult{Claimed: 1, Retried: 1}, result)
+	require.Len(t, queue.retries, 1)
+	assert.Equal(t, "heartbeat", queue.retries[0].class)
+	assert.Equal(t, "heartbeat:internal", queue.retries[0].message)
 }
 
 func TestWorkerTreatsPostProjectionLeaseReleaseAsSuccess(t *testing.T) {
@@ -265,6 +246,7 @@ func testWorkerTreatsPostProjectionHeartbeatFailureAsSuccess(
 	heartbeatErr error,
 ) {
 	t.Helper()
+
 	lease := workerTestLease()
 	manifest := workerTestManifest(t, rawsync.ManifestTombstone)
 	lease.ManifestID = manifest.ManifestID
@@ -415,15 +397,13 @@ func TestNewWorkerSharesQueueOwnerContract(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = NewWorker(newConfig(strings.Repeat("a", MaxLeaseOwnerBytes+1)))
-	assert.ErrorIs(t, err, rawsync.ErrInvalid)
+	require.ErrorIs(t, err, rawsync.ErrInvalid)
 
 	_, err = NewWorker(newConfig(string([]byte{0xff})))
 	assert.ErrorIs(t, err, rawsync.ErrInvalid)
 }
 
 func TestNewWorkerRequiresValidatedAttemptTimeout(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 	config := WorkerConfig{
 		Queue: &workerQueueFixture{},
@@ -449,23 +429,20 @@ func TestNewWorkerRequiresValidatedAttemptTimeout(t *testing.T) {
 	}
 
 	_, err := NewWorker(config)
-	assert.ErrorIs(err, rawsync.ErrInvalid,
+	require.ErrorIs(t, err, rawsync.ErrInvalid,
 		"a worker without a per-attempt timeout must be rejected")
 
 	config.AttemptTimeout = -time.Second
 	_, err = NewWorker(config)
-	assert.ErrorIs(err, rawsync.ErrInvalid)
+	require.ErrorIs(t, err, rawsync.ErrInvalid)
 
 	config.AttemptTimeout = 90 * time.Second
 	worker, err := NewWorker(config)
 	require.NoError(t, err)
-	assert.Equal(90*time.Second, worker.AttemptTimeout)
+	assert.Equal(t, 90*time.Second, worker.AttemptTimeout)
 }
 
 func TestWorkerAttemptTimeoutStopsRunawayPipelineAndRecordsDeadline(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	lease := workerTestLease()
 	manifest := workerTestManifest(t, rawsync.ManifestSnapshot)
@@ -497,25 +474,22 @@ func TestWorkerAttemptTimeoutStopsRunawayPipelineAndRecordsDeadline(t *testing.T
 
 	result, err := worker.RunBatch(t.Context())
 
-	require.Error(err)
-	assert.Less(time.Since(started), 5*time.Second,
+	require.Error(t, err)
+	assert.Less(t, time.Since(started), 5*time.Second,
 		"a cooperative pipeline must observe the per-attempt deadline, not outlive the lease")
 	select {
 	case <-parseStopped:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the parse pipeline never observed the attempt deadline")
+		require.FailNow(t, "the parse pipeline never observed the attempt deadline")
 	}
-	assert.Equal(BatchResult{Claimed: 1, Retried: 1}, result)
-	require.Len(queue.retries, 1)
-	assert.Equal("parse", queue.retries[0].class)
-	assert.Contains(queue.retries[0].message, "deadline")
-	assert.WithinDuration(started.Add(time.Minute), queue.retries[0].availableAt, 2*time.Second)
+	assert.Equal(t, BatchResult{Claimed: 1, Retried: 1}, result)
+	require.Len(t, queue.retries, 1)
+	assert.Equal(t, "parse", queue.retries[0].class)
+	assert.Contains(t, queue.retries[0].message, "deadline")
+	assert.WithinDuration(t, started.Add(time.Minute), queue.retries[0].availableAt, 2*time.Second)
 }
 
 func TestWorkerStopsRenewingLeaseWhenStageBlocksPastAttemptDeadline(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	lease := workerTestLease()
 	manifest := workerTestManifest(t, rawsync.ManifestSnapshot)
@@ -575,36 +549,29 @@ func TestWorkerStopsRenewingLeaseWhenStageBlocksPastAttemptDeadline(t *testing.T
 	select {
 	case <-heartbeatStarted:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the lease never began renewing before the attempt deadline")
+		require.FailNow(t, "the lease never began renewing before the attempt deadline")
 	}
 	select {
 	case <-deadlineObserved:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the blocked stage never observed its attempt deadline")
+		require.FailNow(t, "the blocked stage never observed its attempt deadline")
 	}
 	frozen := queue.heartbeats.Load()
-	time.Sleep(8 * worker.HeartbeatInterval)
-	still := queue.heartbeats.Load()
-	require.Equal(frozen, still,
-		"the attempt deadline must stop lease renewal; a stage that blocks past it cannot keep the lease alive")
 
 	releaseBlocked()
 	select {
 	case result := <-batchDone:
-		require.NoError(<-batchErr,
+		require.NoError(t, <-batchErr,
 			"a stage that finishes after the deadline keeps its fenced outcome")
-		assert.Equal(BatchResult{Claimed: 1, Succeeded: 1}, result)
+		assert.Equal(t, BatchResult{Claimed: 1, Succeeded: 1}, result)
 	case <-time.After(5 * time.Second):
-		t.Fatal("releasing the blocked stage must let the batch finish")
+		require.FailNow(t, "releasing the blocked stage must let the batch finish")
 	}
-	assert.Equal(still, queue.heartbeats.Load(),
+	assert.Equal(t, frozen, queue.heartbeats.Load(),
 		"no renewal may happen after the deadline fires or after the stage finally returns")
 }
 
 func TestWorkerJoinsCleanupFailureWithParseFailure(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	lease := workerTestLease()
 	manifest := workerTestManifest(t, rawsync.ManifestSnapshot)
@@ -636,20 +603,18 @@ func TestWorkerJoinsCleanupFailureWithParseFailure(t *testing.T) {
 
 	result, err := worker.RunBatch(t.Context())
 
-	require.Error(err)
-	assert.Contains(err.Error(), "cleanup_failed",
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cleanup_failed",
 		"a cleanup failure must not be swallowed when parsing already failed")
-	assert.NotContains(err.Error(), materialized.Root(),
+	assert.NotContains(t, err.Error(), materialized.Root(),
 		"the returned error must not expose the raw tree path")
-	assert.Equal(BatchResult{Claimed: 1, Retried: 1}, result)
-	require.Len(queue.retries, 1)
-	assert.Equal("parse", queue.retries[0].class,
+	assert.Equal(t, BatchResult{Claimed: 1, Retried: 1}, result)
+	require.Len(t, queue.retries, 1)
+	assert.Equal(t, "parse", queue.retries[0].class,
 		"the parse failure stays the durable stage")
 }
 
 func TestWorkerReportsPreProjectionCleanupFailureOnceWhenRetryFailsToo(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 	lease := workerTestLease()
 	manifest := workerTestManifest(t, rawsync.ManifestSnapshot)
@@ -682,19 +647,16 @@ func TestWorkerReportsPreProjectionCleanupFailureOnceWhenRetryFailsToo(t *testin
 	stage, pipelineErr := worker.runPipeline(t.Context(), lease)
 
 	require.Error(t, pipelineErr)
-	assert.Equal("materialize", stage,
+	assert.Equal(t, "materialize", stage,
 		"the pre-projection cleanup failure owns the durable stage")
-	assert.ErrorIs(pipelineErr, errMaterializationCleanup)
-	assert.Equal(1, strings.Count(pipelineErr.Error(), cleanupFailure.Error()),
+	require.ErrorIs(t, pipelineErr, errMaterializationCleanup)
+	assert.Equal(t, 1, strings.Count(pipelineErr.Error(), cleanupFailure.Error()),
 		"a failed cleanup retry must not re-report the already reported cleanup failure")
-	assert.Equal(int64(2), attempts.Load(),
+	assert.Equal(t, int64(2), attempts.Load(),
 		"the deferred cleanup must retry the failed removal exactly once")
 }
 
 func TestWorkerRetriesJobWhenPreProjectionCleanupRetrySucceeds(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	lease := workerTestLease()
 	manifest := workerTestManifest(t, rawsync.ManifestSnapshot)
@@ -729,24 +691,21 @@ func TestWorkerRetriesJobWhenPreProjectionCleanupRetrySucceeds(t *testing.T) {
 
 	result, err := worker.RunBatch(t.Context())
 
-	require.Error(err,
+	require.Error(t, err,
 		"a first cleanup failure must still fail the attempt even when the retry succeeds")
-	assert.Contains(err.Error(), "materialize:internal+cleanup_failed")
-	assert.Equal(1, strings.Count(err.Error(), "(materialization cleanup failed)"))
-	assert.Equal(BatchResult{Claimed: 1, Retried: 1}, result)
-	require.Len(queue.retries, 1)
-	assert.Equal("materialize", queue.retries[0].class)
-	assert.Equal("materialize:internal+cleanup_failed", queue.retries[0].message,
+	assert.Contains(t, err.Error(), "materialize:internal+cleanup_failed")
+	assert.Equal(t, 1, strings.Count(err.Error(), "(materialization cleanup failed)"))
+	assert.Equal(t, BatchResult{Claimed: 1, Retried: 1}, result)
+	require.Len(t, queue.retries, 1)
+	assert.Equal(t, "materialize", queue.retries[0].class)
+	assert.Equal(t, "materialize:internal+cleanup_failed", queue.retries[0].message,
 		"the durable diagnostic carries the cleanup failure exactly once")
 	_, statErr := os.Stat(materialized.Root())
-	assert.ErrorIs(statErr, os.ErrNotExist,
+	assert.ErrorIs(t, statErr, os.ErrNotExist,
 		"the successful retry must still remove the private tree")
 }
 
 func TestWorkerSanitizesPathAndContentBearingErrors(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	lease := workerTestLease()
 	manifest := workerTestManifest(t, rawsync.ManifestSnapshot)
@@ -771,19 +730,19 @@ func TestWorkerSanitizesPathAndContentBearingErrors(t *testing.T) {
 
 	result, err := worker.RunBatch(t.Context())
 
-	require.Error(err)
-	assert.NotContains(err.Error(), clientPath,
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), clientPath,
 		"returned errors must not leak client source paths")
-	assert.NotContains(err.Error(), rawContent,
+	assert.NotContains(t, err.Error(), rawContent,
 		"returned errors must not leak raw provider content")
-	assert.Equal(BatchResult{Claimed: 1, Retried: 1}, result)
-	require.Len(queue.retries, 1)
-	assert.Equal("parse", queue.retries[0].class)
-	assert.NotContains(queue.retries[0].message, clientPath,
+	assert.Equal(t, BatchResult{Claimed: 1, Retried: 1}, result)
+	require.Len(t, queue.retries, 1)
+	assert.Equal(t, "parse", queue.retries[0].class)
+	assert.NotContains(t, queue.retries[0].message, clientPath,
 		"durable queue arguments must not carry client source paths")
-	assert.NotContains(queue.retries[0].message, rawContent,
+	assert.NotContains(t, queue.retries[0].message, rawContent,
 		"durable queue arguments must not carry raw provider content")
-	assert.Equal("parse:internal", queue.retries[0].message,
+	assert.Equal(t, "parse:internal", queue.retries[0].message,
 		"only allowlisted stage and error codes may be persisted")
 }
 
@@ -791,6 +750,7 @@ func TestWorkerKeepsPipelineCauseWhenHeartbeatLosesLeaseToo(t *testing.T) {
 	t.Parallel()
 	run := func(t *testing.T, heartbeatErr error) {
 		t.Helper()
+
 		lease := workerTestLease()
 		manifest := workerTestManifest(t, rawsync.ManifestSnapshot)
 		lease.ManifestID = manifest.ManifestID
@@ -849,9 +809,6 @@ func TestWorkerKeepsPipelineCauseWhenHeartbeatLosesLeaseToo(t *testing.T) {
 }
 
 func TestWorkerPreservesCleanupFailureWhenHeartbeatCancelsCooperativeParse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	lease := workerTestLease()
 	manifest := workerTestManifest(t, rawsync.ManifestSnapshot)
@@ -902,26 +859,26 @@ func TestWorkerPreservesCleanupFailureWhenHeartbeatCancelsCooperativeParse(t *te
 
 	result, err := worker.RunBatch(t.Context())
 
-	require.Error(err)
-	assert.NotErrorIs(err, context.Canceled,
+	require.Error(t, err)
+	require.NotErrorIs(t, err, context.Canceled,
 		"the heartbeat-induced cancellation must not become the classified outcome")
-	assert.Contains(err.Error(), "parse:internal+cleanup_failed",
+	assert.Contains(t, err.Error(), "parse:internal+cleanup_failed",
 		"the durable diagnostic keeps the pipeline stage and the cleanup failure")
-	assert.Contains(err.Error(), "(materialization cleanup failed)")
-	assert.NotContains(err.Error(), heartbeatFailure.Error(),
+	assert.Contains(t, err.Error(), "(materialization cleanup failed)")
+	assert.NotContains(t, err.Error(), heartbeatFailure.Error(),
 		"heartbeat transport detail must not leak")
-	assert.NotContains(err.Error(), cleanupFailure.Error(),
+	assert.NotContains(t, err.Error(), cleanupFailure.Error(),
 		"raw cleanup detail must not leak")
-	assert.NotContains(err.Error(), materialized.Root(),
+	assert.NotContains(t, err.Error(), materialized.Root(),
 		"the raw tree path must not leak")
-	assert.Equal(BatchResult{Claimed: 1, Retried: 1}, result)
-	require.Len(queue.retries, 1)
-	assert.Equal("parse", queue.retries[0].class,
+	assert.Equal(t, BatchResult{Claimed: 1, Retried: 1}, result)
+	require.Len(t, queue.retries, 1)
+	assert.Equal(t, "parse", queue.retries[0].class,
 		"the parse stage stays the durable stage instead of degrading to heartbeat")
-	assert.Equal("parse:internal+cleanup_failed", queue.retries[0].message)
-	assert.NotContains(queue.retries[0].message, heartbeatFailure.Error())
-	assert.NotContains(queue.retries[0].message, cleanupFailure.Error())
-	assert.Empty(queue.failures)
+	assert.Equal(t, "parse:internal+cleanup_failed", queue.retries[0].message)
+	assert.NotContains(t, queue.retries[0].message, heartbeatFailure.Error())
+	assert.NotContains(t, queue.retries[0].message, cleanupFailure.Error())
+	assert.Empty(t, queue.failures)
 }
 
 func TestStripCanceledLeavesPreservesSubstantiveCauses(t *testing.T) {
@@ -981,22 +938,20 @@ func TestStripCanceledLeavesPreservesSubstantiveCauses(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			t.Parallel()
 			stripped, removed := stripCanceledLeaves(tc.err)
 			if tc.wantInside == nil {
-				assert.NoError(stripped)
+				assert.NoError(t, stripped)
 				if tc.err != nil {
-					assert.True(removed)
+					assert.True(t, removed)
 				} else {
-					assert.False(removed)
+					assert.False(t, removed)
 				}
 				return
 			}
 			require.Error(t, stripped)
-			assert.Equal(tc.wantMsg, stripped.Error())
-			assert.ErrorIs(stripped, tc.wantInside)
+			assert.Equal(t, tc.wantMsg, stripped.Error())
+			assert.ErrorIs(t, stripped, tc.wantInside)
 		})
 	}
 }

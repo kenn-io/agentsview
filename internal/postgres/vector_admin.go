@@ -42,6 +42,7 @@ SELECT id, fingerprint, model, dimension, created_at
 	if err != nil {
 		return nil, fmt.Errorf("listing vector generations: %w", err)
 	}
+	defer rows.Close()
 	var gens []VectorGenerationRow
 	for rows.Next() {
 		var g VectorGenerationRow
@@ -120,6 +121,7 @@ func vectorGenerationMachines(
 	if err != nil {
 		return nil, fmt.Errorf("listing machines for generation %d: %w", genID, err)
 	}
+	defer rows.Close()
 	defer func() { _ = rows.Close() }()
 	var machines []string
 	for rows.Next() {
@@ -224,6 +226,7 @@ func existingChunkGenerationsTx(ctx context.Context, tx *sql.Tx) ([]int64, error
 	if err != nil {
 		return nil, fmt.Errorf("listing remaining generations: %w", err)
 	}
+	defer rows.Close()
 	var ids []int64
 	for rows.Next() {
 		var id int64

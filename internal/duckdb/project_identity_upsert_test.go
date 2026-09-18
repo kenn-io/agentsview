@@ -31,11 +31,9 @@ func TestUpsertSessionProjectIdentitySnapshotsBatchesStatements(t *testing.T) {
 }
 
 func TestDuckUpsertUnknownDoesNotReplaceAmbiguousEvidence(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	database := openTestDuckDB(t)
-	require.NoError(EnsureSchema(ctx, database))
+	require.NoError(t, EnsureSchema(ctx, database))
 	exec := func(query string, args ...any) error {
 		_, err := database.ExecContext(ctx, query, args...)
 		return err
@@ -43,7 +41,7 @@ func TestDuckUpsertUnknownDoesNotReplaceAmbiguousEvidence(t *testing.T) {
 	queryRow := func(query string, args ...any) *sql.Row {
 		return database.QueryRowContext(ctx, query, args...)
 	}
-	require.NoError(upsertSourceArchiveScope(
+	require.NoError(t, upsertSourceArchiveScope(
 		exec, queryRow, "archive", "salt"))
 	base := export.ProjectIdentityObservation{
 		SourceArchiveID: "archive", SourceArchiveSalt: "salt",
@@ -53,15 +51,15 @@ func TestDuckUpsertUnknownDoesNotReplaceAmbiguousEvidence(t *testing.T) {
 	ambiguous := base
 	ambiguous.RemoteResolution = export.ProjectResolutionAmbiguous
 	ambiguous.RemoteCandidateCount = 2
-	require.NoError(upsertProjectIdentityObservation(
+	require.NoError(t, upsertProjectIdentityObservation(
 		exec, queryRow, ambiguous, ""))
 	unknown := base
 	unknown.RemoteResolution = export.ProjectResolutionUnknown
-	require.NoError(upsertProjectIdentityObservation(
+	require.NoError(t, upsertProjectIdentityObservation(
 		exec, queryRow, unknown, ""))
 
 	var resolution string
-	require.NoError(database.QueryRowContext(ctx, `
+	require.NoError(t, database.QueryRowContext(ctx, `
 		SELECT remote_resolution
 		FROM source_project_identity_observations
 		WHERE source_archive_id = ? AND project = ? AND machine = ?

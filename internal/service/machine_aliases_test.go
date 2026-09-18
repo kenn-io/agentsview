@@ -25,9 +25,9 @@ func TestDirectMachineAliases(t *testing.T) {
 			s.EndedAt = new("2024-06-01T09:00:00Z")
 		})
 	}
-	require.NoError(t, d.SetSyncState("machine_alias:old-owner", "installation-a"))
-	require.NoError(t, d.SetSyncState("artifact_local_installation_id", "installation-a"))
-	require.NoError(t, d.SetSyncState("machine_label:installation-a", "Laptop"))
+	require.NoError(t, d.SetSyncState(t.Context(), "machine_alias:old-owner", "installation-a"))
+	require.NoError(t, d.SetSyncState(t.Context(), "artifact_local_installation_id", "installation-a"))
+	require.NoError(t, d.SetSyncState(t.Context(), "machine_label:installation-a", "Laptop"))
 	backend := service.NewDirectBackend(d, nil)
 	for _, tt := range []struct {
 		machine string
@@ -40,29 +40,26 @@ func TestDirectMachineAliases(t *testing.T) {
 		{"Laptop", 0, 0},
 	} {
 		t.Run(tt.machine, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			list, err := backend.List(t.Context(), service.ListFilter{Machine: tt.machine})
-			require.NoError(err)
-			assert.Len(list.Sessions, tt.count)
+			require.NoError(t, err)
+			assert.Len(t, list.Sessions, tt.count)
 			search, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{
 				Machine: tt.machine, Pattern: "needle", Mode: "substring",
 			})
-			require.NoError(err)
-			assert.Len(search.Matches, tt.count)
+			require.NoError(t, err)
+			assert.Len(t, search.Matches, tt.count)
 			req := service.UsageRequest{From: "2024-06-01", To: "2024-06-01", Machine: tt.machine}
 			summary, err := backend.UsageSummary(t.Context(), req)
-			require.NoError(err)
-			assert.Equal(tt.tokens, summary.Totals.InputTokens)
+			require.NoError(t, err)
+			assert.Equal(t, tt.tokens, summary.Totals.InputTokens)
 			comparison, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
 				UsageRequest:  req,
 				LeftDimension: "project", LeftValue: "project",
 				RightDimension: "project", RightValue: "project",
 			})
-			require.NoError(err)
-			assert.Equal(tt.tokens, comparison.Left.InputTokens)
-			assert.Equal(tt.tokens, comparison.Right.InputTokens)
+			require.NoError(t, err)
+			assert.Equal(t, tt.tokens, comparison.Left.InputTokens)
+			assert.Equal(t, tt.tokens, comparison.Right.InputTokens)
 		})
 	}
 }

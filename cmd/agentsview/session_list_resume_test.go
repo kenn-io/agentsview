@@ -64,19 +64,17 @@ func TestSessionList_ResumeFixture(t *testing.T) {
 	})
 
 	t.Run("human output", func(t *testing.T) {
-		assert := assert.New(t)
-
 		out, err := executeCommand(newRootCommand(), "session", "list",
 			"--resume")
 		require.NoError(t, err)
 		// Enriched human header is present and the in-flight marker is shown
 		// for the recently-active row. The ID column keeps a copyable handle
 		// for the surfaced session.
-		assert.Contains(out, "ID")
-		assert.Contains(out, "AGE")
-		assert.Contains(out, "NAME")
-		assert.Contains(out, "fresh")
-		assert.Contains(out, activeMarker)
-		assert.NotContains(out, "stale")
+		assert.Contains(t, out, "ID")
+		assert.Contains(t, out, "AGE")
+		assert.Contains(t, out, "NAME")
+		assert.Contains(t, out, "fresh")
+		assert.Contains(t, out, activeMarker)
+		assert.NotContains(t, out, "stale")
 	})
 }

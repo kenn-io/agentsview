@@ -37,8 +37,6 @@ func parseClaudeUploadIdentityFixture(t *testing.T, filename, content string) []
 }
 
 func TestClaudeUploadIdentityAdoptsExplicitRootAndDerivesFork(t *testing.T) {
-	assert := assert.New(t)
-
 	lines := []string{
 		`{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","sessionId":"root-stable","isSidechain":false,"message":{"content":"root"}}`,
 		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-01-01T00:00:01Z","sessionId":"root-stable","isSidechain":false,"message":{"content":[{"type":"text","text":"root answer"}]}}`,
@@ -55,11 +53,11 @@ func TestClaudeUploadIdentityAdoptsExplicitRootAndDerivesFork(t *testing.T) {
 	}
 	results := parseClaudeUploadIdentityFixture(t, "transport-name", strings.Join(lines, "\n")+"\n")
 	require.Len(t, results, 2)
-	assert.Equal("root-stable", results[0].Session.ID)
-	assert.Empty(results[0].Session.ParentSessionID)
-	assert.Equal("root-stable-c1", results[1].Session.ID)
-	assert.Equal("root-stable", results[1].Session.ParentSessionID)
-	assert.Equal(RelFork, results[1].Session.RelationshipType)
+	assert.Equal(t, "root-stable", results[0].Session.ID)
+	assert.Empty(t, results[0].Session.ParentSessionID)
+	assert.Equal(t, "root-stable-c1", results[1].Session.ID)
+	assert.Equal(t, "root-stable", results[1].Session.ParentSessionID)
+	assert.Equal(t, RelFork, results[1].Session.RelationshipType)
 }
 
 func TestClaudeUploadIdentityRequiresStableStrictRootEvidence(t *testing.T) {
@@ -96,18 +94,15 @@ func TestClaudeUploadIdentityAllows249ByteID(t *testing.T) {
 }
 
 func TestClaudeUploadIdentityIgnoresStagedCompanionPath(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := filepath.Join(t.TempDir(), "project", "subagents")
-	require.NoError(os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 	path := filepath.Join(dir, "agent-root.jsonl")
-	require.NoError(os.WriteFile(path, []byte(uploadIdentityTranscript("root-stable", "false", "root-stable")), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(uploadIdentityTranscript("root-stable", "false", "root-stable")), 0o644))
 	results, _, err := claudeParseFile(path, "project", "remote", claudeParseOptions{uploadIdentity: true})
-	require.NoError(err)
-	require.Len(results, 1)
-	assert.Empty(results[0].Session.ParentSessionID)
-	assert.Equal(RelNone, results[0].Session.RelationshipType)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Empty(t, results[0].Session.ParentSessionID)
+	assert.Equal(t, RelNone, results[0].Session.RelationshipType)
 }
 
 func TestClaudeUploadIdentityAllowsNonReservedDevicePrefixes(t *testing.T) {
@@ -119,19 +114,17 @@ func TestClaudeUploadIdentityAllowsNonReservedDevicePrefixes(t *testing.T) {
 }
 
 func TestClaudeLocalProviderPreservesFilenameIdentity(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(root, "-Users-dev-demo", "transport-name.jsonl")
-	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(os.WriteFile(path, []byte(uploadIdentityTranscript("embedded", "false", "embedded")), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(uploadIdentityTranscript("embedded", "false", "embedded")), 0o644))
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}, Machine: "local"})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, "transport-name", outcome.Results[0].Result.Session.ID)
 }

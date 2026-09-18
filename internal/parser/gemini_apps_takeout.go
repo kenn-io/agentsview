@@ -138,8 +138,7 @@ func planGeminiAppsFile(path string) (geminiAppsFilePlan, bool, error) {
 			continue
 		}
 		if err != nil {
-			var geminiAppsUnsupportedError geminiAppsUnsupportedError
-			if errors.As(err, &geminiAppsUnsupportedError) {
+			if _, ok := errors.AsType[geminiAppsUnsupportedError](err); ok {
 				return geminiAppsFilePlan{}, false, err
 			}
 			plan.errors++

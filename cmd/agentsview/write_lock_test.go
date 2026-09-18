@@ -47,6 +47,7 @@ func assertOpenWriteDBRefused(
 	wantSubstrings ...string,
 ) error {
 	t.Helper()
+
 	database, lock, err := openWriteDB(t.Context(), cfg)
 	require.Error(t, err)
 	require.Nil(t, database)
@@ -60,6 +61,7 @@ func requireOpenWriteDBForTest(
 	cfg config.Config,
 ) (*db.DB, *writeOwnerLock) {
 	t.Helper()
+
 	database, lock, err := openWriteDB(t.Context(), cfg)
 	require.NoError(t, err)
 	require.NotNil(t, database)
@@ -78,6 +80,7 @@ func holdBackgroundLaunchLockForTest(t *testing.T, dataDir string) *flock.Flock 
 
 func holdExternalStartupLockForTest(t *testing.T, dataDir string) *flock.Flock {
 	t.Helper()
+
 	lockPath, err := runtimeStore(dataDir).LockPath()
 	require.NoError(t, err)
 	startLock := flock.New(lockPath)

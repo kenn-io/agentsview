@@ -11,8 +11,6 @@ import (
 )
 
 func TestValidateRawParseLeaseRequestBoundsClaimBatch(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 
 	require.NoError(t, validateRawParseLeaseRequest(
@@ -20,11 +18,11 @@ func TestValidateRawParseLeaseRequestBoundsClaimBatch(t *testing.T) {
 	))
 
 	err := validateRawParseLeaseRequest("worker-a", 0, time.Minute)
-	assert.ErrorIs(err, rawsync.ErrInvalid)
+	require.ErrorIs(t, err, rawsync.ErrInvalid)
 	err = validateRawParseLeaseRequest("worker-a", -1, time.Minute)
-	assert.ErrorIs(err, rawsync.ErrInvalid)
+	require.ErrorIs(t, err, rawsync.ErrInvalid)
 	err = validateRawParseLeaseRequest("worker-a", rawderive.MaxClaimBatchSize+1, time.Minute)
-	assert.ErrorIs(err, rawsync.ErrInvalid,
+	assert.ErrorIs(t, err, rawsync.ErrInvalid,
 		"the queue and worker must share one claim cap from the rawderive contract")
 }
 
@@ -32,7 +30,7 @@ func TestRawParseLeaseDurationsRequireOneMicrosecond(t *testing.T) {
 	t.Parallel()
 
 	require.NoError(t, validateRawParseLeaseRequest("worker-a", 1, time.Microsecond))
-	assert.ErrorIs(t,
+	require.ErrorIs(t,
 		validateRawParseLeaseRequest("worker-a", 1, time.Nanosecond),
 		rawsync.ErrInvalid,
 	)

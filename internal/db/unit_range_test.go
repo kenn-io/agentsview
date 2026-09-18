@@ -298,14 +298,11 @@ func seedUnitRangeCorpus(t *testing.T, d *DB) int {
 // dedup across multi-run sessions) and one call per anchor (no dedup to
 // exercise, each call trivially batches a single probe).
 func TestDeriveUnitRangesReducerEquivalence(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	wantUnits := seedUnitRangeCorpus(t, d)
 
 	units, _ := scanUnits(t, d, "", true)
-	require.Len(units, wantUnits, "corpus produced an unexpected unit count")
+	require.Len(t, units, wantUnits, "corpus produced an unexpected unit count")
 
 	ctx := t.Context()
 	var anchors []UnitAnchor
@@ -315,7 +312,7 @@ func TestDeriveUnitRangesReducerEquivalence(t *testing.T) {
 			anchors = append(anchors, unitAnchorForMember(t, d, u, member))
 			want = append(want, [2]int{u.Ordinal, u.OrdinalEnd})
 			if u.Kind == "user" {
-				assert.Equal(u.Ordinal, u.OrdinalEnd,
+				assert.Equal(t, u.Ordinal, u.OrdinalEnd,
 					"user unit %s#%d must be a single-ordinal unit",
 					u.SessionID, u.Ordinal)
 			}
@@ -323,18 +320,18 @@ func TestDeriveUnitRangesReducerEquivalence(t *testing.T) {
 	}
 
 	got, err := DeriveUnitRanges(ctx, d, anchors)
-	require.NoError(err)
-	require.Len(got, len(anchors))
+	require.NoError(t, err)
+	require.Len(t, got, len(anchors))
 	for i, a := range anchors {
-		assert.Equal(want[i], got[i],
+		assert.Equal(t, want[i], got[i],
 			"batched derivation for anchor %s#%d", a.SessionID, a.Ordinal)
 	}
 
 	for i, a := range anchors {
 		single, err := DeriveUnitRanges(ctx, d, []UnitAnchor{a})
-		require.NoError(err)
-		require.Len(single, 1)
-		assert.Equal(want[i], single[0],
+		require.NoError(t, err)
+		require.Len(t, single, 1)
+		assert.Equal(t, want[i], single[0],
 			"per-anchor derivation for anchor %s#%d", a.SessionID, a.Ordinal)
 	}
 }
@@ -347,9 +344,6 @@ func TestDeriveUnitRangesReducerEquivalence(t *testing.T) {
 // and must still return exactly the reducer's extents, identical to the
 // sparse per-anchor derivation.
 func TestDeriveUnitRangesReducerEquivalenceDenseFlow(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	seedUnitRangeCorpus(t, d)
 	units, _ := scanUnits(t, d, "", true)
@@ -366,28 +360,28 @@ func TestDeriveUnitRangesReducerEquivalenceDenseFlow(t *testing.T) {
 			want = append(want, [2]int{u.Ordinal, u.OrdinalEnd})
 		}
 	}
-	require.GreaterOrEqual(len(anchors), UnitBoundsFlowFactor,
+	require.GreaterOrEqual(t, len(anchors), UnitBoundsFlowFactor,
 		"s-dense must supply at least UnitBoundsFlowFactor distinct run anchors "+
 			"in one session; extend the corpus session if the factor grows")
 
 	q := &countingUnitQuerier{inner: d}
 	got, err := DeriveUnitRanges(ctx, q, anchors)
-	require.NoError(err)
-	require.Len(got, len(anchors))
+	require.NoError(t, err)
+	require.Len(t, got, len(anchors))
 	for i, a := range anchors {
-		assert.Equal(want[i], got[i],
+		assert.Equal(t, want[i], got[i],
 			"dense-flow derivation for anchor %s#%d", a.SessionID, a.Ordinal)
 	}
-	assert.Equal(1, q.boundsCalls,
+	assert.Equal(t, 1, q.boundsCalls,
 		"dense page must fetch real user bounds (dense flow)")
 
 	// The sparse flow must agree exactly: one probe per call stays under the
 	// flow gate and probes with sentinel bounds.
 	for i, a := range anchors {
 		single, err := DeriveUnitRanges(ctx, d, []UnitAnchor{a})
-		require.NoError(err)
-		require.Len(single, 1)
-		assert.Equal(want[i], single[0],
+		require.NoError(t, err)
+		require.Len(t, single, 1)
+		assert.Equal(t, want[i], single[0],
 			"sparse derivation for anchor %s#%d", a.SessionID, a.Ordinal)
 	}
 }
@@ -448,9 +442,6 @@ func TestDeriveUnitRangesEmptyAnchors(t *testing.T) {
 // representative resolves the run and its extent is handed to every anchor
 // it covers with no second round.
 func TestDeriveUnitRangesBatchesRunAnchors(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	// Comfortably past the gate in one session, with the run extending on
 	// both sides of the anchored ordinals.
@@ -476,16 +467,16 @@ func TestDeriveUnitRangesBatchesRunAnchors(t *testing.T) {
 
 	q := &countingUnitQuerier{inner: d}
 	got, err := DeriveUnitRanges(t.Context(), q, anchors)
-	require.NoError(err)
-	require.Len(got, len(anchors))
+	require.NoError(t, err)
+	require.Len(t, got, len(anchors))
 	for i := range got {
-		assert.Equal([2]int{1, runLen}, got[i], "anchor %d", anchors[i].Ordinal)
+		assert.Equal(t, [2]int{1, runLen}, got[i], "anchor %d", anchors[i].Ordinal)
 	}
 
-	assert.Equal(1, q.boundsCalls, "NearestUserBoundaries calls (dense page)")
-	assert.Equal(anchorCount, q.boundsProbes, "NearestUserBoundaries probes")
-	assert.Equal(1, q.extentCalls, "RunExtents calls")
-	assert.Equal(1, q.extentProbes, "RunExtents probes (one group representative)")
+	assert.Equal(t, 1, q.boundsCalls, "NearestUserBoundaries calls (dense page)")
+	assert.Equal(t, anchorCount, q.boundsProbes, "NearestUserBoundaries probes")
+	assert.Equal(t, 1, q.extentCalls, "RunExtents calls")
+	assert.Equal(t, 1, q.extentProbes, "RunExtents probes (one group representative)")
 }
 
 // TestDeriveUnitRangesSecondRoundAcrossFlip seeds one user interval holding
@@ -495,9 +486,6 @@ func TestDeriveUnitRangesBatchesRunAnchors(t *testing.T) {
 // cannot cover the anchors past the flip: they must resolve in exactly one
 // second RunExtents round, with correct per-run extents.
 func TestDeriveUnitRangesSecondRoundAcrossFlip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s-flip2", "proj", func(s *Session) { s.EndedAt = Ptr(tsHour1) })
 	insertMessages(t, d,
@@ -519,22 +507,22 @@ func TestDeriveUnitRangesSecondRoundAcrossFlip(t *testing.T) {
 	// This test pins the SPARSE flow: the page must stay under the gate so no
 	// NearestUserBoundaries round runs. Guard the coupling explicitly instead
 	// of letting a lowered UnitBoundsFlowFactor flip the flow silently.
-	require.Less(len(anchors), UnitBoundsFlowFactor,
+	require.Less(t, len(anchors), UnitBoundsFlowFactor,
 		"across-flip page must stay sparse; restructure the test if the flow factor shrinks")
 	q := &countingUnitQuerier{inner: d}
 	got, err := DeriveUnitRanges(t.Context(), q, anchors)
-	require.NoError(err)
-	require.Len(got, len(anchors))
-	assert.Equal([2]int{1, 2}, got[0], "run 1 anchor 1")
-	assert.Equal([2]int{1, 2}, got[1], "run 1 anchor 2")
-	assert.Equal([2]int{4, 5}, got[2], "run 2 anchor 4")
-	assert.Equal([2]int{4, 5}, got[3], "run 2 anchor 5")
+	require.NoError(t, err)
+	require.Len(t, got, len(anchors))
+	assert.Equal(t, [2]int{1, 2}, got[0], "run 1 anchor 1")
+	assert.Equal(t, [2]int{1, 2}, got[1], "run 1 anchor 2")
+	assert.Equal(t, [2]int{4, 5}, got[2], "run 2 anchor 4")
+	assert.Equal(t, [2]int{4, 5}, got[3], "run 2 anchor 5")
 
-	assert.Equal(0, q.boundsCalls,
+	assert.Equal(t, 0, q.boundsCalls,
 		"NearestUserBoundaries calls (sparse page probes with sentinel bounds)")
-	assert.Equal(2, q.extentCalls,
+	assert.Equal(t, 2, q.extentCalls,
 		"RunExtents calls (representative round + across-flip remainder)")
-	assert.Equal(3, q.extentProbes,
+	assert.Equal(t, 3, q.extentProbes,
 		"RunExtents probes (1 representative + 2 across the flip)")
 }
 
@@ -575,9 +563,6 @@ func TestDeriveUnitRangesNonMemberSpan(t *testing.T) {
 // SQLite first-code-point guard's COALESCE path: unicode(”) is NULL, and an
 // empty user row is still an embeddable boundary.
 func TestNearestUserBoundariesSentinels(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s-b", "proj", func(s *Session) { s.EndedAt = Ptr(tsHour1) })
 	insertMessages(t, d,
@@ -597,17 +582,17 @@ func TestNearestUserBoundariesSentinels(t *testing.T) {
 		{SessionID: "s-b", Ordinal: 1},
 		{SessionID: "s-b", Ordinal: 6},
 	})
-	require.NoError(err)
-	require.Len(got, 5)
-	assert.Equal(UnitBounds{Prev: -1, Next: 1}, got[0],
+	require.NoError(t, err)
+	require.Len(t, got, 5)
+	assert.Equal(t, UnitBounds{Prev: -1, Next: 1}, got[0],
 		"no user row before session start")
-	assert.Equal(UnitBounds{Prev: 1, Next: 5}, got[1],
+	assert.Equal(t, UnitBounds{Prev: 1, Next: 5}, got[1],
 		"prefixed user row at 3 must not be a boundary; empty user row at 5 is")
-	assert.Equal(UnitBounds{Prev: 1, Next: 5}, got[2],
+	assert.Equal(t, UnitBounds{Prev: 1, Next: 5}, got[2],
 		"empty-content user row is an embeddable boundary")
-	assert.Equal(UnitBounds{Prev: -1, Next: 5}, got[3],
+	assert.Equal(t, UnitBounds{Prev: -1, Next: 5}, got[3],
 		"boundaries are exclusive of the probe ordinal itself")
-	assert.Equal(UnitBounds{Prev: 5, Next: UnitOrdinalMax}, got[4],
+	assert.Equal(t, UnitBounds{Prev: 5, Next: UnitOrdinalMax}, got[4],
 		"no user row after the last assistant")
 }
 
@@ -626,9 +611,6 @@ func TestNearestUserBoundariesSentinels(t *testing.T) {
 // session's base, so a single misattributed slot fails the assertion for
 // that specific session.
 func TestUnitBoundsQuerierChunkingAlignment(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	// >1 chunk boundary crossed for both methods (unitExtentChunk is the
@@ -659,11 +641,11 @@ func TestUnitBoundsQuerierChunkingAlignment(t *testing.T) {
 		boundProbes[k] = UnitProbe{SessionID: sessionID(k), Ordinal: ordinal}
 	}
 	bounds, err := d.NearestUserBoundaries(ctx, boundProbes)
-	require.NoError(err)
-	require.Len(bounds, n)
+	require.NoError(t, err)
+	require.Len(t, bounds, n)
 	for k, got := range bounds {
 		b := base(k)
-		assert.Equal(UnitBounds{Prev: b, Next: b + 3}, got,
+		assert.Equal(t, UnitBounds{Prev: b, Next: b + 3}, got,
 			"bound probe for session %s", sessionID(k))
 	}
 
@@ -679,11 +661,11 @@ func TestUnitBoundsQuerierChunkingAlignment(t *testing.T) {
 		}
 	}
 	extents, err := d.RunExtents(ctx, extentProbes)
-	require.NoError(err)
-	require.Len(extents, n)
+	require.NoError(t, err)
+	require.Len(t, extents, n)
 	for k, got := range extents {
 		b := base(k)
-		assert.Equal([2]int{b + 1, b + 2}, got,
+		assert.Equal(t, [2]int{b + 1, b + 2}, got,
 			"extent probe for session %s", sessionID(k))
 	}
 }

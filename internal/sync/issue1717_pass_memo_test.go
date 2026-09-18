@@ -16,21 +16,19 @@ import (
 )
 
 func TestIssue1717PassMemoReusesAcrossPages(t *testing.T) {
-	require := require.New(t)
-
 	const sourceCount = reconciliationPageSize + 1
 	provider, root := newIssue1717Provider(t, sourceCount, reconciliationPageSize-1)
 	engine := newIssue1717Engine(t, provider, root)
 
-	require.NoError(engine.ReconcileWatchRoots(
+	require.NoError(t, engine.ReconcileWatchRoots(
 		t.Context(), []string{root}, false,
 	))
 	for i := range sourceCount {
 		session, err := engine.db.GetSession(
 			t.Context(), issue1717SessionID(i),
 		)
-		require.NoError(err)
-		require.NotNil(session, "session %d must be archived", i)
+		require.NoError(t, err)
+		require.NotNil(t, session, "session %d must be archived", i)
 		assert.Equal(t, "main_repo", session.Project,
 			"page boundary must keep the memoized project")
 	}
@@ -39,9 +37,6 @@ func TestIssue1717PassMemoReusesAcrossPages(t *testing.T) {
 }
 
 func TestIssue1717ChangedPathPlanMemoLifetime(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	provider, root := newIssue1717Provider(t, 2, 0)
 	engine := newIssue1717Engine(t, provider, root)
 	files := make([]parser.DiscoveredFile, len(provider.sources))
@@ -58,35 +53,33 @@ func TestIssue1717ChangedPathPlanMemoLifetime(t *testing.T) {
 	result, err := engine.SyncChangedPathPlanContext(t.Context(), ChangedPathPlan{
 		Files: files,
 	}, nil)
-	require.NoError(err)
-	assert.Equal(len(files), result.FilesProcessed)
+	require.NoError(t, err)
+	assert.Equal(t, len(files), result.FilesProcessed)
 	for i := range files {
 		session, err := engine.db.GetSession(t.Context(), issue1717SessionID(i))
-		require.NoError(err)
-		require.NotNil(session)
-		assert.Equal("main_repo", session.Project)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, "main_repo", session.Project)
 	}
 }
 
 func TestIssue1717NextOperationRefresh(t *testing.T) {
-	require := require.New(t)
-
 	provider, root := newIssue1717Provider(t, 1, -1)
 	engine := newIssue1717Engine(t, provider, root)
 
-	require.NoError(engine.ReconcileWatchRootsAfterLostEvents(
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
 		t.Context(), []string{root}, false,
 	))
-	require.NoError(os.RemoveAll(provider.mainRepo))
+	require.NoError(t, os.RemoveAll(provider.mainRepo))
 	makeIssue1717Repo(t, provider.newRepo)
 	provider.resetForOperation()
 
-	require.NoError(engine.ReconcileWatchRootsAfterLostEvents(
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
 		t.Context(), []string{root}, false,
 	))
 	session, err := engine.db.GetSession(t.Context(), issue1717SessionID(0))
-	require.NoError(err)
-	require.NotNil(session)
+	require.NoError(t, err)
+	require.NotNil(t, session)
 	assert.Equal(t, "new_repo", session.Project)
 }
 
@@ -266,13 +259,13 @@ func newIssue1717Provider(
 	provider.cond = stdsync.NewCond(&provider.mu)
 	provider.mutate = func() {
 		if err := os.RemoveAll(mainRepo); err != nil {
-			t.Errorf("remove initial repository: %v", err)
+			assert.Failf(t, "test failed", "remove initial repository: %v", err)
 		}
 		if err := os.MkdirAll(
 			filepath.Join(newRepo, ".git", "worktrees", "deleted-child"),
 			0o755,
 		); err != nil {
-			t.Errorf("create replacement repository: %v", err)
+			assert.Failf(t, "test failed", "create replacement repository: %v", err)
 		}
 	}
 	return provider, root
@@ -282,7 +275,7 @@ func newIssue1717Engine(
 	t *testing.T, provider *issue1717Provider, root string,
 ) *Engine {
 	t.Helper()
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			provider.Def.Type: {root},
 		},

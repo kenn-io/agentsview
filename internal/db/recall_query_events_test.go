@@ -10,9 +10,6 @@ import (
 )
 
 func TestRecallQueryEventRecordsRankedExposureSnapshot(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	event := RecallQueryEvent{
 		QueryID:            "query-1",
@@ -34,58 +31,52 @@ func TestRecallQueryEventRecordsRankedExposureSnapshot(t *testing.T) {
 
 	id, err := d.RecordRecallQueryEvent(t.Context(), event)
 
-	require.NoError(err)
-	assert.Equal("query-1", id)
+	require.NoError(t, err)
+	assert.Equal(t, "query-1", id)
 	got, err := d.GetRecallQueryEvent(t.Context(), id)
-	require.NoError(err)
-	require.NotNil(got)
-	assert.Equal("query-1", got.QueryID)
-	assert.Equal("recover wrong cwd", got.Query)
-	assert.Equal("brief", got.Surface)
-	assert.Equal(event.FiltersJSON, got.FiltersJSON)
-	assert.True(got.TrustedOnly)
-	assert.Equal(RecallLexicalScorePolicyVersion, got.ScorePolicyVersion)
-	assert.Equal(3, got.ResultCount)
-	assert.Equal(2, got.PackedCount)
-	assert.Equal(9.75, got.TopScore)
-	assert.Equal("context_empty", got.MissReason)
-	assert.NotEmpty(got.CreatedAt)
-	require.Len(got.Exposures, 3)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "query-1", got.QueryID)
+	assert.Equal(t, "recover wrong cwd", got.Query)
+	assert.Equal(t, "brief", got.Surface)
+	assert.Equal(t, event.FiltersJSON, got.FiltersJSON)
+	assert.True(t, got.TrustedOnly)
+	assert.Equal(t, RecallLexicalScorePolicyVersion, got.ScorePolicyVersion)
+	assert.Equal(t, 3, got.ResultCount)
+	assert.Equal(t, 2, got.PackedCount)
+	assert.InDelta(t, 9.75, got.TopScore, 0)
+	assert.Equal(t, "context_empty", got.MissReason)
+	assert.NotEmpty(t, got.CreatedAt)
+	require.Len(t, got.Exposures, 3)
 	for i, want := range event.Exposures {
-		assert.Equal(id, got.Exposures[i].QueryID)
-		assert.Equal(want.Rank, got.Exposures[i].Rank)
-		assert.Equal(want.EntryID, got.Exposures[i].EntryID)
-		assert.Equal(want.Score, got.Exposures[i].Score)
-		assert.Equal(want.Packed, got.Exposures[i].Packed)
+		assert.Equal(t, id, got.Exposures[i].QueryID)
+		assert.Equal(t, want.Rank, got.Exposures[i].Rank)
+		assert.Equal(t, want.EntryID, got.Exposures[i].EntryID)
+		assert.InDelta(t, want.Score, got.Exposures[i].Score, 0)
+		assert.Equal(t, want.Packed, got.Exposures[i].Packed)
 	}
 }
 
 func TestRecallQueryEventGeneratesOpaqueID(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 
 	first, err := d.RecordRecallQueryEvent(t.Context(), RecallQueryEvent{
 		Query:   "first query",
 		Surface: "query",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	second, err := d.RecordRecallQueryEvent(t.Context(), RecallQueryEvent{
 		Query:   "second query",
 		Surface: "query",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.Len(first, 36)
-	assert.Len(second, 36)
-	assert.NotEqual(first, second)
+	assert.Len(t, first, 36)
+	assert.Len(t, second, 36)
+	assert.NotEqual(t, first, second)
 }
 
 func TestRecallQueryEventDuplicateExposureRankRollsBackAtomically(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 
 	_, err := d.RecordRecallQueryEvent(t.Context(), RecallQueryEvent{
@@ -99,25 +90,22 @@ func TestRecallQueryEventDuplicateExposureRankRollsBackAtomically(t *testing.T) 
 		},
 	})
 
-	require.Error(err)
+	require.Error(t, err)
 	got, getErr := d.GetRecallQueryEvent(
 		t.Context(), "query-duplicate-rank",
 	)
-	require.NoError(getErr)
-	assert.Nil(got)
+	require.NoError(t, getErr)
+	assert.Nil(t, got)
 	var exposureCount int
-	require.NoError(d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT COUNT(*) FROM recall_query_exposures
 		WHERE query_id = ?`,
 		"query-duplicate-rank",
 	).Scan(&exposureCount))
-	assert.Zero(exposureCount)
+	assert.Zero(t, exposureCount)
 }
 
 func TestRecallQueryEventPersistsLargeRankedExposureSnapshot(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	exposures := make([]RecallQueryExposure, 205)
 	for i := range exposures {
@@ -140,14 +128,14 @@ func TestRecallQueryEventPersistsLargeRankedExposureSnapshot(t *testing.T) {
 		TopScore:    205.25,
 		Exposures:   exposures,
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	got, err := d.GetRecallQueryEvent(t.Context(), id)
-	require.NoError(err)
-	require.NotNil(got)
-	require.Len(got.Exposures, 205)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Len(t, got.Exposures, 205)
 	for i, exposure := range got.Exposures {
-		assert.Equal(i+1, exposure.Rank)
+		assert.Equal(t, i+1, exposure.Rank)
 	}
 
 	boundaries := []struct {
@@ -166,18 +154,15 @@ func TestRecallQueryEventPersistsLargeRankedExposureSnapshot(t *testing.T) {
 	}
 	for _, boundary := range boundaries {
 		exposure := got.Exposures[boundary.index]
-		assert.Equal(id, exposure.QueryID)
-		assert.Equal(boundary.rank, exposure.Rank)
-		assert.Equal(boundary.entryID, exposure.EntryID)
-		assert.Equal(boundary.score, exposure.Score)
-		assert.Equal(boundary.packed, exposure.Packed)
+		assert.Equal(t, id, exposure.QueryID)
+		assert.Equal(t, boundary.rank, exposure.Rank)
+		assert.Equal(t, boundary.entryID, exposure.EntryID)
+		assert.InDelta(t, boundary.score, exposure.Score, 0)
+		assert.Equal(t, boundary.packed, exposure.Packed)
 	}
 }
 
 func TestRecallQueryEventLateDuplicateRankRollsBackAtomically(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	exposures := make([]RecallQueryExposure, 101)
 	for i := range exposures {
@@ -196,29 +181,27 @@ func TestRecallQueryEventLateDuplicateRankRollsBackAtomically(t *testing.T) {
 		ResultCount: len(exposures),
 		Exposures:   exposures,
 	})
-	require.Error(err)
-	assert.ErrorContains(err, "exposure ranks 100 through 100")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "exposure ranks 100 through 100")
 
 	got, getErr := d.GetRecallQueryEvent(
 		t.Context(), "query-late-duplicate-rank",
 	)
-	require.NoError(getErr)
-	assert.Nil(got)
+	require.NoError(t, getErr)
+	assert.Nil(t, got)
 	var exposureCount int
-	require.NoError(d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT COUNT(*) FROM recall_query_exposures
 		WHERE query_id = ?`,
 		"query-late-duplicate-rank",
 	).Scan(&exposureCount))
-	assert.Zero(exposureCount)
+	assert.Zero(t, exposureCount)
 }
 
 func TestRecallQueryEventSurvivesRecallAndSessionDeletion(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID:              "m1",
 		Type:            "fact",
 		Scope:           "project",
@@ -227,7 +210,7 @@ func TestRecallQueryEventSurvivesRecallAndSessionDeletion(t *testing.T) {
 		Body:            "The measurement outlives its source row.",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = d.RecordRecallQueryEvent(t.Context(), RecallQueryEvent{
 		QueryID:     "query-durable",
 		Query:       "durable query",
@@ -239,26 +222,23 @@ func TestRecallQueryEventSurvivesRecallAndSessionDeletion(t *testing.T) {
 			Rank: 1, EntryID: "m1", Score: 8, Packed: true,
 		}},
 	})
-	require.NoError(err)
-	_, err = d.getWriter().Exec(`DELETE FROM sessions WHERE id = 's1'`)
-	require.NoError(err)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM sessions WHERE id = 's1'`)
+	require.NoError(t, err)
 
 	got, err := d.GetRecallQueryEvent(t.Context(), "query-durable")
 
-	require.NoError(err)
-	require.NotNil(got)
-	require.Len(got.Exposures, 1)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Len(t, got.Exposures, 1)
 	assert.Equal(t, "m1", got.Exposures[0].EntryID)
 }
 
 func TestRecallQueryEventSurvivesFullResyncWithoutExposedEntry(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "old-query-events.db")
-	src, err := Open(srcPath)
-	require.NoError(err)
+	src, err := Open(t.Context(), srcPath)
+	require.NoError(t, err)
 	_, err = src.RecordRecallQueryEvent(t.Context(), RecallQueryEvent{
 		QueryID:     "query-orphan-exposure",
 		Query:       "missing entry query",
@@ -272,41 +252,39 @@ func TestRecallQueryEventSurvivesFullResyncWithoutExposedEntry(t *testing.T) {
 			Rank: 1, EntryID: "entry-not-in-new-db", Score: 7.25,
 		}},
 	})
-	require.NoError(err)
-	require.NoError(src.Close())
+	require.NoError(t, err)
+	require.NoError(t, src.Close())
 
 	dstPath := filepath.Join(dir, "new-query-events.db")
-	dst, err := Open(dstPath)
-	require.NoError(err)
+	dst, err := Open(t.Context(), dstPath)
+	require.NoError(t, err)
 	defer dst.Close()
-	require.NoError(dst.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dst.CopyRecallEntriesFrom(srcPath))
 
 	got, err := dst.GetRecallQueryEvent(
 		t.Context(), "query-orphan-exposure",
 	)
 
-	require.NoError(err)
-	require.NotNil(got)
-	assert.Equal("calibration", got.Surface)
-	assert.Equal("context_empty", got.MissReason)
-	require.Len(got.Exposures, 1)
-	assert.Equal("entry-not-in-new-db", got.Exposures[0].EntryID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "calibration", got.Surface)
+	assert.Equal(t, "context_empty", got.MissReason)
+	require.Len(t, got.Exposures, 1)
+	assert.Equal(t, "entry-not-in-new-db", got.Exposures[0].EntryID)
 }
 
 func TestRecallQueryEventCopyToleratesArchiveWithoutLedger(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "old-without-ledger.db")
-	src, err := Open(srcPath)
-	require.NoError(err)
-	require.NoError(src.Close())
+	src, err := Open(t.Context(), srcPath)
+	require.NoError(t, err)
+	require.NoError(t, src.Close())
 	execRawSQLite(t, srcPath, "DROP TABLE recall_query_exposures")
 	execRawSQLite(t, srcPath, "DROP TABLE recall_query_events")
 
 	dstPath := filepath.Join(dir, "new-with-ledger.db")
-	dst, err := Open(dstPath)
-	require.NoError(err)
+	dst, err := Open(t.Context(), dstPath)
+	require.NoError(t, err)
 	defer dst.Close()
 
 	assert.NoError(t, dst.CopyRecallEntriesFrom(srcPath))

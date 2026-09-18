@@ -137,14 +137,11 @@ func TestToolCallResultSummaryStorage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			d := testDB(t)
 			insertSession(t, d, "s-dedup", "proj")
 			call := tt.call
 			call.SessionID = "s-dedup"
-			require.NoError(d.InsertMessages([]Message{{
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{{
 				SessionID:  "s-dedup",
 				Ordinal:    0,
 				Role:       "assistant",
@@ -155,27 +152,27 @@ func TestToolCallResultSummaryStorage(t *testing.T) {
 
 			var stored string
 			var storedLen int
-			require.NoError(d.Reader().QueryRow(`
+			require.NoError(t, d.Reader().QueryRow(t.Context(), `
 				SELECT COALESCE(result_content, ''),
 				       COALESCE(result_content_length, 0)
 				FROM tool_calls
 				WHERE session_id = ? AND tool_use_id = ?`,
 				"s-dedup", call.ToolUseID,
 			).Scan(&stored, &storedLen))
-			assert.Equal(tt.wantStored, stored, "stored result_content")
-			assert.Equal(tt.wantStoredLen, storedLen,
+			assert.Equal(t, tt.wantStored, stored, "stored result_content")
+			assert.Equal(t, tt.wantStoredLen, storedLen,
 				"stored result_content_length")
 
 			msgs, err := d.GetMessages(
 				t.Context(), "s-dedup", 0, 10, true,
 			)
-			require.NoError(err)
-			require.Len(msgs, 1)
-			require.Len(msgs[0].ToolCalls, 1)
-			assert.Equal(tt.wantLoaded,
+			require.NoError(t, err)
+			require.Len(t, msgs, 1)
+			require.Len(t, msgs[0].ToolCalls, 1)
+			assert.Equal(t, tt.wantLoaded,
 				msgs[0].ToolCalls[0].ResultContent,
 				"loaded ToolCall.ResultContent")
-			assert.Len(msgs[0].ToolCalls[0].ResultEvents,
+			assert.Len(t, msgs[0].ToolCalls[0].ResultEvents,
 				len(call.ResultEvents), "result events survive")
 		})
 	}
@@ -186,7 +183,7 @@ func TestToolCallResultSummaryStorage(t *testing.T) {
 func TestSearchSessionFindsDedupedResultContent(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-find", "proj")
-	require.NoError(t, d.InsertMessages([]Message{{
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{
 		SessionID:  "s-find",
 		Ordinal:    0,
 		Role:       "assistant",
@@ -274,12 +271,9 @@ func TestRestoreToolCallResultContent(t *testing.T) {
 // re-inflate result_content, while a summary the event does not carry is
 // stored as before.
 func TestSubagentLinkKeepsDedupedSummary(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s-link", "proj")
-	require.NoError(d.InsertMessages([]Message{{
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{
 		SessionID:  "s-link",
 		Ordinal:    0,
 		Role:       "assistant",
@@ -307,7 +301,7 @@ func TestSubagentLinkKeepsDedupedSummary(t *testing.T) {
 	stored := func() (string, int) {
 		var content string
 		var length int
-		require.NoError(d.Reader().QueryRow(`
+		require.NoError(t, d.Reader().QueryRow(t.Context(), `
 			SELECT COALESCE(result_content, ''),
 			       COALESCE(result_content_length, 0)
 			FROM tool_calls WHERE session_id = ? AND tool_use_id = ?`,
@@ -317,11 +311,11 @@ func TestSubagentLinkKeepsDedupedSummary(t *testing.T) {
 	}
 
 	content, length := stored()
-	require.Empty(content, "insert must dedup the single-event summary")
-	require.Equal(len("agent finished"), length)
+	require.Empty(t, content, "insert must dedup the single-event summary")
+	require.Equal(t, len("agent finished"), length)
 
 	link := func(result string) {
-		_, err := d.WriteSessionIncremental("s-link", nil,
+		_, err := d.WriteSessionIncremental(t.Context(), "s-link", nil,
 			IncrementalSessionUpdate{
 				MsgCount:    1,
 				NextOrdinal: 1,
@@ -333,26 +327,26 @@ func TestSubagentLinkKeepsDedupedSummary(t *testing.T) {
 					HasResult:         true,
 				}},
 			})
-		require.NoError(err)
+		require.NoError(t, err)
 	}
 
 	link("agent finished")
 	content, length = stored()
-	assert.Empty(content, "link repeating the event must stay deduped")
-	assert.Equal(len("agent finished"), length)
+	assert.Empty(t, content, "link repeating the event must stay deduped")
+	assert.Equal(t, len("agent finished"), length)
 
 	msgs, err := d.GetMessages(t.Context(), "s-link", 0, 10, true)
-	require.NoError(err)
-	require.Len(msgs, 1)
-	require.Len(msgs[0].ToolCalls, 1)
-	assert.Equal("agent finished", msgs[0].ToolCalls[0].ResultContent)
-	assert.Equal("agent-child", msgs[0].ToolCalls[0].SubagentSessionID)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].ToolCalls, 1)
+	assert.Equal(t, "agent finished", msgs[0].ToolCalls[0].ResultContent)
+	assert.Equal(t, "agent-child", msgs[0].ToolCalls[0].SubagentSessionID)
 
 	link("agent finished with a longer final report")
 	content, length = stored()
-	assert.Equal("agent finished with a longer final report", content,
+	assert.Equal(t, "agent finished with a longer final report", content,
 		"a summary the event does not carry is stored")
-	assert.Equal(len("agent finished with a longer final report"), length)
+	assert.Equal(t, len("agent finished with a longer final report"), length)
 }
 
 // TestOmittedResultContentLengthRoundTrips pins the public write API: the
@@ -382,6 +376,7 @@ func TestOmittedResultContentLengthRoundTrips(t *testing.T) {
 		t *testing.T, d *DB, sessionID string, wantEvents int,
 	) ToolCall {
 		t.Helper()
+
 		msgs, err := d.GetMessages(t.Context(), sessionID, 0, 10, true)
 		require.NoError(t, err)
 		require.Len(t, msgs, 1)
@@ -398,7 +393,7 @@ func TestOmittedResultContentLengthRoundTrips(t *testing.T) {
 	t.Run("InsertMessages", func(t *testing.T) {
 		d := testDB(t)
 		insertSession(t, d, "s-nolen", "proj")
-		require.NoError(t, d.InsertMessages([]Message{{
+		require.NoError(t, d.InsertMessages(t.Context(), []Message{{
 			SessionID: "s-nolen", Ordinal: 0, Role: "assistant",
 			Content: "running", HasToolUse: true,
 			ToolCalls: []ToolCall{call("call_nolen")},
@@ -435,7 +430,7 @@ func TestOmittedResultContentLengthRoundTrips(t *testing.T) {
 		wrong := call("call_wrong")
 		wrong.ResultContentLength = len(summary) - 1
 		wrong.ResultEvents[0].ContentLength = len(summary) + 7
-		require.NoError(t, d.InsertMessages([]Message{{
+		require.NoError(t, d.InsertMessages(t.Context(), []Message{{
 			SessionID: "s-wrong", Ordinal: 0, Role: "assistant",
 			Content: "running", HasToolUse: true,
 			ToolCalls: []ToolCall{wrong},
@@ -448,7 +443,7 @@ func TestOmittedResultContentLengthRoundTrips(t *testing.T) {
 	t.Run("withheld text keeps the supplied length", func(t *testing.T) {
 		d := testDB(t)
 		insertSession(t, d, "s-withheld", "proj")
-		require.NoError(t, d.InsertMessages([]Message{{
+		require.NoError(t, d.InsertMessages(t.Context(), []Message{{
 			SessionID: "s-withheld", Ordinal: 0, Role: "assistant",
 			Content: "running", HasToolUse: true,
 			ToolCalls: []ToolCall{{
@@ -462,19 +457,16 @@ func TestOmittedResultContentLengthRoundTrips(t *testing.T) {
 	})
 
 	t.Run("WriteSessionIncremental link", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		d := testDB(t)
 		insertSession(t, d, "s-link-nolen", "proj")
-		require.NoError(d.InsertMessages([]Message{{
+		require.NoError(t, d.InsertMessages(t.Context(), []Message{{
 			SessionID: "s-link-nolen", Ordinal: 0, Role: "assistant",
 			Content: "spawning", HasToolUse: true,
 			ToolCalls: []ToolCall{{
 				ToolName: "Agent", Category: "Task", ToolUseID: "call_link_nolen",
 			}},
 		}}))
-		_, err := d.WriteSessionIncremental("s-link-nolen", nil,
+		_, err := d.WriteSessionIncremental(t.Context(), "s-link-nolen", nil,
 			IncrementalSessionUpdate{
 				MsgCount: 1, NextOrdinal: 1,
 				SubagentLinks: []ToolCallSubagentLink{{
@@ -484,9 +476,9 @@ func TestOmittedResultContentLengthRoundTrips(t *testing.T) {
 					HasResult:         true,
 				}},
 			})
-		require.NoError(err)
+		require.NoError(t, err)
 		got := loaded(t, d, "s-link-nolen", 0)
-		assert.Equal(summary, got.ResultContent)
-		assert.Equal(len(summary), got.ResultContentLength)
+		assert.Equal(t, summary, got.ResultContent)
+		assert.Equal(t, len(summary), got.ResultContentLength)
 	})
 }

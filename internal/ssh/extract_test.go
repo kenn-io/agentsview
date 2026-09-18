@@ -25,6 +25,7 @@ type tarEntry struct {
 // buildTestTar serializes entries into an in-memory tar archive.
 func buildTestTar(t *testing.T, entries []tarEntry) []byte {
 	t.Helper()
+
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	for _, e := range entries {
@@ -54,9 +55,6 @@ func extract(t *testing.T, data []byte, dst string) (int, error) {
 }
 
 func TestExtractTarStreamSkipsSelfHardlink(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dst := t.TempDir()
 	data := buildTestTar(t, []tarEntry{
 		{name: "home/wes/good.txt", typeflag: tar.TypeReg, body: "hello"},
@@ -71,18 +69,18 @@ func TestExtractTarStreamSkipsSelfHardlink(t *testing.T) {
 	})
 
 	skipped, err := extract(t, data, dst)
-	require.NoError(err)
-	assert.Equal(1, skipped)
+	require.NoError(t, err)
+	assert.Equal(t, 1, skipped)
 
 	good, err := os.ReadFile(filepath.Join(dst, "home/wes/good.txt"))
-	require.NoError(err)
-	assert.Equal("hello", string(good))
+	require.NoError(t, err)
+	assert.Equal(t, "hello", string(good))
 	after, err := os.ReadFile(filepath.Join(dst, "home/wes/after.txt"))
-	require.NoError(err)
-	assert.Equal("world", string(after))
+	require.NoError(t, err)
+	assert.Equal(t, "world", string(after))
 
 	_, statErr := os.Lstat(filepath.Join(dst, "home/wes/loop.jsonl"))
-	assert.True(
+	assert.True(t,
 		os.IsNotExist(statErr),
 		"self-referential hardlink should not be created",
 	)
@@ -142,9 +140,6 @@ func TestExtractTarStreamRejectsRelativePathEscape(t *testing.T) {
 }
 
 func TestExtractTarStreamSkipsSymlinks(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dst := t.TempDir()
 	data := buildTestTar(t, []tarEntry{
 		{name: "home/target.txt", typeflag: tar.TypeReg, body: "data"},
@@ -169,28 +164,25 @@ func TestExtractTarStreamSkipsSymlinks(t *testing.T) {
 	})
 
 	_, err := extract(t, data, dst)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// The regular file is still extracted.
 	body, err := os.ReadFile(filepath.Join(dst, "home/target.txt"))
-	require.NoError(err)
-	assert.Equal("data", string(body))
+	require.NoError(t, err)
+	assert.Equal(t, "data", string(body))
 
 	// No symlink is created anywhere.
 	for _, name := range []string{
 		"home/link.txt", "home/rel-escape", "home/abs-escape",
 	} {
 		_, statErr := os.Lstat(filepath.Join(dst, name))
-		assert.True(
+		assert.True(t,
 			os.IsNotExist(statErr), "%s should be skipped", name,
 		)
 	}
 }
 
 func TestExtractTarStreamNormalHardlink(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dst := t.TempDir()
 	data := buildTestTar(t, []tarEntry{
 		{name: "home/a.txt", typeflag: tar.TypeReg, body: "shared"},
@@ -198,12 +190,12 @@ func TestExtractTarStreamNormalHardlink(t *testing.T) {
 	})
 
 	skipped, err := extract(t, data, dst)
-	require.NoError(err)
-	assert.Equal(0, skipped)
+	require.NoError(t, err)
+	assert.Equal(t, 0, skipped)
 
 	b, err := os.ReadFile(filepath.Join(dst, "home/b.txt"))
-	require.NoError(err)
-	assert.Equal("shared", string(b))
+	require.NoError(t, err)
+	assert.Equal(t, "shared", string(b))
 }
 
 func TestExtractTarStreamPreservesModTime(t *testing.T) {
@@ -233,9 +225,6 @@ func TestExtractTarStreamPreservesModTime(t *testing.T) {
 }
 
 func TestExtractTarStreamCreatesDirsAndFiles(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dst := t.TempDir()
 	data := buildTestTar(t, []tarEntry{
 		{name: "home/wes/.claude/", typeflag: tar.TypeDir},
@@ -247,15 +236,15 @@ func TestExtractTarStreamCreatesDirsAndFiles(t *testing.T) {
 	})
 
 	skipped, err := extract(t, data, dst)
-	require.NoError(err)
-	assert.Equal(0, skipped)
+	require.NoError(t, err)
+	assert.Equal(t, 0, skipped)
 
 	info, err := os.Stat(filepath.Join(dst, "home/wes/.claude"))
-	require.NoError(err)
-	assert.True(info.IsDir())
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
 	body, err := os.ReadFile(filepath.Join(dst, "home/wes/.claude/s.jsonl"))
-	require.NoError(err)
-	assert.Equal("{}", string(body))
+	require.NoError(t, err)
+	assert.Equal(t, "{}", string(body))
 }
 
 // TestExtractTarStreamExtractsLegacyRegularType guards against the
@@ -264,26 +253,24 @@ func TestExtractTarStreamCreatesDirsAndFiles(t *testing.T) {
 // to TypeReg (or TypeDir) before we see the header, so an entry
 // authored as TypeRegA must still extract, not be silently skipped.
 func TestExtractTarStreamExtractsLegacyRegularType(t *testing.T) {
-	require := require.New(t)
-
 	dst := t.TempDir()
 	body := []byte("legacy regular file")
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	require.NoError(tw.WriteHeader(&tar.Header{
+	require.NoError(t, tw.WriteHeader(&tar.Header{
 		Name:     "home/wes/.codex/old.json",
 		Typeflag: tar.TypeRegA, //nolint:staticcheck // testing the deprecated marker
 		Mode:     0o644,
 		Size:     int64(len(body)),
 	}))
 	_, err := tw.Write(body)
-	require.NoError(err)
-	require.NoError(tw.Close())
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
 
 	_, err = extract(t, buf.Bytes(), dst)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	got, err := os.ReadFile(filepath.Join(dst, "home/wes/.codex/old.json"))
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Equal(t, string(body), string(got))
 }

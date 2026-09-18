@@ -16,8 +16,6 @@ import (
 )
 
 func TestUploadServiceStartsDurableDeviceBoundSession(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -32,21 +30,19 @@ func TestUploadServiceStartsDurableDeviceBoundSession(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	assert.True(created)
-	assert.Equal("upl_AQEBAQEBAQEBAQEBAQEBAQ", session.ID)
-	assert.Equal(identity, session.Identity)
-	assert.Equal(parser.AgentCodex, session.Provider)
-	assert.Equal(object, session.Object)
-	assert.Zero(session.Offset)
-	assert.Equal(now, session.CreatedAt)
-	assert.Equal(now.Add(DefaultUploadSessionTTL), session.ExpiresAt)
-	assert.False(session.Complete)
-	assert.Equal(1, store.createCalls)
+	assert.True(t, created)
+	assert.Equal(t, "upl_AQEBAQEBAQEBAQEBAQEBAQ", session.ID)
+	assert.Equal(t, identity, session.Identity)
+	assert.Equal(t, parser.AgentCodex, session.Provider)
+	assert.Equal(t, object, session.Object)
+	assert.Zero(t, session.Offset)
+	assert.Equal(t, now, session.CreatedAt)
+	assert.Equal(t, now.Add(DefaultUploadSessionTTL), session.ExpiresAt)
+	assert.False(t, session.Complete)
+	assert.Equal(t, 1, store.createCalls)
 }
 
 func TestUploadServiceSkipsSessionWhenObjectAlreadyExists(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -62,17 +58,14 @@ func TestUploadServiceSkipsSessionWhenObjectAlreadyExists(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	assert.False(created)
-	assert.Empty(session.ID)
-	assert.Equal(object.Length, session.Offset)
-	assert.True(session.Complete)
-	assert.Zero(store.createCalls)
+	assert.False(t, created)
+	assert.Empty(t, session.ID)
+	assert.Equal(t, object.Length, session.Offset)
+	assert.True(t, session.Complete)
+	assert.Zero(t, store.createCalls)
 }
 
 func TestUploadServiceAppendsAndIndependentlyFinalizesExactObject(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -86,34 +79,31 @@ func TestUploadServiceAppendsAndIndependentlyFinalizesExactObject(t *testing.T) 
 	body := []byte("complete object")
 	object := objectRefForBytes(t, body)
 	session, _, err := service.Start(t.Context(), identity, parser.AgentCodex, object)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	partial, err := service.Append(
 		t.Context(), identity, session.ID, 0, body[:5],
 	)
-	require.NoError(err)
-	assert.Equal(int64(5), partial.Offset)
-	assert.False(partial.Complete)
-	assert.Zero(custody.finalizeCalls)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), partial.Offset)
+	assert.False(t, partial.Complete)
+	assert.Zero(t, custody.finalizeCalls)
 
 	completed, err := service.Append(
 		t.Context(), identity, session.ID, 5, body[5:],
 	)
 
-	require.NoError(err)
-	assert.True(completed.Complete)
-	assert.Equal(object.Length, completed.Offset)
-	assert.Equal(body, custody.finalizedBody)
-	assert.Equal(1, custody.finalizeCalls)
-	assert.Equal([]string{
+	require.NoError(t, err)
+	assert.True(t, completed.Complete)
+	assert.Equal(t, object.Length, completed.Offset)
+	assert.Equal(t, body, custody.finalizedBody)
+	assert.Equal(t, 1, custody.finalizeCalls)
+	assert.Equal(t, []string{
 		"append", "append", "open", "open", "finalize", "complete",
 	}, events)
 }
 
 func TestUploadServiceReturnsCurrentOffsetWithoutWritingOnConflict(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -123,21 +113,18 @@ func TestUploadServiceReturnsCurrentOffsetWithoutWritingOnConflict(t *testing.T)
 	identity := AuthIdentity{TenantID: "tenant-a", DeviceID: "dev-a"}
 	object := objectRefForBytes(t, []byte("offset"))
 	session, _, err := service.Start(t.Context(), identity, parser.AgentCodex, object)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	_, err = service.Append(t.Context(), identity, session.ID, 3, []byte("bad"))
 
 	var conflict *UploadOffsetConflictError
-	require.ErrorAs(err, &conflict)
-	assert.Zero(conflict.CurrentOffset)
-	assert.Empty(store.data)
-	assert.Zero(custody.finalizeCalls)
+	require.ErrorAs(t, err, &conflict)
+	assert.Zero(t, conflict.CurrentOffset)
+	assert.Empty(t, store.data)
+	assert.Zero(t, custody.finalizeCalls)
 }
 
 func TestUploadServiceReturnsCurrentOffsetAfterConcurrentCompletion(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -148,21 +135,18 @@ func TestUploadServiceReturnsCurrentOffsetAfterConcurrentCompletion(t *testing.T
 	body := []byte("concurrent duplicate")
 	object := objectRefForBytes(t, body)
 	session, _, err := service.Start(t.Context(), identity, parser.AgentCodex, object)
-	require.NoError(err)
+	require.NoError(t, err)
 	store.completeBeforeAppend = true
 
 	_, err = service.Append(t.Context(), identity, session.ID, 0, body[:5])
 
 	var conflict *UploadOffsetConflictError
-	require.ErrorAs(err, &conflict)
-	assert.Equal(object.Length, conflict.CurrentOffset)
-	assert.Empty(store.data, "the stale chunk must not be accepted")
+	require.ErrorAs(t, err, &conflict)
+	assert.Equal(t, object.Length, conflict.CurrentOffset)
+	assert.Empty(t, store.data, "the stale chunk must not be accepted")
 }
 
 func TestUploadServiceChecksumMismatchResetsSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -172,24 +156,22 @@ func TestUploadServiceChecksumMismatchResetsSession(t *testing.T) {
 	identity := AuthIdentity{TenantID: "tenant-a", DeviceID: "dev-a"}
 	object := objectRefForBytes(t, []byte("expected"))
 	session, _, err := service.Start(t.Context(), identity, parser.AgentCodex, object)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	_, err = service.Append(
 		t.Context(), identity, session.ID, 0, []byte("corrupt!"),
 	)
 
 	var mismatch *UploadChecksumMismatchError
-	require.ErrorAs(err, &mismatch)
-	assert.Zero(mismatch.CurrentOffset)
-	assert.Zero(store.session.Offset)
-	assert.Empty(store.data)
-	assert.Equal(1, store.resetCalls)
-	assert.Zero(custody.finalizeCalls)
+	require.ErrorAs(t, err, &mismatch)
+	assert.Zero(t, mismatch.CurrentOffset)
+	assert.Zero(t, store.session.Offset)
+	assert.Empty(t, store.data)
+	assert.Equal(t, 1, store.resetCalls)
+	assert.Zero(t, custody.finalizeCalls)
 }
 
 func TestUploadServiceDoesNotReportResetOffsetWhenResetFails(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -204,9 +186,9 @@ func TestUploadServiceDoesNotReportResetOffsetWhenResetFails(t *testing.T) {
 	_, err = service.Append(t.Context(), identity, session.ID, 0, []byte("corrupt!"))
 
 	var mismatch *UploadChecksumMismatchError
-	assert.NotErrorAs(err, &mismatch)
-	assert.ErrorContains(err, "database unavailable")
-	assert.Equal(object.Length, store.session.Offset)
+	assert.NotErrorAs(t, err, &mismatch)
+	require.ErrorContains(t, err, "database unavailable")
+	assert.Equal(t, object.Length, store.session.Offset)
 }
 
 func TestUploadServiceStopsHashingWhenRequestIsCanceled(t *testing.T) {
@@ -227,14 +209,11 @@ func TestUploadServiceStopsHashingWhenRequestIsCanceled(t *testing.T) {
 
 	_, err = service.Append(ctx, identity, session.ID, 0, body)
 
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assert.False(t, store.session.Complete)
 }
 
 func TestUploadServiceSerializesDuplicateFinalization(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
 	store := newMemoryUploadSessionStore()
 	custody := newMemoryUploadCustody()
@@ -245,7 +224,7 @@ func TestUploadServiceSerializesDuplicateFinalization(t *testing.T) {
 	body := []byte("duplicate final patch")
 	object := objectRefForBytes(t, body)
 	session, _, err := service.Start(t.Context(), identity, parser.AgentCodex, object)
-	require.NoError(err)
+	require.NoError(t, err)
 	store.session.Offset = object.Length
 	store.data = append([]byte(nil), body...)
 
@@ -257,7 +236,7 @@ func TestUploadServiceSerializesDuplicateFinalization(t *testing.T) {
 	select {
 	case <-custody.finalizeStarted:
 	case <-time.After(time.Second):
-		require.FailNow("first finalization did not start")
+		require.FailNow(t, "first finalization did not start")
 	}
 	go func() {
 		_, appendErr := service.Append(t.Context(), identity, session.ID, object.Length, nil)
@@ -265,21 +244,18 @@ func TestUploadServiceSerializesDuplicateFinalization(t *testing.T) {
 	}()
 	select {
 	case <-custody.finalizeStarted:
-		require.FailNow("duplicate finalization reached custody concurrently")
+		require.FailNow(t, "duplicate finalization reached custody concurrently")
 	case <-time.After(100 * time.Millisecond):
 	}
 	close(custody.finalizeRelease)
 
-	require.NoError(<-results)
-	require.NoError(<-results)
-	assert.Equal(1, custody.finalizeCalls)
-	assert.True(store.session.Complete)
+	require.NoError(t, <-results)
+	require.NoError(t, <-results)
+	assert.Equal(t, 1, custody.finalizeCalls)
+	assert.True(t, store.session.Complete)
 }
 
 func TestUploadServiceAcceptsCompletionByAnotherProcess(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -290,7 +266,7 @@ func TestUploadServiceAcceptsCompletionByAnotherProcess(t *testing.T) {
 	body := []byte("completed elsewhere")
 	object := objectRefForBytes(t, body)
 	session, _, err := service.Start(t.Context(), identity, parser.AgentCodex, object)
-	require.NoError(err)
+	require.NoError(t, err)
 	store.session.Offset = object.Length
 	store.data = append([]byte(nil), body...)
 	store.completeOnOpen = true
@@ -299,16 +275,13 @@ func TestUploadServiceAcceptsCompletionByAnotherProcess(t *testing.T) {
 		t.Context(), identity, session.ID, object.Length, nil,
 	)
 
-	require.NoError(err)
-	assert.True(completed.Complete)
-	assert.Equal(object.Length, completed.Offset)
-	assert.Zero(custody.finalizeCalls)
+	require.NoError(t, err)
+	assert.True(t, completed.Complete)
+	assert.Equal(t, object.Length, completed.Offset)
+	assert.Zero(t, custody.finalizeCalls)
 }
 
 func TestUploadServiceRetriesFinalizationWithoutAnotherChunk(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -320,21 +293,21 @@ func TestUploadServiceRetriesFinalizationWithoutAnotherChunk(t *testing.T) {
 	body := []byte("retry")
 	object := objectRefForBytes(t, body)
 	session, _, err := service.Start(t.Context(), identity, parser.AgentCodex, object)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	_, err = service.Append(t.Context(), identity, session.ID, 0, body)
-	require.ErrorContains(err, "custody unavailable")
-	assert.Equal(object.Length, store.session.Offset)
-	assert.False(store.session.Complete)
+	require.ErrorContains(t, err, "custody unavailable")
+	assert.Equal(t, object.Length, store.session.Offset)
+	assert.False(t, store.session.Complete)
 
 	custody.finalizeErr = nil
 	completed, err := service.Append(
 		t.Context(), identity, session.ID, object.Length, nil,
 	)
 
-	require.NoError(err)
-	assert.True(completed.Complete)
-	assert.Equal(2, custody.finalizeCalls)
+	require.NoError(t, err)
+	assert.True(t, completed.Complete)
+	assert.Equal(t, 2, custody.finalizeCalls)
 }
 
 func TestUploadServiceRejectsOversizedChunkBeforeStore(t *testing.T) {
@@ -596,5 +569,7 @@ func (r *cancelAfterFirstRead) Read(buffer []byte) (int, error) {
 	return read, err
 }
 
-var _ UploadSessionStore = (*memoryUploadSessionStore)(nil)
-var _ UploadCustody = (*memoryUploadCustody)(nil)
+var (
+	_ UploadSessionStore = (*memoryUploadSessionStore)(nil)
+	_ UploadCustody      = (*memoryUploadCustody)(nil)
+)

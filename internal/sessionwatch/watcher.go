@@ -32,7 +32,12 @@ const (
 var (
 	pollIntervalNanos      int64 = int64(PollInterval)
 	syncFallbackDelayNanos int64 = int64(SyncFallbackDelay)
+	sourceMissingObserver  atomic.Value
 )
+
+func init() {
+	sourceMissingObserver.Store(func(string) {})
+}
 
 func pollInterval() time.Duration {
 	return time.Duration(atomic.LoadInt64(&pollIntervalNanos))
@@ -59,6 +64,14 @@ func SetTimingsForTest(
 		atomic.StoreInt64(&pollIntervalNanos, oldPoll)
 		atomic.StoreInt64(&syncFallbackDelayNanos, oldFallback)
 	}
+}
+
+// SetSourceMissingObserverForTest installs a callback for tests that need to
+// coordinate with source disappearance processing.
+func SetSourceMissingObserverForTest(observer func(string)) func() {
+	previous := sourceMissingObserver.Load().(func(string))
+	sourceMissingObserver.Store(observer)
+	return func() { sourceMissingObserver.Store(previous) }
 }
 
 // Watcher emits a tick on Events() each time the session's DB state
@@ -89,7 +102,7 @@ func (w *Watcher) Events(
 	ctx context.Context, sessionID string,
 ) <-chan struct{} {
 	ch := make(chan struct{})
-	lastCount, lastDBVersion, _ := w.db.GetSessionVersion(
+	lastCount, lastDBVersion, _ := w.db.GetSessionVersion(ctx,
 		sessionID,
 	)
 	go func() {
@@ -104,7 +117,7 @@ func (w *Watcher) Events(
 		}
 
 		// Track file mtime for fallback sync.
-		sourcePath := w.engine.FindSourceFile(sessionID)
+		sourcePath := w.engine.FindSourceFile(ctx, sessionID)
 		var lastFileMtime int64
 		var fileMtimeChangedAt time.Time
 		if sourcePath != "" {
@@ -155,7 +168,7 @@ func (w *Watcher) pollDBOnly(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			count, dbVersion, ok := w.db.GetSessionVersion(sessionID)
+			count, dbVersion, ok := w.db.GetSessionVersion(ctx, sessionID)
 			if ok && (count != lastCount || dbVersion != lastDBVersion) {
 				lastCount = count
 				lastDBVersion = dbVersion
@@ -182,7 +195,7 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 ) bool {
 	// Primary: check if the DB has new data. The version marker covers
 	// message appends and metadata/content-only updates.
-	if count, dbVersion, ok := w.db.GetSessionVersion(
+	if count, dbVersion, ok := w.db.GetSessionVersion(ctx,
 		sessionID,
 	); ok && (count != *lastCount ||
 		dbVersion != *lastDBVersion) {
@@ -195,8 +208,9 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 
 	// Track file mtime for the fallback path.
 	if *sourcePath == "" {
-		*sourcePath = w.engine.FindSourceFile(sessionID)
+		*sourcePath = w.engine.FindSourceFile(ctx, sessionID)
 		if *sourcePath == "" {
+			sourceMissingObserver.Load().(func(string))(sessionID)
 			return false
 		}
 		*lastFileMtime = w.engine.SourceMtime(ctx, sessionID)
@@ -212,6 +226,7 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 		*sourcePath = ""
 		*lastFileMtime = 0
 		*fileMtimeChangedAt = time.Time{}
+		sourceMissingObserver.Load().(func(string))(sessionID)
 		return false
 	}
 
@@ -236,7 +251,7 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 			return false
 		}
 		// Re-check the DB after syncing.
-		if count, dbVersion, ok := w.db.GetSessionVersion(
+		if count, dbVersion, ok := w.db.GetSessionVersion(ctx,
 			sessionID,
 		); ok && (count != *lastCount ||
 			dbVersion != *lastDBVersion) {

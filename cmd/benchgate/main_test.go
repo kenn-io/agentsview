@@ -89,17 +89,14 @@ func TestParseBench(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			got, syntaxErrs := parseString(t, tt.input)
-			assert.Len(syntaxErrs, tt.wantSyntax)
-			require.Len(got, len(tt.want))
+			assert.Len(t, syntaxErrs, tt.wantSyntax)
+			require.Len(t, got, len(tt.want))
 			for name, wantUnits := range tt.want {
 				gotUnits, ok := got[name]
-				require.True(ok, "missing benchmark %s", name)
+				require.True(t, ok, "missing benchmark %s", name)
 				for unit, wantVals := range wantUnits {
-					assert.InDeltaSlice(
+					assert.InDeltaSlice(t,
 						wantVals, gotUnits[unit], 1e-15,
 						"%s %s", name, unit,
 					)
@@ -308,22 +305,20 @@ func TestCompare(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			report, violations, issues := compare(tt.old, tt.new, testGates())
 			units := make([]string, 0, len(violations))
 			for _, v := range violations {
 				units = append(units, v.unit)
 			}
-			assert.Empty(issues)
+			assert.Empty(t, issues)
 			if len(tt.wantUnits) == 0 {
-				assert.Empty(violations)
+				assert.Empty(t, violations)
 			} else {
-				assert.Equal(tt.wantUnits, units)
+				assert.Equal(t, tt.wantUnits, units)
 			}
 			joined := strings.Join(report, "\n")
 			for _, want := range tt.wantReport {
-				assert.Contains(joined, want)
+				assert.Contains(t, joined, want)
 			}
 		})
 	}
@@ -339,8 +334,6 @@ func TestCompare(t *testing.T) {
 // pooled-buffer miss cannot fail the gate on its own.
 func TestCompareOutlierRunPolicy(t *testing.T) {
 	t.Run("alloc outlier run fails", func(t *testing.T) {
-		assert := assert.New(t)
-
 		old := benchSamples{
 			"BenchmarkFoo-8": {"allocs/op": {1000, 1000, 1000, 1000, 1000}},
 		}
@@ -349,9 +342,9 @@ func TestCompareOutlierRunPolicy(t *testing.T) {
 		}
 		_, violations, issues := compare(old, next, testGates())
 		require.Len(t, violations, 1)
-		assert.Empty(issues)
-		assert.Equal("allocs/op", violations[0].unit)
-		assert.InDelta(9000, violations[0].new, 1e-9,
+		assert.Empty(t, issues)
+		assert.Equal(t, "allocs/op", violations[0].unit)
+		assert.InDelta(t, 9000, violations[0].new, 1e-9,
 			"the worst run is what gets gated")
 	})
 
@@ -385,8 +378,6 @@ func TestCompareOutlierRunPolicy(t *testing.T) {
 // (e.g. -benchmem dropped from the candidate run) is a config error
 // so the gate exits 2 instead of silently disabling that metric.
 func TestCompareMissingCandidateUnit(t *testing.T) {
-	assert := assert.New(t)
-
 	old := benchSamples{
 		"BenchmarkFoo-8": {
 			"sec/op":    noisy(1e-3, 6),
@@ -397,11 +388,11 @@ func TestCompareMissingCandidateUnit(t *testing.T) {
 		"BenchmarkFoo-8": {"sec/op": noisy(1e-3, 6)},
 	}
 	report, violations, issues := compare(old, next, testGates())
-	assert.Empty(violations)
+	assert.Empty(t, violations)
 	require.Len(t, issues, 1)
-	assert.Contains(issues[0].msg,
+	assert.Contains(t, issues[0].msg,
 		"allocs/op present in baseline but missing from candidate")
-	assert.Contains(strings.Join(report, "\n"),
+	assert.Contains(t, strings.Join(report, "\n"),
 		"allocs/op missing from candidate")
 }
 

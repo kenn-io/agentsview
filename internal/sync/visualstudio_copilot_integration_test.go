@@ -48,8 +48,6 @@ func vsCopilotTraceLine(
 func TestReconcileWatchRootsPreservesVisualStudioCopilotSessionBehindSymlinkedVSRoot(
 	t *testing.T,
 ) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	conversationID := "5bc5f6d7-9a6e-4f9c-8f3c-b7be2e7d9f20"
 	vsRoot := filepath.Join(root, ".vs")
@@ -57,8 +55,8 @@ func TestReconcileWatchRootsPreservesVisualStudioCopilotSessionBehindSymlinkedVS
 		vsRoot, "SampleApp", "copilot-chat", "thread", "sessions",
 		conversationID,
 	)
-	require.NoError(os.MkdirAll(filepath.Dir(sessionPath), 0o755))
-	require.NoError(os.WriteFile(sessionPath, []byte(vsCopilotTraceLine(
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(vsCopilotTraceLine(
 		conversationID, "span", "chat gpt-5.5", "1781293600000000000",
 		"1781293610000000000", map[string]string{
 			"gen_ai.operation.name": "chat",
@@ -67,37 +65,34 @@ func TestReconcileWatchRootsPreservesVisualStudioCopilotSessionBehindSymlinkedVS
 	)+"\n"), 0o600))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentVSCopilot: {root}},
 		Machine:   "local",
 	})
 	t.Cleanup(engine.Close)
 
 	stats := engine.SyncAll(t.Context(), nil)
-	require.False(stats.Aborted)
-	require.Equal(1, stats.Synced)
+	require.False(t, stats.Aborted)
+	require.Equal(t, 1, stats.Synced)
 	sessionID := "visualstudio-copilot:" + conversationID
 	stored, err := database.GetSession(t.Context(), sessionID)
-	require.NoError(err)
-	require.NotNil(stored)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
 
 	targetVSRoot := filepath.Join(t.TempDir(), "vs-data")
-	require.NoError(os.Rename(vsRoot, targetVSRoot))
+	require.NoError(t, os.Rename(vsRoot, targetVSRoot))
 	if err := os.Symlink(targetVSRoot, vsRoot); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
-	require.NoError(engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
 	active, err := database.GetSession(t.Context(), sessionID)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.NotNil(t, active,
 		"authoritative reconciliation must preserve a session behind a directory symlink")
 }
 
 func TestReconcileWatchRootsVisualStudioCopilot300MembersUsesOneBoundedScan(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	const members = 300
 	root := t.TempDir()
 	tracePath := filepath.Join(
@@ -115,9 +110,9 @@ func TestReconcileWatchRootsVisualStudioCopilot300MembersUsesOneBoundedScan(t *t
 		))
 		data.WriteByte('\n')
 	}
-	require.NoError(os.WriteFile(tracePath, []byte(data.String()), 0o600))
+	require.NoError(t, os.WriteFile(tracePath, []byte(data.String()), 0o600))
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentVSCopilot: {root}},
 		Machine:   "local",
 	})
@@ -126,7 +121,7 @@ func TestReconcileWatchRootsVisualStudioCopilot300MembersUsesOneBoundedScan(t *t
 	// Production uses at least two workers and caps above this desired overlap,
 	// so this target cannot exceed the workers available on low-CPU hosts.
 	overlapTarget := min(4, max(runtime.NumCPU(), 2))
-	require.GreaterOrEqual(overlapTarget, 2)
+	require.GreaterOrEqual(t, overlapTarget, 2)
 	probe := newVSRetainedOverlapProbe(parser.AgentVSCopilot, overlapTarget)
 	ctx := parser.WithReconciliationRetainedMemberObserver(t.Context(), probe.observe)
 	done := make(chan error, 1)
@@ -134,22 +129,22 @@ func TestReconcileWatchRootsVisualStudioCopilot300MembersUsesOneBoundedScan(t *t
 		done <- engine.ReconcileWatchRoots(ctx, []string{root}, false)
 	}()
 	probe.waitAndRelease(t)
-	require.NoError(<-done)
+	require.NoError(t, <-done)
 
 	result := engine.LastReconciliationResult()
-	assert.True(result.Complete)
-	assert.Equal(1, result.Metrics.SharedContainerScans)
-	assert.Equal(256, result.Metrics.MaxSpoolPageRows)
-	assert.Positive(result.Metrics.MaxProviderRetainedBytes)
-	assert.GreaterOrEqual(probe.maxActive.Load(), int32(overlapTarget))
-	assert.GreaterOrEqual(result.Metrics.MaxProviderRetainedBytes, probe.maxBytes.Load(),
+	assert.True(t, result.Complete)
+	assert.Equal(t, 1, result.Metrics.SharedContainerScans)
+	assert.Equal(t, 256, result.Metrics.MaxSpoolPageRows)
+	assert.Positive(t, result.Metrics.MaxProviderRetainedBytes)
+	assert.GreaterOrEqual(t, probe.maxActive.Load(), int32(overlapTarget))
+	assert.GreaterOrEqual(t, result.Metrics.MaxProviderRetainedBytes, probe.maxBytes.Load(),
 		"aggregate metric must include every concurrently retained worker member")
-	assert.Less(result.Metrics.MaxProviderRetainedBytes, int64(data.Len())/2,
+	assert.Less(t, result.Metrics.MaxProviderRetainedBytes, int64(data.Len())/2,
 		"concurrent provider retention must stay bounded by members, not the container")
 	lastID := fmt.Sprintf("visualstudio-copilot:00000000-0000-0000-0000-%012x", members-1)
 	stored, err := database.GetSession(t.Context(), lastID)
-	require.NoError(err)
-	require.NotNil(stored)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
 }
 
 type vsRetainedOverlapProbe struct {
@@ -202,7 +197,7 @@ func (probe *vsRetainedOverlapProbe) waitAndRelease(t *testing.T) {
 		select {
 		case <-probe.arrived:
 		case <-time.After(30 * time.Second):
-			t.Fatal("timed out waiting for concurrent retained members")
+			require.FailNow(t, "timed out waiting for concurrent retained members")
 		}
 	}
 	close(probe.release)
@@ -230,8 +225,6 @@ func vsAtomicMaxInt64(value *atomic.Int64, candidate int64) {
 // secondary one under the old "best conversation" heuristic, which used to drop
 // the secondary conversation entirely.
 func TestSyncEngineVisualStudioCopilotMultipleConversationsPerFile(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -262,10 +255,10 @@ func TestSyncEngineVisualStudioCopilotMultipleConversationsPerFile(t *testing.T)
 	tracePath := filepath.Join(
 		tracesDir, "20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(tracePath, []byte(data), 0o644))
+	require.NoError(t, os.WriteFile(tracePath, []byte(data), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
@@ -284,13 +277,13 @@ func TestSyncEngineVisualStudioCopilotMultipleConversationsPerFile(t *testing.T)
 	// The stored file_path is a virtual sync key, but `session export`
 	// and other source consumers must still resolve it to an openable
 	// trace file.
-	stored := database.GetSessionFilePath("visualstudio-copilot:" + dominant)
-	require.NotEmpty(stored)
+	stored := database.GetSessionFilePath(t.Context(), "visualstudio-copilot:"+dominant)
+	require.NotEmpty(t, stored)
 	resolved := parser.ResolveSourceFilePath(stored)
 	f, err := os.Open(resolved)
-	require.NoError(err,
+	require.NoError(t, err,
 		"resolved source path should open: %s", resolved)
-	require.NoError(f.Close())
+	require.NoError(t, f.Close())
 }
 
 // TestSyncEngineVisualStudioCopilotReadErrorNotCachedAsSkip verifies that a
@@ -298,9 +291,6 @@ func TestSyncEngineVisualStudioCopilotMultipleConversationsPerFile(t *testing.T)
 // Caching by mtime would hide the failure once the file became readable
 // without a content change (e.g. a permission fix).
 func TestSyncEngineVisualStudioCopilotReadErrorNotCachedAsSkip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -311,14 +301,14 @@ func TestSyncEngineVisualStudioCopilotReadErrorNotCachedAsSkip(t *testing.T) {
 	// An unreadable trace file: a symlink to a directory cannot be
 	// scanned as JSONL, and its (followed) mtime is stable across syncs.
 	target := filepath.Join(t.TempDir(), "dir")
-	require.NoError(os.Mkdir(target, 0o755))
+	require.NoError(t, os.Mkdir(target, 0o755))
 	tracePath := filepath.Join(
 		tracesDir, "20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.Symlink(target, tracePath))
+	require.NoError(t, os.Symlink(target, tracePath))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
@@ -326,14 +316,14 @@ func TestSyncEngineVisualStudioCopilotReadErrorNotCachedAsSkip(t *testing.T) {
 	})
 
 	first := engine.SyncAll(t.Context(), nil)
-	require.NotZero(first.Failed, "read failure should be reported")
+	require.NotZero(t, first.Failed, "read failure should be reported")
 
 	// The same engine syncs again with the file unchanged. The failure
 	// must surface again instead of being silently skipped from cache.
 	second := engine.SyncAll(t.Context(), nil)
-	assert.NotZero(second.Failed,
+	assert.NotZero(t, second.Failed,
 		"read failure must not be cached as a skip")
-	assert.Zero(second.Skipped,
+	assert.Zero(t, second.Skipped,
 		"an unreadable file must not be recorded as a skip")
 }
 
@@ -342,9 +332,6 @@ func TestSyncEngineVisualStudioCopilotReadErrorNotCachedAsSkip(t *testing.T) {
 // errors) is cleared when a new engine is constructed, so the read failure is
 // retried rather than silently skipped after upgrade.
 func TestSyncEngineVisualStudioCopilotClearsStaleReadErrorSkip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -353,23 +340,23 @@ func TestSyncEngineVisualStudioCopilotClearsStaleReadErrorSkip(t *testing.T) {
 	}
 	tracesDir := t.TempDir()
 	target := filepath.Join(t.TempDir(), "dir")
-	require.NoError(os.Mkdir(target, 0o755))
+	require.NoError(t, os.Mkdir(target, 0o755))
 	tracePath := filepath.Join(
 		tracesDir, "20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.Symlink(target, tracePath))
+	require.NoError(t, os.Symlink(target, tracePath))
 
 	database := dbtest.OpenTestDB(t)
 	// Seed the skip cache as an older build would have: the physical trace
 	// path keyed by its current mtime, so an unchanged file matches and is
 	// skipped before the read error can surface.
 	info, err := os.Stat(tracePath)
-	require.NoError(err)
-	require.NoError(database.ReplaceSkippedFiles(map[string]int64{
+	require.NoError(t, err)
+	require.NoError(t, database.ReplaceSkippedFiles(t.Context(), map[string]int64{
 		tracePath: info.ModTime().UnixNano(),
 	}))
 
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
@@ -377,9 +364,9 @@ func TestSyncEngineVisualStudioCopilotClearsStaleReadErrorSkip(t *testing.T) {
 	})
 
 	stats := engine.SyncAll(t.Context(), nil)
-	assert.NotZero(stats.Failed,
+	assert.NotZero(t, stats.Failed,
 		"stale read-error skip must be cleared so the failure is retried")
-	assert.Zero(stats.Skipped,
+	assert.Zero(t, stats.Skipped,
 		"the stale skip entry must not suppress the file")
 }
 
@@ -418,7 +405,7 @@ func TestFindSourceFileVisualStudioCopilotReturnsVirtualPath(t *testing.T) {
 	)
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
@@ -427,7 +414,7 @@ func TestFindSourceFileVisualStudioCopilotReturnsVirtualPath(t *testing.T) {
 	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 
 	want := parser.VisualStudioCopilotVirtualPath(tracePath, conversationID)
-	assert.Equal(t, want, engine.FindSourceFile(sessionID),
+	assert.Equal(t, want, engine.FindSourceFile(t.Context(), sessionID),
 		"source resolution must return the conversation virtual path")
 	assert.NotZero(t, engine.SourceMtime(t.Context(), sessionID),
 		"mtime must resolve the virtual path to the physical trace")
@@ -436,8 +423,6 @@ func TestFindSourceFileVisualStudioCopilotReturnsVirtualPath(t *testing.T) {
 func TestSyncRootsSinceVisualStudioCopilotPollMarksDeletedVS2026SourceMissing(
 	t *testing.T,
 ) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -448,8 +433,8 @@ func TestSyncRootsSinceVisualStudioCopilotPollMarksDeletedVS2026SourceMissing(
 		root, ".vs", "SampleApp", "copilot-chat", "thread", "sessions",
 		conversationID,
 	)
-	require.NoError(os.MkdirAll(filepath.Dir(sessionPath), 0o755))
-	require.NoError(os.WriteFile(sessionPath, []byte(
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
 		vsCopilotTraceLine(conversationID, "d1", "chat gpt-5.5",
 			"1781293600000000000", "1781293610000000000",
 			map[string]string{
@@ -458,30 +443,28 @@ func TestSyncRootsSinceVisualStudioCopilotPollMarksDeletedVS2026SourceMissing(
 			})+"\n"), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {root},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 	assertSessionMessageCount(t, database, sessionID, 1)
 
-	require.NoError(os.Remove(sessionPath))
+	require.NoError(t, os.Remove(sessionPath))
 	engine.SyncRootsSince(t.Context(), []string{root}, time.Time{}, nil)
 
 	full, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(err)
+	require.NoError(t, err)
 	assertSourceMissingState(t, full)
 	sess, err := database.GetSession(t.Context(), sessionID)
-	require.NoError(err)
-	require.NotNil(sess, "unwatched polling must preserve the archived session")
+	require.NoError(t, err)
+	require.NotNil(t, sess, "unwatched polling must preserve the archived session")
 	assertSessionMessageCount(t, database, sessionID, 1)
 }
 
 func TestSyncPathsVisualStudioCopilotMarksDeletedVS2026SourceMissing(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -492,8 +475,8 @@ func TestSyncPathsVisualStudioCopilotMarksDeletedVS2026SourceMissing(t *testing.
 		root, ".vs", "SampleApp", "copilot-chat", "thread", "sessions",
 		conversationID,
 	)
-	require.NoError(os.MkdirAll(filepath.Dir(sessionPath), 0o755))
-	require.NoError(os.WriteFile(sessionPath, []byte(
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
 		vsCopilotTraceLine(conversationID, "d1", "chat gpt-5.5",
 			"1781293600000000000", "1781293610000000000",
 			map[string]string{
@@ -502,24 +485,24 @@ func TestSyncPathsVisualStudioCopilotMarksDeletedVS2026SourceMissing(t *testing.
 			})+"\n"), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {root},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 	assertSessionMessageCount(t, database, sessionID, 1)
 
-	require.NoError(os.Remove(sessionPath))
+	require.NoError(t, os.Remove(sessionPath))
 	engine.SyncPathsContext(t.Context(), []string{sessionPath})
 
 	full, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(err)
+	require.NoError(t, err)
 	assertSourceMissingState(t, full)
 	sess, err := database.GetSession(t.Context(), sessionID)
-	require.NoError(err)
-	require.NotNil(sess,
+	require.NoError(t, err)
+	require.NotNil(t, sess,
 		"an extensionless container event must preserve its archived virtual member")
 	assertSessionMessageCount(t, database, sessionID, 1)
 }
@@ -527,8 +510,6 @@ func TestSyncPathsVisualStudioCopilotMarksDeletedVS2026SourceMissing(t *testing.
 func TestSyncRootsSinceVisualStudioCopilotPollPreservesVS2026SessionWhenRootMissing(
 	t *testing.T,
 ) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -540,8 +521,8 @@ func TestSyncRootsSinceVisualStudioCopilotPollPreservesVS2026SessionWhenRootMiss
 		root, ".vs", "SampleApp", "copilot-chat", "thread", "sessions",
 		conversationID,
 	)
-	require.NoError(os.MkdirAll(filepath.Dir(sessionPath), 0o755))
-	require.NoError(os.WriteFile(sessionPath, []byte(
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
 		vsCopilotTraceLine(conversationID, "d1", "chat gpt-5.5",
 			"1781293600000000000", "1781293610000000000",
 			map[string]string{
@@ -550,21 +531,21 @@ func TestSyncRootsSinceVisualStudioCopilotPollPreservesVS2026SessionWhenRootMiss
 			})+"\n"), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {root},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 	assertSessionMessageCount(t, database, sessionID, 1)
 
-	require.NoError(os.RemoveAll(root))
+	require.NoError(t, os.RemoveAll(root))
 	engine.SyncRootsSince(t.Context(), []string{root}, time.Time{}, nil)
 
 	preserved, err := database.GetSession(t.Context(), sessionID)
-	require.NoError(err)
-	require.NotNil(preserved,
+	require.NoError(t, err)
+	require.NotNil(t, preserved,
 		"polling must preserve archived VS 2026 sessions when the root is unavailable")
 	assertSessionMessageCount(t, database, sessionID, 1)
 }
@@ -572,8 +553,6 @@ func TestSyncRootsSinceVisualStudioCopilotPollPreservesVS2026SessionWhenRootMiss
 func TestSyncRootsSinceVisualStudioCopilotRecanonicalizesDeletedVS2026SessionToOldLegacyTrace(
 	t *testing.T,
 ) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -593,38 +572,38 @@ func TestSyncRootsSinceVisualStudioCopilotRecanonicalizesDeletedVS2026SessionToO
 		root, ".vs", "SampleApp", "copilot-chat", "thread", "sessions",
 		conversationID,
 	)
-	require.NoError(os.WriteFile(legacyPath, []byte(data), 0o644))
-	require.NoError(os.MkdirAll(filepath.Dir(sessionPath), 0o755))
-	require.NoError(os.WriteFile(sessionPath, []byte(data), 0o644))
+	require.NoError(t, os.WriteFile(legacyPath, []byte(data), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(data), 0o644))
 	legacyMtime := time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC)
 	sessionMtime := time.Date(2026, 6, 13, 0, 0, 0, 0, time.UTC)
-	require.NoError(os.Chtimes(legacyPath, legacyMtime, legacyMtime))
-	require.NoError(os.Chtimes(sessionPath, sessionMtime, sessionMtime))
+	require.NoError(t, os.Chtimes(legacyPath, legacyMtime, legacyMtime))
+	require.NoError(t, os.Chtimes(sessionPath, sessionMtime, sessionMtime))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {root},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 	vsVirtualPath := parser.VisualStudioCopilotVirtualPath(
 		sessionPath, conversationID,
 	)
-	require.Equal(vsVirtualPath, database.GetSessionFilePath(sessionID))
+	require.Equal(t, vsVirtualPath, database.GetSessionFilePath(t.Context(), sessionID))
 
-	require.NoError(os.Remove(sessionPath))
+	require.NoError(t, os.Remove(sessionPath))
 	stats := engine.SyncRootsSince(
 		t.Context(), []string{root},
 		time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC), nil,
 	)
-	require.NotZero(stats.Synced)
+	require.NotZero(t, stats.Synced)
 
 	legacyVirtualPath := parser.VisualStudioCopilotVirtualPath(
 		legacyPath, conversationID,
 	)
-	assert.Equal(t, legacyVirtualPath, database.GetSessionFilePath(sessionID))
+	assert.Equal(t, legacyVirtualPath, database.GetSessionFilePath(t.Context(), sessionID))
 	assertSessionMessageCount(t, database, sessionID, 1)
 }
 
@@ -632,8 +611,6 @@ func TestSyncRootsSinceVisualStudioCopilotRecanonicalizesDeletedVS2026SessionToO
 // a single-session re-sync keeps the stored project rather than overwriting it
 // with the provider's default project.
 func TestSyncSingleSessionContextVisualStudioCopilotPreservesProject(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -644,28 +621,28 @@ func TestSyncSingleSessionContextVisualStudioCopilotPreservesProject(t *testing.
 	)
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 
 	before, err := database.GetSession(t.Context(), sessionID)
-	require.NoError(err)
-	require.NotNil(before)
-	require.Equal("visualstudio", before.Project)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.Equal(t, "visualstudio", before.Project)
 	before.Project = "stored-solution"
-	require.NoError(database.UpsertSession(*before))
+	require.NoError(t, database.UpsertSession(t.Context(), *before))
 
-	require.NoError(engine.SyncSingleSessionContext(
+	require.NoError(t, engine.SyncSingleSessionContext(
 		t.Context(), sessionID,
 	))
 
 	after, err := database.GetSession(t.Context(), sessionID)
-	require.NoError(err)
-	require.NotNil(after)
+	require.NoError(t, err)
+	require.NotNil(t, after)
 	assert.Equal(t, "stored-solution", after.Project,
 		"single-session re-sync must preserve the stored project")
 }
@@ -678,9 +655,6 @@ func TestSyncSingleSessionContextVisualStudioCopilotPreservesProject(t *testing.
 // later treats as complete, so the conversation must fail to sync and be retried
 // until every sibling is readable.
 func TestSyncEngineVisualStudioCopilotUnreadableSiblingBlocksPartialSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -692,7 +666,7 @@ func TestSyncEngineVisualStudioCopilotUnreadableSiblingBlocksPartialSession(t *t
 	readable := filepath.Join(
 		tracesDir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(readable, []byte(
+	require.NoError(t, os.WriteFile(readable, []byte(
 		vsCopilotTraceLine(conversationID, "x1", "chat gpt-5.5",
 			"1781293600000000000", "1781293610000000000",
 			map[string]string{
@@ -705,14 +679,14 @@ func TestSyncEngineVisualStudioCopilotUnreadableSiblingBlocksPartialSession(t *t
 	// conversation's spans, so the conversation must not be reconstructed from
 	// the readable file alone.
 	target := filepath.Join(t.TempDir(), "dir")
-	require.NoError(os.Mkdir(target, 0o755))
+	require.NoError(t, os.Mkdir(target, 0o755))
 	sibling := filepath.Join(
 		tracesDir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.Symlink(target, sibling))
+	require.NoError(t, os.Symlink(target, sibling))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
@@ -720,14 +694,14 @@ func TestSyncEngineVisualStudioCopilotUnreadableSiblingBlocksPartialSession(t *t
 	})
 
 	stats := engine.SyncAll(t.Context(), nil)
-	assert.NotZero(stats.Failed,
+	assert.NotZero(t, stats.Failed,
 		"an unreadable sibling must surface as a sync failure")
 
 	sess, err := database.GetSession(
 		t.Context(), "visualstudio-copilot:"+conversationID,
 	)
-	require.NoError(err)
-	assert.Nil(sess,
+	require.NoError(t, err)
+	assert.Nil(t, sess,
 		"the conversation must not be indexed as a partial transcript while "+
 			"a sibling is unreadable")
 }
@@ -739,8 +713,6 @@ func TestSyncEngineVisualStudioCopilotUnreadableSiblingBlocksPartialSession(t *t
 // skip fingerprint must span all of them; keying it on the representative file
 // alone would skip the re-sync and leave the session stale.
 func TestSyncSingleSessionVisualStudioCopilotReparsesWhenSiblingChanges(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -750,7 +722,7 @@ func TestSyncSingleSessionVisualStudioCopilotReparsesWhenSiblingChanges(t *testi
 	primary := filepath.Join(
 		tracesDir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(primary, []byte(
+	require.NoError(t, os.WriteFile(primary, []byte(
 		vsCopilotTraceLine(conversationID, "a1", "chat gpt-5.5",
 			"1781293600000000000", "1781293610000000000",
 			map[string]string{
@@ -759,13 +731,13 @@ func TestSyncSingleSessionVisualStudioCopilotReparsesWhenSiblingChanges(t *testi
 			})+"\n"), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 	assertSessionMessageCount(t, database, sessionID, 1)
 
 	// A sibling trace file gains a second turn for the same conversation while
@@ -775,7 +747,7 @@ func TestSyncSingleSessionVisualStudioCopilotReparsesWhenSiblingChanges(t *testi
 	sibling := filepath.Join(
 		tracesDir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(sibling, []byte(
+	require.NoError(t, os.WriteFile(sibling, []byte(
 		vsCopilotTraceLine(conversationID, "b1", "chat gpt-5.5",
 			"1781293620000000000", "1781293630000000000",
 			map[string]string{
@@ -783,7 +755,7 @@ func TestSyncSingleSessionVisualStudioCopilotReparsesWhenSiblingChanges(t *testi
 				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Second task."}]}]`,
 			})+"\n"), 0o644))
 
-	require.NoError(engine.SyncSingleSessionContext(
+	require.NoError(t, engine.SyncSingleSessionContext(
 		t.Context(), sessionID,
 	))
 	assertSessionMessageCount(t, database, sessionID, 2)
@@ -795,9 +767,6 @@ func TestSyncSingleSessionVisualStudioCopilotReparsesWhenSiblingChanges(t *testi
 // decide whether to resync; if it only saw the representative file, a sibling
 // trace gaining spans would be missed and the session would never refresh.
 func TestSourceMtimeVisualStudioCopilotReflectsSiblingChanges(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -807,7 +776,7 @@ func TestSourceMtimeVisualStudioCopilotReflectsSiblingChanges(t *testing.T) {
 	primary := filepath.Join(
 		tracesDir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(primary, []byte(
+	require.NoError(t, os.WriteFile(primary, []byte(
 		vsCopilotTraceLine(conversationID, "a1", "chat gpt-5.5",
 			"1781293600000000000", "1781293610000000000",
 			map[string]string{
@@ -816,23 +785,23 @@ func TestSourceMtimeVisualStudioCopilotReflectsSiblingChanges(t *testing.T) {
 			})+"\n"), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 
 	before := engine.SourceMtime(t.Context(), sessionID)
-	require.NotZero(before)
+	require.NotZero(t, before)
 
 	// A sibling trace file gains spans with a strictly newer mtime while the
 	// representative trace file is left untouched.
 	sibling := filepath.Join(
 		tracesDir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(sibling, []byte(
+	require.NoError(t, os.WriteFile(sibling, []byte(
 		vsCopilotTraceLine(conversationID, "b1", "chat gpt-5.5",
 			"1781293620000000000", "1781293630000000000",
 			map[string]string{
@@ -840,12 +809,12 @@ func TestSourceMtimeVisualStudioCopilotReflectsSiblingChanges(t *testing.T) {
 				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Second."}]}]`,
 			})+"\n"), 0o644))
 	newer := time.Unix(0, before+int64(time.Hour))
-	require.NoError(os.Chtimes(sibling, newer, newer))
+	require.NoError(t, os.Chtimes(sibling, newer, newer))
 
 	after := engine.SourceMtime(t.Context(), sessionID)
-	assert.Greater(after, before,
+	assert.Greater(t, after, before,
 		"SourceMtime must reflect a newer sibling trace file")
-	assert.Equal(newer.UnixNano(), after,
+	assert.Equal(t, newer.UnixNano(), after,
 		"SourceMtime must return the composite max sibling mtime")
 }
 
@@ -856,8 +825,6 @@ func TestSourceMtimeVisualStudioCopilotReflectsSiblingChanges(t *testing.T) {
 // fingerprint identical to the stored one and be skipped as "unchanged",
 // silently caching the directory read error.
 func TestSyncSingleSessionVisualStudioCopilotDirReadErrorSurfaces(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -873,7 +840,7 @@ func TestSyncSingleSessionVisualStudioCopilotDirReadErrorSurfaces(t *testing.T) 
 	primary := filepath.Join(
 		tracesDir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(primary, []byte(
+	require.NoError(t, os.WriteFile(primary, []byte(
 		vsCopilotTraceLine(conversationID, "a1", "chat gpt-5.5",
 			"1781293600000000000", "1781293610000000000",
 			map[string]string{
@@ -882,22 +849,22 @@ func TestSyncSingleSessionVisualStudioCopilotDirReadErrorSurfaces(t *testing.T) 
 			})+"\n"), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 	assertSessionMessageCount(t, database, sessionID, 1)
 
 	// Make the directory traversable but not readable: the stored trace file can
 	// still be stat'd and opened, but enumerating siblings via ReadDir fails.
-	require.NoError(os.Chmod(tracesDir, 0o100))
+	require.NoError(t, os.Chmod(tracesDir, 0o100))
 	t.Cleanup(func() { _ = os.Chmod(tracesDir, 0o755) })
 
 	err := engine.SyncSingleSessionContext(t.Context(), sessionID)
-	require.Error(err,
+	require.Error(t, err,
 		"a sibling directory read error must surface, not be cached as an "+
 			"unchanged skip")
 }
@@ -909,9 +876,6 @@ func TestSyncSingleSessionVisualStudioCopilotDirReadErrorSurfaces(t *testing.T) 
 // message replacement, so a reparse after a sibling is rotated away would
 // otherwise permanently drop messages already stored in SQLite.
 func TestSyncEngineVisualStudioCopilotPreservesSessionWhenSiblingDeleted(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -921,7 +885,7 @@ func TestSyncEngineVisualStudioCopilotPreservesSessionWhenSiblingDeleted(t *test
 	primary := filepath.Join(
 		tracesDir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(primary, []byte(
+	require.NoError(t, os.WriteFile(primary, []byte(
 		vsCopilotTraceLine(conversationID, "a1", "chat gpt-5.5",
 			"1781293600000000000", "1781293610000000000",
 			map[string]string{
@@ -931,7 +895,7 @@ func TestSyncEngineVisualStudioCopilotPreservesSessionWhenSiblingDeleted(t *test
 	sibling := filepath.Join(
 		tracesDir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(sibling, []byte(
+	require.NoError(t, os.WriteFile(sibling, []byte(
 		vsCopilotTraceLine(conversationID, "b1", "chat gpt-5.5",
 			"1781293620000000000", "1781293630000000000",
 			map[string]string{
@@ -940,46 +904,44 @@ func TestSyncEngineVisualStudioCopilotPreservesSessionWhenSiblingDeleted(t *test
 			})+"\n"), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 	assertSessionMessageCount(t, database, sessionID, 2)
-	require.NoError(database.SetSessionDataVersion(
+	require.NoError(t, database.SetSessionDataVersion(t.Context(),
 		sessionID, db.CurrentDataVersion()-1,
 	))
 
 	// The sibling that contributed the second turn is rotated away. A reparse now
 	// sees only the first turn; the archived two-turn transcript must be
 	// preserved rather than force-replaced with the partial one.
-	require.NoError(os.Remove(sibling))
+	require.NoError(t, os.Remove(sibling))
 	currentSize, currentMtime := parser.VisualStudioCopilotTraceFingerprint(
 		primary,
 	)
 
-	require.NoError(engine.SyncSingleSessionContext(
+	require.NoError(t, engine.SyncSingleSessionContext(
 		t.Context(), sessionID,
 	))
 	assertSessionMessageCount(t, database, sessionID, 2)
 	sess, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(err, "GetSessionFull")
-	require.NotNil(sess)
-	require.NotNil(sess.FileSize)
-	assert.Equal(currentSize, *sess.FileSize)
-	require.NotNil(sess.FileMtime)
-	assert.Equal(currentMtime, *sess.FileMtime)
-	assert.Equal(db.CurrentDataVersion(), sess.DataVersion)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.FileSize)
+	assert.Equal(t, currentSize, *sess.FileSize)
+	require.NotNil(t, sess.FileMtime)
+	assert.Equal(t, currentMtime, *sess.FileMtime)
+	assert.Equal(t, db.CurrentDataVersion(), sess.DataVersion)
 }
 
 // TestSyncEngineVisualStudioCopilotPreservesToolResultsWhenTraceShrinks verifies
 // that a same-message-count reparse which loses tool result events does not
 // overwrite the richer archived transcript.
 func TestSyncEngineVisualStudioCopilotPreservesToolResultsWhenTraceShrinks(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -1003,34 +965,34 @@ func TestSyncEngineVisualStudioCopilotPreservesToolResultsWhenTraceShrinks(t *te
 			"1781293600000000000", "1781293610000000000",
 			attrs) + "\n"
 	}
-	require.NoError(os.WriteFile(tracePath, []byte(
+	require.NoError(t, os.WriteFile(tracePath, []byte(
 		toolSpan(`{"Value":"Build succeeded."}`),
 	), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 	msgs := fetchMessages(t, database, sessionID)
-	require.Len(msgs, 1)
-	require.Len(msgs[0].ToolCalls, 1)
-	require.Len(msgs[0].ToolCalls[0].ResultEvents, 1)
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].ToolCalls, 1)
+	require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1)
 
-	require.NoError(os.WriteFile(tracePath, []byte(toolSpan("")), 0o644))
+	require.NoError(t, os.WriteFile(tracePath, []byte(toolSpan("")), 0o644))
 	later := time.Unix(1781293700, 0)
-	require.NoError(os.Chtimes(tracePath, later, later))
+	require.NoError(t, os.Chtimes(tracePath, later, later))
 
-	require.NoError(engine.SyncSingleSessionContext(
+	require.NoError(t, engine.SyncSingleSessionContext(
 		t.Context(), sessionID,
 	))
 	msgs = fetchMessages(t, database, sessionID)
-	require.Len(msgs, 1)
-	require.Len(msgs[0].ToolCalls, 1)
-	require.Len(msgs[0].ToolCalls[0].ResultEvents, 1,
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].ToolCalls, 1)
+	require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1,
 		"archived tool result event must be preserved")
 	assert.Equal(t, "Build succeeded.",
 		msgs[0].ToolCalls[0].ResultEvents[0].Content)
@@ -1040,9 +1002,6 @@ func TestSyncEngineVisualStudioCopilotPreservesToolResultsWhenTraceShrinks(t *te
 // verifies that a shrink caused by a rotated sibling does not hide richer data
 // that appears on a remaining same-key span.
 func TestSyncEngineVisualStudioCopilotMergesRicherMatchedMessageWhenTraceShrinks(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -1071,8 +1030,8 @@ func TestSyncEngineVisualStudioCopilotMergesRicherMatchedMessageWhenTraceShrinks
 	)
 	firstPrompt := "Retained first archived prompt."
 	lastPrompt := strings.Repeat("Retained final archived prompt. ", 30)
-	require.NoError(os.WriteFile(primary, []byte(toolSpan("")), 0o644))
-	require.NoError(os.WriteFile(rotatedSibling, []byte(strings.Join([]string{
+	require.NoError(t, os.WriteFile(primary, []byte(toolSpan("")), 0o644))
+	require.NoError(t, os.WriteFile(rotatedSibling, []byte(strings.Join([]string{
 		vsCopilotTraceLine(conversationID, "first_chat", "chat gpt-5.5",
 			"1781293580000000000", "1781293590000000000",
 			map[string]string{
@@ -1088,65 +1047,62 @@ func TestSyncEngineVisualStudioCopilotMergesRicherMatchedMessageWhenTraceShrinks
 	}, "\n")+"\n"), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 	msgs := fetchMessages(t, database, sessionID)
-	require.Len(msgs, 3)
-	require.Len(msgs[1].ToolCalls, 1)
-	require.Empty(msgs[1].ToolCalls[0].ResultEvents)
+	require.Len(t, msgs, 3)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Empty(t, msgs[1].ToolCalls[0].ResultEvents)
 
-	require.NoError(os.Remove(rotatedSibling))
-	require.NoError(os.WriteFile(primary, []byte(
+	require.NoError(t, os.Remove(rotatedSibling))
+	require.NoError(t, os.WriteFile(primary, []byte(
 		toolSpan(`{"Value":"Build succeeded."}`),
 	), 0o644))
 	later := time.Unix(1781293800, 0)
-	require.NoError(os.Chtimes(primary, later, later))
+	require.NoError(t, os.Chtimes(primary, later, later))
 	currentSize, currentMtime := parser.VisualStudioCopilotTraceFingerprint(
 		primary,
 	)
 
-	require.NoError(engine.SyncSingleSessionContext(
+	require.NoError(t, engine.SyncSingleSessionContext(
 		t.Context(), sessionID,
 	))
 	msgs = fetchMessages(t, database, sessionID)
-	require.Len(msgs, 3,
+	require.Len(t, msgs, 3,
 		"archived-only sibling message must be retained")
-	assert.Equal(strings.TrimSpace(firstPrompt), msgs[0].Content)
-	require.Len(msgs[1].ToolCalls, 1)
-	require.Len(msgs[1].ToolCalls[0].ResultEvents, 1,
+	assert.Equal(t, strings.TrimSpace(firstPrompt), msgs[0].Content)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1,
 		"richer same-key tool result must be merged into archive")
-	assert.Equal("Build succeeded.",
+	assert.Equal(t, "Build succeeded.",
 		msgs[1].ToolCalls[0].ResultEvents[0].Content)
-	assert.Equal(strings.TrimSpace(lastPrompt), msgs[2].Content)
+	assert.Equal(t, strings.TrimSpace(lastPrompt), msgs[2].Content)
 
 	assertSessionState(t, database, sessionID, func(sess *db.Session) {
-		require.NotNil(sess.FirstMessage)
-		assert.Equal(strings.TrimSpace(firstPrompt), *sess.FirstMessage)
-		require.NotNil(sess.StartedAt)
-		require.NotNil(sess.EndedAt)
-		assert.Equal(time.Unix(0, 1781293580000000000).UTC().
+		require.NotNil(t, sess.FirstMessage)
+		assert.Equal(t, strings.TrimSpace(firstPrompt), *sess.FirstMessage)
+		require.NotNil(t, sess.StartedAt)
+		require.NotNil(t, sess.EndedAt)
+		assert.Equal(t, time.Unix(0, 1781293580000000000).UTC().
 			Format(time.RFC3339Nano), *sess.StartedAt)
-		assert.Equal(time.Unix(0, 1781293630000000000).UTC().
+		assert.Equal(t, time.Unix(0, 1781293630000000000).UTC().
 			Format(time.RFC3339Nano), *sess.EndedAt)
 	})
 	sess, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(err, "GetSessionFull")
-	require.NotNil(sess)
-	require.NotNil(sess.FileSize)
-	assert.Equal(currentSize, *sess.FileSize)
-	require.NotNil(sess.FileMtime)
-	assert.Equal(currentMtime, *sess.FileMtime)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.FileSize)
+	assert.Equal(t, currentSize, *sess.FileSize)
+	require.NotNil(t, sess.FileMtime)
+	assert.Equal(t, currentMtime, *sess.FileMtime)
 }
 
 func TestSyncEngineVisualStudioCopilotMergesUpdateAndPreservesIncompleteSameCount(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -1177,20 +1133,20 @@ func TestSyncEngineVisualStudioCopilotMergesUpdateAndPreservesIncompleteSameCoun
 			"1781293620000000000", "1781293630000000000",
 			`{"Value":"`+longResult+`"}`),
 	}, "\n") + "\n"
-	require.NoError(os.WriteFile(tracePath, []byte(initial), 0o644))
+	require.NoError(t, os.WriteFile(tracePath, []byte(initial), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 	msgs := fetchMessages(t, database, sessionID)
-	require.Len(msgs, 2)
-	require.Empty(msgs[0].ToolCalls[0].ResultEvents)
-	require.Len(msgs[1].ToolCalls[0].ResultEvents, 1)
+	require.Len(t, msgs, 2)
+	require.Empty(t, msgs[0].ToolCalls[0].ResultEvents)
+	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
 
 	reparse := strings.Join([]string{
 		toolSpan("tool_build", "call_build", "dotnet build",
@@ -1199,29 +1155,26 @@ func TestSyncEngineVisualStudioCopilotMergesUpdateAndPreservesIncompleteSameCoun
 		toolSpan("tool_test", "call_test", "dotnet test",
 			"1781293620000000000", "1781293630000000000", ""),
 	}, "\n") + "\n"
-	require.NoError(os.WriteFile(tracePath, []byte(reparse), 0o644))
+	require.NoError(t, os.WriteFile(tracePath, []byte(reparse), 0o644))
 	later := time.Unix(1781293800, 0)
-	require.NoError(os.Chtimes(tracePath, later, later))
+	require.NoError(t, os.Chtimes(tracePath, later, later))
 
-	require.NoError(engine.SyncSingleSessionContext(
+	require.NoError(t, engine.SyncSingleSessionContext(
 		t.Context(), sessionID,
 	))
 	msgs = fetchMessages(t, database, sessionID)
-	require.Len(msgs, 2)
-	require.Len(msgs[0].ToolCalls[0].ResultEvents, 1,
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1,
 		"same-count richer message must be merged")
-	assert.Equal("Build succeeded.",
+	assert.Equal(t, "Build succeeded.",
 		msgs[0].ToolCalls[0].ResultEvents[0].Content)
-	require.Len(msgs[1].ToolCalls[0].ResultEvents, 1,
+	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1,
 		"same-count incomplete message must keep archived result")
-	assert.Equal(strings.TrimSpace(longResult),
+	assert.Equal(t, strings.TrimSpace(longResult),
 		msgs[1].ToolCalls[0].ResultEvents[0].Content)
 }
 
 func TestSyncEngineVisualStudioCopilotMergeDerivesFirstMessageFromMergedRows(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -1245,10 +1198,10 @@ func TestSyncEngineVisualStudioCopilotMergeDerivesFirstMessageFromMergedRows(t *
 		tracesDir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
 	)
 	laterPrompt := strings.Repeat("Retained later archived prompt. ", 30)
-	require.NoError(os.WriteFile(primary, []byte(
+	require.NoError(t, os.WriteFile(primary, []byte(
 		toolSpan("dotnet bui")+"\n",
 	), 0o644))
-	require.NoError(os.WriteFile(rotatedSibling, []byte(
+	require.NoError(t, os.WriteFile(rotatedSibling, []byte(
 		vsCopilotTraceLine(conversationID, "later_chat", "chat gpt-5.5",
 			"1781293620000000000", "1781293630000000000",
 			map[string]string{
@@ -1257,37 +1210,37 @@ func TestSyncEngineVisualStudioCopilotMergeDerivesFirstMessageFromMergedRows(t *
 			})+"\n"), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 	assertSessionState(t, database, sessionID, func(sess *db.Session) {
-		require.NotNil(sess.FirstMessage)
-		assert.Equal("Run command: dotnet bui", *sess.FirstMessage)
+		require.NotNil(t, sess.FirstMessage)
+		assert.Equal(t, "Run command: dotnet bui", *sess.FirstMessage)
 	})
 
-	require.NoError(os.Remove(rotatedSibling))
-	require.NoError(os.WriteFile(primary, []byte(
+	require.NoError(t, os.Remove(rotatedSibling))
+	require.NoError(t, os.WriteFile(primary, []byte(
 		toolSpan("dotnet build --configuration Release")+"\n",
 	), 0o644))
 	later := time.Unix(1781293800, 0)
-	require.NoError(os.Chtimes(primary, later, later))
+	require.NoError(t, os.Chtimes(primary, later, later))
 
-	require.NoError(engine.SyncSingleSessionContext(
+	require.NoError(t, engine.SyncSingleSessionContext(
 		t.Context(), sessionID,
 	))
 	msgs := fetchMessages(t, database, sessionID)
-	require.Len(msgs, 2)
-	assert.Equal("[Bash: run_command_in_terminal]\n$ "+
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "[Bash: run_command_in_terminal]\n$ "+
 		"dotnet build --configuration Release",
 		msgs[0].Content)
-	assert.Equal(strings.TrimSpace(laterPrompt), msgs[1].Content)
+	assert.Equal(t, strings.TrimSpace(laterPrompt), msgs[1].Content)
 	assertSessionState(t, database, sessionID, func(sess *db.Session) {
-		require.NotNil(sess.FirstMessage)
-		assert.Equal("Run command: dotnet build --configuration Release",
+		require.NotNil(t, sess.FirstMessage)
+		assert.Equal(t, "Run command: dotnet build --configuration Release",
 			*sess.FirstMessage,
 		)
 	})
@@ -1298,9 +1251,6 @@ func TestSyncEngineVisualStudioCopilotMergeDerivesFirstMessageFromMergedRows(t *
 // in a remaining or newly written trace file while still retaining archived-only
 // messages.
 func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenTraceShrinks(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -1310,7 +1260,7 @@ func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenTraceShrinks(t *testin
 	primary := filepath.Join(
 		tracesDir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(primary, []byte(
+	require.NoError(t, os.WriteFile(primary, []byte(
 		vsCopilotTraceLine(conversationID, "tool_build",
 			"execute_tool run_command_in_terminal",
 			"1781293600000000000", "1781293610000000000",
@@ -1324,7 +1274,7 @@ func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenTraceShrinks(t *testin
 		tracesDir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
 	)
 	oldPrompt := strings.Repeat("Retained archived prompt. ", 80)
-	require.NoError(os.WriteFile(rotatedSibling, []byte(strings.Join([]string{
+	require.NoError(t, os.WriteFile(rotatedSibling, []byte(strings.Join([]string{
 		vsCopilotTraceLine(conversationID, "old_chat_1", "chat gpt-5.5",
 			"1781293620000000000", "1781293630000000000",
 			map[string]string{
@@ -1340,20 +1290,20 @@ func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenTraceShrinks(t *testin
 	}, "\n")+"\n"), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 	assertSessionMessageCount(t, database, sessionID, 3)
 
-	require.NoError(os.Remove(rotatedSibling))
+	require.NoError(t, os.Remove(rotatedSibling))
 	newSibling := filepath.Join(
 		tracesDir, "20260613T145205_cccc3333_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(newSibling, []byte(
+	require.NoError(t, os.WriteFile(newSibling, []byte(
 		vsCopilotTraceLine(conversationID, "new_chat", "chat gpt-5.5",
 			"1781293660000000000", "1781293670000000000",
 			map[string]string{
@@ -1361,18 +1311,18 @@ func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenTraceShrinks(t *testin
 				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"New follow-up."}]}]`,
 			})+"\n"), 0o644))
 	later := time.Unix(1781293800, 0)
-	require.NoError(os.Chtimes(newSibling, later, later))
+	require.NoError(t, os.Chtimes(newSibling, later, later))
 
-	require.NoError(engine.SyncSingleSessionContext(
+	require.NoError(t, engine.SyncSingleSessionContext(
 		t.Context(), sessionID,
 	))
 	msgs := fetchMessages(t, database, sessionID)
-	require.Len(msgs, 4)
-	assert.Equal("[Bash: run_command_in_terminal]\n$ dotnet build",
+	require.Len(t, msgs, 4)
+	assert.Equal(t, "[Bash: run_command_in_terminal]\n$ dotnet build",
 		msgs[0].Content)
-	assert.Equal(strings.TrimSpace(oldPrompt), msgs[1].Content)
-	assert.Equal("Another archived prompt.", msgs[2].Content)
-	assert.Equal("New follow-up.", msgs[3].Content)
+	assert.Equal(t, strings.TrimSpace(oldPrompt), msgs[1].Content)
+	assert.Equal(t, "Another archived prompt.", msgs[2].Content)
+	assert.Equal(t, "New follow-up.", msgs[3].Content)
 }
 
 // TestSyncEngineVisualStudioCopilotMergesNewMessageWhenCompositeGrows verifies
@@ -1381,9 +1331,6 @@ func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenTraceShrinks(t *testin
 // larger new trace, the composite size can grow even though archived-only
 // messages still need to be retained.
 func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenCompositeGrows(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -1393,7 +1340,7 @@ func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenCompositeGrows(t *test
 	primary := filepath.Join(
 		tracesDir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(primary, []byte(
+	require.NoError(t, os.WriteFile(primary, []byte(
 		vsCopilotTraceLine(conversationID, "tool_build",
 			"execute_tool run_command_in_terminal",
 			"1781293600000000000", "1781293610000000000",
@@ -1406,7 +1353,7 @@ func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenCompositeGrows(t *test
 	rotatedSibling := filepath.Join(
 		tracesDir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(rotatedSibling, []byte(
+	require.NoError(t, os.WriteFile(rotatedSibling, []byte(
 		vsCopilotTraceLine(conversationID, "old_chat", "chat gpt-5.5",
 			"1781293620000000000", "1781293630000000000",
 			map[string]string{
@@ -1416,21 +1363,21 @@ func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenCompositeGrows(t *test
 	storedSize, _ := parser.VisualStudioCopilotTraceFingerprint(primary)
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 	assertSessionMessageCount(t, database, sessionID, 2)
 
-	require.NoError(os.Remove(rotatedSibling))
+	require.NoError(t, os.Remove(rotatedSibling))
 	newSibling := filepath.Join(
 		tracesDir, "20260613T145205_cccc3333_VSGitHubCopilot_traces.jsonl",
 	)
 	newPrompt := strings.Repeat("New follow-up with enough detail. ", 120)
-	require.NoError(os.WriteFile(newSibling, []byte(
+	require.NoError(t, os.WriteFile(newSibling, []byte(
 		vsCopilotTraceLine(conversationID, "new_chat", "chat gpt-5.5",
 			"1781293640000000000", "1781293650000000000",
 			map[string]string{
@@ -1438,20 +1385,20 @@ func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenCompositeGrows(t *test
 				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"` + newPrompt + `"}]}]`,
 			})+"\n"), 0o644))
 	currentSize, _ := parser.VisualStudioCopilotTraceFingerprint(primary)
-	require.Greater(currentSize, storedSize,
+	require.Greater(t, currentSize, storedSize,
 		"test setup must grow the composite trace size")
 	later := time.Unix(1781293800, 0)
-	require.NoError(os.Chtimes(newSibling, later, later))
+	require.NoError(t, os.Chtimes(newSibling, later, later))
 
-	require.NoError(engine.SyncSingleSessionContext(
+	require.NoError(t, engine.SyncSingleSessionContext(
 		t.Context(), sessionID,
 	))
 	msgs := fetchMessages(t, database, sessionID)
-	require.Len(msgs, 3)
-	assert.Equal("[Bash: run_command_in_terminal]\n$ dotnet build",
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "[Bash: run_command_in_terminal]\n$ dotnet build",
 		msgs[0].Content)
-	assert.Equal("Archived prompt.", msgs[1].Content)
-	assert.Equal(strings.TrimSpace(newPrompt), msgs[2].Content)
+	assert.Equal(t, "Archived prompt.", msgs[1].Content)
+	assert.Equal(t, strings.TrimSpace(newPrompt), msgs[2].Content)
 }
 
 // TestSyncEngineVisualStudioCopilotDoesNotAppendRotatedDuplicateToolCall
@@ -1459,9 +1406,6 @@ func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenCompositeGrows(t *test
 // timestamp replaces the archived copy instead of being appended as a new
 // transcript row while another archived-only sibling row is retained.
 func TestSyncEngineVisualStudioCopilotDoesNotAppendRotatedDuplicateToolCall(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -1481,13 +1425,13 @@ func TestSyncEngineVisualStudioCopilotDoesNotAppendRotatedDuplicateToolCall(t *t
 				"gen_ai.tool.call.result":    `{"Value":"Build succeeded."}`,
 			}) + "\n"
 	}
-	require.NoError(os.WriteFile(primary, []byte(
+	require.NoError(t, os.WriteFile(primary, []byte(
 		toolSpan("1781293600000000000", "1781293610000000000"),
 	), 0o644))
 	rotatedSibling := filepath.Join(
 		tracesDir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(rotatedSibling, []byte(
+	require.NoError(t, os.WriteFile(rotatedSibling, []byte(
 		vsCopilotTraceLine(conversationID, "archived_chat", "chat gpt-5.5",
 			"1781293620000000000", "1781293630000000000",
 			map[string]string{
@@ -1496,35 +1440,35 @@ func TestSyncEngineVisualStudioCopilotDoesNotAppendRotatedDuplicateToolCall(t *t
 			})+"\n"), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 	assertSessionMessageCount(t, database, sessionID, 2)
 
-	require.NoError(os.Remove(rotatedSibling))
-	require.NoError(os.WriteFile(primary, []byte(
+	require.NoError(t, os.Remove(rotatedSibling))
+	require.NoError(t, os.WriteFile(primary, []byte(
 		toolSpan("1781293660000000000", "1781293670000000000"),
 	), 0o644))
 	later := time.Unix(1781293800, 0)
-	require.NoError(os.Chtimes(primary, later, later))
+	require.NoError(t, os.Chtimes(primary, later, later))
 
-	require.NoError(engine.SyncSingleSessionContext(
+	require.NoError(t, engine.SyncSingleSessionContext(
 		t.Context(), sessionID,
 	))
 	msgs := fetchMessages(t, database, sessionID)
-	require.Len(msgs, 2)
-	assert.Equal("[Bash: run_command_in_terminal]\n$ dotnet build",
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "[Bash: run_command_in_terminal]\n$ dotnet build",
 		msgs[0].Content)
-	require.Len(msgs[0].ToolCalls, 1)
-	assert.Equal("call_build", msgs[0].ToolCalls[0].ToolUseID)
-	require.Len(msgs[0].ToolCalls[0].ResultEvents, 1)
-	assert.Equal("Build succeeded.",
+	require.Len(t, msgs[0].ToolCalls, 1)
+	assert.Equal(t, "call_build", msgs[0].ToolCalls[0].ToolUseID)
+	require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, "Build succeeded.",
 		msgs[0].ToolCalls[0].ResultEvents[0].Content)
-	assert.Equal("Archived prompt.", msgs[1].Content)
+	assert.Equal(t, "Archived prompt.", msgs[1].Content)
 }
 
 // TestSyncAllVisualStudioCopilotSkipCacheUsesCompositeFingerprint verifies that
@@ -1535,8 +1479,6 @@ func TestSyncEngineVisualStudioCopilotDoesNotAppendRotatedDuplicateToolCall(t *t
 // unchanged must still be detected, so Visual Studio Copilot is excluded from
 // the generic skip cache.
 func TestSyncAllVisualStudioCopilotSkipCacheUsesCompositeFingerprint(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -1546,7 +1488,7 @@ func TestSyncAllVisualStudioCopilotSkipCacheUsesCompositeFingerprint(t *testing.
 	primary := filepath.Join(
 		tracesDir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(primary, []byte(
+	require.NoError(t, os.WriteFile(primary, []byte(
 		vsCopilotTraceLine(conversationID, "a1", "chat gpt-5.5",
 			"1781293600000000000", "1781293610000000000",
 			map[string]string{
@@ -1555,24 +1497,24 @@ func TestSyncAllVisualStudioCopilotSkipCacheUsesCompositeFingerprint(t *testing.
 			})+"\n"), 0o644))
 	// Pin the representative's mtime; the generic skip cache keys on it.
 	repTime := time.Unix(1781293610, 0)
-	require.NoError(os.Chtimes(primary, repTime, repTime))
+	require.NoError(t, os.Chtimes(primary, repTime, repTime))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCopilot: {tracesDir},
 		},
 		Machine: "local",
 	})
-	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
+	require.NotZero(t, engine.SyncAll(t.Context(), nil).Synced)
 	assertSessionMessageCount(t, database, sessionID, 1)
 
 	// Trash the conversation and re-sync so its virtual path lands in the skip
 	// cache with the composite mtime (equal to the representative's mtime).
-	require.NoError(database.SoftDeleteSession(sessionID))
-	require.NoError(database.ResetAllMtimes())
+	require.NoError(t, database.SoftDeleteSession(t.Context(), sessionID))
+	require.NoError(t, database.ResetAllMtimes(t.Context()))
 	engine.SyncAll(t.Context(), nil)
-	require.NotZero(engine.SnapshotSkipCache()[parser.VisualStudioCopilotVirtualPath(
+	require.NotZero(t, engine.SnapshotSkipCache()[parser.VisualStudioCopilotVirtualPath(
 		primary, conversationID,
 	)],
 		"trashed conversation must be in the skip cache for this test to "+
@@ -1584,12 +1526,12 @@ func TestSyncAllVisualStudioCopilotSkipCacheUsesCompositeFingerprint(t *testing.
 	// conversation a second turn. The composite size grows but the
 	// representative mtime does not, so only the composite fingerprint can
 	// detect the change.
-	_, restoreErr := database.RestoreSession(sessionID)
-	require.NoError(restoreErr)
+	_, restoreErr := database.RestoreSession(t.Context(), sessionID)
+	require.NoError(t, restoreErr)
 	sibling := filepath.Join(
 		tracesDir, "20260610T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(os.WriteFile(sibling, []byte(
+	require.NoError(t, os.WriteFile(sibling, []byte(
 		vsCopilotTraceLine(conversationID, "b1", "chat gpt-5.5",
 			"1781293620000000000", "1781293630000000000",
 			map[string]string{
@@ -1597,7 +1539,7 @@ func TestSyncAllVisualStudioCopilotSkipCacheUsesCompositeFingerprint(t *testing.
 				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Second."}]}]`,
 			})+"\n"), 0o644))
 	olderTime := time.Unix(1781293600, 0)
-	require.NoError(os.Chtimes(sibling, olderTime, olderTime))
+	require.NoError(t, os.Chtimes(sibling, olderTime, olderTime))
 
 	engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, database, sessionID, 2)

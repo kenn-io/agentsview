@@ -34,7 +34,7 @@ func TestExportProfileInvalidPath(t *testing.T) {
 		root func() *cobra.Command
 		args []string
 	}{
-		{"sessions", func(t *testing.T) { seedExportSessionsArchive(t) }, newRootCommand, []string{"export", "sessions"}},
+		{"sessions", func(t *testing.T) { t.Helper(); seedExportSessionsArchive(t) }, newRootCommand, []string{"export", "sessions"}},
 		{"hour", seedExportReportingArchive, func() *cobra.Command {
 			return newExportReportingTestRoot(time.Date(2026, 7, 29, 14, 37, 0, 0, time.UTC))
 		}, []string{"export", "hour", "2026-07-28-10"}},
@@ -47,19 +47,16 @@ func TestExportProfileInvalidPath(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			tt.seed(t)
 			dir := t.TempDir()
 			badParent := filepath.Join(dir, "parent")
-			require.NoError(os.WriteFile(badParent, []byte("file"), 0o600))
+			require.NoError(t, os.WriteFile(badParent, []byte("file"), 0o600))
 			args := append([]string{}, tt.args...)
 			args = append(args, "--cpuprofile", filepath.Join(badParent, "cpu"), "--memprofile", filepath.Join(badParent, "mem"), "--trace", filepath.Join(badParent, "trace"))
 			stdout, stderr, err := executeExportSessionsCommand(tt.root(), args...)
-			require.NoError(err)
-			assert.NotEmpty(stdout)
-			assert.Empty(stderr)
+			require.NoError(t, err)
+			assert.NotEmpty(t, stdout)
+			assert.Empty(t, stderr)
 		})
 	}
 }
@@ -71,42 +68,47 @@ func TestExportProfileSuccess(t *testing.T) {
 		root func() *cobra.Command
 		args []string
 	}{
-		{"sessions", func(t *testing.T) { seedExportSessionsArchive(t) }, newRootCommand,
-			[]string{"export", "sessions"}},
-		{"hour", seedExportReportingArchive,
+		{
+			"sessions", func(t *testing.T) { t.Helper(); seedExportSessionsArchive(t) }, newRootCommand,
+			[]string{"export", "sessions"},
+		},
+		{
+			"hour", seedExportReportingArchive,
 			func() *cobra.Command {
 				return newExportReportingTestRoot(time.Date(2026, 7, 29, 14, 37, 0, 0, time.UTC))
 			},
-			[]string{"export", "hour", "2026-07-28-10"}},
-		{"day", seedExportReportingArchive,
+			[]string{"export", "hour", "2026-07-28-10"},
+		},
+		{
+			"day", seedExportReportingArchive,
 			func() *cobra.Command {
 				return newExportReportingTestRoot(time.Date(2026, 7, 29, 14, 37, 0, 0, time.UTC))
 			},
-			[]string{"export", "day", "2026-07-28"}},
-		{"digest", seedExportReportingArchive,
+			[]string{"export", "day", "2026-07-28"},
+		},
+		{
+			"digest", seedExportReportingArchive,
 			func() *cobra.Command {
 				return newExportReportingTestRoot(time.Date(2026, 7, 29, 14, 37, 0, 0, time.UTC))
 			},
-			[]string{"export", "digest", "--from", "2026-07-28", "--to", "2026-07-28"}},
+			[]string{"export", "digest", "--from", "2026-07-28", "--to", "2026-07-28"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			tt.seed(t)
 			dir := t.TempDir()
 			args := append([]string{}, tt.args...)
 			paths := []string{filepath.Join(dir, "cpu"), filepath.Join(dir, "mem"), filepath.Join(dir, "trace")}
 			args = append(args, "--cpuprofile", paths[0], "--memprofile", paths[1], "--trace", paths[2])
 			stdout, stderr, err := executeExportSessionsCommand(tt.root(), args...)
-			require.NoError(err)
-			assert.NotEmpty(stdout)
-			assert.Empty(stderr)
+			require.NoError(t, err)
+			assert.NotEmpty(t, stdout)
+			assert.Empty(t, stderr)
 			for _, path := range paths {
 				info, err := os.Stat(path)
-				require.NoError(err)
-				assert.Positive(info.Size())
+				require.NoError(t, err)
+				assert.Positive(t, info.Size())
 			}
 		})
 	}
@@ -125,9 +127,6 @@ func TestExportProfileFailureCleanup(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			dir := t.TempDir()
 			paths := []string{filepath.Join(dir, "cpu"), filepath.Join(dir, "mem"), filepath.Join(dir, "trace")}
 			args := append([]string{}, tt.args...)
@@ -137,12 +136,12 @@ func TestExportProfileFailureCleanup(t *testing.T) {
 				root = newExportReportingTestRoot(time.Date(2026, 7, 29, 14, 37, 0, 0, time.UTC))
 			}
 			_, _, err := executeExportSessionsCommand(root, args...)
-			require.Error(err)
-			assert.Contains(err.Error(), tt.want)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
 			for _, path := range paths {
 				info, statErr := os.Stat(path)
-				require.NoError(statErr)
-				assert.Positive(info.Size())
+				require.NoError(t, statErr)
+				assert.Positive(t, info.Size())
 			}
 		})
 	}

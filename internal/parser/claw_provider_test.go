@@ -71,36 +71,30 @@ func assertClawProviderStreamingDiscoveryPropagatesAgentSymlinkErrors(
 	}
 
 	t.Run("dangling agent symlink", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		root := t.TempDir()
 		healthy := writeHealthySession(t, root)
 		target := filepath.Join(t.TempDir(), "linked-agent")
-		require.NoError(os.MkdirAll(target, 0o755))
+		require.NoError(t, os.MkdirAll(target, 0o755))
 		link := filepath.Join(root, "linked")
 		if err := os.Symlink(target, link); err != nil {
 			t.Skipf("symlink not supported: %v", err)
 		}
-		require.NoError(os.RemoveAll(target))
+		require.NoError(t, os.RemoveAll(target))
 
 		_, err := discoverEach(t, root)
 
-		require.Error(err)
-		assert.ErrorIs(err, os.ErrNotExist)
+		require.Error(t, err)
+		require.ErrorIs(t, err, os.ErrNotExist)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 
-		require.NoError(os.Remove(link))
+		require.NoError(t, os.Remove(link))
 		yielded, err := discoverEach(t, root)
-		require.NoError(err)
-		assert.Equal([]string{healthy}, yielded)
+		require.NoError(t, err)
+		assert.Equal(t, []string{healthy}, yielded)
 	})
 
 	t.Run("unstatable agent symlink target", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		if runtime.GOOS == "windows" {
 			t.Skip("directory read permissions are not enforced on Windows")
 		}
@@ -111,24 +105,24 @@ func assertClawProviderStreamingDiscoveryPropagatesAgentSymlinkErrors(
 		healthy := writeHealthySession(t, root)
 		targetParent := t.TempDir()
 		target := filepath.Join(targetParent, "linked-agent")
-		require.NoError(os.MkdirAll(target, 0o755))
+		require.NoError(t, os.MkdirAll(target, 0o755))
 		if err := os.Symlink(target, filepath.Join(root, "linked")); err != nil {
 			t.Skipf("symlink not supported: %v", err)
 		}
-		require.NoError(os.Chmod(targetParent, 0o000))
+		require.NoError(t, os.Chmod(targetParent, 0o000))
 		t.Cleanup(func() { _ = os.Chmod(targetParent, 0o755) })
 
 		_, err := discoverEach(t, root)
 
-		require.Error(err)
-		assert.ErrorIs(err, os.ErrPermission)
+		require.Error(t, err)
+		require.ErrorIs(t, err, os.ErrPermission)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 
-		require.NoError(os.Chmod(targetParent, 0o755))
+		require.NoError(t, os.Chmod(targetParent, 0o755))
 		yielded, err := discoverEach(t, root)
-		require.NoError(err)
-		assert.Equal([]string{healthy}, yielded)
+		require.NoError(t, err)
+		assert.Equal(t, []string{healthy}, yielded)
 	})
 }
 

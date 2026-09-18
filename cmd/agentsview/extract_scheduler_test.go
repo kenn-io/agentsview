@@ -62,9 +62,6 @@ func (f *fakePassManager) callsSnapshot() []extract.PassOptions {
 
 func TestExtractSchedulerBurstOfNotifyProducesExactlyOnePass(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		mgr := &fakePassManager{}
 		s := newExtractScheduler(mgr, 20*time.Millisecond, 0, 0, nil)
 		go s.Run(t.Context())
@@ -74,24 +71,21 @@ func TestExtractSchedulerBurstOfNotifyProducesExactlyOnePass(t *testing.T) {
 			s.Notify()
 		}
 		synctest.Sleep(50 * time.Millisecond)
-		require.Equal(1, mgr.callCount(), "debounced pass never ran")
+		require.Equal(t, 1, mgr.callCount(), "debounced pass never ran")
 		calls := mgr.callsSnapshot()
-		assert.True(calls[0].Full,
+		assert.True(t, calls[0].Full,
 			"the lifetime's first pass carries the startup full top-up")
 
 		s.Notify()
 		synctest.Sleep(50 * time.Millisecond)
 		calls = mgr.callsSnapshot()
-		require.Equal(2, mgr.callCount(), "second debounced pass never ran")
-		assert.False(calls[1].Full,
+		require.Equal(t, 2, mgr.callCount(), "second debounced pass never ran")
+		assert.False(t, calls[1].Full,
 			"event-driven passes after the startup pass are incremental")
 	})
 }
 
 func TestExtractSchedulerNotifiesDownstreamAfterEveryStartedPass(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	mgr := &fakePassManager{results: []fakeTryPassResult{
 		{started: false},
 		{
@@ -106,23 +100,23 @@ func TestExtractSchedulerNotifiesDownstreamAfterEveryStartedPass(t *testing.T) {
 	s.onPassFinished = func() { notified++ }
 
 	started, ok, err := s.tryPassWithLease(t.Context(), extract.PassOptions{})
-	assert.False(started)
-	assert.True(ok)
-	require.NoError(err)
-	assert.Zero(notified)
+	assert.False(t, started)
+	assert.True(t, ok)
+	require.NoError(t, err)
+	assert.Zero(t, notified)
 
 	started, ok, err = s.tryPassWithLease(t.Context(), extract.PassOptions{})
-	assert.True(started)
-	assert.True(ok)
-	require.EqualError(err, "later extraction failed")
-	assert.Equal(1, notified,
+	assert.True(t, started)
+	assert.True(t, ok)
+	require.EqualError(t, err, "later extraction failed")
+	assert.Equal(t, 1, notified,
 		"partial commits must refresh downstream indexes despite a later error")
 
 	started, ok, err = s.tryPassWithLease(t.Context(), extract.PassOptions{})
-	assert.True(started)
-	assert.True(ok)
-	require.NoError(err)
-	assert.Equal(2, notified)
+	assert.True(t, started)
+	assert.True(t, ok)
+	require.NoError(t, err)
+	assert.Equal(t, 2, notified)
 }
 
 func TestExtractSchedulerBackstopTickRunsFullPass(t *testing.T) {
@@ -175,7 +169,7 @@ func TestExtractSchedulerStopTerminatesRun(t *testing.T) {
 		select {
 		case <-done:
 		default:
-			t.Fatal("Stop did not terminate Run")
+			require.FailNow(t, "Stop did not terminate Run")
 		}
 	})
 }
@@ -194,7 +188,7 @@ func TestExtractSchedulerNotifyNeverBlocksWithoutAReader(t *testing.T) {
 		select {
 		case <-done:
 		default:
-			t.Fatal("Notify blocked without a running scheduler")
+			require.FailNow(t, "Notify blocked without a running scheduler")
 		}
 	})
 }
@@ -300,14 +294,14 @@ func TestExtractSchedulerPassHoldsIdleWorkLease(t *testing.T) {
 	<-mgr.started
 	select {
 	case <-idled:
-		t.Fatal("daemon idled out while an extraction pass was in flight")
+		require.FailNow(t, "daemon idled out while an extraction pass was in flight")
 	case <-time.After(200 * time.Millisecond):
 	}
 	mgr.releaseOnce()
 	select {
 	case <-idled:
 	case <-time.After(2 * time.Second):
-		t.Fatal("daemon never idled once the pass completed")
+		require.FailNow(t, "daemon never idled once the pass completed")
 	}
 }
 
@@ -325,7 +319,7 @@ func TestExtractSchedulerStartsNoPassAfterDraining(t *testing.T) {
 		select {
 		case <-idled:
 		default:
-			t.Fatal("tracker never went idle")
+			require.FailNow(t, "tracker never went idle")
 		}
 		go s.Run(t.Context())
 		defer s.Stop()
@@ -357,7 +351,7 @@ func TestExtractSchedulerStartupPassSurvivesShortIdleTimeout(t *testing.T) {
 	select {
 	case <-idled:
 	case <-time.After(2 * time.Second):
-		t.Fatal("daemon never idled once the startup pass completed")
+		require.FailNow(t, "daemon never idled once the startup pass completed")
 	}
 }
 

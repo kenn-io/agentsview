@@ -28,29 +28,26 @@ func TestPushWorkBoundedByChangedBatchNotArchiveSize(t *testing.T) {
 	ctx := t.Context()
 	for _, size := range []int{20, 400} {
 		t.Run(fmt.Sprintf("archive_%d", size), func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			local, path := newPushFixture(t, size)
 			_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-			require.NoError(err)
+			require.NoError(t, err)
 
 			appendMessage(t, local, "sess-7")
-			require.NoError(local.DeleteSession("sess-3"))
+			require.NoError(t, local.DeleteSession(ctx, "sess-3"))
 
 			res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-			require.NoError(err)
-			assert.False(res.Diagnostics.Full)
+			require.NoError(t, err)
+			assert.False(t, res.Diagnostics.Full)
 			// Work is bounded by the changed batch regardless of archive size:
-			assert.LessOrEqual(res.Diagnostics.CandidateSessions.Total, 3)
-			assert.Equal(1, res.Diagnostics.PushedSessions.Total)
-			assert.Equal(1, res.Diagnostics.DeletedStaleSessions)
+			assert.LessOrEqual(t, res.Diagnostics.CandidateSessions.Total, 3)
+			assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
+			assert.Equal(t, 1, res.Diagnostics.DeletedStaleSessions)
 			// And an untouched follow-up push does nothing:
 			res2, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-			require.NoError(err)
-			assert.Zero(res2.Diagnostics.PushedSessions.Total)
-			assert.Zero(res2.Diagnostics.DeletedStaleSessions)
-			assert.LessOrEqual(res2.Diagnostics.CandidateSessions.Total, 2)
+			require.NoError(t, err)
+			assert.Zero(t, res2.Diagnostics.PushedSessions.Total)
+			assert.Zero(t, res2.Diagnostics.DeletedStaleSessions)
+			assert.LessOrEqual(t, res2.Diagnostics.CandidateSessions.Total, 2)
 		})
 	}
 }
@@ -68,17 +65,14 @@ func TestPushWorkBoundedByChangedBatchNotArchiveSize(t *testing.T) {
 // in rebuild_test.go; POSIX rename is atomic, which is what this test relies
 // on to avoid ever observing a torn file.)
 func TestRebuildUnderReaderNeverErrorsAndEventuallyServesRebuiltData(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	skipReopenTestOnWindows(t)
 	ctx := t.Context()
 	local, path := newPushFixture(t, 3)
 	_, err := rebuildMirror(ctx, path, local, "m", SyncOptions{}, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
-	store, err := NewStore(path)
-	require.NoError(err)
+	store, err := NewStore(ctx, path)
+	require.NoError(t, err)
 	defer store.Close()
 
 	watchCtx := t.Context()
@@ -95,19 +89,19 @@ func TestRebuildUnderReaderNeverErrorsAndEventuallyServesRebuiltData(t *testing.
 		}
 	})
 
-	require.NoError(local.DeleteSession("sess-2"))
+	require.NoError(t, local.DeleteSession(ctx, "sess-2"))
 	appendMessage(t, local, "sess-1")
 
 	res, err := Push(ctx, path, local, "m", SyncOptions{}, true, nil)
-	require.NoError(err, "a rebuild racing a live reader must never error")
-	assert.True(res.Diagnostics.Full)
-	assert.Zero(res.Errors)
+	require.NoError(t, err, "a rebuild racing a live reader must never error")
+	assert.True(t, res.Diagnostics.Full)
+	assert.Zero(t, res.Errors)
 
 	// The reader goroutine keeps running through the watcher's poll-and-adopt
 	// window (rather than stopping right after Push returns), so it actually
 	// exercises swapHandle concurrently with reads instead of merely racing
 	// the rename itself.
-	require.Eventually(func() bool {
+	require.Eventually(t, func() bool {
 		ids := listMirrorSessionIDs(t, store)
 		if len(ids) != 2 {
 			return false
@@ -117,10 +111,10 @@ func TestRebuildUnderReaderNeverErrorsAndEventuallyServesRebuiltData(t *testing.
 
 	cancelReader()
 	wg.Wait()
-	assert.Zero(readerErrs.Load(),
+	assert.Zero(t, readerErrs.Load(),
 		"concurrent reads against the live store must never error during a rebuild swap")
 
-	assert.Equal(3, mirrorMessageCountViaStore(t, store, "sess-1"),
+	assert.Equal(t, 3, mirrorMessageCountViaStore(t, store, "sess-1"),
 		"store must eventually serve sess-1's appended message")
 }
 
@@ -143,9 +137,6 @@ func mirrorMessageCountViaStore(t *testing.T, store *Store, sessionID string) in
 // but only to reconcile mirror-resident rows — a never-mirrored session is
 // skipped without counting anywhere).
 func TestFilteredIncrementalPushScopesCandidatesPushesAndDeletes(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local := newLocalDB(t)
 	writes := []db.SessionBatchWrite{
@@ -182,13 +173,13 @@ func TestFilteredIncrementalPushScopesCandidatesPushesAndDeletes(t *testing.T) {
 			ReplaceMessages: true,
 		},
 	}
-	_, err := local.WriteSessionBatchAtomic(writes)
-	require.NoError(err)
+	_, err := local.WriteSessionBatchAtomic(ctx, writes)
+	require.NoError(t, err)
 
 	opts := SyncOptions{Projects: []string{"alpha"}}
 	path := filepath.Join(t.TempDir(), "filtered.duckdb")
 	_, err = Push(ctx, path, local, "m", opts, true, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	// Every mirror connection here is opened and closed immediately, never
 	// held open across a later Push call: DuckDB does not tolerate a second
 	// independent connection on the same literal path string while one is
@@ -199,17 +190,17 @@ func TestFilteredIncrementalPushScopesCandidatesPushesAndDeletes(t *testing.T) {
 
 	appendMessage(t, local, "sess-in-1")
 	appendMessage(t, local, "sess-out-1")
-	require.NoError(local.DeleteSession("sess-in-2"))
-	require.NoError(local.DeleteSession("sess-out-2"))
+	require.NoError(t, local.DeleteSession(ctx, "sess-in-2"))
+	require.NoError(t, local.DeleteSession(ctx, "sess-out-2"))
 
 	res, err := Push(ctx, path, local, "m", opts, false, nil)
-	require.NoError(err)
-	assert.False(res.Diagnostics.Full)
-	assert.LessOrEqual(res.Diagnostics.CandidateSessions.Total, 2,
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full)
+	assert.LessOrEqual(t, res.Diagnostics.CandidateSessions.Total, 2,
 		"the out-of-scope mutation must not count as an in-scope candidate")
-	assert.Equal(1, res.Diagnostics.PushedSessions.Total,
+	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total,
 		"only the in-scope mutated session is pushed")
-	assert.Equal(1, res.Diagnostics.DeletedStaleSessions,
+	assert.Equal(t, 1, res.Diagnostics.DeletedStaleSessions,
 		"only the in-scope, mirror-resident hard delete counts as removed")
 
 	assertMirrorMessageCount(t, path, "sess-in-1", 2)
@@ -245,30 +236,27 @@ func TestProjectTransitionRemovesSessionFromFilteredMirror(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			local, path := newPushFixture(t, 2)
 			_, err := Push(ctx, path, local, "m", tt.opts, false, nil)
-			require.NoError(err)
+			require.NoError(t, err)
 			assertMirrorTableCountWhere(t, path, "sessions", "id = ?", "sess-1", 1)
 
 			moveSessionToProject(t, local, "sess-1", tt.toProject)
 
 			res, err := Push(ctx, path, local, "m", tt.opts, false, nil)
-			require.NoError(err)
-			assert.False(res.Diagnostics.Full)
-			assert.Equal(1, res.Diagnostics.DeletedStaleSessions,
+			require.NoError(t, err)
+			assert.False(t, res.Diagnostics.Full)
+			assert.Equal(t, 1, res.Diagnostics.DeletedStaleSessions,
 				"the out-of-scope-moved resident session must count as removed")
-			assert.Zero(res.Diagnostics.PushedSessions.Total)
+			assert.Zero(t, res.Diagnostics.PushedSessions.Total)
 			assertMirrorSessionAbsent(t, path, "sess-1")
 			assertMirrorTableCountWhere(t, path, "sessions", "id = ?", "sess-2", 1)
 			assertMirrorTableCountWhere(t, path, "messages", "session_id = ?", "sess-1", 0)
 
 			// A follow-up push has nothing left to reconcile.
 			res2, err := Push(ctx, path, local, "m", tt.opts, false, nil)
-			require.NoError(err)
-			assert.Zero(res2.Diagnostics.DeletedStaleSessions)
+			require.NoError(t, err)
+			assert.Zero(t, res2.Diagnostics.DeletedStaleSessions)
 		})
 	}
 }
@@ -279,23 +267,20 @@ func TestProjectTransitionRemovesSessionFromFilteredMirror(t *testing.T) {
 // (out-of-scope) project. A scope-filtered tombstone load would skip it and
 // strand the mirror row forever; the unfiltered load must apply it.
 func TestProjectTransitionThenHardDeleteAppliesTombstone(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	opts := SyncOptions{ExcludeProjects: []string{"scratch"}}
 	local, path := newPushFixture(t, 2)
 	_, err := Push(ctx, path, local, "m", opts, false, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	assertMirrorTableCountWhere(t, path, "sessions", "id = ?", "sess-1", 1)
 
 	moveSessionToProject(t, local, "sess-1", "scratch")
-	require.NoError(local.DeleteSession("sess-1"))
+	require.NoError(t, local.DeleteSession(ctx, "sess-1"))
 
 	res, err := Push(ctx, path, local, "m", opts, false, nil)
-	require.NoError(err)
-	assert.False(res.Diagnostics.Full)
-	assert.Equal(1, res.Diagnostics.DeletedStaleSessions,
+	require.NoError(t, err)
+	assert.False(t, res.Diagnostics.Full)
+	assert.Equal(t, 1, res.Diagnostics.DeletedStaleSessions,
 		"the out-of-scope tombstone must still remove the resident mirror row")
 	assertMirrorSessionAbsent(t, path, "sess-1")
 	assertMirrorTableCountWhere(t, path, "sessions", "id = ?", "sess-2", 1)
@@ -308,7 +293,7 @@ func TestProjectTransitionThenHardDeleteAppliesTombstone(t *testing.T) {
 func moveSessionToProject(t *testing.T, local *db.DB, sessionID, project string) {
 	t.Helper()
 	modifiedAt := time.Now().UTC().Format(localSyncTimestampLayout)
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
+	require.NoError(t, local.Update(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			`UPDATE sessions SET project = ?, local_modified_at = ? WHERE id = ?`,
 			project, modifiedAt, sessionID,
@@ -341,21 +326,19 @@ func TestReplaceCurationBoundedByLocalCurationSizeNotMirrorSize(t *testing.T) {
 	ctx := t.Context()
 	for _, size := range []int{20, 400} {
 		t.Run(fmt.Sprintf("archive_%d", size), func(t *testing.T) {
-			require := require.New(t)
-
 			local, path := newPushFixture(t, size)
-			ok, err := local.StarSession("sess-1")
-			require.NoError(err)
-			require.True(ok)
+			ok, err := local.StarSession(ctx, "sess-1")
+			require.NoError(t, err)
+			require.True(t, ok)
 			msgs, err := local.GetAllMessages(ctx, "sess-2")
-			require.NoError(err)
-			require.NotEmpty(msgs)
+			require.NoError(t, err)
+			require.NotEmpty(t, msgs)
 			note := "curation scale note"
-			_, err = local.PinMessage("sess-2", msgs[0].ID, &note)
-			require.NoError(err)
+			_, err = local.PinMessage(ctx, "sess-2", msgs[0].ID, &note)
+			require.NoError(t, err)
 
 			_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-			require.NoError(err)
+			require.NoError(t, err)
 
 			// Every mirror connection below is opened and closed immediately
 			// (assertMirrorTableCount*), never held open across a later Push
@@ -367,8 +350,8 @@ func TestReplaceCurationBoundedByLocalCurationSizeNotMirrorSize(t *testing.T) {
 			assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", "sess-1", 1)
 			assertMirrorTableCountWhere(t, path, "pinned_messages", "session_id = ?", "sess-2", 1)
 
-			require.NoError(local.UnstarSession("sess-1"))
-			require.NoError(local.UnpinMessage("sess-2", msgs[0].ID))
+			require.NoError(t, local.UnstarSession(ctx, "sess-1"))
+			require.NoError(t, local.UnpinMessage(ctx, "sess-2", msgs[0].ID))
 			// A mutating incremental push (a required precondition for
 			// replaceCuration to be worth asserting on): appending a message
 			// bumps sess-3's sync_marker so the push actually does mutating
@@ -376,7 +359,7 @@ func TestReplaceCurationBoundedByLocalCurationSizeNotMirrorSize(t *testing.T) {
 			appendMessage(t, local, "sess-3")
 
 			_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-			require.NoError(err)
+			require.NoError(t, err)
 			assertMirrorTableCount(t, path, "starred_sessions", 0)
 			assertMirrorTableCount(t, path, "pinned_messages", 0)
 		})
@@ -391,18 +374,15 @@ func TestReplaceCurationBoundedByLocalCurationSizeNotMirrorSize(t *testing.T) {
 // curation change still refreshes and propagates it (CurationRefreshed
 // true) exactly as before this change.
 func TestCurationRefreshSkipsWhenLocalCurationStateUnchanged(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local, path := newPushFixture(t, 2)
-	ok, err := local.StarSession("sess-1")
-	require.NoError(err)
-	require.True(ok)
+	ok, err := local.StarSession(ctx, "sess-1")
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	first, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(err)
-	assert.True(first.Diagnostics.Full, "initial push is a rebuild")
+	require.NoError(t, err)
+	assert.True(t, first.Diagnostics.Full, "initial push is a rebuild")
 	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", "sess-1", 1)
 
 	// A mutating incremental push with no curation change: the star
@@ -412,28 +392,28 @@ func TestCurationRefreshSkipsWhenLocalCurationStateUnchanged(t *testing.T) {
 	// unchanged-fingerprint check.
 	appendMessage(t, local, "sess-2")
 	second, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(err)
-	assert.False(second.Diagnostics.Full)
-	assert.False(second.Diagnostics.CurationRefreshed,
+	require.NoError(t, err)
+	assert.False(t, second.Diagnostics.Full)
+	assert.False(t, second.Diagnostics.CurationRefreshed,
 		"unchanged local curation state must skip the mirror-side refresh")
 	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", "sess-1", 1)
 
 	// Now star sess-2 too: a real curation change with no other session
 	// mutation. The next push must detect it and refresh.
-	ok, err = local.StarSession("sess-2")
-	require.NoError(err)
-	require.True(ok)
+	ok, err = local.StarSession(ctx, "sess-2")
+	require.NoError(t, err)
+	require.True(t, ok)
 	third, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(err)
-	assert.False(third.Diagnostics.Full)
-	assert.True(third.Diagnostics.CurationRefreshed,
+	require.NoError(t, err)
+	assert.False(t, third.Diagnostics.Full)
+	assert.True(t, third.Diagnostics.CurationRefreshed,
 		"a real curation change must trigger the mirror-side refresh")
 	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", "sess-2", 1)
 
 	// And a further no-op push (curation unchanged again) skips once more.
 	fourth, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(err)
-	assert.False(fourth.Diagnostics.CurationRefreshed)
+	require.NoError(t, err)
+	assert.False(t, fourth.Diagnostics.CurationRefreshed)
 }
 
 // TestCurationSkipsSessionsAbsentFromMirror pins replaceCuration's
@@ -442,8 +422,6 @@ func TestCurationRefreshSkipsWhenLocalCurationStateUnchanged(t *testing.T) {
 // any session the mirror does not hold) must be skipped, not inserted as a
 // dangling curation row.
 func TestCurationSkipsSessionsAbsentFromMirror(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	local := newLocalDB(t)
 	seedDuckDBSyncFixture(t, local) // alpha + beta project sessions
@@ -451,21 +429,21 @@ func TestCurationSkipsSessionsAbsentFromMirror(t *testing.T) {
 	opts := SyncOptions{Projects: []string{"alpha"}}
 
 	_, err := Push(ctx, path, local, "test-machine", opts, false, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// Star the out-of-scope beta session and pin one of its messages; the
 	// filtered mirror does not contain it.
-	ok, err := local.StarSession("duck-sync-beta")
-	require.NoError(err)
-	require.True(ok)
+	ok, err := local.StarSession(ctx, "duck-sync-beta")
+	require.NoError(t, err)
+	require.True(t, ok)
 	msgs, err := local.GetAllMessages(ctx, "duck-sync-beta")
-	require.NoError(err)
-	require.NotEmpty(msgs)
-	_, err = local.PinMessage("duck-sync-beta", msgs[0].ID, nil)
-	require.NoError(err)
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	_, err = local.PinMessage(ctx, "duck-sync-beta", msgs[0].ID, nil)
+	require.NoError(t, err)
 
 	res, err := Push(ctx, path, local, "test-machine", opts, false, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.False(t, res.Diagnostics.Full)
 
 	assertMirrorTableCountWhere(t, path,
@@ -485,41 +463,39 @@ func TestCurationSkipsSessionsAbsentFromMirror(t *testing.T) {
 // be skipped by the mirror-membership check even though its star and pin
 // are fully in scope locally.
 func TestReplaceCurationSkipsStarForSessionAbsentFromMirror(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	local, _ := newPushFixture(t, 2)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(createSchema(ctx, syncer.DB()))
+	require.NoError(t, createSchema(ctx, syncer.DB()))
 
 	// Mirror only sess-1; sess-2 stays local-only.
 	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	fingerprints, err := syncer.sessionFingerprints(ctx, sessions)
-	require.NoError(err)
+	require.NoError(t, err)
 	for _, sess := range sessions {
 		if sess.ID != "sess-1" {
 			continue
 		}
 		_, err := syncer.pushSingleSession(ctx, sess, fingerprints[sess.ID])
-		require.NoError(err)
+		require.NoError(t, err)
 	}
 
 	for _, id := range []string{"sess-1", "sess-2"} {
-		ok, err := local.StarSession(id)
-		require.NoError(err)
-		require.True(ok)
+		ok, err := local.StarSession(ctx, id)
+		require.NoError(t, err)
+		require.True(t, ok)
 	}
 	msgs, err := local.GetAllMessages(ctx, "sess-2")
-	require.NoError(err)
-	require.NotEmpty(msgs)
-	_, err = local.PinMessage("sess-2", msgs[0].ID, nil)
-	require.NoError(err)
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	_, err = local.PinMessage(ctx, "sess-2", msgs[0].ID, nil)
+	require.NoError(t, err)
 
 	snap, err := syncer.loadCurationSnapshot(ctx)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = syncer.replaceCuration(ctx, snap)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	assertDuckDBCountWhere(t, syncer.DB(),
 		"starred_sessions", "session_id = ?", "sess-1", 1)
@@ -545,8 +521,6 @@ func TestCursorUsageSyncBoundedByAppendedEventsNotHistory(t *testing.T) {
 	ctx := t.Context()
 	for _, size := range []int{20, 400} {
 		t.Run(fmt.Sprintf("history_%d", size), func(t *testing.T) {
-			require := require.New(t)
-
 			local, path := newPushFixture(t, 2)
 			events := make([]db.CursorUsageEvent, 0, size)
 			for i := range size {
@@ -557,23 +531,23 @@ func TestCursorUsageSyncBoundedByAppendedEventsNotHistory(t *testing.T) {
 					InputTokens: i + 1,
 				})
 			}
-			require.NoError(local.InsertCursorUsageEvents(events))
+			require.NoError(t, local.InsertCursorUsageEvents(ctx, events))
 
 			_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-			require.NoError(err)
+			require.NoError(t, err)
 			assertMirrorTableCount(t, path, "cursor_usage_events", size)
 
 			// Delete one historical row directly from the mirror; the
 			// connection is closed before the next Push (see
 			// assertMirrorTableCount for the never-hold-open contract).
-			conn, err := Open(path)
-			require.NoError(err)
+			conn, err := Open(ctx, path)
+			require.NoError(t, err)
 			_, err = conn.ExecContext(ctx,
 				`DELETE FROM cursor_usage_events WHERE input_tokens = 1`)
-			require.NoError(err)
-			require.NoError(conn.Close())
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
 
-			require.NoError(local.InsertCursorUsageEvents([]db.CursorUsageEvent{{
+			require.NoError(t, local.InsertCursorUsageEvents(ctx, []db.CursorUsageEvent{{
 				OccurredAt:  "2026-02-01T00:00:00Z",
 				Model:       "cursor-model",
 				Kind:        "usage",
@@ -582,7 +556,7 @@ func TestCursorUsageSyncBoundedByAppendedEventsNotHistory(t *testing.T) {
 			appendMessage(t, local, "sess-1")
 
 			res, err := Push(ctx, path, local, "m", SyncOptions{Automatic: true}, false, nil)
-			require.NoError(err)
+			require.NoError(t, err)
 			assert.False(t, res.Diagnostics.Full,
 				"a valid mirror must take the incremental path")
 
@@ -606,36 +580,33 @@ func TestCursorUsageSyncBoundedByAppendedEventsNotHistory(t *testing.T) {
 // refresh and the star would stay missing until an unrelated curation
 // edit.
 func TestCurationRefreshRetriesUntilSkippedSessionIsMirrored(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local, _ := newPushFixture(t, 2)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(createSchema(ctx, syncer.DB()))
+	require.NoError(t, createSchema(ctx, syncer.DB()))
 
 	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	fingerprints, err := syncer.sessionFingerprints(ctx, sessions)
-	require.NoError(err)
+	require.NoError(t, err)
 	pushOne := func(id string) {
 		for _, sess := range sessions {
 			if sess.ID != id {
 				continue
 			}
 			_, err := syncer.pushSingleSession(ctx, sess, fingerprints[sess.ID])
-			require.NoError(err)
+			require.NoError(t, err)
 		}
 	}
 	// Mirror only sess-1; the starred sess-2 stays local-only for now.
 	pushOne("sess-1")
-	ok, err := local.StarSession("sess-2")
-	require.NoError(err)
-	require.True(ok)
+	ok, err := local.StarSession(ctx, "sess-2")
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	refreshed, err := syncer.refreshCurationIfChanged(ctx)
-	require.NoError(err)
-	assert.True(refreshed)
+	require.NoError(t, err)
+	assert.True(t, refreshed)
 	assertDuckDBCountWhere(t, syncer.DB(),
 		"starred_sessions", "session_id = ?", "sess-2", 0)
 
@@ -643,8 +614,8 @@ func TestCurationRefreshRetriesUntilSkippedSessionIsMirrored(t *testing.T) {
 	// must still trigger another refresh that delivers the skipped star.
 	pushOne("sess-2")
 	refreshed, err = syncer.refreshCurationIfChanged(ctx)
-	require.NoError(err)
-	assert.True(refreshed,
+	require.NoError(t, err)
+	assert.True(t, refreshed,
 		"a star skipped for a not-yet-mirrored session must refresh again once the session lands")
 	assertDuckDBCountWhere(t, syncer.DB(),
 		"starred_sessions", "session_id = ?", "sess-2", 1)
@@ -652,8 +623,8 @@ func TestCurationRefreshRetriesUntilSkippedSessionIsMirrored(t *testing.T) {
 	// With every curated session resident the fingerprint converges, so
 	// further pushes skip the refresh.
 	refreshed, err = syncer.refreshCurationIfChanged(ctx)
-	require.NoError(err)
-	assert.False(refreshed)
+	require.NoError(t, err)
+	assert.False(t, refreshed)
 }
 
 // TestCurationFingerprintDetectsNoteOnlyEdit guards the specific gap a
@@ -662,40 +633,37 @@ func TestCurationRefreshRetriesUntilSkippedSessionIsMirrored(t *testing.T) {
 // pinned message id set or created_at, so the fingerprint must incorporate
 // note content, not just membership.
 func TestCurationFingerprintDetectsNoteOnlyEdit(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 	msgs, err := local.GetAllMessages(ctx, "sess-1")
-	require.NoError(err)
-	require.NotEmpty(msgs)
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
 	firstNote := "first note"
-	_, err = local.PinMessage("sess-1", msgs[0].ID, &firstNote)
-	require.NoError(err)
+	_, err = local.PinMessage(ctx, "sess-1", msgs[0].ID, &firstNote)
+	require.NoError(t, err)
 
 	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	secondNote := "second note"
-	_, err = local.PinMessage("sess-1", msgs[0].ID, &secondNote)
-	require.NoError(err)
+	_, err = local.PinMessage(ctx, "sess-1", msgs[0].ID, &secondNote)
+	require.NoError(t, err)
 	appendMessage(t, local, "sess-1")
 
 	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(err)
-	assert.True(res.Diagnostics.CurationRefreshed,
+	require.NoError(t, err)
+	assert.True(t, res.Diagnostics.CurationRefreshed,
 		"a note-only pin edit must still be detected as a curation change")
 
-	conn, err := Open(path)
-	require.NoError(err)
+	conn, err := Open(ctx, path)
+	require.NoError(t, err)
 	defer conn.Close()
 	var got string
-	require.NoError(conn.QueryRowContext(ctx,
+	require.NoError(t, conn.QueryRowContext(ctx,
 		`SELECT note FROM pinned_messages WHERE session_id = ? AND message_id = ?`,
 		"sess-1", msgs[0].ID,
 	).Scan(&got))
-	assert.Equal(secondNote, got)
+	assert.Equal(t, secondNote, got)
 }
 
 // TestCurationFingerprintDetectsUnpinRepinWithSameNote is the FIX6
@@ -710,33 +678,31 @@ func TestCurationFingerprintDetectsNoteOnlyEdit(t *testing.T) {
 // could otherwise reuse the same pin id purely as an artifact of the table
 // being momentarily empty.
 func TestCurationFingerprintDetectsUnpinRepinWithSameNote(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	local, path := newPushFixture(t, 2)
 	msgs1, err := local.GetAllMessages(ctx, "sess-1")
-	require.NoError(err)
-	require.NotEmpty(msgs1)
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs1)
 	msgs2, err := local.GetAllMessages(ctx, "sess-2")
-	require.NoError(err)
-	require.NotEmpty(msgs2)
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs2)
 
 	note := "same note"
-	_, err = local.PinMessage("sess-1", msgs1[0].ID, &note)
-	require.NoError(err)
-	_, err = local.PinMessage("sess-2", msgs2[0].ID, &note)
-	require.NoError(err)
+	_, err = local.PinMessage(ctx, "sess-1", msgs1[0].ID, &note)
+	require.NoError(t, err)
+	_, err = local.PinMessage(ctx, "sess-2", msgs2[0].ID, &note)
+	require.NoError(t, err)
 
 	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
-	require.NoError(local.UnpinMessage("sess-1", msgs1[0].ID))
-	_, err = local.PinMessage("sess-1", msgs1[0].ID, &note)
-	require.NoError(err)
+	require.NoError(t, local.UnpinMessage(ctx, "sess-1", msgs1[0].ID))
+	_, err = local.PinMessage(ctx, "sess-1", msgs1[0].ID, &note)
+	require.NoError(t, err)
 	appendMessage(t, local, "sess-1")
 
 	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.True(t, res.Diagnostics.CurationRefreshed,
 		"an unpin+repin with the same note must still be detected as a curation change")
 }
@@ -748,33 +714,31 @@ func TestCurationFingerprintDetectsUnpinRepinWithSameNote(t *testing.T) {
 // note, so the fingerprint's HasNote field must keep them apart instead of
 // collapsing both to "".
 func TestCurationFingerprintDistinguishesNilNoteFromEmptyNote(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	local, _ := newPushFixture(t, 1)
 	s := newInMemoryTestSync(t, local, SyncOptions{})
 
 	msgs, err := local.GetAllMessages(ctx, "sess-1")
-	require.NoError(err)
-	require.NotEmpty(msgs)
-	_, err = local.PinMessage("sess-1", msgs[0].ID, nil)
-	require.NoError(err)
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	_, err = local.PinMessage(ctx, "sess-1", msgs[0].ID, nil)
+	require.NoError(t, err)
 
 	snap, err := s.loadCurationSnapshot(ctx)
-	require.NoError(err)
+	require.NoError(t, err)
 	withoutNote, err := snap.fingerprint()
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// Updating the note in place keeps the pin's id and created_at, so
 	// note presence is the only field that can distinguish the states.
 	empty := ""
-	_, err = local.PinMessage("sess-1", msgs[0].ID, &empty)
-	require.NoError(err)
+	_, err = local.PinMessage(ctx, "sess-1", msgs[0].ID, &empty)
+	require.NoError(t, err)
 
 	snap, err = s.loadCurationSnapshot(ctx)
-	require.NoError(err)
+	require.NoError(t, err)
 	withEmptyNote, err := snap.fingerprint()
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.NotEqual(t, withoutNote, withEmptyNote,
 		"an explicit empty-string note is a different state than no note at all")
 }
@@ -785,7 +749,7 @@ func TestCurationFingerprintDistinguishesNilNoteFromEmptyNote(t *testing.T) {
 // mirror connection must never be held open across a later Push call.
 func assertMirrorTableCount(t *testing.T, path, table string, want int) {
 	t.Helper()
-	conn, err := Open(path)
+	conn, err := Open(t.Context(), path)
 	require.NoError(t, err)
 	defer conn.Close()
 	assertDuckDBCount(t, conn, table, want)
@@ -797,7 +761,7 @@ func assertMirrorTableCountWhere(
 	t *testing.T, path, table, where string, arg any, want int,
 ) {
 	t.Helper()
-	conn, err := Open(path)
+	conn, err := Open(t.Context(), path)
 	require.NoError(t, err)
 	defer conn.Close()
 	assertDuckDBCountWhere(t, conn, table, where, arg, want)

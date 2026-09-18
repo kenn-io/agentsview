@@ -64,7 +64,7 @@ func TestStoreSearchContentSemanticInvalidInputReturns400Before501(t *testing.T)
 				_, err := s.SearchContent(t.Context(), f)
 				require.Error(t, err)
 				var inputErr *db.SearchInputError
-				assert.ErrorAs(t, err, &inputErr,
+				require.ErrorAs(t, err, &inputErr,
 					"expected *db.SearchInputError, got %T: %v", err, err)
 				assert.NotErrorIs(t, err, db.ErrSemanticUnavailable,
 					"invalid input must not be masked as ErrSemanticUnavailable")
@@ -162,13 +162,11 @@ func TestMapPGWriteErrorKeepsNonReadOnlyCause(t *testing.T) {
 	err := mapPGWriteError("writing test row", cause)
 
 	require.ErrorIs(t, err, cause)
-	assert.NotErrorIs(t, err, db.ErrReadOnly)
+	require.NotErrorIs(t, err, db.ErrReadOnly)
 	assert.Contains(t, err.Error(), "writing test row")
 }
 
 func TestEmptyTrashExcludesSameRowsItDeletes(t *testing.T) {
-	assert := assert.New(t)
-
 	state := &emptyTrashProbeState{
 		sessions: map[string]bool{
 			"already-trashed":                   true,
@@ -185,23 +183,21 @@ func TestEmptyTrashExcludesSameRowsItDeletes(t *testing.T) {
 	}
 	store := &Store{pg: newEmptyTrashProbeDB(t, state)}
 
-	count, err := store.EmptyTrash()
+	count, err := store.EmptyTrash(t.Context())
 
 	require.NoError(t, err, "EmptyTrash")
-	assert.Equal(1, count)
-	assert.True(state.deleted["already-trashed"])
-	assert.True(state.excluded["already-trashed"])
-	assert.True(state.excluded["vibe:session_already_trashed"])
-	assert.True(state.deleted["vibe:session_already_trashed"])
-	assert.False(state.deleted["concurrently-trashed"])
-	assert.False(state.excluded["concurrently-trashed"])
-	assert.False(state.excluded["vibe:session_concurrently_trashed"])
-	assert.False(state.deleted["vibe:session_concurrently_trashed"])
+	assert.Equal(t, 1, count)
+	assert.True(t, state.deleted["already-trashed"])
+	assert.True(t, state.excluded["already-trashed"])
+	assert.True(t, state.excluded["vibe:session_already_trashed"])
+	assert.True(t, state.deleted["vibe:session_already_trashed"])
+	assert.False(t, state.deleted["concurrently-trashed"])
+	assert.False(t, state.excluded["concurrently-trashed"])
+	assert.False(t, state.excluded["vibe:session_concurrently_trashed"])
+	assert.False(t, state.deleted["vibe:session_concurrently_trashed"])
 }
 
 func TestDeleteSessionIfTrashedExcludesRecordedAliases(t *testing.T) {
-	assert := assert.New(t)
-
 	state := &emptyTrashProbeState{
 		sessions: map[string]bool{
 			"trashed":              true,
@@ -215,19 +211,17 @@ func TestDeleteSessionIfTrashedExcludesRecordedAliases(t *testing.T) {
 	}
 	store := &Store{pg: newEmptyTrashProbeDB(t, state)}
 
-	count, err := store.DeleteSessionIfTrashed("trashed")
+	count, err := store.DeleteSessionIfTrashed(t.Context(), "trashed")
 
 	require.NoError(t, err, "DeleteSessionIfTrashed")
-	assert.EqualValues(1, count)
-	assert.True(state.deleted["trashed"])
-	assert.True(state.excluded["trashed"])
-	assert.True(state.excluded["vibe:session_trashed"])
-	assert.True(state.deleted["vibe:session_trashed"])
+	assert.EqualValues(t, 1, count)
+	assert.True(t, state.deleted["trashed"])
+	assert.True(t, state.excluded["trashed"])
+	assert.True(t, state.excluded["vibe:session_trashed"])
+	assert.True(t, state.deleted["vibe:session_trashed"])
 }
 
 func TestDeleteSessionIfTrashedExcludesReverseAliasCanonical(t *testing.T) {
-	assert := assert.New(t)
-
 	state := &emptyTrashProbeState{
 		sessions: map[string]bool{
 			"vibe:canonical":       false,
@@ -241,14 +235,14 @@ func TestDeleteSessionIfTrashedExcludesReverseAliasCanonical(t *testing.T) {
 	}
 	store := &Store{pg: newEmptyTrashProbeDB(t, state)}
 
-	count, err := store.DeleteSessionIfTrashed("vibe:session_trashed")
+	count, err := store.DeleteSessionIfTrashed(t.Context(), "vibe:session_trashed")
 
 	require.NoError(t, err, "DeleteSessionIfTrashed")
-	assert.EqualValues(1, count)
-	assert.True(state.deleted["vibe:session_trashed"])
-	assert.True(state.deleted["vibe:canonical"])
-	assert.True(state.excluded["vibe:session_trashed"])
-	assert.True(state.excluded["vibe:canonical"])
+	assert.EqualValues(t, 1, count)
+	assert.True(t, state.deleted["vibe:session_trashed"])
+	assert.True(t, state.deleted["vibe:canonical"])
+	assert.True(t, state.excluded["vibe:session_trashed"])
+	assert.True(t, state.excluded["vibe:canonical"])
 }
 
 type emptyTrashProbeDriver struct{}

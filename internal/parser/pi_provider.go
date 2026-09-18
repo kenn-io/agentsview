@@ -172,7 +172,7 @@ func (p *piProvider) sourceForSessionID(
 
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return SourceRef{}, false, nil
+		return SourceRef{}, false, nil //nolint:nilerr // Unavailable optional discovery roots have no matching source.
 	}
 	target := sessionID + ".jsonl"
 	for _, entry := range entries {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -23,6 +24,7 @@ import (
 // session directory: chat-messages.json, run-state.json, and chat-meta.json.
 func writeCodebuffTestFiles(t *testing.T, dir, content string) {
 	t.Helper()
+
 	chatPath := filepath.Join(dir, "chat-messages.json")
 	runStatePath := filepath.Join(dir, "run-state.json")
 	chatMetaPath := filepath.Join(dir, "chat-meta.json")
@@ -55,7 +57,7 @@ func createCodebuffArchive(t *testing.T, numSessions int) string {
 
 	for p := range numProjects {
 		project := fmt.Sprintf("project-%d", p)
-		for s := 0; s < sessionsPerProject; s++ {
+		for s := range sessionsPerProject {
 			ts := fmt.Sprintf("2026-07-15T%02d-00-00.000Z", 10+s)
 			dir := filepath.Join(root, project, "chats", ts)
 			require.NoError(t, os.MkdirAll(dir, 0o755))
@@ -89,9 +91,6 @@ func createCodebuffSingleSession(t *testing.T) (root, chatPath string) {
 // bytes. The stat-only freshness gate (providerSourceFreshBeforeFingerprint)
 // should prevent the fingerprint from being called for unchanged sources.
 func TestSyncAllCodebuffBoundedPerEventWork(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -100,7 +99,7 @@ func TestSyncAllCodebuffBoundedPerEventWork(t *testing.T) {
 	root := createCodebuffArchive(t, 6)
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -109,27 +108,26 @@ func TestSyncAllCodebuffBoundedPerEventWork(t *testing.T) {
 
 	// First sync: all sessions should be parsed.
 	synced := engine.SyncAll(t.Context(), nil).Synced
-	assert.Equal(6, synced, "first sync should parse all 6 sessions")
+	assert.Equal(t, 6, synced, "first sync should parse all 6 sessions")
 
 	// Second sync with no changes: all sessions should be skipped.
 	synced = engine.SyncAll(t.Context(), nil).Synced
-	assert.Equal(0, synced, "second sync with no changes should skip all sessions")
+	assert.Equal(t, 0, synced, "second sync with no changes should skip all sessions")
 
 	// Modify one session's chat-messages.json.
 	modifiedDir := filepath.Join(root, "project-0", "chats", "2026-07-15T10-00-00.000Z")
 	modifiedChatPath := filepath.Join(modifiedDir, "chat-messages.json")
-	require.NoError(os.WriteFile(modifiedChatPath, []byte(`[
+	require.NoError(t, os.WriteFile(modifiedChatPath, []byte(`[
 		{"id":"user-1","variant":"user","content":"Modified message","timestamp":"03:04 PM"}
 	]`), 0o644))
 
 	// Touch the file to ensure mtime changes.
-	time.Sleep(10 * time.Millisecond)
-	now := time.Now()
-	require.NoError(os.Chtimes(modifiedChatPath, now, now))
+	now := time.Now().Add(time.Minute)
+	require.NoError(t, os.Chtimes(modifiedChatPath, now, now))
 
 	// Third sync: only the modified session should be reparsed.
 	synced = engine.SyncAll(t.Context(), nil).Synced
-	assert.Equal(1, synced, "third sync should only reparse the modified session")
+	assert.Equal(t, 1, synced, "third sync should only reparse the modified session")
 }
 
 // codebuffFingerprintCountingProvider wraps the real Codebuff Provider so
@@ -281,7 +279,7 @@ func newCodebuffCountingEngine(
 	})
 	require.NotNil(t, inner)
 	provider := &codebuffFingerprintCountingProvider{inner: inner}
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -409,6 +407,7 @@ func codebuffMetaOnlySessionFiles(
 	t *testing.T, dir string, metaCount int, firstPrompt string,
 ) {
 	t.Helper()
+
 	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "chat-messages.json"),
 		[]byte("[]"),
@@ -450,8 +449,6 @@ func codebuffMetaOnlySessionFiles(
 // reconciliation pass, or the db.Session write — surfaces as
 // MessageCount == 0 here.
 func TestSyncCodebuffMetaOnlySessionKeepsCounts(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -460,11 +457,11 @@ func TestSyncCodebuffMetaOnlySessionKeepsCounts(t *testing.T) {
 	project := "codebuff-meta"
 	ts := "2026-07-16T00-09-00.236Z"
 	sessionDir := filepath.Join(root, project, "chats", ts)
-	require.NoError(os.MkdirAll(sessionDir, 0o755))
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
 	codebuffMetaOnlySessionFiles(t, sessionDir, 7, "Alpha prompt")
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -472,7 +469,7 @@ func TestSyncCodebuffMetaOnlySessionKeepsCounts(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(1,
+	require.Equal(t, 1,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"meta-only session with non-zero chat-meta.json must sync")
 
@@ -480,23 +477,23 @@ func TestSyncCodebuffMetaOnlySessionKeepsCounts(t *testing.T) {
 	sess, err := database.GetSession(
 		t.Context(), canonicalID,
 	)
-	require.NoError(err)
-	require.NotNil(sess,
+	require.NoError(t, err)
+	require.NotNil(t, sess,
 		"synced session must persist to the database")
-	require.Equal(7, sess.MessageCount,
+	require.Equal(t, 7, sess.MessageCount,
 		"meta-derived counts must survive sync; a 0 here means "+
 			"the engine recomputed from the empty parsed-message "+
 			"slice and overwrote chat-meta.json's count")
-	require.NotNil(sess.StartedAt,
+	require.NotNil(t, sess.StartedAt,
 		"meta-only session must have a StartedAt timestamp; nil means "+
 			"the parser left it unset and analytics would fall back to "+
 			"import-time created_at, incorrectly dating historical sessions")
-	require.NotEmpty(*sess.StartedAt,
+	require.NotEmpty(t, *sess.StartedAt,
 		"StartedAt must be non-empty for a meta-only session")
-	require.NotNil(sess.EndedAt,
+	require.NotNil(t, sess.EndedAt,
 		"meta-only session must have an EndedAt timestamp; nil means "+
 			"the parser left it unset")
-	require.NotEmpty(*sess.EndedAt,
+	require.NotEmpty(t, *sess.EndedAt,
 		"EndedAt must be non-empty for a meta-only session")
 }
 
@@ -510,15 +507,13 @@ func TestSyncCodebuffMetaOnlySessionKeepsCounts(t *testing.T) {
 //
 // chat-messages.json and run-state.json stay on disk untouched.
 func TestSyncCodebuffMetaOnlyDriftReparsesSession(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 
 	root := createCodebuffArchive(t, 6)
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -526,7 +521,7 @@ func TestSyncCodebuffMetaOnlyDriftReparsesSession(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(6,
+	require.Equal(t, 6,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"cold sync must parse every discovered session")
 
@@ -534,14 +529,13 @@ func TestSyncCodebuffMetaOnlyDriftReparsesSession(t *testing.T) {
 		root, "project-0", "chats", "2026-07-15T10-00-00.000Z",
 	)
 	metaPath := filepath.Join(targetDir, "chat-meta.json")
-	require.NoError(os.WriteFile(metaPath, []byte(`{
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{
 		"messageCount": 1,
 		"firstPrompt": "Meta-drift prompt",
 		"messagesSize": 4096
 	}`), 0o644))
-	time.Sleep(10 * time.Millisecond)
-	bump := time.Now()
-	require.NoError(os.Chtimes(metaPath, bump, bump))
+	bump := time.Now().Add(time.Minute)
+	require.NoError(t, os.Chtimes(metaPath, bump, bump))
 
 	assert.Equal(t, 1,
 		engine.SyncAll(t.Context(), nil).Synced,
@@ -564,15 +558,13 @@ func TestSyncCodebuffMetaOnlyDriftReparsesSession(t *testing.T) {
 //
 // chat-messages.json and chat-meta.json stay on disk untouched.
 func TestSyncCodebuffRunStateOnlyDriftReparsesSession(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 
 	root := createCodebuffArchive(t, 6)
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -580,7 +572,7 @@ func TestSyncCodebuffRunStateOnlyDriftReparsesSession(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(6,
+	require.Equal(t, 6,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"cold sync must parse every discovered session")
 
@@ -588,7 +580,7 @@ func TestSyncCodebuffRunStateOnlyDriftReparsesSession(t *testing.T) {
 		root, "project-0", "chats", "2026-07-15T10-00-00.000Z",
 	)
 	runStatePath := filepath.Join(targetDir, "run-state.json")
-	require.NoError(os.WriteFile(runStatePath, []byte(`{
+	require.NoError(t, os.WriteFile(runStatePath, []byte(`{
 		"sessionState": {
 			"mainAgentState": {
 				"agentType": "base2-deepseek",
@@ -597,9 +589,8 @@ func TestSyncCodebuffRunStateOnlyDriftReparsesSession(t *testing.T) {
 			"fileContext": {"cwd": "/initial/cwd"}
 		}
 	}`), 0o644))
-	time.Sleep(10 * time.Millisecond)
-	bump := time.Now()
-	require.NoError(os.Chtimes(runStatePath, bump, bump))
+	bump := time.Now().Add(time.Minute)
+	require.NoError(t, os.Chtimes(runStatePath, bump, bump))
 
 	assert.Equal(t, 1,
 		engine.SyncAll(t.Context(), nil).Synced,
@@ -631,15 +622,13 @@ func TestSyncCodebuffRunStateOnlyDriftReparsesSession(t *testing.T) {
 // the two files removes a subtle flake risk if the host filesystem
 // has a coarser-than-10ms mtime resolution.
 func TestSyncCodebuffMetaAndRunStateCompositeDriftReparsesSession(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 
 	root := createCodebuffArchive(t, 6)
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -647,7 +636,7 @@ func TestSyncCodebuffMetaAndRunStateCompositeDriftReparsesSession(t *testing.T) 
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(6,
+	require.Equal(t, 6,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"cold sync must parse every discovered session")
 
@@ -656,12 +645,12 @@ func TestSyncCodebuffMetaAndRunStateCompositeDriftReparsesSession(t *testing.T) 
 	)
 	metaPath := filepath.Join(targetDir, "chat-meta.json")
 	runStatePath := filepath.Join(targetDir, "run-state.json")
-	require.NoError(os.WriteFile(metaPath, []byte(`{
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{
 		"messageCount": 1,
 		"firstPrompt": "Composite-drift prompt",
 		"messagesSize": 8192
 	}`), 0o644))
-	require.NoError(os.WriteFile(runStatePath, []byte(`{
+	require.NoError(t, os.WriteFile(runStatePath, []byte(`{
 		"sessionState": {
 			"mainAgentState": {
 				"agentType": "base2-deepseek",
@@ -670,10 +659,9 @@ func TestSyncCodebuffMetaAndRunStateCompositeDriftReparsesSession(t *testing.T) 
 			"fileContext": {"cwd": "/initial/cwd"}
 		}
 	}`), 0o644))
-	time.Sleep(10 * time.Millisecond)
-	bump := time.Now()
-	require.NoError(os.Chtimes(metaPath, bump, bump))
-	require.NoError(os.Chtimes(runStatePath, bump, bump))
+	bump := time.Now().Add(time.Minute)
+	require.NoError(t, os.Chtimes(metaPath, bump, bump))
+	require.NoError(t, os.Chtimes(runStatePath, bump, bump))
 
 	assert.Equal(t, 1,
 		engine.SyncAll(t.Context(), nil).Synced,
@@ -700,16 +688,13 @@ func TestSyncCodebuffMetaAndRunStateCompositeDriftReparsesSession(t *testing.T) 
 // detect companion-file deletions that would otherwise be invisible to
 // the individual-file mtime composite.
 func TestSyncCodebuffCompanionFileDeletionReparsesSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 
 	root := createCodebuffArchive(t, 6)
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -717,12 +702,12 @@ func TestSyncCodebuffCompanionFileDeletionReparsesSession(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(6,
+	require.Equal(t, 6,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"cold sync must parse every discovered session")
 
 	// Warm sync: all sessions unchanged, so all should be skipped.
-	assert.Equal(0,
+	assert.Equal(t, 0,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"warm sync must skip all unchanged sessions")
 
@@ -734,16 +719,14 @@ func TestSyncCodebuffCompanionFileDeletionReparsesSession(t *testing.T) {
 		root, "project-0", "chats", "2026-07-15T10-00-00.000Z",
 	)
 	runStatePath := filepath.Join(targetDir, "run-state.json")
-	require.NoError(os.Remove(runStatePath),
+	require.NoError(t, os.Remove(runStatePath),
 		"deleting run-state.json must succeed")
-	time.Sleep(10 * time.Millisecond)
-
 	// Re-sync: exactly the session whose companion was deleted should
 	// be reparsed. A value of zero means the directory mtime signal
 	// was not picked up (the companion-file deletion was invisible to
 	// the freshness gate), and a value above one means the composite
 	// double-counted or other sessions were affected.
-	assert.Equal(1,
+	assert.Equal(t, 1,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"deleting run-state.json must trigger reparse of exactly "+
 			"one session via the directory mtime cutoff signal; a "+
@@ -759,15 +742,13 @@ func TestSyncCodebuffCompanionFileDeletionReparsesSession(t *testing.T) {
 // MultiFileStatHasher type assertion would not surface the inner
 // codebuffSourceSet through the wrapper.
 func TestSyncCodebuffProviderStatHashSideTable(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 
 	database := dbtest.OpenTestDB(t)
 	root, chatPath := createCodebuffSingleSession(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -775,35 +756,35 @@ func TestSyncCodebuffProviderStatHashSideTable(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(1,
+	require.Equal(t, 1,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"cold sync must parse the seeded codebuff session")
 	hashed, hasHash, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentCodebuff, chatPath,
 	)
-	require.NoError(err)
-	require.True(hasHash,
+	require.NoError(t, err)
+	require.True(t, hasHash,
 		"a successful cold sync must populate provider_freshness "+
 			"for the registered codebuff source; a missing row "+
 			"means the Engine's MultiFileStatHasher type "+
 			"assertion failed to surface the SourceSetProvider "+
 			"wrapping the codebuffSourceSet")
-	require.NotZero(hashed,
+	require.NotZero(t, hashed,
 		"the staged digest must be non-zero so a later warm pass "+
 			"can short-circuit on a matching snapshot")
 
 	// Warm sync with no changes leaves the side-table intact and
 	// skips the source.
-	require.Equal(0,
+	require.Equal(t, 0,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"warm sync over an unchanged codebuff source must skip "+
 			"the source via the per-component digest short-circuit")
 	hashedAgain, hasHashAgain, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentCodebuff, chatPath,
 	)
-	require.NoError(err)
-	require.True(hasHashAgain)
-	require.Equal(hashed, hashedAgain,
+	require.NoError(t, err)
+	require.True(t, hasHashAgain)
+	require.Equal(t, hashed, hashedAgain,
 		"the side-table digest must be stable across an unchanged "+
 			"warm sync; a divergence here means the digest "+
 			"pre-check is hashing inconsistent inputs across runs")
@@ -821,8 +802,6 @@ func TestSyncCodebuffProviderStatHashSideTable(t *testing.T) {
 // inputs (the rewritten logical key instead of the physical file, Issue 3)
 // sees the digest stay constant and the warm sync also continues to skip.
 func TestSyncCodebuffProviderStatHashSiblingDriftForcesReparse(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -830,7 +809,7 @@ func TestSyncCodebuffProviderStatHashSiblingDriftForcesReparse(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	root, chatPath := createCodebuffSingleSession(t)
 	runStatePath := filepath.Join(filepath.Dir(chatPath), "run-state.json")
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -838,7 +817,7 @@ func TestSyncCodebuffProviderStatHashSiblingDriftForcesReparse(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(1,
+	require.Equal(t, 1,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"cold sync must parse the seeded session")
 
@@ -858,24 +837,23 @@ func TestSyncCodebuffProviderStatHashSiblingDriftForcesReparse(t *testing.T) {
 	runStateBodyRewritten := strings.Replace(
 		runStateBody, `"unusedC":"0"`, `"unusedC":"9"`, 1,
 	)
-	require.Len(runStateBodyRewritten, len(runStateBody),
+	require.Len(t, runStateBodyRewritten, len(runStateBody),
 		"rewritten run-state body length must match exactly so "+
 			"the sum-of-sizes and max-mtime composite stay "+
 			"constant between the two syncs")
 	chatTime := time.Date(2026, time.July, 4, 12, 0, 0, 0, time.UTC)
-	require.NoError(os.Chtimes(chatPath, chatTime, chatTime))
+	require.NoError(t, os.Chtimes(chatPath, chatTime, chatTime))
 
 	// Sub-max mtime under the existing chat-messages.json max.
-	time.Sleep(10 * time.Millisecond)
 	subMaxTime := chatTime.Add(-1 * time.Minute)
-	require.NoError(os.WriteFile(runStatePath, []byte(runStateBodyRewritten), 0o644))
-	require.NoError(os.Chtimes(runStatePath, subMaxTime, subMaxTime))
+	require.NoError(t, os.WriteFile(runStatePath, []byte(runStateBodyRewritten), 0o644))
+	require.NoError(t, os.Chtimes(runStatePath, subMaxTime, subMaxTime))
 
 	// After the rewrite the warm sync must reparse the session.
 	// Without the per-component fix the engine's max-mtime
 	// composite would stay at chatTime and skip the source,
 	// leaving a stale row.
-	require.Equal(1,
+	require.Equal(t, 1,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"a same-size sibling rewrite with a sub-max mtime must "+
 			"force provider.Fingerprint on the next warm sync; "+
@@ -900,8 +878,6 @@ func TestSyncCodebuffProviderStatHashSiblingDriftForcesReparse(t *testing.T) {
 // to prove the digest is computed from the physical on-disk file
 // (not the logical path that would stat-empty).
 func TestSyncCodebuffProviderStatHashRemoteStoresUnderLogicalKey(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -910,7 +886,7 @@ func TestSyncCodebuffProviderStatHashRemoteStoresUnderLogicalKey(t *testing.T) {
 	root, _ := createCodebuffSingleSession(t)
 	const rewritePrefix = "hosts~/remote/"
 	logicalChat := rewritePrefix + "project-0/chats/2026-07-15T10-00-00.000Z/chat-messages.json"
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -933,7 +909,7 @@ func TestSyncCodebuffProviderStatHashRemoteStoresUnderLogicalKey(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(1,
+	require.Equal(t, 1,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"remote-import engine must sync with the path rewriter")
 
@@ -945,14 +921,14 @@ func TestSyncCodebuffProviderStatHashRemoteStoresUnderLogicalKey(t *testing.T) {
 	logicalHash, hasLogical, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentCodebuff, logicalChat,
 	)
-	require.NoError(err)
-	require.True(hasLogical,
+	require.NoError(t, err)
+	require.True(t, hasLogical,
 		"a successful remote-import sync must persist the "+
 			"per-component digest under the rewritten logical "+
 			"key; a missing row means Issue 3 is broken and the "+
 			"engine either hashed the wrong path or dropped the "+
 			"rewriter at the write site")
-	require.NotZero(logicalHash,
+	require.NotZero(t, logicalHash,
 		"logical-key digest must be non-zero; a zero means the "+
 			"engine hashed the logical path itself rather than the "+
 			"physical materialized file (which is not stat-able "+
@@ -965,20 +941,19 @@ func TestSyncCodebuffProviderStatHashRemoteStoresUnderLogicalKey(t *testing.T) {
 	// warm-pass digest would either stay constant (because every
 	// logical-path stat fails) or match a missing-file pattern that
 	// SHA-comparing the logical path never reaches.
-	require.Equal(0,
+	require.Equal(t, 0,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"warm sync over an unchanged materialized file must skip "+
 			"via the per-component digest short-circuit")
 	rewriteMaterializedChat := filepath.Join(root, "project-0", "chats",
 		"2026-07-15T10-00-00.000Z", "chat-messages.json")
-	require.NoError(os.WriteFile(rewriteMaterializedChat, []byte(
+	require.NoError(t, os.WriteFile(rewriteMaterializedChat, []byte(
 		`[{"id":"u1","variant":"user","content":"hi","timestamp":"03:04 PM"},
         {"id":"u2","variant":"user","content":"there","timestamp":"03:05 PM"}]`,
 	), 0o644))
-	time.Sleep(10 * time.Millisecond)
-	bump := time.Now()
-	require.NoError(os.Chtimes(rewriteMaterializedChat, bump, bump))
-	require.Equal(1,
+	bump := time.Now().Add(time.Minute)
+	require.NoError(t, os.Chtimes(rewriteMaterializedChat, bump, bump))
+	require.Equal(t, 1,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"mutating the materialized chat-messages.json must "+
 			"trigger a reparse via the per-component digest; a "+
@@ -987,9 +962,9 @@ func TestSyncCodebuffProviderStatHashRemoteStoresUnderLogicalKey(t *testing.T) {
 	logicalHashAfter, hasLogicalAfter, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentCodebuff, logicalChat,
 	)
-	require.NoError(err)
-	require.True(hasLogicalAfter)
-	require.NotEqual(logicalHash, logicalHashAfter,
+	require.NoError(t, err)
+	require.True(t, hasLogicalAfter)
+	require.NotEqual(t, logicalHash, logicalHashAfter,
 		"post-mutation digest must differ from the pre-mutation "+
 			"digest; equality means the engine is hashing something "+
 			"other than the materialized file (the original Issue 3 "+
@@ -1022,15 +997,13 @@ func TestSyncCodebuffProviderStatHashRemoteStoresUnderLogicalKey(t *testing.T) {
 //     per-row gate suppressed digest persist despite a non-nil
 //     staged hash.
 func TestSyncCodebuffCwdFilteredSourceDoesNotPersistStatHash(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 
 	database := dbtest.OpenTestDB(t)
 	root, chatPath := createCodebuffSingleSession(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -1042,12 +1015,12 @@ func TestSyncCodebuffCwdFilteredSourceDoesNotPersistStatHash(t *testing.T) {
 	t.Cleanup(engine.Close)
 
 	engine.ResetStagedProviderStatHashes()
-	require.Equal(0,
+	require.Equal(t, 0,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"CWD-prefix mismatch must CWD-filter every discovered "+
 			"source; a non-zero synced count means the test "+
 			"prefix accidentally matches the seeded archive")
-	require.Equal(int64(1), engine.StagedProviderStatHashes(),
+	require.Equal(t, int64(1), engine.StagedProviderStatHashes(),
 		"the per-component digest staging block must have "+
 			"run once for the discovered source even though "+
 			"the CWD filter rejects its session write; "+
@@ -1057,8 +1030,8 @@ func TestSyncCodebuffCwdFilteredSourceDoesNotPersistStatHash(t *testing.T) {
 	_, hasStored, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentCodebuff, chatPath,
 	)
-	require.NoError(err)
-	require.False(hasStored,
+	require.NoError(t, err)
+	require.False(t, hasStored,
 		"provider_freshness must NOT be populated when the "+
 			"source row was CWD-filtered despite a non-nil "+
 			"staged digest; a non-nil row here means the "+
@@ -1083,15 +1056,13 @@ func TestSyncCodebuffCwdFilteredSourceDoesNotPersistStatHash(t *testing.T) {
 // would never reach the tombstone, only mark the source via the
 // in-memory skip cache.
 func TestSyncCodebuffMissingSourceClearsProviderStatHash(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 
 	database := dbtest.OpenTestDB(t)
 	root, chatPath := createCodebuffSingleSession(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -1099,14 +1070,14 @@ func TestSyncCodebuffMissingSourceClearsProviderStatHash(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(1,
+	require.Equal(t, 1,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"cold sync must parse the seeded Codebuff session")
 	_, hasBefore, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentCodebuff, chatPath,
 	)
-	require.NoError(err)
-	require.True(hasBefore,
+	require.NoError(t, err)
+	require.True(t, hasBefore,
 		"a successful cold sync must populate provider_freshness "+
 			"as the precondition for the tombstone clear")
 
@@ -1114,7 +1085,7 @@ func TestSyncCodebuffMissingSourceClearsProviderStatHash(t *testing.T) {
 	// sees a fully missing source. Reconcile iterates archived
 	// ownership, calls lstat on each, and tombstones any source that
 	// is gone without container fallback.
-	require.NoError(os.RemoveAll(filepath.Dir(chatPath)),
+	require.NoError(t, os.RemoveAll(filepath.Dir(chatPath)),
 		"deleting the session directory must succeed; partial "+
 			"deletions leave companion files for the engine to "+
 			"still consider the source present")
@@ -1122,7 +1093,7 @@ func TestSyncCodebuffMissingSourceClearsProviderStatHash(t *testing.T) {
 	_, _, err = engine.ReconcileWatchRootsWithStats(
 		t.Context(), []string{root}, true, nil,
 	)
-	require.NoError(err,
+	require.NoError(t, err,
 		"reconcile must complete; an error here would mask whether "+
 			"the tombstone path was actually reached")
 
@@ -1131,18 +1102,18 @@ func TestSyncCodebuffMissingSourceClearsProviderStatHash(t *testing.T) {
 	// and provider_freshness key are Codebuff.
 	const sessionID = "freebuff:project-0:2026-07-15T10-00-00.000Z"
 	full, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(err)
+	require.NoError(t, err)
 	assertSourceMissingState(t, full)
 	sess, err := database.GetSession(t.Context(), sessionID)
-	require.NoError(err)
-	require.NotNil(sess, "a missing source must not hide the archived session")
+	require.NoError(t, err)
+	require.NotNil(t, sess, "a missing source must not hide the archived session")
 	assertSessionMessageCount(t, database, sessionID, 1)
 
 	_, hasAfter, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentCodebuff, chatPath,
 	)
-	require.NoError(err)
-	require.False(hasAfter,
+	require.NoError(t, err)
+	require.False(t, hasAfter,
 		"tombstoning must clear provider_freshness; a non-nil row "+
 			"after this means Issue 3 regressed and a future "+
 			"byte-identical restore would falsely mark the source as "+
@@ -1161,15 +1132,13 @@ func TestSyncCodebuffMissingSourceClearsProviderStatHash(t *testing.T) {
 // the staging block stamps the digest, so the warm sync must
 // repopulate the row.
 func TestSyncCodebuffColdStartForcesFingerprintUntilStamped(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 
 	database := dbtest.OpenTestDB(t)
 	root, chatPath := createCodebuffSingleSession(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -1177,14 +1146,14 @@ func TestSyncCodebuffColdStartForcesFingerprintUntilStamped(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(1,
+	require.Equal(t, 1,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"cold sync must parse the seeded session")
 	_, hasBefore, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentCodebuff, chatPath,
 	)
-	require.NoError(err)
-	require.True(hasBefore,
+	require.NoError(t, err)
+	require.True(t, hasBefore,
 		"first sync must populate provider_freshness as the "+
 			"precondition to clearing it post-cold-warm")
 
@@ -1197,14 +1166,14 @@ func TestSyncCodebuffColdStartForcesFingerprintUntilStamped(t *testing.T) {
 	// No digest may be persisted before fingerprinting, parsing, or
 	// writing succeeds, so the re-stamp must ride on that confirmed
 	// skip rather than a pre-parse cold-stamp.
-	require.NoError(database.DeleteProviderStatHash(
+	require.NoError(t, database.DeleteProviderStatHash(
 		t.Context(), parser.AgentCodebuff, chatPath,
 	))
 	_, hasCleared, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentCodebuff, chatPath,
 	)
-	require.NoError(err)
-	require.False(hasCleared,
+	require.NoError(t, err)
+	require.False(t, hasCleared,
 		"DeleteProviderStatHash must take effect so the cold-warm "+
 			"path is exercised next")
 
@@ -1213,8 +1182,8 @@ func TestSyncCodebuffColdStartForcesFingerprintUntilStamped(t *testing.T) {
 	_, hasAfter, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentCodebuff, chatPath,
 	)
-	require.NoError(err)
-	require.True(hasAfter,
+	require.NoError(t, err)
+	require.True(t, hasAfter,
 		"a warm SyncAll with provider_freshness cleared must "+
 			"re-stamp the digest; a missing row here means the "+
 			"per-component gate fell through to the legacy "+
@@ -1230,16 +1199,13 @@ func TestSyncCodebuffColdStartForcesFingerprintUntilStamped(t *testing.T) {
 // match and short-circuit the source, leaving classification, costs, or
 // metadata stale despite FingerprintHashRequiredForFreshness.
 func TestSyncCodebuffSameSizeSameMtimeRewriteIsDetected(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 
 	database := dbtest.OpenTestDB(t)
 	root, chatPath := createCodebuffSingleSession(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -1247,7 +1213,7 @@ func TestSyncCodebuffSameSizeSameMtimeRewriteIsDetected(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(1,
+	require.Equal(t, 1,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"cold sync must parse the seeded Codebuff session")
 
@@ -1258,16 +1224,16 @@ func TestSyncCodebuffSameSizeSameMtimeRewriteIsDetected(t *testing.T) {
 	dir := filepath.Dir(chatPath)
 	runStatePath := filepath.Join(dir, "run-state.json")
 	original, err := os.ReadFile(runStatePath)
-	require.NoError(err)
+	require.NoError(t, err)
 	info, err := os.Stat(runStatePath)
-	require.NoError(err)
+	require.NoError(t, err)
 	originalMtime := info.ModTime()
 
 	hasher := engine.ProviderStatHasher(parser.AgentCodebuff)
-	require.NotNil(hasher,
+	require.NotNil(t, hasher,
 		"Codebuff must register a MultiFileStatHasher")
 	digestBefore := hasher.ComputeMultiFileStatHash(chatPath)
-	require.NotZero(digestBefore)
+	require.NotZero(t, digestBefore)
 
 	replacement := bytes.Replace(
 		original,
@@ -1275,19 +1241,25 @@ func TestSyncCodebuffSameSizeSameMtimeRewriteIsDetected(t *testing.T) {
 		[]byte("base3-free-deepseek"),
 		1,
 	)
-	require.Len(replacement, len(original),
+	require.Len(t, replacement, len(original),
 		"the rewrite must preserve byte length so only ctime "+
 			"distinguishes the new content")
-	require.NotEqual(original, replacement,
+	require.NotEqual(t, original, replacement,
 		"the rewrite must change content so the fingerprint hash "+
 			"can detect it")
 
-	time.Sleep(10 * time.Millisecond) // distinct ctime tick across platforms
-	require.NoError(os.WriteFile(runStatePath, replacement, 0o644))
-	require.NoError(os.Chtimes(runStatePath, originalMtime, originalMtime))
-
-	digestAfter := hasher.ComputeMultiFileStatHash(chatPath)
-	assert.NotEqual(digestBefore, digestAfter,
+	digestAfter := digestBefore
+	for attempts := 0; digestAfter == digestBefore && attempts < 10_000; attempts++ {
+		require.NoError(t, os.WriteFile(runStatePath, replacement, 0o644))
+		require.NoError(t, os.Chtimes(runStatePath, originalMtime, originalMtime))
+		digestAfter = hasher.ComputeMultiFileStatHash(chatPath)
+		if digestAfter == digestBefore {
+			runtime.Gosched()
+		}
+	}
+	require.NotEqual(t, digestBefore, digestAfter,
+		"fixture rewrite must advance the native change-time signal")
+	assert.NotEqual(t, digestBefore, digestAfter,
 		"the ctime term must fold into the digest so a same-size, "+
 			"mtime-preserved rewrite is not invisible to the freshness gate")
 
@@ -1301,14 +1273,14 @@ func TestSyncCodebuffSameSizeSameMtimeRewriteIsDetected(t *testing.T) {
 	// matrix); on other platforms the digest cannot move and this test would
 	// not be representative.
 	second := engine.SyncAll(t.Context(), nil)
-	require.Equal(1, second.Synced,
+	require.Equal(t, 1, second.Synced,
 		"a same-size, mtime-preserved companion rewrite must be "+
 			"detected and re-synced; a skip means the freshness gate "+
 			"never re-verified the content")
 
 	// The re-stamped digest must now short-circuit the unchanged source.
 	third := engine.SyncAll(t.Context(), nil)
-	assert.Zero(third.Synced,
+	assert.Zero(t, third.Synced,
 		"after the rewrite is synced the digest must match again and "+
 			"the source must short-circuit")
 }
@@ -1323,15 +1295,13 @@ func TestSyncCodebuffSameSizeSameMtimeRewriteIsDetected(t *testing.T) {
 // parameter so the source reaches the per-component digest gate, which
 // then forces a full fingerprint and detects the content drift.
 func TestSyncCodebuffIncrementalCutoffDetectsCtimeDrift(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 
 	database := dbtest.OpenTestDB(t)
 	root, chatPath := createCodebuffSingleSession(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -1339,12 +1309,12 @@ func TestSyncCodebuffIncrementalCutoffDetectsCtimeDrift(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(1,
+	require.Equal(t, 1,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"cold sync must parse the seeded Codebuff session")
 
 	// Confirm the warm pass skips the unchanged source.
-	require.Equal(0,
+	require.Equal(t, 0,
 		engine.SyncAll(t.Context(), nil).Synced,
 		"warm SyncAll must skip the unchanged source")
 
@@ -1355,9 +1325,9 @@ func TestSyncCodebuffIncrementalCutoffDetectsCtimeDrift(t *testing.T) {
 	dir := filepath.Dir(chatPath)
 	runStatePath := filepath.Join(dir, "run-state.json")
 	original, err := os.ReadFile(runStatePath)
-	require.NoError(err)
+	require.NoError(t, err)
 	info, err := os.Stat(runStatePath)
-	require.NoError(err)
+	require.NoError(t, err)
 	originalMtime := info.ModTime()
 
 	replacement := bytes.Replace(
@@ -1366,21 +1336,32 @@ func TestSyncCodebuffIncrementalCutoffDetectsCtimeDrift(t *testing.T) {
 		[]byte("base3-free-deepseek"),
 		1,
 	)
-	require.Len(replacement, len(original),
+	require.Len(t, replacement, len(original),
 		"rewrite must preserve byte length so mtime is the only "+
 			"pre-ctime signal")
 
-	time.Sleep(10 * time.Millisecond)
 	// Use a cutoff anchored between the cold-sync mtimes and the
 	// rewrite ctime: the ctime-inclusive cutoff must see the source
 	// as fresh even though mtime alone would not.
 	cutoff := time.Now()
-	time.Sleep(10 * time.Millisecond)
-	require.NoError(os.WriteFile(runStatePath, replacement, 0o644))
-	require.NoError(os.Chtimes(runStatePath, originalMtime, originalMtime))
+	var rewrittenSourceMtime int64
+	sourceID := "codebuff:" +
+		filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(runStatePath)))) +
+		":" + filepath.Base(filepath.Dir(runStatePath))
+	for range 10_000 {
+		require.NoError(t, os.WriteFile(runStatePath, replacement, 0o644))
+		require.NoError(t, os.Chtimes(runStatePath, originalMtime, originalMtime))
+		rewrittenSourceMtime = engine.SourceMtime(t.Context(), sourceID)
+		if rewrittenSourceMtime > cutoff.UnixNano() {
+			break
+		}
+		runtime.Gosched()
+	}
+	require.Greater(t, rewrittenSourceMtime, cutoff.UnixNano(),
+		"fixture rewrite must advance past the incremental cutoff")
 
 	stats := engine.SyncAllSince(t.Context(), cutoff, nil)
-	require.Equal(1, stats.Synced,
+	require.Equal(t, 1, stats.Synced,
 		"SyncAllSince must pick up a same-size, mtime-preserved "+
 			"companion rewrite via the ctime-inclusive cutoff; "+
 			"a zero here means the cutoff saw only max(mtime) and "+
@@ -1409,7 +1390,7 @@ func TestSyncCodebuffSingleSessionWritesProviderStatHash(t *testing.T) {
 
 	database := dbtest.OpenTestDB(t)
 	root, chatPath := createCodebuffSingleSession(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -1417,10 +1398,9 @@ func TestSyncCodebuffSingleSessionWritesProviderStatHash(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.NoError(t,
-		engine.SyncSingleSession(
-			"codebuff:project-0:2026-07-15T10-00-00.000Z",
-		),
+	require.NoError(t, engine.SyncSingleSession(
+		"codebuff:project-0:2026-07-15T10-00-00.000Z",
+	),
 		"a single-session sync on a live source must commit "+
 			"without errors; ErrOrNil semantics here ensure the "+
 			"test only exercises the digest-persist gate")
@@ -1460,7 +1440,7 @@ func TestSyncEngineProviderStatHashersRegistrationIsCapabilityGated(t *testing.T
 	}
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		// No AgentDirs: the engine is registered with the default
 		// factory map but discovers nothing; that is sufficient to
 		// populate providerStatHashers at construction time.
@@ -1509,12 +1489,9 @@ func TestSyncEngineProviderStatHashersRegistrationIsCapabilityGated(t *testing.T
 // (b); a sum-of-sizes reduction would miss (a). The watcher polls
 // SourceMtime continuously, so the lookup must stay stat-only.
 func TestSourceMtimeCodebuffUsesPerFileHash(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -1529,7 +1506,7 @@ func TestSourceMtimeCodebuffUsesPerFileHash(t *testing.T) {
 	ts := "2026-07-15T10-00-00.000Z"
 	rawID := project + ":" + ts
 	dir := filepath.Join(root, project, "chats", ts)
-	require.NoError(os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 
 	chatPath := filepath.Join(dir, "chat-messages.json")
 	runStatePath := filepath.Join(dir, "run-state.json")
@@ -1542,9 +1519,9 @@ func TestSourceMtimeCodebuffUsesPerFileHash(t *testing.T) {
 	const chatBody = `[{"id":"u1","variant":"user","content":"hello","timestamp":"03:04 PM"}]`
 	const runStateBody = `{"sessionState":{"mainAgentState":{"agentType":"base2-free-deepseek"}}}`
 	const chatMetaBody = `{"messageCount":1,"firstPrompt":"hello","messagesSize":50}`
-	require.NoError(os.WriteFile(chatPath, []byte(chatBody), 0o644))
-	require.NoError(os.WriteFile(runStatePath, []byte(runStateBody), 0o644))
-	require.NoError(os.WriteFile(chatMetaPath, []byte(chatMetaBody), 0o644))
+	require.NoError(t, os.WriteFile(chatPath, []byte(chatBody), 0o644))
+	require.NoError(t, os.WriteFile(runStatePath, []byte(runStateBody), 0o644))
+	require.NoError(t, os.WriteFile(chatMetaPath, []byte(chatMetaBody), 0o644))
 
 	// Stagger mtimes so chat-messages.json holds the max; the other
 	// two files are below it. Rewriting run-state.json with a new
@@ -1553,23 +1530,30 @@ func TestSourceMtimeCodebuffUsesPerFileHash(t *testing.T) {
 	chatTime := time.Date(2026, time.July, 4, 12, 0, 0, 0, time.UTC)
 	runStateTime := chatTime.Add(-5 * time.Minute)
 	chatMetaTime := chatTime.Add(-10 * time.Minute)
-	require.NoError(os.Chtimes(chatPath, chatTime, chatTime))
-	require.NoError(os.Chtimes(runStatePath, runStateTime, runStateTime))
-	require.NoError(os.Chtimes(chatMetaPath, chatMetaTime, chatMetaTime))
+	require.NoError(t, os.Chtimes(chatPath, chatTime, chatTime))
+	require.NoError(t, os.Chtimes(runStatePath, runStateTime, runStateTime))
+	require.NoError(t, os.Chtimes(chatMetaPath, chatMetaTime, chatMetaTime))
 
 	baseline := engine.SourceMtime(t.Context(), "codebuff:"+rawID)
-	require.NotZero(baseline,
+	require.NotZero(t, baseline,
 		"baseline SourceMtime must be non-zero for a live Codebuff session")
 
 	// (a) Same-size companion-file rewrite with a *new* mtime that
 	// stays below the existing max. The old max-mtime reduction
 	// would return the same value; the per-file hash must change.
-	time.Sleep(10 * time.Millisecond)
-	require.NoError(os.WriteFile(runStatePath, []byte(runStateBody), 0o644))
 	subMaxTime := chatTime.Add(-1 * time.Minute) // still below chatTime
-	require.NoError(os.Chtimes(runStatePath, subMaxTime, subMaxTime))
-	afterSubMaxRewrite := engine.SourceMtime(t.Context(), "codebuff:"+rawID)
-	assert.NotEqual(baseline, afterSubMaxRewrite,
+	afterSubMaxRewrite := baseline
+	for attempts := 0; afterSubMaxRewrite == baseline && attempts < 10_000; attempts++ {
+		require.NoError(t, os.WriteFile(runStatePath, []byte(runStateBody), 0o644))
+		require.NoError(t, os.Chtimes(runStatePath, subMaxTime, subMaxTime))
+		afterSubMaxRewrite = engine.SourceMtime(t.Context(), "codebuff:"+rawID)
+		if afterSubMaxRewrite == baseline {
+			runtime.Gosched()
+		}
+	}
+	require.NotEqual(t, baseline, afterSubMaxRewrite,
+		"fixture rewrite must advance the native change-time signal")
+	assert.NotEqual(t, baseline, afterSubMaxRewrite,
 		"a same-size run-state.json rewrite with a sub-max mtime "+
 			"must change SourceMtime; equal values pin the regression "+
 			"where SourceMtime reduced to max mtime across the three files")
@@ -1579,13 +1563,12 @@ func TestSourceMtimeCodebuffUsesPerFileHash(t *testing.T) {
 	// delta is zero, but per-file stats must still trigger a hash
 	// change. The old code never inspected sizes, so a per-file
 	// size shift would have been invisible.
-	time.Sleep(10 * time.Millisecond)
-	require.NoError(os.WriteFile(chatPath, []byte(chatBody+"          "), 0o644))
-	require.NoError(os.WriteFile(chatMetaPath, []byte(chatMetaBody[:len(chatMetaBody)-10]), 0o644))
-	require.NoError(os.Chtimes(chatPath, chatTime, chatTime))
-	require.NoError(os.Chtimes(chatMetaPath, chatMetaTime, chatMetaTime))
+	require.NoError(t, os.WriteFile(chatPath, []byte(chatBody+"          "), 0o644))
+	require.NoError(t, os.WriteFile(chatMetaPath, []byte(chatMetaBody[:len(chatMetaBody)-10]), 0o644))
+	require.NoError(t, os.Chtimes(chatPath, chatTime, chatTime))
+	require.NoError(t, os.Chtimes(chatMetaPath, chatMetaTime, chatMetaTime))
 	afterOffsettingSize := engine.SourceMtime(t.Context(), "codebuff:"+rawID)
-	assert.NotEqual(afterSubMaxRewrite, afterOffsettingSize,
+	assert.NotEqual(t, afterSubMaxRewrite, afterOffsettingSize,
 		"offsetting per-file size changes that keep the sum unchanged "+
 			"must still change SourceMtime; equal values pin the "+
 			"regression where freshness ignored per-file size")
@@ -1595,18 +1578,17 @@ func TestSourceMtimeCodebuffUsesPerFileHash(t *testing.T) {
 	// content, and capture again. The new appearance must change
 	// the hash because the missing-file block is a fixed zero
 	// sequence distinct from any real (size, mtime) pair.
-	require.NoError(os.Remove(chatMetaPath))
+	require.NoError(t, os.Remove(chatMetaPath))
 	afterMissingMeta := engine.SourceMtime(t.Context(), "codebuff:"+rawID)
-	assert.NotEqual(afterOffsettingSize, afterMissingMeta,
+	assert.NotEqual(t, afterOffsettingSize, afterMissingMeta,
 		"a deleted chat-meta.json must change SourceMtime; equal "+
 			"values mean the missing-companion branch is hashed the "+
 			"same as a present one")
-	time.Sleep(10 * time.Millisecond)
-	require.NoError(os.WriteFile(chatMetaPath, []byte(chatMetaBody), 0o644))
+	require.NoError(t, os.WriteFile(chatMetaPath, []byte(chatMetaBody), 0o644))
 	recreatedTime := chatTime.Add(2 * time.Minute)
-	require.NoError(os.Chtimes(chatMetaPath, recreatedTime, recreatedTime))
+	require.NoError(t, os.Chtimes(chatMetaPath, recreatedTime, recreatedTime))
 	afterRecreatedMeta := engine.SourceMtime(t.Context(), "codebuff:"+rawID)
-	assert.NotEqual(afterMissingMeta, afterRecreatedMeta,
+	assert.NotEqual(t, afterMissingMeta, afterRecreatedMeta,
 		"a recreated chat-meta.json with a new mtime must change "+
 			"SourceMtime back to a value distinct from the missing-file state")
 }

@@ -44,9 +44,6 @@ func TestOpenCursorAttributionDB_DoesNotCreateMissingDB(t *testing.T) {
 }
 
 func TestLoadCursorAttribution_Happy(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	path := seedCursorAttributionDBTest(t)
 	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
 
@@ -54,22 +51,22 @@ func TestLoadCursorAttribution_Happy(t *testing.T) {
 	to := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
 
 	got, status, err := LoadCursorAttribution(t.Context(), from, to)
-	require.NoError(err)
-	require.NotNil(got)
-	assert.Equal(CursorAttributionAvailable, status)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, CursorAttributionAvailable, status)
 
-	assert.Equal(int64(2), got.ScoredCommits)
-	assert.Equal(int64(18), got.LinesAdded)
-	assert.Equal(int64(6), got.LinesDeleted)
-	assert.Equal(int64(6), got.TabLinesAdded)
-	assert.Equal(int64(4), got.ComposerLinesAdded)
-	assert.Equal(int64(5), got.HumanLinesAdded)
-	assert.Equal(int64(3), got.BlankLinesAdded)
-	assert.InDelta(10.0/18.0, got.AIAuthoredPct, 1e-9)
-	require.Len(got.ConversationCounts, 2)
-	assert.Equal("model-a", got.ConversationCounts[0].Model)
-	assert.Equal("composer", got.ConversationCounts[0].Mode)
-	assert.Equal(int64(3), got.ConversationCounts[0].Count)
+	assert.Equal(t, int64(2), got.ScoredCommits)
+	assert.Equal(t, int64(18), got.LinesAdded)
+	assert.Equal(t, int64(6), got.LinesDeleted)
+	assert.Equal(t, int64(6), got.TabLinesAdded)
+	assert.Equal(t, int64(4), got.ComposerLinesAdded)
+	assert.Equal(t, int64(5), got.HumanLinesAdded)
+	assert.Equal(t, int64(3), got.BlankLinesAdded)
+	assert.InDelta(t, 10.0/18.0, got.AIAuthoredPct, 1e-9)
+	require.Len(t, got.ConversationCounts, 2)
+	assert.Equal(t, "model-a", got.ConversationCounts[0].Model)
+	assert.Equal(t, "composer", got.ConversationCounts[0].Mode)
+	assert.Equal(t, int64(3), got.ConversationCounts[0].Count)
 }
 
 func TestLoadCursorAttribution_MissingDB(t *testing.T) {
@@ -99,14 +96,11 @@ func TestLoadCursorAttribution_EmptyDB(t *testing.T) {
 }
 
 func TestLoadCursorAttribution_NormalizesEmptyConversationKeys(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	path := seedCursorAttributionDBTest(t)
 	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
 
 	conn, err := sql.Open("sqlite3", path)
-	require.NoError(err)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
 	ts := time.Date(2026, 6, 1, 14, 0, 0, 0, time.UTC).UnixMilli()
@@ -115,28 +109,29 @@ func TestLoadCursorAttribution_NormalizesEmptyConversationKeys(t *testing.T) {
 			(NULL, NULL, ?),
 			('', '', ?)
 	`, ts, ts)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	got, status, err := LoadCursorAttribution(t.Context(),
 		time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC),
 	)
-	require.NoError(err)
-	require.NotNil(got)
-	assert.Equal(CursorAttributionAvailable, status)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, CursorAttributionAvailable, status)
 
 	emptyRows := 0
 	for _, entry := range got.ConversationCounts {
 		if entry.Model == "" && entry.Mode == "" {
 			emptyRows++
-			assert.Equal(int64(2), entry.Count)
+			assert.Equal(t, int64(2), entry.Count)
 		}
 	}
-	assert.Equal(1, emptyRows)
+	assert.Equal(t, 1, emptyRows)
 }
 
 func seedCursorAttributionDBTest(t *testing.T) string {
 	t.Helper()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ai-code-tracking.db")
 	conn, err := sql.Open("sqlite3", path)
@@ -213,6 +208,7 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 
 func seedEmptyCursorAttributionDBTest(t *testing.T) string {
 	t.Helper()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ai-code-tracking.db")
 	conn, err := sql.Open("sqlite3", path)

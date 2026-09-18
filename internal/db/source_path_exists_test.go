@@ -34,7 +34,7 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 			s.FilePath = &path
 		})
 	}
-	require.NoError(t, database.SoftDeleteSession("deleted"))
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "deleted"))
 	baselineSessionSource(t, database, defaultMachine, "codex", sourceMissingPath)
 	changed, err := database.MarkSessionSourceMissing(
 		t.Context(), defaultMachine, "codex", "source-missing", sourceMissingPath,
@@ -55,7 +55,7 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := database.HasActiveSessionSourceBelow(tc.agent, tc.path)
+			got, err := database.HasActiveSessionSourceBelow(t.Context(), tc.agent, tc.path)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
 		})
@@ -70,48 +70,45 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 		{name: "negative prefix", path: filepath.Join(base, "absent")},
 	} {
 		t.Run(tc.name+" query shape", func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			lower, upper := activeSessionSourceBounds(tc.path)
-			rows, err := database.getReader().Query(
+			rows, err := database.getReader().Query(t.Context(),
 				hasActiveSessionSourceBelowQuery,
 				"codex", lower, upper,
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 			var gotRows []int
 			for rows.Next() {
 				var one int
-				require.NoError(rows.Scan(&one))
+				require.NoError(t, rows.Scan(&one))
 				gotRows = append(gotRows, one)
 			}
-			require.NoError(rows.Err())
-			require.NoError(rows.Close())
-			assert.Equal(tc.wantRows, gotRows,
+			require.NoError(t, rows.Err())
+			defer rows.Close()
+			assert.Equal(t, tc.wantRows, gotRows,
 				"the prefix probe must return at most its one sentinel row")
 
-			planRows, err := database.getReader().Query(
+			planRows, err := database.getReader().Query(t.Context(),
 				"EXPLAIN QUERY PLAN "+hasActiveSessionSourceBelowQuery,
 				"codex", lower, upper,
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 			var plan []string
 			for planRows.Next() {
 				var id, parent, unused int
 				var detail string
-				require.NoError(planRows.Scan(&id, &parent, &unused, &detail))
+				require.NoError(t, planRows.Scan(&id, &parent, &unused, &detail))
 				plan = append(plan, detail)
 			}
-			require.NoError(planRows.Err())
-			require.NoError(planRows.Close())
-			assert.Condition(func() bool {
+			require.NoError(t, planRows.Err())
+			defer planRows.Close()
+			assert.Condition(t, func() bool {
 				return strings.Contains(strings.Join(plan, "\n"),
 					"idx_sessions_agent_file_path_active (agent=? AND file_path>? AND file_path<?)")
 			}, "expected indexed agent/path range seek, plans: %v", plan)
 			if tc.wantRows != nil {
 				positivePlan = append([]string(nil), plan...)
 			} else {
-				assert.Equal(positivePlan, plan,
+				assert.Equal(t, positivePlan, plan,
 					"positive and negative probes must use the same index seek")
 			}
 		})

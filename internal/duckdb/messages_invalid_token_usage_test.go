@@ -23,9 +23,6 @@ import (
 // The mirror is corrupted directly rather than through a push so the read
 // path is exercised on its own, independent of what any parser emits.
 func TestDuckGetMessagesDropsInvalidStoredTokenUsage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	store := newDuckWindowStore(t, func(local *db.DB) {
 		seedDuckWindowMessages(t, local, "sInvalidUsage")
@@ -36,29 +33,27 @@ func TestDuckGetMessagesDropsInvalidStoredTokenUsage(t *testing.T) {
 		 WHERE session_id = ? AND ordinal = ?`,
 		`{"input_tokens":4,"cache_read_input_tokens":123`, "sInvalidUsage", 0,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	msgs, err := store.GetMessages(ctx, "sInvalidUsage", 0, 10, true)
-	require.NoError(err)
-	require.NotEmpty(msgs)
-	assert.Empty(string(msgs[0].TokenUsage),
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	assert.Empty(t, string(msgs[0].TokenUsage),
 		"invalid token_usage must not reach the caller")
 
 	// The real regression: the row must be marshalable.
 	_, err = json.Marshal(struct {
 		Messages []db.Message `json:"messages"`
 	}{Messages: msgs})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// Everything else on the row survives.
-	assert.Equal(0, msgs[0].Ordinal)
-	assert.NotEmpty(msgs[0].Content)
+	assert.Equal(t, 0, msgs[0].Ordinal)
+	assert.NotEmpty(t, msgs[0].Content)
 }
 
 // Valid usage must still round-trip through the mirror untouched.
 func TestDuckGetMessagesPreservesValidStoredTokenUsage(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	store := newDuckWindowStore(t, func(local *db.DB) {
 		seedDuckWindowMessages(t, local, "sValidUsage")
@@ -69,11 +64,11 @@ func TestDuckGetMessagesPreservesValidStoredTokenUsage(t *testing.T) {
 		 WHERE session_id = ? AND ordinal = ?`,
 		`{"input_tokens":7}`, "sValidUsage", 0,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	msgs, err := store.GetMessages(ctx, "sValidUsage", 0, 10, true)
-	require.NoError(err)
-	require.NotEmpty(msgs)
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
 	assert.JSONEq(t, `{"input_tokens":7}`, string(msgs[0].TokenUsage))
 }
 
@@ -95,23 +90,21 @@ func TestDuckGetMessagesPreservesValidStoredTokenUsage(t *testing.T) {
 // slice, v2's does not. Asserting on a pristine mirror is the point -- a
 // test that plants corruption cannot catch this.
 func TestDuckCleanMirrorMessagesMarshal(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	store := newDuckWindowStore(t, func(local *db.DB) {
 		seedDuckWindowMessages(t, local, "sCleanMirror")
 	})
 
 	var invalid int
-	require.NoError(store.DB().QueryRowContext(ctx,
+	require.NoError(t, store.DB().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM messages
 		 WHERE token_usage <> '' AND NOT json_valid(token_usage)`,
 	).Scan(&invalid))
-	require.Zero(invalid, "precondition: the mirror must be uncorrupted")
+	require.Zero(t, invalid, "precondition: the mirror must be uncorrupted")
 
 	msgs, err := store.GetMessages(ctx, "sCleanMirror", 0, 100, true)
-	require.NoError(err)
-	require.NotEmpty(msgs)
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
 
 	// An absent usage value must be nil, never a zero-length value.
 	for _, m := range msgs {
@@ -126,6 +119,6 @@ func TestDuckCleanMirrorMessagesMarshal(t *testing.T) {
 	_, err = json.Marshal(struct {
 		Messages []db.Message `json:"messages"`
 	}{Messages: msgs})
-	require.NoError(err,
+	require.NoError(t, err,
 		"a clean mirror must marshal; this is what duckdb serve does per request")
 }

@@ -1,8 +1,7 @@
 package parser
 
-import "context"
-
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"

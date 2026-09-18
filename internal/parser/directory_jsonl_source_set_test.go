@@ -10,9 +10,6 @@ import (
 )
 
 func TestDirectoryJSONLSourceSetDiscoversProjectFiles(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	writeSourceFile(t, filepath.Join(root, "project-b", "session-b.jsonl"), "{}\n")
 	writeSourceFile(t, filepath.Join(root, "project-a", "session-a.jsonl"), "{}\n")
@@ -22,10 +19,10 @@ func TestDirectoryJSONLSourceSetDiscoversProjectFiles(t *testing.T) {
 	sources := NewDirectoryJSONLSourceSet(AgentQwen, []string{root})
 
 	discovered, err := sources.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 2)
-	assert.Equal([]string{"project-a", "project-b"}, sourceProjects(discovered))
-	assert.Equal([]string{
+	require.NoError(t, err)
+	require.Len(t, discovered, 2)
+	assert.Equal(t, []string{"project-a", "project-b"}, sourceProjects(discovered))
+	assert.Equal(t, []string{
 		filepath.Join(root, "project-a", "session-a.jsonl"),
 		filepath.Join(root, "project-b", "session-b.jsonl"),
 	}, sourceDisplayPaths(discovered))
@@ -33,15 +30,12 @@ func TestDirectoryJSONLSourceSetDiscoversProjectFiles(t *testing.T) {
 	found, ok, err := sources.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "session-b",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(filepath.Join(root, "project-b", "session-b.jsonl"), found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, filepath.Join(root, "project-b", "session-b.jsonl"), found.DisplayPath)
 }
 
 func TestDirectoryJSONLSourceSetComposesPathFilters(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	writeSourceFile(t, filepath.Join(root, "project", "session-keep.jsonl"), "{}\n")
 	writeSourceFile(t, filepath.Join(root, "project", "ignore.jsonl"), "{}\n")
@@ -56,16 +50,13 @@ func TestDirectoryJSONLSourceSetComposesPathFilters(t *testing.T) {
 	)
 
 	discovered, err := sources.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal("custom-project", discovered[0].ProjectHint)
-	assert.Equal(filepath.Join(root, "project", "session-keep.jsonl"), discovered[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, "custom-project", discovered[0].ProjectHint)
+	assert.Equal(t, filepath.Join(root, "project", "session-keep.jsonl"), discovered[0].DisplayPath)
 }
 
 func TestDirectoryJSONLSourceSetClassifiesDeletedProjectFiles(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sources := NewDirectoryJSONLSourceSet(AgentCommandCode, []string{root})
 
@@ -77,10 +68,10 @@ func TestDirectoryJSONLSourceSetClassifiesDeletedProjectFiles(t *testing.T) {
 			WatchRoot: root,
 		},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal("project", changed[0].ProjectHint)
-	assert.Equal("project/deleted.jsonl", changed[0].Opaque.(JSONLSource).RelPath)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, "project", changed[0].ProjectHint)
+	assert.Equal(t, "project/deleted.jsonl", changed[0].Opaque.(JSONLSource).RelPath)
 
 	deep, err := sources.SourcesForChangedPath(
 		t.Context(),
@@ -90,6 +81,6 @@ func TestDirectoryJSONLSourceSetClassifiesDeletedProjectFiles(t *testing.T) {
 			WatchRoot: root,
 		},
 	)
-	require.NoError(err)
-	assert.Empty(deep)
+	require.NoError(t, err)
+	assert.Empty(t, deep)
 }

@@ -16,14 +16,12 @@ import (
 func TestProviderSourceFreshBeforeFingerprintRejectsUnverifiedStatDigest(
 	t *testing.T,
 ) {
-	require := require.New(t)
-
 	database := openTestDB(t)
 	path := filepath.Join(t.TempDir(), "session.jsonl")
-	require.NoError(os.WriteFile(path, []byte("unchanged\n"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte("unchanged\n"), 0o644))
 	info, err := os.Stat(path)
-	require.NoError(err)
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:        "session",
 		Agent:     string(parser.AgentClaude),
 		Project:   "project-a",
@@ -32,10 +30,10 @@ func TestProviderSourceFreshBeforeFingerprintRejectsUnverifiedStatDigest(
 		FileSize:  int64Ptr(info.Size()),
 		FileMtime: int64Ptr(info.ModTime().UnixNano()),
 	}))
-	require.NoError(database.SetSessionDataVersion(
+	require.NoError(t, database.SetSessionDataVersion(t.Context(),
 		"session", db.CurrentDataVersion(),
 	))
-	require.NoError(database.UpsertProviderStatHash(
+	require.NoError(t, database.UpsertProviderStatHash(
 		t.Context(), parser.AgentClaude, path, 0,
 	))
 
@@ -57,13 +55,10 @@ func TestProviderSourceFreshBeforeFingerprintRejectsUnverifiedStatDigest(
 }
 
 func TestClaudeIncrementalWritePersistsCompleteSourceStatHash(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := openTestDB(t)
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "project-a")
-	require.NoError(os.MkdirAll(projectDir, 0o755))
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
 	path := filepath.Join(projectDir, "incremental-hash.jsonl")
 	builder := testjsonl.NewSessionBuilder().
 		AddClaudeUserWithUUID(
@@ -72,9 +67,9 @@ func TestClaudeIncrementalWritePersistsCompleteSourceStatHash(t *testing.T) {
 		AddClaudeAssistantWithUUID(
 			"2024-01-01T10:00:01Z", "ok", "b", "a",
 		)
-	require.NoError(os.WriteFile(path, []byte(builder.String()), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(builder.String()), 0o644))
 
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -82,15 +77,15 @@ func TestClaudeIncrementalWritePersistsCompleteSourceStatHash(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 	initial := engine.SyncAll(t.Context(), nil)
-	require.Equal(1, initial.Synced)
-	require.Zero(initial.Failed)
+	require.Equal(t, 1, initial.Synced)
+	require.Zero(t, initial.Failed)
 	hasher := engine.providerStatHashers[parser.AgentClaude]
-	require.NotNil(hasher)
+	require.NotNil(t, hasher)
 	initialDigest, ok, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentClaude, path,
 	)
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	// Consume one complete record while leaving an unfinished record at EOF.
 	// The cursor may advance, but the digest must continue to describe the last
@@ -98,19 +93,19 @@ func TestClaudeIncrementalWritePersistsCompleteSourceStatHash(t *testing.T) {
 	builder.AddClaudeUserWithUUID(
 		"2024-01-01T10:00:02Z", "next", "c", "b",
 	)
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		path, []byte(builder.String()+`{"type":"assistant"`), 0o644,
 	))
 	partial := engine.SyncAll(t.Context(), nil)
-	require.Equal(1, partial.Synced)
-	require.Zero(partial.Failed)
+	require.Equal(t, 1, partial.Synced)
+	require.Zero(t, partial.Failed)
 	partialDigest, ok, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentClaude, path,
 	)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(initialDigest, partialDigest)
-	assert.NotEqual(hasher.ComputeMultiFileStatHash(path), partialDigest)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, initialDigest, partialDigest)
+	assert.NotEqual(t, hasher.ComputeMultiFileStatHash(path), partialDigest)
 
 	// Replacing the unfinished tail with a complete record lets the
 	// incremental parser consume the full fingerprinted source. Its successful
@@ -118,14 +113,14 @@ func TestClaudeIncrementalWritePersistsCompleteSourceStatHash(t *testing.T) {
 	builder.AddClaudeAssistantWithUUID(
 		"2024-01-01T10:00:03Z", "done", "d", "c",
 	)
-	require.NoError(os.WriteFile(path, []byte(builder.String()), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(builder.String()), 0o644))
 	complete := engine.SyncAll(t.Context(), nil)
-	require.Equal(1, complete.Synced)
-	require.Zero(complete.Failed)
+	require.Equal(t, 1, complete.Synced)
+	require.Zero(t, complete.Failed)
 	completeDigest, ok, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentClaude, path,
 	)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(hasher.ComputeMultiFileStatHash(path), completeDigest)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, hasher.ComputeMultiFileStatHash(path), completeDigest)
 }

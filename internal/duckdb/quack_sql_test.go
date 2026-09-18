@@ -86,9 +86,6 @@ func TestDuckValueLiteralFormatsNullableNumericPointers(t *testing.T) {
 }
 
 func TestDuckSQLWithArgsExecutesNamedStringKinds(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	duck := openTestDuckDB(t)
 
@@ -98,14 +95,14 @@ func TestDuckSQLWithArgsExecutesNamedStringKinds(t *testing.T) {
 		export.CheckoutBranch,
 		export.ProjectResolutionAmbiguous,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var relationship, checkout, resolution string
-	require.NoError(duck.QueryRowContext(ctx, stmt).
+	require.NoError(t, duck.QueryRowContext(ctx, stmt).
 		Scan(&relationship, &checkout, &resolution))
-	assert.Equal(string(export.WorktreeLinked), relationship)
-	assert.Equal(string(export.CheckoutBranch), checkout)
-	assert.Equal(string(export.ProjectResolutionAmbiguous), resolution)
+	assert.Equal(t, string(export.WorktreeLinked), relationship)
+	assert.Equal(t, string(export.CheckoutBranch), checkout)
+	assert.Equal(t, string(export.ProjectResolutionAmbiguous), resolution)
 }
 
 func TestDuckValueLiteralFormatsNamedScalarKinds(t *testing.T) {

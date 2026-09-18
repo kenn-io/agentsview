@@ -71,9 +71,6 @@ func TestScanSecretsDedupEventsVsResult(t *testing.T) {
 // the ToolResultEvent.EventIndex field, so SecretFindingSource can re-locate
 // the source after a round-trip.
 func TestScanSecretsResultEventIndexIsSlicePosition(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	sess := db.Session{ID: "s1"}
 	// The secret is in the second event (slice position 1); its EventIndex
 	// field is a non-positional value to prove the scanner ignores it.
@@ -95,10 +92,10 @@ func TestScanSecretsResultEventIndexIsSlicePosition(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(got, "no aws-access-key finding: %+v", findings)
-	assert.Equal("tool_result_event", got.LocationKind)
-	require.NotNil(got.EventIndex, "EventIndex = nil, want slice position 1")
-	assert.Equal(1, *got.EventIndex, "EventIndex = %v, want slice position 1", *got.EventIndex)
+	require.NotNil(t, got, "no aws-access-key finding: %+v", findings)
+	assert.Equal(t, "tool_result_event", got.LocationKind)
+	require.NotNil(t, got.EventIndex, "EventIndex = nil, want slice position 1")
+	assert.Equal(t, 1, *got.EventIndex, "EventIndex = %v, want slice position 1", *got.EventIndex)
 }
 
 // TestComputeSignalsAndSecretsDefiniteOnly pins the inline-sync contract: the
@@ -106,8 +103,6 @@ func TestScanSecretsResultEventIndexIsSlicePosition(t *testing.T) {
 // rules version, keeping the FP-prone, CPU-heavy candidate regexes out of the
 // sync hot path.
 func TestComputeSignalsAndSecretsDefiniteOnly(t *testing.T) {
-	assert := assert.New(t)
-
 	sess := db.Session{ID: "s1"}
 	msgs := []db.Message{{
 		SessionID: "s1", Ordinal: 0, Role: "user",
@@ -116,10 +111,10 @@ func TestComputeSignalsAndSecretsDefiniteOnly(t *testing.T) {
 	update, findings := computeSignalsAndSecrets(sess, msgs)
 	require.NotEmpty(t, findings, "expected at least one definite finding")
 	for _, f := range findings {
-		assert.Equal(secrets.ConfidenceDefinite, f.Confidence, "inline scan stored a non-definite finding: %+v", f)
+		assert.Equal(t, secrets.ConfidenceDefinite, f.Confidence, "inline scan stored a non-definite finding: %+v", f)
 	}
-	assert.Equal(secrets.DefiniteRulesVersion(), update.SecretsRulesVersion)
-	assert.Equal(1, update.SecretLeakCount, "SecretLeakCount = %d, want 1 (one definite)", update.SecretLeakCount)
+	assert.Equal(t, secrets.DefiniteRulesVersion(), update.SecretsRulesVersion)
+	assert.Equal(t, 1, update.SecretLeakCount, "SecretLeakCount = %d, want 1 (one definite)", update.SecretLeakCount)
 }
 
 // TestInlineScanThenBackfillStoresCandidates verifies the full split-version
@@ -129,17 +124,14 @@ func TestComputeSignalsAndSecretsDefiniteOnly(t *testing.T) {
 // adds candidate findings, and stamps the full version (so a second backfill is
 // a no-op).
 func TestInlineScanThenBackfillStoresCandidates(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	fx := newEngineFixture(t)
 	ctx := t.Context()
 	const id = "s1"
-	require.NoError(fx.db.UpsertSession(db.Session{
+	require.NoError(t, fx.db.UpsertSession(ctx, db.Session{
 		ID: id, Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 1, UserMessageCount: 1,
 	}))
-	require.NoError(fx.db.ReplaceSessionMessages(id, []db.Message{
+	require.NoError(t, fx.db.ReplaceSessionMessages(ctx, id, []db.Message{
 		{
 			SessionID: id, Ordinal: 0, Role: "user",
 			Content: "aws AKIA7QHWN2DKR4FYPLJM and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6",
@@ -147,24 +139,24 @@ func TestInlineScanThenBackfillStoresCandidates(t *testing.T) {
 	}))
 
 	// Inline sync path: definite-only findings, definite version.
-	require.NoError(fx.engine.RecomputeSignals(ctx, id))
+	require.NoError(t, fx.engine.RecomputeSignals(ctx, id))
 	got, err := fx.db.SessionSecretFindings(ctx, id)
-	require.NoError(err)
-	assert.Zero(countConfidence(got, secrets.ConfidenceCandidate), "inline scan stored candidate findings: %+v", got)
-	assert.NotZero(countConfidence(got, secrets.ConfidenceDefinite), "inline scan stored no definite findings")
+	require.NoError(t, err)
+	assert.Zero(t, countConfidence(got, secrets.ConfidenceCandidate), "inline scan stored candidate findings: %+v", got)
+	assert.NotZero(t, countConfidence(got, secrets.ConfidenceDefinite), "inline scan stored no definite findings")
 
 	// Backfill must treat the inline-only session as stale and rescan it.
 	sum, err := fx.engine.ScanSecrets(ctx, SecretScanInput{Backfill: true}, nil)
-	require.NoError(err)
-	require.Equal(1, sum.Scanned, "backfill Scanned = %d, want 1 (inline-only session is stale)", sum.Scanned)
+	require.NoError(t, err)
+	require.Equal(t, 1, sum.Scanned, "backfill Scanned = %d, want 1 (inline-only session is stale)", sum.Scanned)
 	got, err = fx.db.SessionSecretFindings(ctx, id)
-	require.NoError(err)
-	assert.NotZero(countConfidence(got, secrets.ConfidenceCandidate), "backfill did not store candidate findings: %+v", got)
+	require.NoError(t, err)
+	assert.NotZero(t, countConfidence(got, secrets.ConfidenceCandidate), "backfill did not store candidate findings: %+v", got)
 
 	// Now current at the full version: a second backfill scans nothing.
 	sum2, err := fx.engine.ScanSecrets(ctx, SecretScanInput{Backfill: true}, nil)
-	require.NoError(err)
-	assert.Zero(sum2.Scanned, "second backfill Scanned = %d, want 0 (now at full version)", sum2.Scanned)
+	require.NoError(t, err)
+	assert.Zero(t, sum2.Scanned, "second backfill Scanned = %d, want 0 (now at full version)", sum2.Scanned)
 }
 
 // TestScanSecretsBreakdown verifies that ScanSecrets reports definite
@@ -174,40 +166,40 @@ func TestScanSecretsBreakdown(t *testing.T) {
 	fx := newEngineFixture(t)
 	ctx := t.Context()
 	const id = "s1"
-	if err := fx.db.UpsertSession(db.Session{
+	if err := fx.db.UpsertSession(ctx, db.Session{
 		ID: id, Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 1, UserMessageCount: 1,
 	}); err != nil {
-		t.Fatalf("UpsertSession: %v", err)
+		require.FailNowf(t, "test failed", "UpsertSession: %v", err)
 	}
 	// One message containing both a definite AWS key and a candidate
 	// high-entropy assignment.
-	if err := fx.db.ReplaceSessionMessages(id, []db.Message{
+	if err := fx.db.ReplaceSessionMessages(ctx, id, []db.Message{
 		{
 			SessionID: id, Ordinal: 0, Role: "user",
 			Content: "aws AKIA7QHWN2DKR4FYPLJM and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6",
 		},
 	}); err != nil {
-		t.Fatalf("ReplaceSessionMessages: %v", err)
+		require.FailNowf(t, "test failed", "ReplaceSessionMessages: %v", err)
 	}
 	sum, err := fx.engine.ScanSecrets(ctx, SecretScanInput{Backfill: true}, nil)
 	if err != nil {
-		t.Fatalf("ScanSecrets: %v", err)
+		require.FailNowf(t, "test failed", "ScanSecrets: %v", err)
 	}
 	if sum.Scanned != 1 {
-		t.Fatalf("Scanned = %d, want 1", sum.Scanned)
+		require.FailNowf(t, "test failed", "Scanned = %d, want 1", sum.Scanned)
 	}
 	if sum.DefiniteFindings != 1 {
-		t.Errorf("DefiniteFindings = %d, want 1", sum.DefiniteFindings)
+		assert.Failf(t, "test failed", "DefiniteFindings = %d, want 1", sum.DefiniteFindings)
 	}
 	if sum.CandidateFindings != 1 {
-		t.Errorf("CandidateFindings = %d, want 1", sum.CandidateFindings)
+		assert.Failf(t, "test failed", "CandidateFindings = %d, want 1", sum.CandidateFindings)
 	}
 	if sum.TotalFindings != 2 {
-		t.Errorf("TotalFindings = %d, want 2", sum.TotalFindings)
+		assert.Failf(t, "test failed", "TotalFindings = %d, want 2", sum.TotalFindings)
 	}
 	if sum.WithSecrets != 1 {
-		t.Errorf("WithSecrets = %d, want 1 (session has ≥1 definite finding)", sum.WithSecrets)
+		assert.Failf(t, "test failed", "WithSecrets = %d, want 1 (session has ≥1 definite finding)", sum.WithSecrets)
 	}
 }
 
@@ -254,19 +246,16 @@ func countConfidence(findings []db.SecretFinding, confidence string) int {
 }
 
 func TestEngineScanSecretsBackfillResumable(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	fx := newEngineFixture(t)
 	ctx := t.Context()
 	// Seed two sessions with secret-bearing content directly, bypassing the
 	// sync scan path, so secrets_rules_version stays "" (unscanned).
 	for _, id := range []string{"s1", "s2"} {
-		require.NoError(fx.db.UpsertSession(db.Session{
+		require.NoError(t, fx.db.UpsertSession(ctx, db.Session{
 			ID: id, Project: "proj", Machine: "m", Agent: "claude",
 			MessageCount: 1, UserMessageCount: 1,
 		}))
-		require.NoError(fx.db.ReplaceSessionMessages(id, []db.Message{
+		require.NoError(t, fx.db.ReplaceSessionMessages(ctx, id, []db.Message{
 			{
 				SessionID: id, Ordinal: 0, Role: "user",
 				Content: "my key AKIA7QHWN2DKR4FYPLJM here",
@@ -276,34 +265,32 @@ func TestEngineScanSecretsBackfillResumable(t *testing.T) {
 	ticks := 0
 	sum, err := fx.engine.ScanSecrets(ctx, SecretScanInput{Backfill: true},
 		func(SecretScanProgress) { ticks++ })
-	require.NoError(err)
-	require.Equal(2, sum.Scanned, "scan summary = %+v, want Scanned=2", sum)
-	require.Equal(2, sum.WithSecrets, "scan summary = %+v, want WithSecrets=2", sum)
-	assert.NotZero(ticks, "expected at least one progress tick")
+	require.NoError(t, err)
+	require.Equal(t, 2, sum.Scanned, "scan summary = %+v, want Scanned=2", sum)
+	require.Equal(t, 2, sum.WithSecrets, "scan summary = %+v, want WithSecrets=2", sum)
+	assert.NotZero(t, ticks, "expected at least one progress tick")
 	for _, id := range []string{"s1", "s2"} {
 		s, err := fx.db.GetSession(ctx, id)
-		require.NoError(err)
-		require.NotNil(s)
-		assert.GreaterOrEqual(s.SecretLeakCount, 1, "%s SecretLeakCount = %d, want >=1", id, s.SecretLeakCount)
+		require.NoError(t, err)
+		require.NotNil(t, s)
+		assert.GreaterOrEqual(t, s.SecretLeakCount, 1, "%s SecretLeakCount = %d, want >=1", id, s.SecretLeakCount)
 	}
 	// Re-running the backfill scans nothing: all sessions are now current.
 	sum2, err := fx.engine.ScanSecrets(ctx, SecretScanInput{Backfill: true}, nil)
-	require.NoError(err)
-	assert.Zero(sum2.Scanned, "resumed Scanned = %d, want 0 (already current)", sum2.Scanned)
+	require.NoError(t, err)
+	assert.Zero(t, sum2.Scanned, "resumed Scanned = %d, want 0 (already current)", sum2.Scanned)
 }
 
 // TestScanSecretsCanceledContextReturnsError pins the cancellation contract: a
 // scan run with a canceled context must return that error rather than report a
 // partial scan as success, and must persist nothing.
 func TestScanSecretsCanceledContextReturnsError(t *testing.T) {
-	require := require.New(t)
-
 	fx := newEngineFixture(t)
-	require.NoError(fx.db.UpsertSession(db.Session{
+	require.NoError(t, fx.db.UpsertSession(t.Context(), db.Session{
 		ID: "s1", Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 1, UserMessageCount: 1,
 	}))
-	require.NoError(fx.db.ReplaceSessionMessages("s1", []db.Message{
+	require.NoError(t, fx.db.ReplaceSessionMessages(t.Context(), "s1", []db.Message{
 		{
 			SessionID: "s1", Ordinal: 0, Role: "user",
 			Content: "my key AKIA7QHWN2DKR4FYPLJM here",
@@ -312,9 +299,9 @@ func TestScanSecretsCanceledContextReturnsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, err := fx.engine.ScanSecrets(ctx, SecretScanInput{Backfill: true}, nil)
-	require.ErrorIs(err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	s, err := fx.db.GetSession(t.Context(), "s1")
-	require.NoError(err)
-	require.NotNil(s)
+	require.NoError(t, err)
+	require.NotNil(t, s)
 	assert.Zero(t, s.SecretLeakCount, "SecretLeakCount = %d, want 0 (canceled scan persisted nothing)", s.SecretLeakCount)
 }

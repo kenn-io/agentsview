@@ -269,7 +269,7 @@ func runCurrent(
 		refreshAttemptMetaKey, previousAttempt,
 	); restoreErr != nil {
 		return fmt.Errorf(
-			"restoring pricing refresh attempt after cancellation: %v: %w",
+			"restoring pricing refresh attempt after cancellation: %w: %w",
 			restoreErr, err,
 		)
 	}

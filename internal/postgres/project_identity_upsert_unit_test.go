@@ -95,33 +95,31 @@ func TestPlanProjectIdentityObservationSync(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			plan := planProjectIdentityObservationSync(tt.observations)
 
 			var gotReal []string
 			for _, obs := range plan.realRemote {
 				gotReal = append(gotReal, obs.GitRemoteName)
 			}
-			assert.Equal(tt.wantReal, gotReal, "real remote observations")
+			assert.Equal(t, tt.wantReal, gotReal, "real remote observations")
 
 			var gotAmbiguous []string
 			for _, obs := range plan.ambiguous {
 				gotAmbiguous = append(gotAmbiguous, obs.RootPath)
 			}
-			assert.Equal(tt.wantAmbiguous, gotAmbiguous, "ambiguous observations")
+			assert.Equal(t, tt.wantAmbiguous, gotAmbiguous, "ambiguous observations")
 
 			var gotFallbacks []string
 			for _, obs := range plan.fallbacks {
 				gotFallbacks = append(gotFallbacks, obs.RootPath)
 			}
-			assert.Equal(tt.wantFallbacks, gotFallbacks, "fallbacks")
+			assert.Equal(t, tt.wantFallbacks, gotFallbacks, "fallbacks")
 
 			var gotRoots []string
 			for _, root := range plan.realRoots {
 				gotRoots = append(gotRoots, root.rootPath)
 			}
-			assert.Equal(tt.wantRoots, gotRoots, "real roots")
+			assert.Equal(t, tt.wantRoots, gotRoots, "real roots")
 		})
 	}
 }

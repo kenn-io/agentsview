@@ -57,9 +57,6 @@ func seedKiroSQLiteSession(
 }
 
 func TestParseKiroSQLiteSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath, db := newKiroSQLiteTestDB(t)
 	seedKiroSQLiteSession(
 		t, db, "/home/user/code/kiro-app", "sqlite-session",
@@ -70,27 +67,27 @@ func TestParseKiroSQLiteSession(t *testing.T) {
 	sess, msgs, err := parseKiroSQLiteSession(
 		t.Context(), dbPath, "sqlite-session", "test-machine",
 	)
-	require.NoError(err, "parseKiroSQLiteSession")
-	require.NotNil(sess, "expected session")
-	assert.Equal("kiro:sqlite-session", sess.ID, "ID")
-	assert.Equal(AgentKiro, sess.Agent, "Agent")
-	assert.Equal("test-machine", sess.Machine, "Machine")
-	assert.Equal("kiro_app", sess.Project, "Project")
-	assert.Equal("/home/user/code/kiro-app", sess.Cwd, "Cwd")
-	assert.Equal("Build the Kiro parser", sess.FirstMessage, "FirstMessage")
-	assert.Equal(4, sess.MessageCount, "MessageCount")
-	assert.Equal(2, sess.UserMessageCount, "UserMessageCount")
-	assert.Equal(dbPath+"#sqlite-session", sess.File.Path, "File.Path")
-	assert.Equal(int64(1779012030000)*1_000_000, sess.File.Mtime, "File.Mtime")
+	require.NoError(t, err, "parseKiroSQLiteSession")
+	require.NotNil(t, sess, "expected session")
+	assert.Equal(t, "kiro:sqlite-session", sess.ID, "ID")
+	assert.Equal(t, AgentKiro, sess.Agent, "Agent")
+	assert.Equal(t, "test-machine", sess.Machine, "Machine")
+	assert.Equal(t, "kiro_app", sess.Project, "Project")
+	assert.Equal(t, "/home/user/code/kiro-app", sess.Cwd, "Cwd")
+	assert.Equal(t, "Build the Kiro parser", sess.FirstMessage, "FirstMessage")
+	assert.Equal(t, 4, sess.MessageCount, "MessageCount")
+	assert.Equal(t, 2, sess.UserMessageCount, "UserMessageCount")
+	assert.Equal(t, dbPath+"#sqlite-session", sess.File.Path, "File.Path")
+	assert.Equal(t, int64(1779012030000)*1_000_000, sess.File.Mtime, "File.Mtime")
 
-	require.Len(msgs, 4, "messages len")
-	assert.Equal(RoleUser, msgs[0].Role, "msg[0].Role")
-	assert.Equal("Build the Kiro parser", msgs[0].Content, "msg[0].Content")
-	assert.Equal(RoleAssistant, msgs[1].Role, "msg[1].Role")
-	assert.Equal("I can do that.", msgs[1].Content, "msg[1].Content")
-	assert.True(msgs[3].HasToolUse, "msg[3].HasToolUse")
-	require.Len(msgs[3].ToolCalls, 1, "msg[3].ToolCalls len")
-	assert.Equal("execute_bash", msgs[3].ToolCalls[0].ToolName, "msg[3].ToolName")
+	require.Len(t, msgs, 4, "messages len")
+	assert.Equal(t, RoleUser, msgs[0].Role, "msg[0].Role")
+	assert.Equal(t, "Build the Kiro parser", msgs[0].Content, "msg[0].Content")
+	assert.Equal(t, RoleAssistant, msgs[1].Role, "msg[1].Role")
+	assert.Equal(t, "I can do that.", msgs[1].Content, "msg[1].Content")
+	assert.True(t, msgs[3].HasToolUse, "msg[3].HasToolUse")
+	require.Len(t, msgs[3].ToolCalls, 1, "msg[3].ToolCalls len")
+	assert.Equal(t, "execute_bash", msgs[3].ToolCalls[0].ToolName, "msg[3].ToolName")
 }
 
 func TestListKiroSQLiteSessionMetaUsesNewestLogicalRow(t *testing.T) {

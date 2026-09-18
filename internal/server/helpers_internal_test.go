@@ -41,7 +41,7 @@ func testServer(
 		DBPath:       dbPath,
 		WriteTimeout: writeTimeout,
 	}
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {dir},
 		},
@@ -64,6 +64,7 @@ func assertTimeoutResponse(
 	t *testing.T, resp *http.Response, detailSubstrings ...string,
 ) {
 	t.Helper()
+
 	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)

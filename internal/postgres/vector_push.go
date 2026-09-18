@@ -192,7 +192,7 @@ func (id vectorOwnerIdentity) owns(ownerMarker, machine string) bool {
 func (s *Sync) vectorOwnerIdentity(
 	ctx context.Context,
 ) (vectorOwnerIdentity, error) {
-	markerID, err := s.pushMarkerID()
+	markerID, err := s.pushMarkerID(ctx)
 	if err != nil {
 		return vectorOwnerIdentity{}, err
 	}
@@ -273,7 +273,7 @@ func (s *Sync) pushVectors(
 		res.Skipped, res.SkippedReason = true, unavailable
 		return res, nil
 	}
-	witnessKey, err := s.vectorGenerationWitnessKey()
+	witnessKey, err := s.vectorGenerationWitnessKey(ctx)
 	if err != nil {
 		return res, err
 	}
@@ -513,7 +513,7 @@ func (s *Sync) lookupVectorGeneration(
 		`SELECT id, created_at FROM vector_generations WHERE fingerprint = $1`,
 		fingerprint,
 	).Scan(&genID, &createdAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return vectorGeneration{}, false, nil
 	}
 	if isUndefinedTable(err) {
@@ -908,8 +908,8 @@ SELECT EXISTS (
 	}, nil
 }
 
-func (s *Sync) vectorGenerationWitnessKey() (string, error) {
-	markerID, err := s.pushMarkerID()
+func (s *Sync) vectorGenerationWitnessKey(ctx context.Context) (string, error) {
+	markerID, err := s.pushMarkerID(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -1474,6 +1474,7 @@ func (s *Sync) clearUsageOnlyVectorSessions(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing usage-only vector sessions: %w", err)
 	}
+	defer rows.Close()
 	var ids []string
 	for rows.Next() {
 		var id string

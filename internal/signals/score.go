@@ -199,9 +199,9 @@ func isStuckReask(in ScoreInput) bool {
 		in.Heuristics.RunawayToolLoopCount > 0
 }
 
-func capPenalty(raw, max int) int {
-	if raw > max {
-		return max
+func capPenalty(raw, maximum int) int {
+	if raw > maximum {
+		return maximum
 	}
 	return raw
 }

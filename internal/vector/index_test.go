@@ -13,23 +13,21 @@ import (
 )
 
 func TestOpenCreatesSchema(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 
 	ix, err := Open(ctx, path, false, 4000)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer ix.Close()
 
 	var name string
-	require.NoError(ix.db.QueryRowContext(ctx,
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT name FROM sqlite_master WHERE type='table' AND name='vector_messages'`).Scan(&name))
-	require.Equal("vector_messages", name)
+	require.Equal(t, "vector_messages", name)
 
-	require.NoError(ix.db.QueryRowContext(ctx,
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT name FROM sqlite_master WHERE type='table' AND name='message_vectors_generations'`).Scan(&name))
-	require.Equal("message_vectors_generations", name)
+	require.Equal(t, "message_vectors_generations", name)
 }
 
 func TestOpenReadOnlyOnMissingFileFails(t *testing.T) {
@@ -45,22 +43,20 @@ func TestOpenReadOnlyOnMissingFileFails(t *testing.T) {
 // handed out writable handles. A read-only Open on a valid vectors.db must
 // refuse writes at the SQLite level.
 func TestOpenReadOnlyRefusesWrites(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 
 	rw, err := Open(ctx, path, false, 4000)
-	require.NoError(err)
-	require.NoError(rw.Close())
+	require.NoError(t, err)
+	require.NoError(t, rw.Close())
 
 	ro, err := Open(ctx, path, true, 4000)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer ro.Close()
 
 	_, err = ro.db.ExecContext(ctx,
 		`INSERT INTO vector_meta (key, value) VALUES ('probe', 'x')`)
-	require.Error(err, "a read-only vectors.db handle must refuse writes")
+	require.Error(t, err, "a read-only vectors.db handle must refuse writes")
 	assert.Contains(t, err.Error(), "readonly",
 		"the refusal must be SQLite's readonly-database error, got: %v", err)
 }
@@ -72,43 +68,38 @@ func TestOpenReadOnlyRefusesWrites(t *testing.T) {
 // writable and read-only branches must escape the path, and read-only must
 // still refuse writes.
 func TestOpenPathWithSpecialCharacters(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	dir := filepath.Join(t.TempDir(), "we%41rd dir")
-	require.NoError(os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 	path := filepath.Join(dir, "vectors.db")
 
 	rw, err := Open(ctx, path, false, 4000)
-	require.NoError(err, "writable Open must succeed on a path with %% and space")
+	require.NoError(t, err, "writable Open must succeed on a path with %% and space")
 	_, err = rw.db.ExecContext(ctx,
 		`INSERT INTO vector_meta (key, value) VALUES ('probe', 'x')`)
-	require.NoError(err)
-	require.NoError(rw.Close())
+	require.NoError(t, err)
+	require.NoError(t, rw.Close())
 
 	_, err = os.Stat(path)
-	require.NoError(err, "the database file must exist at the literal path, not a decoded one")
+	require.NoError(t, err, "the database file must exist at the literal path, not a decoded one")
 
 	ro, err := Open(ctx, path, true, 4000)
-	require.NoError(err, "read-only Open must succeed on a path with %% and space")
+	require.NoError(t, err, "read-only Open must succeed on a path with %% and space")
 	defer ro.Close()
 
 	var value string
-	require.NoError(ro.db.QueryRowContext(ctx,
+	require.NoError(t, ro.db.QueryRowContext(ctx,
 		`SELECT value FROM vector_meta WHERE key = 'probe'`).Scan(&value))
-	assert.Equal("x", value)
+	assert.Equal(t, "x", value)
 
 	_, err = ro.db.ExecContext(ctx,
 		`INSERT INTO vector_meta (key, value) VALUES ('probe2', 'y')`)
-	require.Error(err, "a read-only vectors.db handle must refuse writes")
-	assert.Contains(err.Error(), "readonly",
+	require.Error(t, err, "a read-only vectors.db handle must refuse writes")
+	assert.Contains(t, err.Error(), "readonly",
 		"the refusal must be SQLite's readonly-database error, got: %v", err)
 }
 
 func TestOpenSplitOptionsUse15PercentOverlap(t *testing.T) {
-	assert := assert.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 
@@ -116,9 +107,9 @@ func TestOpenSplitOptionsUse15PercentOverlap(t *testing.T) {
 	require.NoError(t, err)
 	defer ix.Close()
 
-	assert.Equal(4000, ix.split.MaxRunes)
-	assert.Equal(600, ix.split.Overlap, "15%% of 4000 is 600")
-	assert.Equal(ChunkOverlap(4000), ix.split.Overlap,
+	assert.Equal(t, 4000, ix.split.MaxRunes)
+	assert.Equal(t, 600, ix.split.Overlap, "15%% of 4000 is 600")
+	assert.Equal(t, ChunkOverlap(4000), ix.split.Overlap,
 		"Open must derive Overlap from the shared ChunkOverlap helper")
 }
 
@@ -129,52 +120,50 @@ func TestChunkOverlapIs15Percent(t *testing.T) {
 }
 
 func TestEnsureGenerationLifecycle(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 
 	ix, err := Open(ctx, path, false, 4000)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer ix.Close()
 
 	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
 	fingerprint, err := ix.EnsureGeneration(ctx, gen, sqlitevec.StateBuilding)
-	require.NoError(err)
-	require.NotEmpty(fingerprint)
+	require.NoError(t, err)
+	require.NotEmpty(t, fingerprint)
 
 	infos, err := ix.Generations(ctx)
-	require.NoError(err)
-	require.Len(infos, 1)
-	require.Equal("building", infos[0].State)
-	require.Equal("fake-model", infos[0].Model)
-	require.Equal(3, infos[0].Dimension)
-	require.Equal(fingerprint, infos[0].Fingerprint)
-	require.NotZero(infos[0].ID)
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	require.Equal(t, "building", infos[0].State)
+	require.Equal(t, "fake-model", infos[0].Model)
+	require.Equal(t, 3, infos[0].Dimension)
+	require.Equal(t, fingerprint, infos[0].Fingerprint)
+	require.NotZero(t, infos[0].ID)
 
 	building, ok, err := ix.BuildingFingerprint(ctx)
-	require.NoError(err)
-	require.True(ok)
-	require.Equal(fingerprint, building)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, fingerprint, building)
 
 	_, ok, err = ix.ActiveFingerprint(ctx)
-	require.NoError(err)
-	require.False(ok)
+	require.NoError(t, err)
+	require.False(t, ok)
 
-	require.NoError(ix.SetStateByID(ctx, infos[0].ID, sqlitevec.StateActive))
+	require.NoError(t, ix.SetStateByID(ctx, infos[0].ID, sqlitevec.StateActive))
 
 	active, ok, err := ix.ActiveFingerprint(ctx)
-	require.NoError(err)
-	require.True(ok)
-	require.Equal(fingerprint, active)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, fingerprint, active)
 
 	_, ok, err = ix.BuildingFingerprint(ctx)
-	require.NoError(err)
-	require.False(ok)
+	require.NoError(t, err)
+	require.False(t, ok)
 
 	info, err := ix.GenerationByID(ctx, infos[0].ID)
-	require.NoError(err)
-	require.Equal("active", info.State)
+	require.NoError(t, err)
+	require.Equal(t, "active", info.State)
 }
 
 // TestGenerationByIDUnknownIDReturnsSentinel guards the HTTP layer's 404
@@ -182,56 +171,52 @@ func TestEnsureGenerationLifecycle(t *testing.T) {
 // ErrGenerationNotFound via errors.Is, not just any error, so callers can
 // distinguish "not found" from other failures.
 func TestGenerationByIDUnknownIDReturnsSentinel(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 
 	ix, err := Open(ctx, path, false, 4000)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer ix.Close()
 
 	_, err = ix.GenerationByID(ctx, 999)
-	require.Error(err)
-	require.ErrorIs(err, ErrGenerationNotFound)
-	require.Contains(err.Error(), "999")
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrGenerationNotFound)
+	require.Contains(t, err.Error(), "999")
 }
 
 func TestGenerationCoverageCounts(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 
 	ix, err := Open(ctx, path, false, 4000)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer ix.Close()
 
 	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
 	fingerprint, err := ix.EnsureGeneration(ctx, gen, sqlitevec.StateBuilding)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	_, err = ix.db.ExecContext(ctx,
 		`INSERT INTO vector_messages (doc_key, session_id, ordinal, ordinal_end, content, content_hash)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d1", "s1", 0, 0, "hello world", "h1")
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = ix.db.ExecContext(ctx,
 		`INSERT INTO vector_messages (doc_key, session_id, ordinal, ordinal_end, content, content_hash)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d2", "s1", 1, 1, "goodbye world", "h2")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	err = ix.store.SaveVectors(ctx, fingerprint, "d1", "h1", []kitvec.ChunkVector{
 		{ChunkIndex: 0, Vector: kitvec.Vector{1, 0, 0}},
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	infos, err := ix.Generations(ctx)
-	require.NoError(err)
-	require.Len(infos, 1)
-	require.EqualValues(1, infos[0].Embedded)
-	require.EqualValues(1, infos[0].Missing)
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	require.EqualValues(t, 1, infos[0].Embedded)
+	require.EqualValues(t, 1, infos[0].Missing)
 }
 
 // TestGenerationCoverageStaleRevisionCountsAsMissing asserts that a stamp
@@ -239,45 +224,43 @@ func TestGenerationCoverageCounts(t *testing.T) {
 // (the content changed since it was embedded) counts as Missing, not
 // Embedded, since kit's store treats such a document as pending re-embed.
 func TestGenerationCoverageStaleRevisionCountsAsMissing(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 
 	ix, err := Open(ctx, path, false, 4000)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer ix.Close()
 
 	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
 	fingerprint, err := ix.EnsureGeneration(ctx, gen, sqlitevec.StateBuilding)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	_, err = ix.db.ExecContext(ctx,
 		`INSERT INTO vector_messages (doc_key, session_id, ordinal, ordinal_end, content, content_hash)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d1", "s1", 0, 0, "hello world", "h1")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	err = ix.store.SaveVectors(ctx, fingerprint, "d1", "h1", []kitvec.ChunkVector{
 		{ChunkIndex: 0, Vector: kitvec.Vector{1, 0, 0}},
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	infos, err := ix.Generations(ctx)
-	require.NoError(err)
-	require.Len(infos, 1)
-	require.EqualValues(1, infos[0].Embedded)
-	require.EqualValues(0, infos[0].Missing)
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	require.EqualValues(t, 1, infos[0].Embedded)
+	require.EqualValues(t, 0, infos[0].Missing)
 
 	_, err = ix.db.ExecContext(ctx,
 		`UPDATE vector_messages SET content_hash = 'changed' WHERE doc_key = ?`, "d1")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	infos, err = ix.Generations(ctx)
-	require.NoError(err)
-	require.Len(infos, 1)
-	require.EqualValues(0, infos[0].Embedded, "stale stamp revision no longer counts as embedded")
-	require.EqualValues(1, infos[0].Missing, "stale stamp revision counts as missing")
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	require.EqualValues(t, 0, infos[0].Embedded, "stale stamp revision no longer counts as embedded")
+	require.EqualValues(t, 1, infos[0].Missing, "stale stamp revision counts as missing")
 }
 
 // v1MirrorDDL is the pre-versioning mirror schema (no ordinal_end/
@@ -310,6 +293,7 @@ CREATE TABLE vector_meta (
 // must detect as a mismatch (absent key, mirror state present) and reset.
 func seedV1Mirror(t *testing.T, path string) {
 	t.Helper()
+
 	ctx := t.Context()
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
@@ -354,6 +338,7 @@ CREATE INDEX `+spec.VectorsPrefix+`_stamps_by_doc_revision ON `+spec.stampsTable
 // Opens: sqlitevec.New must not need any CREATE TABLE on a mode=ro handle.
 func seedV2Mirror(t *testing.T, path string) {
 	t.Helper()
+
 	ctx := t.Context()
 	ix, err := Open(ctx, path, false, 4000)
 	require.NoError(t, err)
@@ -374,56 +359,50 @@ UPDATE vector_meta SET value = '2' WHERE key = ?`, mirrorSchemaVersionKey)
 }
 
 func TestMirrorSchemaVersionFreshDBStampsVersionNothingDropped(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 
 	ix, err := Open(ctx, path, false, 4000)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer ix.Close()
 
 	var version string
-	require.NoError(ix.db.QueryRowContext(ctx,
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT value FROM vector_meta WHERE key = ?`, mirrorSchemaVersionKey,
 	).Scan(&version))
-	assert.Equal(MessageIndexSpec().MirrorSchemaVersion, version)
+	assert.Equal(t, MessageIndexSpec().MirrorSchemaVersion, version)
 
 	var metaCount int
-	require.NoError(ix.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM vector_meta`).Scan(&metaCount))
-	assert.Equal(1, metaCount, "a fresh DB has nothing to drop, only the stamped version key")
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM vector_meta`).Scan(&metaCount))
+	assert.Equal(t, 1, metaCount, "a fresh DB has nothing to drop, only the stamped version key")
 }
 
 func TestMirrorSchemaVersionCurrentVersionUntouchedOnReopen(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 
 	ix, err := Open(ctx, path, false, 4000)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = ix.db.ExecContext(ctx, `
 INSERT INTO vector_messages (doc_key, session_id, ordinal, ordinal_end, content, content_hash)
 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d1", "s1", 0, 0, "hello world", "h1")
-	require.NoError(err)
-	require.NoError(ix.setRefreshWatermark(ctx, "2024-01-01T00:00:00Z"))
-	require.NoError(ix.Close())
+	require.NoError(t, err)
+	require.NoError(t, ix.setRefreshWatermark(ctx, "2024-01-01T00:00:00Z"))
+	require.NoError(t, ix.Close())
 
 	ix2, err := Open(ctx, path, false, 4000)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer ix2.Close()
 
 	var content string
-	require.NoError(ix2.db.QueryRowContext(ctx,
+	require.NoError(t, ix2.db.QueryRowContext(ctx,
 		`SELECT content FROM vector_messages WHERE doc_key = ?`, "d1").Scan(&content))
-	assert.Equal("hello world", content, "current-version data must survive a reopen untouched")
+	assert.Equal(t, "hello world", content, "current-version data must survive a reopen untouched")
 
 	watermark, err := ix2.refreshWatermark(ctx)
-	require.NoError(err)
-	assert.Equal("2024-01-01T00:00:00Z", watermark)
+	require.NoError(t, err)
+	assert.Equal(t, "2024-01-01T00:00:00Z", watermark)
 }
 
 // TestMirrorSchemaVersionMismatchResetsWritePath covers the full write-path
@@ -432,57 +411,54 @@ VALUES (?, ?, ?, ?, ?, ?)`,
 // and recreated with the v2 columns and defaults, and vector_meta must be
 // cleared except for the freshly stamped version key.
 func TestMirrorSchemaVersionMismatchResetsWritePath(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 	seedV1Mirror(t, path)
 
 	ix, err := Open(ctx, path, false, 4000)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer ix.Close()
 
 	var rowCount int
-	require.NoError(ix.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM vector_messages`).Scan(&rowCount))
-	assert.Zero(rowCount, "v1 mirror rows must not survive a version reset")
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM vector_messages`).Scan(&rowCount))
+	assert.Zero(t, rowCount, "v1 mirror rows must not survive a version reset")
 
 	_, err = ix.db.ExecContext(ctx, `
 INSERT INTO vector_messages (doc_key, session_id, ordinal, ordinal_end, content, content_hash)
 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d1", "s1", 0, 0, "hello", "h1")
-	require.NoError(err)
+	require.NoError(t, err)
 	var subordinate int
 	var offsets string
-	require.NoError(ix.db.QueryRowContext(ctx,
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT subordinate, offsets FROM vector_messages WHERE doc_key = ?`, "d1",
 	).Scan(&subordinate, &offsets))
-	assert.Zero(subordinate, "subordinate defaults to 0")
-	assert.Equal("[]", offsets, "offsets defaults to an empty JSON array")
+	assert.Zero(t, subordinate, "subordinate defaults to 0")
+	assert.Equal(t, "[]", offsets, "offsets defaults to an empty JSON array")
 
 	_, err = ix.db.ExecContext(ctx, `
 INSERT INTO vector_messages (doc_key, session_id, ordinal, ordinal_end, content, content_hash)
 VALUES (?, ?, ?, ?, ?, ?)`,
 		"d2", "s1", 0, 0, "duplicate slot", "h2")
-	assert.Error(err, "the unique (session_id, ordinal) index must be retained")
+	require.Error(t, err, "the unique (session_id, ordinal) index must be retained")
 
 	var metaCount int
-	require.NoError(ix.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM vector_meta`).Scan(&metaCount))
-	assert.Equal(1, metaCount, "vector_meta is cleared of the old watermark/scope keys")
+	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM vector_meta`).Scan(&metaCount))
+	assert.Equal(t, 1, metaCount, "vector_meta is cleared of the old watermark/scope keys")
 	var version string
-	require.NoError(ix.db.QueryRowContext(ctx,
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT value FROM vector_meta WHERE key = ?`, mirrorSchemaVersionKey,
 	).Scan(&version))
-	assert.Equal(MessageIndexSpec().MirrorSchemaVersion, version)
+	assert.Equal(t, MessageIndexSpec().MirrorSchemaVersion, version)
 
 	err = ix.db.QueryRowContext(ctx,
 		`SELECT name FROM sqlite_master WHERE name = 'message_vectors_gen7'`).Scan(new(string))
-	assert.ErrorIs(err, sql.ErrNoRows, "the stray abandoned per-generation table must be dropped")
+	require.ErrorIs(t, err, sql.ErrNoRows, "the stray abandoned per-generation table must be dropped")
 
 	var genCount int
-	require.NoError(ix.db.QueryRowContext(ctx,
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM `+MessageIndexSpec().generationsTable()).Scan(&genCount))
-	assert.Zero(genCount, "kit must have recreated its generations table fresh, not kept the fake row")
+	assert.Zero(t, genCount, "kit must have recreated its generations table fresh, not kept the fake row")
 }
 
 // TestMirrorSchemaVersionV2StampResetsWritePath covers the document-identity
@@ -491,27 +467,24 @@ VALUES (?, ?, ?, ?, ?, ?)`,
 // per message) must still be reset on writable open — the stamp, not the
 // column set, is what marks the rows incompatible.
 func TestMirrorSchemaVersionV2StampResetsWritePath(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 	seedV2Mirror(t, path)
 
 	ix, err := Open(ctx, path, false, 4000)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer ix.Close()
 
 	var rowCount int
-	require.NoError(ix.db.QueryRowContext(ctx,
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM vector_messages`).Scan(&rowCount))
-	assert.Zero(rowCount, "per-message v2 rows must not survive a version reset")
+	assert.Zero(t, rowCount, "per-message v2 rows must not survive a version reset")
 
 	var version string
-	require.NoError(ix.db.QueryRowContext(ctx,
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT value FROM vector_meta WHERE key = ?`, mirrorSchemaVersionKey,
 	).Scan(&version))
-	assert.Equal(MessageIndexSpec().MirrorSchemaVersion, version)
+	assert.Equal(t, MessageIndexSpec().MirrorSchemaVersion, version)
 }
 
 // TestMirrorSchemaVersionV2StampReadOnlyReturnsSentinel covers the read path
@@ -531,7 +504,7 @@ func TestMirrorSchemaVersionV2StampReadOnlyReturnsSentinel(t *testing.T) {
 	defer ro.Close()
 
 	_, err = ro.Search(ctx, fakeSearchEncoder(), "alpha", 10)
-	assert.ErrorIs(t, err, ErrMirrorVersionMismatch)
+	require.ErrorIs(t, err, ErrMirrorVersionMismatch)
 
 	_, err = ro.StaleActive(ctx, "any-fingerprint", "")
 	assert.ErrorIs(t, err, ErrMirrorVersionMismatch,
@@ -545,21 +518,18 @@ func TestMirrorSchemaVersionV2StampReadOnlyReturnsSentinel(t *testing.T) {
 // rather than misreading v1-shaped rows or falling through to
 // ErrNoActiveGeneration.
 func TestMirrorSchemaVersionReadOnlyMismatchSearchReturnsSentinel(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 	seedV1Mirror(t, path)
 
 	ro, err := Open(ctx, path, true, 4000)
-	require.NoError(err, "read-only Open must succeed even against a mismatched mirror")
+	require.NoError(t, err, "read-only Open must succeed even against a mismatched mirror")
 	defer ro.Close()
 
 	_, err = ro.Search(ctx, fakeSearchEncoder(), "alpha", 10)
-	require.Error(err)
-	assert.ErrorIs(err, ErrMirrorVersionMismatch)
-	assert.NotErrorIs(err, ErrNoActiveGeneration,
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrMirrorVersionMismatch)
+	assert.NotErrorIs(t, err, ErrNoActiveGeneration,
 		"a version mismatch must not be reported as an empty index")
 }
 
@@ -568,17 +538,15 @@ func TestMirrorSchemaVersionReadOnlyMismatchSearchReturnsSentinel(t *testing.T) 
 // be flagged as a mismatch, so Search proceeds to its normal
 // ErrNoActiveGeneration/BuildingError/hit-returning behavior.
 func TestMirrorSchemaVersionReadOnlyCurrentVersionSearchUnaffected(t *testing.T) {
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 
 	rw, err := Open(ctx, path, false, 4000)
-	require.NoError(err)
-	require.NoError(rw.Close())
+	require.NoError(t, err)
+	require.NoError(t, rw.Close())
 
 	ro, err := Open(ctx, path, true, 4000)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer ro.Close()
 
 	_, err = ro.Search(ctx, fakeSearchEncoder(), "alpha", 10)

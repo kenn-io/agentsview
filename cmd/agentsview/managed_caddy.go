@@ -132,7 +132,7 @@ func rewriteConfiguredPublicURLPort(
 		)
 	}
 
-	shouldRewrite := false
+	var shouldRewrite bool
 	if port := u.Port(); port != "" {
 		explicitPort, err := strconv.Atoi(port)
 		if err != nil {
@@ -472,7 +472,7 @@ func waitForLocalPort(
 			return err
 		default:
 		}
-		conn, err := net.DialTimeout("tcp", address, 200*time.Millisecond)
+		conn, err := (&net.Dialer{Timeout: 200 * time.Millisecond}).DialContext(ctx, "tcp", address)
 		if err == nil {
 			conn.Close()
 			return nil

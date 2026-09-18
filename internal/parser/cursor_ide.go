@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -206,7 +207,7 @@ func loadCursorIDEComposerMeta(
 		`SELECT value FROM cursorDiskKV WHERE key = ?`,
 		cursorIDEComposerKeyPrefix+composerID,
 	).Scan(&raw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return cursorIDEComposerMeta{}, false, nil
 	}
 	if err != nil {
@@ -439,7 +440,7 @@ func parseCursorIDEComposer(
 		`SELECT value FROM cursorDiskKV WHERE key = ?`,
 		cursorIDEComposerKeyPrefix+composerID,
 	).Scan(&raw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

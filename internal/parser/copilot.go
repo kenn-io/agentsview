@@ -504,7 +504,7 @@ func loadCopilotStoreUsage(ctx context.Context,
 		// Older stores need not contain usage data. Confirm a missing schema
 		// before falling back; operational read failures must remain retryable.
 		if sqliteErr, ok := errors.AsType[sqlite3.Error](err); ok && sqliteErr.Code == sqlite3.ErrError {
-			hasUsage, schemaErr := copilotStoreHasUsageSchema(context.Background(), store.QueryRowContext)
+			hasUsage, schemaErr := copilotStoreHasUsageSchema(ctx, store.QueryRowContext)
 			if schemaErr == nil && !hasUsage {
 				return nil, nil
 			}

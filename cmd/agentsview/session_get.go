@@ -155,10 +155,14 @@ func resolveBareCodebuffID(
 	localMachine := cfg.InstallationID
 	locations := parser.FindCodebuffFreebuffMatches(
 		[]parser.CodebuffFamilyRoots{
-			{Agent: parser.AgentCodebuff,
-				Roots: cfg.ResolveDirs(parser.AgentCodebuff)},
-			{Agent: parser.AgentFreebuff,
-				Roots: cfg.ResolveDirs(parser.AgentFreebuff)},
+			{
+				Agent: parser.AgentCodebuff,
+				Roots: cfg.ResolveDirs(parser.AgentCodebuff),
+			},
+			{
+				Agent: parser.AgentFreebuff,
+				Roots: cfg.ResolveDirs(parser.AgentFreebuff),
+			},
 		},
 		rawID,
 	)
@@ -352,7 +356,7 @@ func resolveCodebuffBareID(
 	cfg := mustLoadConfig(cmd)
 	machineFlag, _ := cmd.Flags().GetString("machine")
 	if machineFlag != "" && machineFlag != "local" && machineFlag != "*" {
-		database, err := openReadOnlyDB(cfg)
+		database, err := openReadOnlyDB(cmd.Context(), cfg)
 		if err != nil {
 			return "", err
 		}
@@ -385,6 +389,7 @@ func errBareCodebuffRemoteUnsupported(id string) error {
 		id,
 	)
 } // isCanonicalServiceSessionID reports whether id is already in the
+
 // canonical "agent:..." or "host~..." form that resolveServiceSessionID
 // can look up directly.
 //

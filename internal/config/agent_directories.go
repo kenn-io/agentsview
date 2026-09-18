@@ -155,6 +155,8 @@ func convertAgentTableMap(raw map[string]any) (bool, error) {
 			keys["claude_homes"] = "homes"
 		case parser.AgentCodex:
 			keys["codex_homes"] = "homes"
+		default:
+			// Other providers only have the canonical dirs field.
 		}
 		for _, key := range slices.Sorted(maps.Keys(keys)) {
 			value, exists := raw[key]

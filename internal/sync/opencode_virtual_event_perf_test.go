@@ -23,9 +23,6 @@ func TestOpenCodeVirtualEventDoesNotRecheckUnrelatedMembers(t *testing.T) {
 			var allocations []float64
 			for _, count := range []int{8, 800} {
 				t.Run(strconv.Itoa(count), func(t *testing.T) {
-					assert := assert.New(t)
-					require := require.New(t)
-
 					env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 					oc := createOpenCodeDB(t, env.opencodeDir)
 					oc.addProject(t, "project-a", "/workspace/project-a")
@@ -54,15 +51,15 @@ func TestOpenCodeVirtualEventDoesNotRecheckUnrelatedMembers(t *testing.T) {
  '{"text":"prompt"}' FROM session_v2;
  INSERT INTO session_message SELECT 'v2_assistant_' || id, id, 'assistant', 2, time_created, time_updated,
  '{"content":[{"type":"text","id":"text-a","text":"answer"}]}' FROM session_v2;`)
-						require.NoError(err)
+						require.NoError(t, err)
 					}
-					require.Equal(count, env.engine.SyncAll(t.Context(), nil).Synced)
+					require.Equal(t, count, env.engine.SyncAll(t.Context(), nil).Synced)
 					path := parser.OpenCodeSQLiteVirtualPath(oc.path, "ses00000")
 					var syncErr error
 					allocations = append(allocations, testing.AllocsPerRun(3, func() {
 						syncErr = env.engine.SyncPathsContext(t.Context(), []string{path})
 					}))
-					require.NoError(syncErr)
+					require.NoError(t, syncErr)
 					assertMessageContent(t, env.db, "opencode:ses00000", "prompt", "answer")
 					// A genuinely removed virtual member still needs source-missing
 					// reconciliation, and the persistent archive must retain its content.
@@ -71,21 +68,21 @@ func TestOpenCodeVirtualEventDoesNotRecheckUnrelatedMembers(t *testing.T) {
 						table = "session_v2"
 					}
 					_, err := oc.db.ExecContext(t.Context(), "DELETE FROM "+table+" WHERE id = 'ses00000'")
-					require.NoError(err)
+					require.NoError(t, err)
 					if layout == "mixed" {
 						_, err = oc.db.ExecContext(t.Context(), "DELETE FROM session WHERE id = 'ses00000'")
-						require.NoError(err)
+						require.NoError(t, err)
 					}
-					require.NoError(env.engine.SyncPathsContext(t.Context(), []string{path}))
+					require.NoError(t, env.engine.SyncPathsContext(t.Context(), []string{path}))
 					stored, err := env.db.GetSessionFull(t.Context(), "opencode:ses00000")
-					require.NoError(err)
-					require.NotNil(stored)
-					assert.NotNil(stored.SourceMissingAt)
+					require.NoError(t, err)
+					require.NotNil(t, stored)
+					assert.NotNil(t, stored.SourceMissingAt)
 					assertMessageContent(t, env.db, "opencode:ses00000", "prompt", "answer")
 					other, err := env.db.GetSessionFull(t.Context(), "opencode:ses00001")
-					require.NoError(err)
-					require.NotNil(other)
-					assert.Nil(other.SourceMissingAt)
+					require.NoError(t, err)
+					require.NotNil(t, other)
+					assert.Nil(t, other.SourceMissingAt)
 				})
 			}
 			require.Len(t, allocations, 2)
@@ -141,55 +138,54 @@ func TestOpenCodeFamilySidecarDeletionReconciliation(t *testing.T) {
 		agent    parser.AgentType
 		filename string
 	}{
-		{parser.AgentOpenCode, "opencode.db"}, {parser.AgentKilo, "kilo.db"},
-		{parser.AgentMiMoCode, "mimocode.db"}, {parser.AgentIcodemate, "icodemate.db"},
+		{parser.AgentOpenCode, "opencode.db"},
+		{parser.AgentKilo, "kilo.db"},
+		{parser.AgentMiMoCode, "mimocode.db"},
+		{parser.AgentIcodemate, "icodemate.db"},
 	} {
 		t.Run(string(provider.agent), func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			archive := dbtest.OpenTestDB(t)
-			engine := syncengine.NewEngine(archive, syncengine.EngineConfig{
+			engine := syncengine.NewEngine(t.Context(), archive, syncengine.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{provider.agent: {root}}, Machine: "local",
 			})
 			t.Cleanup(engine.Close)
 			oc := createOpenCodeLikeDB(t, filepath.Join(root, provider.filename), string(provider.agent))
 			_, err := oc.db.ExecContext(t.Context(), "PRAGMA journal_mode=WAL")
-			require.NoError(err)
+			require.NoError(t, err)
 			oc.addProject(t, "project-a", "/workspace/project-a")
 			for i := range 2 {
 				seedOpenCodeSQLiteTextSession(t, oc, "project-a", fmt.Sprintf("ses%05d", i),
 					1779012000000, 1779012030000, "prompt", "answer")
 			}
-			require.Equal(2, engine.SyncAll(t.Context(), nil).Synced)
+			require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
 			// Deleting a member then checkpointing the writer does not make the
 			// surviving container disappear. The authoritative pass detects it.
 			_, err = oc.db.ExecContext(t.Context(), "DELETE FROM session WHERE id = 'ses00000'")
-			require.NoError(err)
-			require.NoError(oc.db.Close())
-			require.NoError(engine.SyncPathsContext(t.Context(), []string{oc.path, oc.path + "-wal", oc.path + "-shm"}))
+			require.NoError(t, err)
+			require.NoError(t, oc.db.Close())
+			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{oc.path, oc.path + "-wal", oc.path + "-shm"}))
 			id := string(provider.agent) + ":ses00000"
 			stored, err := archive.GetSessionFull(t.Context(), id)
-			require.NoError(err)
-			require.NotNil(stored)
-			assert.Nil(stored.SourceMissingAt)
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			assert.Nil(t, stored.SourceMissingAt)
 			_, _, err = engine.ReconcileWatchRootsWithStats(t.Context(), []string{root}, true, nil)
-			require.NoError(err)
+			require.NoError(t, err)
 			stored, err = archive.GetSessionFull(t.Context(), id)
-			require.NoError(err)
-			require.NotNil(stored)
-			assert.NotNil(stored.SourceMissingAt)
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			assert.NotNil(t, stored.SourceMissingAt)
 			assertMessageContent(t, archive, id, "prompt", "answer")
 			// Container removal still marks the surviving member missing, without
 			// removing its archived messages.
-			require.NoError(os.Rename(oc.path, oc.path+".removed"))
-			require.NoError(engine.SyncPathsContext(t.Context(), []string{oc.path, oc.path + "-wal", oc.path + "-shm"}))
+			require.NoError(t, os.Rename(oc.path, oc.path+".removed"))
+			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{oc.path, oc.path + "-wal", oc.path + "-shm"}))
 			other := string(provider.agent) + ":ses00001"
 			stored, err = archive.GetSessionFull(t.Context(), other)
-			require.NoError(err)
-			require.NotNil(stored)
-			assert.NotNil(stored.SourceMissingAt)
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			assert.NotNil(t, stored.SourceMissingAt)
 			assertMessageContent(t, archive, other, "prompt", "answer")
 		})
 	}

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -116,12 +117,12 @@ func probeInsightGenerationAvailabilityTx(
 
 // GetSessionVersion returns the message count and a compact version
 // marker for SSE change detection.
-func (s *Store) GetSessionVersion(
+func (s *Store) GetSessionVersion(ctx context.Context,
 	id string,
 ) (int, int64, bool) {
 	var count int
 	var updatedAt time.Time
-	err := s.pg.QueryRow(
+	err := s.pg.QueryRowContext(ctx,
 		`SELECT message_count, COALESCE(updated_at, created_at)
 		 FROM sessions WHERE id = $1`,
 		id,
@@ -208,9 +209,9 @@ func buildPGInsightFilter(
 }
 
 // InsertInsight stores a dashboard insight in PG.
-func (s *Store) InsertInsight(insight db.Insight) (int64, error) {
+func (s *Store) InsertInsight(ctx context.Context, insight db.Insight) (int64, error) {
 	var id int64
-	err := s.pg.QueryRow(
+	err := s.pg.QueryRowContext(ctx,
 		`INSERT INTO insights (
 			type, date_from, date_to, project,
 			agent, model, prompt, content,
@@ -237,8 +238,8 @@ func (s *Store) InsertInsight(insight db.Insight) (int64, error) {
 }
 
 // DeleteInsight removes a dashboard insight from PG.
-func (s *Store) DeleteInsight(id int64) error {
-	_, err := s.pg.Exec(
+func (s *Store) DeleteInsight(ctx context.Context, id int64) error {
+	_, err := s.pg.ExecContext(ctx,
 		"DELETE FROM insights WHERE id = $1",
 		id,
 	)
@@ -299,7 +300,7 @@ func (s *Store) GetInsight(
 		id,
 	)
 	insight, err := scanPGInsight(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -329,7 +330,7 @@ func (s *Store) GetCachedInsight(
 		cacheKey,
 	)
 	insight, err := scanPGInsight(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -362,7 +363,7 @@ func (s *Store) RecordRecallQueryEvent(
 	return "", db.ErrReadOnly
 }
 
-func (s *Store) InsertRecallEntry(_ db.RecallEntry) (string, error) {
+func (s *Store) InsertRecallEntry(ctx context.Context, _ db.RecallEntry) (string, error) {
 	return "", db.ErrReadOnly
 }
 
@@ -385,10 +386,10 @@ func (s *Store) IngestEvalTrajectory(
 }
 
 // RenameSession updates the visible session name in PG.
-func (s *Store) RenameSession(
+func (s *Store) RenameSession(ctx context.Context,
 	id string, displayName *string,
 ) error {
-	_, err := s.pg.Exec(
+	_, err := s.pg.ExecContext(ctx,
 		`UPDATE sessions
 		 SET display_name = $2,
 		     updated_at = NOW()
@@ -402,8 +403,8 @@ func (s *Store) RenameSession(
 }
 
 // SoftDeleteSession moves a session to user trash.
-func (s *Store) SoftDeleteSession(id string) error {
-	_, err := s.pg.Exec(
+func (s *Store) SoftDeleteSession(ctx context.Context, id string) error {
+	_, err := s.pg.ExecContext(ctx,
 		`UPDATE sessions
 		 SET deleted_at = NOW(),
 		     deletion_cause = NULL,
@@ -420,7 +421,7 @@ func (s *Store) SoftDeleteSession(id string) error {
 }
 
 // SoftDeleteSessions moves multiple sessions to user trash.
-func (s *Store) SoftDeleteSessions(ids []string) (int, error) {
+func (s *Store) SoftDeleteSessions(ctx context.Context, ids []string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -433,7 +434,7 @@ func (s *Store) SoftDeleteSessions(ids []string) (int, error) {
 		for _, id := range ids[start:end] {
 			placeholders = append(placeholders, pb.add(id))
 		}
-		res, err := s.pg.Exec(
+		res, err := s.pg.ExecContext(ctx,
 			`UPDATE sessions
 			 SET deleted_at = NOW(),
 			     deletion_cause = NULL,
@@ -456,8 +457,8 @@ func (s *Store) SoftDeleteSessions(ids []string) (int, error) {
 
 // RestoreSession restores a trashed session and invalidates source freshness
 // so changes made while it was trashed are parsed.
-func (s *Store) RestoreSession(id string) (int64, error) {
-	res, err := s.pg.Exec(
+func (s *Store) RestoreSession(ctx context.Context, id string) (int64, error) {
+	res, err := s.pg.ExecContext(ctx,
 		`UPDATE sessions
 		 SET deleted_at = NULL,
 		     deletion_cause = NULL,
@@ -479,10 +480,9 @@ func (s *Store) RestoreSession(id string) (int64, error) {
 }
 
 // DeleteSessionIfTrashed permanently deletes a trashed session.
-func (s *Store) DeleteSessionIfTrashed(
+func (s *Store) DeleteSessionIfTrashed(ctx context.Context,
 	id string,
 ) (int64, error) {
-	ctx := context.Background()
 	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, mapPGWriteError(
@@ -551,8 +551,7 @@ func (s *Store) ListTrashedSessions(
 }
 
 // EmptyTrash permanently deletes every trashed session.
-func (s *Store) EmptyTrash() (int, error) {
-	ctx := context.Background()
+func (s *Store) EmptyTrash(ctx context.Context) (int, error) {
 	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, mapPGWriteError("begin empty-trash tx", err)
@@ -674,19 +673,19 @@ func deletePGTrashedSessionRows(
 }
 
 // UpsertSession is not supported in read-only mode.
-func (s *Store) UpsertSession(_ db.Session) error {
+func (s *Store) UpsertSession(ctx context.Context, _ db.Session) error {
 	return db.ErrReadOnly
 }
 
 // ReplaceSessionMessages is not supported in read-only mode.
-func (s *Store) ReplaceSessionMessages(
+func (s *Store) ReplaceSessionMessages(ctx context.Context,
 	_ string, _ []db.Message,
 ) error {
 	return db.ErrReadOnly
 }
 
 // WriteSessionBatchAtomic is not supported in read-only mode.
-func (s *Store) WriteSessionBatchAtomic(
+func (s *Store) WriteSessionBatchAtomic(ctx context.Context,
 	_ []db.SessionBatchWrite,
 	_ ...func() error,
 ) (db.SessionBatchResult, error) {

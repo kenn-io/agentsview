@@ -12,35 +12,29 @@ import (
 )
 
 func TestOpenClaudeProviderCapabilities(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	caps := openClaudeProviderCapabilities()
-	require.Equal(caps.Source.DiscoverSources, CapabilitySupported)
-	require.Equal(caps.Source.WatchSources, CapabilitySupported)
-	require.Equal(caps.Source.ClassifyChangedPath, CapabilitySupported)
-	require.Equal(caps.Source.FindSource, CapabilitySupported)
-	require.Equal(caps.Source.ForceReplaceOnParse, CapabilitySupported)
+	require.Equal(t, CapabilitySupported, caps.Source.DiscoverSources)
+	require.Equal(t, CapabilitySupported, caps.Source.WatchSources)
+	require.Equal(t, CapabilitySupported, caps.Source.ClassifyChangedPath)
+	require.Equal(t, CapabilitySupported, caps.Source.FindSource)
+	require.Equal(t, CapabilitySupported, caps.Source.ForceReplaceOnParse)
 
 	def, ok := AgentByType(AgentOpenClaude)
-	require.True(ok, "AgentOpenClaude missing from Registry")
-	assert.True(def.FileBased)
-	assert.Equal("OPENCLAUDE_PROJECTS_DIR", def.EnvVar)
-	assert.Equal("OPENCLAUDE_CONFIG_DIR", def.DefaultRootEnvVar)
-	assert.Equal("openclaude_project_dirs", def.ConfigKey)
-	assert.Equal([]string{".openclaude/projects"}, def.DefaultDirs)
-	assert.Equal("openclaude:", def.IDPrefix)
-	assert.Empty(def.WatchSubdirs)
-	assert.Nil(def.WatchRootsFunc)
+	require.True(t, ok, "AgentOpenClaude missing from Registry")
+	assert.True(t, def.FileBased)
+	assert.Equal(t, "OPENCLAUDE_PROJECTS_DIR", def.EnvVar)
+	assert.Equal(t, "OPENCLAUDE_CONFIG_DIR", def.DefaultRootEnvVar)
+	assert.Equal(t, "openclaude_project_dirs", def.ConfigKey)
+	assert.Equal(t, []string{".openclaude/projects"}, def.DefaultDirs)
+	assert.Equal(t, "openclaude:", def.IDPrefix)
+	assert.Empty(t, def.WatchSubdirs)
+	assert.Nil(t, def.WatchRootsFunc)
 }
 
 func TestOpenClaudeDiscoverParseAndFindSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "my-project")
-	require.NoError(os.MkdirAll(projectDir, 0o755))
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
 
 	path := filepath.Join(projectDir, "session-123.jsonl")
 	content := strings.Join([]string{
@@ -98,73 +92,70 @@ func TestOpenClaudeDiscoverParseAndFindSource(t *testing.T) {
 			},
 		}),
 	}, "\n") + "\n"
-	require.NoError(os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
 	provider, ok := NewProvider(AgentOpenClaude, ProviderConfig{
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(path, discovered[0].Key)
-	assert.Equal("my-project", discovered[0].ProjectHint)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, path, discovered[0].Key)
+	assert.Equal(t, "my-project", discovered[0].ProjectHint)
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "openclaude:session-123",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(path, found.Key)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, path, found.Key)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      discovered[0],
 		Fingerprint: SourceFingerprint{Hash: "hash-123"},
 		Machine:     "devbox",
 	})
-	require.NoError(err)
-	require.True(outcome.ResultSetComplete)
-	require.True(outcome.ForceReplace)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.True(t, outcome.ResultSetComplete)
+	require.True(t, outcome.ForceReplace)
+	require.Len(t, outcome.Results, 1)
 
 	result := outcome.Results[0].Result
-	assert.Equal(AgentOpenClaude, result.Session.Agent)
-	assert.Equal("openclaude:session-123", result.Session.ID)
-	assert.Equal("my_project", result.Session.Project)
-	assert.Equal("hello from openclaude", result.Session.FirstMessage)
-	assert.Equal("User title", result.Session.SessionName)
-	assert.Equal(1, result.Session.UserMessageCount)
-	assert.Equal(TerminationAwaitingUser, result.Session.TerminationStatus)
-	assert.Equal(7, result.Session.TotalOutputTokens)
-	assert.Equal(17, result.Session.PeakContextTokens)
-	assert.True(result.Session.HasTotalOutputTokens)
-	assert.True(result.Session.HasPeakContextTokens)
-	assert.Equal("hash-123", result.Session.File.Hash)
-	require.Len(result.Messages, 3)
+	assert.Equal(t, AgentOpenClaude, result.Session.Agent)
+	assert.Equal(t, "openclaude:session-123", result.Session.ID)
+	assert.Equal(t, "my_project", result.Session.Project)
+	assert.Equal(t, "hello from openclaude", result.Session.FirstMessage)
+	assert.Equal(t, "User title", result.Session.SessionName)
+	assert.Equal(t, 1, result.Session.UserMessageCount)
+	assert.Equal(t, TerminationAwaitingUser, result.Session.TerminationStatus)
+	assert.Equal(t, 7, result.Session.TotalOutputTokens)
+	assert.Equal(t, 17, result.Session.PeakContextTokens)
+	assert.True(t, result.Session.HasTotalOutputTokens)
+	assert.True(t, result.Session.HasPeakContextTokens)
+	assert.Equal(t, "hash-123", result.Session.File.Hash)
+	require.Len(t, result.Messages, 3)
 
-	assert.Equal(RoleUser, result.Messages[0].Role)
-	assert.Equal(RoleAssistant, result.Messages[1].Role)
-	assert.Equal("end_turn", result.Messages[1].StopReason)
-	assert.Equal(7, result.Messages[1].OutputTokens)
-	assert.Equal(17, result.Messages[1].ContextTokens)
-	assert.True(result.Messages[1].HasOutputTokens)
-	assert.True(result.Messages[1].HasContextTokens)
-	assert.Equal(RoleAssistant, result.Messages[2].Role)
-	assert.True(result.Messages[2].IsSystem)
-	assert.True(result.Messages[2].IsCompactBoundary)
-	assert.Equal("compact_boundary", result.Messages[2].SourceSubtype)
-	assert.Contains(result.Messages[2].Content, "Compact summary")
+	assert.Equal(t, RoleUser, result.Messages[0].Role)
+	assert.Equal(t, RoleAssistant, result.Messages[1].Role)
+	assert.Equal(t, "end_turn", result.Messages[1].StopReason)
+	assert.Equal(t, 7, result.Messages[1].OutputTokens)
+	assert.Equal(t, 17, result.Messages[1].ContextTokens)
+	assert.True(t, result.Messages[1].HasOutputTokens)
+	assert.True(t, result.Messages[1].HasContextTokens)
+	assert.Equal(t, RoleAssistant, result.Messages[2].Role)
+	assert.True(t, result.Messages[2].IsSystem)
+	assert.True(t, result.Messages[2].IsCompactBoundary)
+	assert.Equal(t, "compact_boundary", result.Messages[2].SourceSubtype)
+	assert.Contains(t, result.Messages[2].Content, "Compact summary")
 }
 
 func TestOpenClaudeTerminationUsesSystemToolResults(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "tool-project")
-	require.NoError(os.MkdirAll(projectDir, 0o755))
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
 
 	path := filepath.Join(projectDir, "session-tools.jsonl")
 	content := strings.Join([]string{
@@ -191,33 +182,30 @@ func TestOpenClaudeTerminationUsesSystemToolResults(t *testing.T) {
 			},
 		}),
 	}, "\n") + "\n"
-	require.NoError(os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
 	provider, ok := NewProvider(AgentOpenClaude, ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0].Result
 
-	assert.Equal(TerminationClean, result.Session.TerminationStatus)
-	require.Len(result.Messages, 3)
-	assert.True(result.Messages[2].IsSystem)
-	require.Len(result.Messages[2].ToolResults, 1)
-	assert.Equal("toolu_sys", result.Messages[2].ToolResults[0].ToolUseID)
+	assert.Equal(t, TerminationClean, result.Session.TerminationStatus)
+	require.Len(t, result.Messages, 3)
+	assert.True(t, result.Messages[2].IsSystem)
+	require.Len(t, result.Messages[2].ToolResults, 1)
+	assert.Equal(t, "toolu_sys", result.Messages[2].ToolResults[0].ToolUseID)
 }
 
 func TestOpenClaudeTerminationCompactBoundaryDoesNotResolveToolCall(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "compact-project")
-	require.NoError(os.MkdirAll(projectDir, 0o755))
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
 
 	path := filepath.Join(projectDir, "session-compact.jsonl")
 	content := strings.Join([]string{
@@ -243,33 +231,30 @@ func TestOpenClaudeTerminationCompactBoundaryDoesNotResolveToolCall(t *testing.T
 			},
 		}),
 	}, "\n") + "\n"
-	require.NoError(os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
 	provider, ok := NewProvider(AgentOpenClaude, ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0].Result
 
-	assert.Equal(TerminationToolCallPending, result.Session.TerminationStatus)
-	require.Len(result.Messages, 3)
-	assert.True(result.Messages[2].IsSystem)
-	assert.True(result.Messages[2].IsCompactBoundary)
-	assert.Equal(RoleAssistant, result.Messages[2].Role)
+	assert.Equal(t, TerminationToolCallPending, result.Session.TerminationStatus)
+	require.Len(t, result.Messages, 3)
+	assert.True(t, result.Messages[2].IsSystem)
+	assert.True(t, result.Messages[2].IsCompactBoundary)
+	assert.Equal(t, RoleAssistant, result.Messages[2].Role)
 }
 
 func TestOpenClaudeQueuedCommandAttachment(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "queue-project")
-	require.NoError(os.MkdirAll(projectDir, 0o755))
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
 
 	path := filepath.Join(projectDir, "session-queue.jsonl")
 	content := strings.Join([]string{
@@ -345,42 +330,39 @@ func TestOpenClaudeQueuedCommandAttachment(t *testing.T) {
 			},
 		}),
 	}, "\n") + "\n"
-	require.NoError(os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
 	provider, ok := NewProvider(AgentOpenClaude, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: discovered[0],
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 
 	result := outcome.Results[0].Result
-	require.Len(result.Messages, 4)
-	assert.Equal("/resume next step\nwith context", result.Messages[1].Content)
-	assert.Equal("queued_command", result.Messages[1].SourceSubtype)
-	assert.Equal(RoleUser, result.Messages[1].Role)
-	assert.Equal("<system-reminder>remember this</system-reminder>\n\nactual prompt", result.Messages[2].Content)
-	assert.Equal("queued_command", result.Messages[2].SourceSubtype)
-	assert.False(result.Messages[2].IsSystem)
-	assert.Equal(3, result.Session.UserMessageCount)
-	assert.Equal("first prompt", result.Session.FirstMessage)
+	require.Len(t, result.Messages, 4)
+	assert.Equal(t, "/resume next step\nwith context", result.Messages[1].Content)
+	assert.Equal(t, "queued_command", result.Messages[1].SourceSubtype)
+	assert.Equal(t, RoleUser, result.Messages[1].Role)
+	assert.Equal(t, "<system-reminder>remember this</system-reminder>\n\nactual prompt", result.Messages[2].Content)
+	assert.Equal(t, "queued_command", result.Messages[2].SourceSubtype)
+	assert.False(t, result.Messages[2].IsSystem)
+	assert.Equal(t, 3, result.Session.UserMessageCount)
+	assert.Equal(t, "first prompt", result.Session.FirstMessage)
 }
 
 func TestOpenClaudeSkipsMetaUserMessages(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "meta-project")
-	require.NoError(os.MkdirAll(projectDir, 0o755))
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
 
 	path := filepath.Join(projectDir, "session-meta.jsonl")
 	content := strings.Join([]string{
@@ -426,37 +408,34 @@ func TestOpenClaudeSkipsMetaUserMessages(t *testing.T) {
 			},
 		}),
 	}, "\n") + "\n"
-	require.NoError(os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
 	provider, ok := NewProvider(AgentOpenClaude, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: discovered[0],
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 
 	result := outcome.Results[0].Result
-	require.Len(result.Messages, 2)
-	assert.Equal("real prompt", result.Session.FirstMessage)
-	assert.Equal(1, result.Session.UserMessageCount)
-	assert.Equal(TerminationAwaitingUser, result.Session.TerminationStatus)
-	assert.Equal(RoleUser, result.Messages[0].Role)
-	assert.Equal("real prompt", result.Messages[0].Content)
-	assert.Equal(RoleAssistant, result.Messages[1].Role)
+	require.Len(t, result.Messages, 2)
+	assert.Equal(t, "real prompt", result.Session.FirstMessage)
+	assert.Equal(t, 1, result.Session.UserMessageCount)
+	assert.Equal(t, TerminationAwaitingUser, result.Session.TerminationStatus)
+	assert.Equal(t, RoleUser, result.Messages[0].Role)
+	assert.Equal(t, "real prompt", result.Messages[0].Content)
+	assert.Equal(t, RoleAssistant, result.Messages[1].Role)
 }
 
 func TestOpenClaudeDiscoverParseSubagentRelationship(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(
 		root,
@@ -466,8 +445,8 @@ func TestOpenClaudeDiscoverParseSubagentRelationship(t *testing.T) {
 		"tasks",
 		"agent-worker.jsonl",
 	)
-	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(os.WriteFile(path, []byte(strings.Join([]string{
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join([]string{
 		buildMetadataLine(map[string]any{
 			"type":      "user",
 			"timestamp": tsEarly,
@@ -495,23 +474,23 @@ func TestOpenClaudeDiscoverParseSubagentRelationship(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  discovered[0],
 		Machine: "devbox",
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 
 	result := outcome.Results[0].Result
-	assert.Equal("openclaude:agent-worker", result.Session.ID)
-	assert.Equal("openclaude:parent-123", result.Session.ParentSessionID)
-	assert.Equal(RelSubagent, result.Session.RelationshipType)
+	assert.Equal(t, "openclaude:agent-worker", result.Session.ID)
+	assert.Equal(t, "openclaude:parent-123", result.Session.ParentSessionID)
+	assert.Equal(t, RelSubagent, result.Session.RelationshipType)
 }
 
 func openClaudeDiscoverEach(t *testing.T, root string) ([]string, error) {
@@ -535,8 +514,6 @@ func openClaudeDiscoverEach(t *testing.T, root string) ([]string, error) {
 // reconciliation treats a clean DiscoverEach as authoritative, and skipping a
 // symlinked project would tombstone every session beneath it.
 func TestOpenClaudeDiscoverEachFollowsSymlinkedProjectDirectory(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	targetRoot := t.TempDir()
 	projectDir := "-Users-dev-code-demo"
@@ -559,15 +536,15 @@ func TestOpenClaudeDiscoverEachFollowsSymlinkedProjectDirectory(t *testing.T) {
 	provider, ok := NewProvider(AgentOpenClaude, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
+	require.True(t, ok)
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.ElementsMatch(
+	require.NoError(t, err)
+	require.ElementsMatch(t,
 		[]string{linkedPath, regularPath}, sourceDisplayPaths(discovered),
 	)
 
 	streamed, err := openClaudeDiscoverEach(t, root)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{linkedPath, regularPath}, streamed,
 		"DiscoverEach must find the same sessions as Discover "+
 			"for symlinked project directories")
@@ -585,40 +562,34 @@ func TestOpenClaudeStreamingDiscoveryPropagatesProjectSymlinkErrors(
 	}
 
 	t.Run("dangling project symlink", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		root := t.TempDir()
 		writeSourceFile(
 			t, healthyPath(root), claudeProviderFixture("hello openclaude"),
 		)
 		target := filepath.Join(t.TempDir(), "linked-project")
-		require.NoError(os.MkdirAll(target, 0o755))
+		require.NoError(t, os.MkdirAll(target, 0o755))
 		link := filepath.Join(root, "linked")
 		if err := os.Symlink(target, link); err != nil {
 			t.Skipf("symlink not supported: %v", err)
 		}
-		require.NoError(os.RemoveAll(target))
+		require.NoError(t, os.RemoveAll(target))
 
 		yielded, err := openClaudeDiscoverEach(t, root)
 
-		require.Error(err)
-		assert.ErrorIs(err, os.ErrNotExist)
+		require.Error(t, err)
+		require.ErrorIs(t, err, os.ErrNotExist)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 		// The walker records the failure and continues with healthy siblings.
-		assert.Equal([]string{healthyPath(root)}, yielded)
+		assert.Equal(t, []string{healthyPath(root)}, yielded)
 
-		require.NoError(os.Remove(link))
+		require.NoError(t, os.Remove(link))
 		yielded, err = openClaudeDiscoverEach(t, root)
-		require.NoError(err)
-		assert.Equal([]string{healthyPath(root)}, yielded)
+		require.NoError(t, err)
+		assert.Equal(t, []string{healthyPath(root)}, yielded)
 	})
 
 	t.Run("unstatable project symlink target", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		if runtime.GOOS == "windows" {
 			t.Skip("directory read permissions are not enforced on Windows")
 		}
@@ -631,24 +602,24 @@ func TestOpenClaudeStreamingDiscoveryPropagatesProjectSymlinkErrors(
 		)
 		targetParent := t.TempDir()
 		target := filepath.Join(targetParent, "linked-project")
-		require.NoError(os.MkdirAll(target, 0o755))
+		require.NoError(t, os.MkdirAll(target, 0o755))
 		if err := os.Symlink(target, filepath.Join(root, "linked")); err != nil {
 			t.Skipf("symlink not supported: %v", err)
 		}
-		require.NoError(os.Chmod(targetParent, 0o000))
+		require.NoError(t, os.Chmod(targetParent, 0o000))
 		t.Cleanup(func() { _ = os.Chmod(targetParent, 0o755) })
 
 		yielded, err := openClaudeDiscoverEach(t, root)
 
-		require.Error(err)
-		assert.ErrorIs(err, os.ErrPermission)
+		require.Error(t, err)
+		require.ErrorIs(t, err, os.ErrPermission)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(err, &incomplete)
-		assert.Equal([]string{healthyPath(root)}, yielded)
+		require.ErrorAs(t, err, &incomplete)
+		assert.Equal(t, []string{healthyPath(root)}, yielded)
 
-		require.NoError(os.Chmod(targetParent, 0o755))
+		require.NoError(t, os.Chmod(targetParent, 0o755))
 		yielded, err = openClaudeDiscoverEach(t, root)
-		require.NoError(err)
-		assert.Equal([]string{healthyPath(root)}, yielded)
+		require.NoError(t, err)
+		assert.Equal(t, []string{healthyPath(root)}, yielded)
 	})
 }

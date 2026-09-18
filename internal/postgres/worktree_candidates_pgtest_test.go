@@ -23,11 +23,11 @@ func seedPGCandidateSession(
 ) {
 	t.Helper()
 	ended := started
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID: id, Project: project, Machine: machine, Agent: "codex", Cwd: cwd,
 		StartedAt: &started, EndedAt: &ended, MessageCount: 1,
 	}), "UpsertSession %s", id)
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID: id, Ordinal: 0, Role: "assistant", Content: "hi", ContentLength: 2,
 	}}), "InsertMessages %s", id)
 }
@@ -97,7 +97,7 @@ func TestPGWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 
 	seedPGCandidateSession(t, localDB, "unavailable-session", project, machine,
 		"", "2025-06-02T10:00:00Z")
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID: "zero-message-session", Project: project, Machine: machine,
 		Agent: "codex",
 	}), "seed zero-message session")
@@ -238,11 +238,9 @@ func TestPGWorktreeCandidatesExcludeDifferentProjectKeys(t *testing.T) {
 		ProjectLabel: export.SafeProjectDisplayLabel(primary),
 		ProjectKey:   projects[primary].ProjectKey,
 	}
-	localCandidates, err :=
-		localDB.ListArchiveWorktreeCandidates(ctx, request)
+	localCandidates, err := localDB.ListArchiveWorktreeCandidates(ctx, request)
 	require.NoError(t, err)
-	pgCandidates, err :=
-		(&Store{pg: pg}).ListArchiveWorktreeCandidates(ctx, request)
+	pgCandidates, err := (&Store{pg: pg}).ListArchiveWorktreeCandidates(ctx, request)
 	require.NoError(t, err)
 
 	assert.Equal(t, localCandidates, pgCandidates)
@@ -286,17 +284,17 @@ func TestPGWorktreeCandidatesUseSessionDatabaseGeneration(t *testing.T) {
 	require.NoError(t, err)
 	archiveSalt, err := localDB.GetArchiveSalt(ctx)
 	require.NoError(t, err)
-	newLocalDB, err := db.Open(filepath.Join(t.TempDir(), "new-local.db"))
+	newLocalDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "new-local.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, newLocalDB.Close()) })
 	require.NoError(t, newLocalDB.SetArchiveIdentityForTest(
 		ctx, archiveID, archiveSalt,
 	))
 	require.NoError(t, newLocalDB.SetDatabaseIDForTest(ctx, newGeneration))
-	markerID, err := localDB.GetSyncState(pushMarkerIDStateKey)
+	markerID, err := localDB.GetSyncState(t.Context(), pushMarkerIDStateKey)
 	require.NoError(t, err)
 	require.NotEmpty(t, markerID)
-	require.NoError(t, newLocalDB.SetSyncState(pushMarkerIDStateKey, markerID))
+	require.NoError(t, newLocalDB.SetSyncState(ctx, pushMarkerIDStateKey, markerID))
 	seedPGCandidateSession(t, newLocalDB, sessionID, newProject, machine,
 		"/srv/new/repo/worktree", "2025-06-02T10:00:00Z")
 	setPGCandidateSnapshot(t, ctx, newLocalDB, sessionID, newProject, machine,

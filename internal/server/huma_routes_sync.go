@@ -118,7 +118,7 @@ var runHTTPRemoteSync = func(
 }
 
 type preparedHTTPRebuild interface {
-	BorrowRebuildOptions() (syncpkg.RebuildOptions, func(), error)
+	BorrowRebuildOptions(ctx context.Context) (syncpkg.RebuildOptions, func(), error)
 	Close() error
 }
 
@@ -197,7 +197,7 @@ func (s *Server) syncStatusEngine() *syncpkg.Engine {
 	return s.onDemandEngine
 }
 
-func (s *Server) syncEngineForRequest() (*syncpkg.Engine, error) {
+func (s *Server) syncEngineForRequest(ctx context.Context) (*syncpkg.Engine, error) {
 	if s.engine != nil {
 		return s.engine, nil
 	}
@@ -205,10 +205,10 @@ func (s *Server) syncEngineForRequest() (*syncpkg.Engine, error) {
 	if !ok {
 		return nil, apiError(http.StatusNotImplemented, "not available in remote mode")
 	}
-	return s.syncEngineForLocal(local), nil
+	return s.syncEngineForLocal(ctx, local), nil
 }
 
-func (s *Server) syncEngineForLocal(local *db.DB) *syncpkg.Engine {
+func (s *Server) syncEngineForLocal(ctx context.Context, local *db.DB) *syncpkg.Engine {
 	if s.engine != nil {
 		return s.engine
 	}
@@ -222,7 +222,7 @@ func (s *Server) syncEngineForLocal(local *db.DB) *syncpkg.Engine {
 	if s.broadcaster != nil {
 		emitter = s.broadcaster
 	}
-	s.onDemandEngine = syncpkg.NewEngine(local, syncpkg.EngineConfig{
+	s.onDemandEngine = syncpkg.NewEngine(ctx, local, syncpkg.EngineConfig{
 		AgentDirs:               cfg.AgentDirs,
 		SourceMachines:          cfg.SourceMachines,
 		ProviderMetadata:        cfg.ProviderMetadata,
@@ -244,7 +244,7 @@ func (s *Server) humaTriggerSync(
 	engine := s.engine
 	if !in.StartupOnly {
 		var err error
-		engine, err = s.syncEngineForRequest()
+		engine, err = s.syncEngineForRequest(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -258,7 +258,7 @@ func (s *Server) humaTriggerSync(
 			stats, err := s.runSyncWhenReady(ctx, engine, *in, nil)
 			if err != nil {
 				writeHumaJSON(hctx, http.StatusInternalServerError,
-					apiErrorResponse{Message: err.Error()})
+					apiResponseError{Message: err.Error()})
 				return
 			}
 			writeHumaJSON(hctx, http.StatusOK, stats)
@@ -371,7 +371,7 @@ func (s *Server) humaTriggerResync(
 	ctx context.Context,
 	_ *emptyInput,
 ) (*huma.StreamResponse, error) {
-	engine, err := s.syncEngineForRequest()
+	engine, err := s.syncEngineForRequest(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +381,7 @@ func (s *Server) humaTriggerResync(
 			stats, err := s.runResyncWithFallback(ctx, engine, nil)
 			if err != nil {
 				writeHumaJSON(hctx, http.StatusInternalServerError,
-					apiErrorResponse{Message: err.Error()})
+					apiResponseError{Message: err.Error()})
 				return
 			}
 			writeHumaJSON(hctx, http.StatusOK, stats)
@@ -433,7 +433,7 @@ func (s *Server) humaSyncRemotes(
 	if !ok {
 		return nil, apiError(http.StatusNotImplemented, "not available in remote mode")
 	}
-	engine := s.syncEngineForLocal(local)
+	engine := s.syncEngineForLocal(ctx, local)
 	hosts, err := s.resolveRemoteSyncHosts(ctx, in.Body.Hosts)
 	if err != nil {
 		return nil, err
@@ -609,7 +609,7 @@ func (s *Server) runRemoteSyncRequest(
 					if prepared == nil {
 						return syncpkg.RebuildOptions{}, nil, nil
 					}
-					options, release, err := prepared.BorrowRebuildOptions()
+					options, release, err := prepared.BorrowRebuildOptions(ctx)
 					if err != nil {
 						return syncpkg.RebuildOptions{}, prepared, err
 					}
@@ -928,10 +928,10 @@ func primaryRemoteCoordinatorError(err error) error {
 			continue
 		}
 		{
-			var errCase0 *syncpkg.RebuildContributorError
-			var errCase1 *remotesync.HostError
+			_, hasErrCase0 := errors.AsType[*syncpkg.RebuildContributorError](err)
+			_, hasErrCase1 := errors.AsType[*remotesync.HostError](err)
 			switch {
-			case errors.As(err, &errCase0), errors.As(err, &errCase1):
+			case hasErrCase0, hasErrCase1:
 				return err
 			}
 		}
@@ -955,8 +955,8 @@ func isHTTPRemoteCoordinatorError(err error) bool {
 	if _, ok := errors.AsType[*syncpkg.RebuildContributorError](primary); ok {
 		return true
 	}
-	var host *remotesync.HostError
-	return errors.As(primary, &host)
+	_, hasHost := errors.AsType[*remotesync.HostError](primary)
+	return hasHost
 }
 
 func (s *Server) runRemoteSyncHosts(
@@ -1079,8 +1079,10 @@ func (s *Server) runRemoteSyncHostsOwned(
 			)
 			if !acquireHTTPRegistry &&
 				rh.Transport == config.RemoteTransportHTTP {
-				var cleanup httpCleanupRetrier
-				if errors.As(err, &cleanup) {
+				if _, ok := errors.AsType[interface {
+					error
+					httpCleanupRetrier
+				}](err); ok {
 					return failures, totals, &remotesync.HostError{
 						Host: rh.Host, Operation: "sync", Err: err,
 					}
@@ -1155,11 +1157,11 @@ func (s *Server) emitRemoteSyncChanged(stats remotesync.SyncStats) {
 	s.broadcaster.Emit("sessions")
 }
 
-func (s *Server) sessionSyncService() service.SessionService {
+func (s *Server) sessionSyncService(ctx context.Context) service.SessionService {
 	if s.engine == nil {
 		if local, ok := s.db.(*db.DB); ok {
 			return service.NewDirectBackend(
-				local, s.syncEngineForLocal(local),
+				local, s.syncEngineForLocal(ctx, local),
 			)
 		}
 	}
@@ -1186,7 +1188,7 @@ func (s *Server) humaSyncSession(
 		}
 		return nil, apiError(http.StatusInternalServerError, err.Error())
 	}
-	detail, err := s.sessionSyncService().Sync(ctx, in.Body)
+	detail, err := s.sessionSyncService(ctx).Sync(ctx, in.Body)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil, nil
@@ -1211,7 +1213,7 @@ func (s *Server) resyncBeforeSessionSync(ctx context.Context) error {
 	if !ok || !local.NeedsResync() {
 		return nil
 	}
-	engine, err := s.syncEngineForRequest()
+	engine, err := s.syncEngineForRequest(ctx)
 	if err != nil {
 		return err
 	}

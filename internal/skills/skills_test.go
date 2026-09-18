@@ -12,35 +12,30 @@ func TestRemoteArgs(t *testing.T) {
 	assert.Empty(t, Remote{}.Args())
 	assert.Equal(t, " --server https://example.invalid",
 		Remote{Server: "https://example.invalid"}.Args())
-	assert.Equal(t,
-		" --server https://example.invalid --server-token-file token",
+	assert.Equal(t, " --server https://example.invalid --server-token-file token",
 		Remote{Server: "https://example.invalid", TokenFile: "token"}.Args())
 }
 
 func TestRenderBakesServerArgsAndRemoteLine(t *testing.T) {
-	assert := assert.New(t)
-
 	remote := Remote{Server: "https://example.invalid", TokenFile: "token"}
 	rendered, err := Render(HarnessClaude, "dev", remote)
 	require.NoError(t, err)
 
-	assert.Contains(rendered.Content, "--server https://example.invalid")
-	assert.Contains(rendered.Content, "--server-token-file token")
-	assert.Contains(rendered.Content, "--exclude-session <this-session-id>")
-	assert.NotContains(rendered.Content, "--fts --in")
-	assert.Equal(remote, ParseRemote(rendered.Content))
-	assert.Equal(StateCurrent, Classify([]byte(rendered.Content), rendered))
+	assert.Contains(t, rendered.Content, "--server https://example.invalid")
+	assert.Contains(t, rendered.Content, "--server-token-file token")
+	assert.Contains(t, rendered.Content, "--exclude-session <this-session-id>")
+	assert.NotContains(t, rendered.Content, "--fts --in")
+	assert.Equal(t, remote, ParseRemote(rendered.Content))
+	assert.Equal(t, StateCurrent, Classify([]byte(rendered.Content), rendered))
 }
 
 func TestRenderWithoutRemoteOmitsServerFlags(t *testing.T) {
-	assert := assert.New(t)
-
 	rendered, err := Render(HarnessClaude, "dev", Remote{})
 	require.NoError(t, err)
-	assert.NotContains(rendered.Content, "--limit 8 --server")
-	assert.NotContains(rendered.Content, "--json --server")
-	assert.True(ParseRemote(rendered.Content).Empty())
-	assert.Contains(rendered.Content, "silently searches local SQLite")
+	assert.NotContains(t, rendered.Content, "--limit 8 --server")
+	assert.NotContains(t, rendered.Content, "--json --server")
+	assert.True(t, ParseRemote(rendered.Content).Empty())
+	assert.Contains(t, rendered.Content, "silently searches local SQLite")
 }
 
 func TestParseRemoteIgnoresMalformedLine(t *testing.T) {
@@ -91,14 +86,12 @@ func TestRemoteArgsQuotesUnsafeValues(t *testing.T) {
 }
 
 func TestRemoteValidateRejectsControlCharacters(t *testing.T) {
-	assert := assert.New(t)
-
-	assert.NoError(Remote{Server: "https://example.invalid"}.Validate())
-	assert.Error(Remote{Server: "https://example.invalid\nname: evil"}.Validate())
-	assert.Error(Remote{Server: "ok", TokenFile: "tok\ttab"}.Validate())
+	require.NoError(t, Remote{Server: "https://example.invalid"}.Validate())
+	require.Error(t, Remote{Server: "https://example.invalid\nname: evil"}.Validate())
+	require.Error(t, Remote{Server: "ok", TokenFile: "tok\ttab"}.Validate())
 
 	_, err := Render(HarnessClaude, "dev", Remote{Server: "a\nb"})
-	assert.Error(err, "Render must refuse a remote that would break the file")
+	assert.Error(t, err, "Render must refuse a remote that would break the file")
 }
 
 // TestParseRemoteDropsControlCharacters covers a hand-edited file whose JSON

@@ -264,7 +264,7 @@ func openReportingExportDB(
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("loading config: %w", err)
 	}
-	database, err := openExportReadOnlyDB(appConfig)
+	database, err := openExportReadOnlyDB(cmd.Context(), appConfig)
 	if err != nil {
 		return nil, func() {}, err
 	}

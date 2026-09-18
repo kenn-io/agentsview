@@ -20,9 +20,7 @@ const (
 	cjkFTSSchemaVersion       = "messages-cjk-fts-v3"
 )
 
-var (
-	simpleFTSRuntimeConfig, simpleFTSRuntimeErr = discoverSimpleFTSRuntime()
-)
+var simpleFTSRuntimeConfig, simpleFTSRuntimeErr = discoverSimpleFTSRuntime()
 
 const schemaCJKFTSPendingSessions = `
 CREATE TABLE IF NOT EXISTS messages_cjk_fts_pending_sessions (

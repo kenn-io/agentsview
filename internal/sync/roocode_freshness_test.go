@@ -20,20 +20,17 @@ import (
 // polling work with transcript size and archive cardinality instead
 // of the changed batch.
 func TestRooCodeFreshBeforeFingerprintUsesCompositeStat(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	taskDir := t.TempDir()
 	historyPath := filepath.Join(taskDir, "history_item.json")
 	messagesPath := filepath.Join(taskDir, "ui_messages.json")
-	require.NoError(os.WriteFile(historyPath,
+	require.NoError(t, os.WriteFile(historyPath,
 		[]byte(`{"id":"task-1","ts":1,"task":"t"}`), 0o644))
-	require.NoError(os.WriteFile(messagesPath, []byte(`[]`), 0o644))
+	require.NoError(t, os.WriteFile(messagesPath, []byte(`[]`), 0o644))
 
 	historyInfo, err := os.Stat(historyPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	messagesInfo, err := os.Stat(messagesPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	compositeSize := historyInfo.Size() + messagesInfo.Size()
 	compositeMtime := historyInfo.ModTime().UnixNano()
 	if m := messagesInfo.ModTime().UnixNano(); m > compositeMtime {
@@ -50,8 +47,8 @@ func TestRooCodeFreshBeforeFingerprintUsesCompositeStat(t *testing.T) {
 		FileSize:  int64Ptr(compositeSize),
 		FileMtime: int64Ptr(compositeMtime),
 	}
-	require.NoError(database.UpsertSession(sess))
-	require.NoError(database.SetSessionDataVersion(
+	require.NoError(t, database.UpsertSession(t.Context(), sess))
+	require.NoError(t, database.SetSessionDataVersion(t.Context(),
 		sess.ID, db.CurrentDataVersion(),
 	))
 
@@ -65,8 +62,8 @@ func TestRooCodeFreshBeforeFingerprintUsesCompositeStat(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		// The gate must be stat-only: make the contents unreadable so
 		// any attempt to hash them would fail loudly.
-		require.NoError(os.Chmod(historyPath, 0o000))
-		require.NoError(os.Chmod(messagesPath, 0o000))
+		require.NoError(t, os.Chmod(historyPath, 0o000))
+		require.NoError(t, os.Chmod(messagesPath, 0o000))
 		t.Cleanup(func() {
 			_ = os.Chmod(historyPath, 0o644)
 			_ = os.Chmod(messagesPath, 0o644)
@@ -76,25 +73,25 @@ func TestRooCodeFreshBeforeFingerprintUsesCompositeStat(t *testing.T) {
 	mtime, fresh := engine.providerSourceFreshBeforeFingerprint(
 		t.Context(), source, file, nil,
 	)
-	assert.True(fresh, "unchanged composite stat must skip the fingerprint")
-	assert.Equal(compositeMtime, mtime)
+	assert.True(t, fresh, "unchanged composite stat must skip the fingerprint")
+	assert.Equal(t, compositeMtime, mtime)
 
 	if runtime.GOOS != "windows" {
-		require.NoError(os.Chmod(historyPath, 0o644))
-		require.NoError(os.Chmod(messagesPath, 0o644))
+		require.NoError(t, os.Chmod(historyPath, 0o644))
+		require.NoError(t, os.Chmod(messagesPath, 0o644))
 	}
 
 	// A transcript append that only touches ui_messages.json must
 	// defeat the skip: the composite folds in the sibling, so the
 	// pre-fingerprint gate cannot hide sibling-only changes.
 	future := time.Now().Add(2 * time.Second)
-	require.NoError(os.WriteFile(messagesPath,
+	require.NoError(t, os.WriteFile(messagesPath,
 		[]byte(`[{"ts":2,"type":"say","say":"text","text":"hi"}]`), 0o644))
-	require.NoError(os.Chtimes(messagesPath, future, future))
+	require.NoError(t, os.Chtimes(messagesPath, future, future))
 
 	_, fresh = engine.providerSourceFreshBeforeFingerprint(
 		t.Context(), source, file, nil,
 	)
-	assert.False(fresh,
+	assert.False(t, fresh,
 		"a sibling-only transcript change must fall through to the fingerprint")
 }

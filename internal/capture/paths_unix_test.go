@@ -13,40 +13,34 @@ import (
 )
 
 func TestInvalidateResultRejectsSymlink(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 	targetPath := filepath.Join(dir, "target.json")
-	require.NoError(os.WriteFile(targetPath, []byte("old result"), 0o600))
+	require.NoError(t, os.WriteFile(targetPath, []byte("old result"), 0o600))
 	resultPath := filepath.Join(dir, "usage.json")
-	require.NoError(os.Symlink(targetPath, resultPath))
+	require.NoError(t, os.Symlink(targetPath, resultPath))
 
 	err := invalidateResult(resultPath)
 
-	require.ErrorContains(err, "not a regular file")
+	require.ErrorContains(t, err, "not a regular file")
 	info, statErr := os.Lstat(resultPath)
-	require.NoError(statErr)
-	assert.NotZero(info.Mode() & os.ModeSymlink)
+	require.NoError(t, statErr)
+	assert.NotZero(t, info.Mode()&os.ModeSymlink)
 	data, readErr := os.ReadFile(targetPath)
-	require.NoError(readErr)
-	assert.Equal("old result", string(data))
+	require.NoError(t, readErr)
+	assert.Equal(t, "old result", string(data))
 }
 
 func TestRunRollsBackNewStateWhenResultCannotBeRemoved(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if os.Geteuid() == 0 {
 		t.Skip("root can remove files from a read-only directory")
 	}
 	root := t.TempDir()
 	resultParent := filepath.Join(t.TempDir(), "read-only")
-	require.NoError(os.Mkdir(resultParent, 0o700))
+	require.NoError(t, os.Mkdir(resultParent, 0o700))
 	resultPath := filepath.Join(resultParent, "usage.json")
-	require.NoError(os.WriteFile(resultPath, []byte("old result"), 0o600))
-	require.NoError(os.Chmod(resultParent, 0o500))
-	t.Cleanup(func() { require.NoError(os.Chmod(resultParent, 0o700)) })
+	require.NoError(t, os.WriteFile(resultPath, []byte("old result"), 0o600))
+	require.NoError(t, os.Chmod(resultParent, 0o500))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(resultParent, 0o700)) })
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	producer := copyCaptureHelper(t, "claude")
 
@@ -60,9 +54,9 @@ func TestRunRollsBackNewStateWhenResultCannotBeRemoved(t *testing.T) {
 		Limits:      testLimits(),
 	})
 
-	require.ErrorContains(err, "invalidating existing result")
-	assert.NoDirExists(captureDir)
+	require.ErrorContains(t, err, "invalidating existing result")
+	assert.NoDirExists(t, captureDir)
 	data, readErr := os.ReadFile(resultPath)
-	require.NoError(readErr)
-	assert.Equal("old result", string(data))
+	require.NoError(t, readErr)
+	assert.Equal(t, "old result", string(data))
 }

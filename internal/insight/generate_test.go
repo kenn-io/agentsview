@@ -66,17 +66,14 @@ Second`,
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			result, err := parseCodexStream(strings.NewReader(tt.input), nil)
 			if tt.wantError != "" {
-				require.Error(err)
-				assert.Contains(err.Error(), tt.wantError)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantError)
 				return
 			}
-			require.NoError(err)
-			assert.Equal(tt.want, result)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, result)
 		})
 	}
 }
@@ -128,24 +125,19 @@ Part 2`,
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			result, err := parseStreamJSON(strings.NewReader(tt.input), nil)
 			if tt.wantError != "" {
-				require.Error(err)
-				assert.Contains(err.Error(), tt.wantError)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantError)
 				return
 			}
-			require.NoError(err)
-			assert.Equal(tt.want, result)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, result)
 		})
 	}
 }
 
 func TestCollectStreamLines_LargeLine(t *testing.T) {
-	assert := assert.New(t)
-
 	longLine := strings.Repeat("x", 3*1024*1024)
 	input := longLine + "\nsmall-line\n"
 	var got []LogEvent
@@ -159,10 +151,10 @@ func TestCollectStreamLines_LargeLine(t *testing.T) {
 	text := <-done
 
 	require.Len(t, got, 2)
-	assert.Equal("stderr", got[0].Stream)
-	assert.Len(got[0].Line, len(longLine))
-	assert.Equal("small-line", got[1].Line)
-	assert.Contains(text, "small-line")
+	assert.Equal(t, "stderr", got[0].Stream)
+	assert.Len(t, got[0].Line, len(longLine))
+	assert.Equal(t, "small-line", got[1].Line)
+	assert.Contains(t, text, "small-line")
 }
 
 func TestAgentEnv(t *testing.T) {
@@ -195,6 +187,7 @@ func createMockBinary(
 	t *testing.T, stdout string, exitCode int, writeArgs bool, name string,
 ) (bin, argsFile string) {
 	t.Helper()
+
 	dir := t.TempDir()
 	dataFile := filepath.Join(dir, "stdout.txt")
 	require.NoError(t, os.WriteFile(dataFile, []byte(stdout), 0o644))
@@ -238,6 +231,8 @@ func createMockBinary(
 func fakeClaudeBin(
 	t *testing.T, stdout string, exitCode int,
 ) string {
+	t.Helper()
+
 	bin, _ := createMockBinary(t, stdout, exitCode, false, "claude")
 	return bin
 }
@@ -283,9 +278,6 @@ func TestGenerateStreamWithOptions_UsesConfiguredBinary(t *testing.T) {
 }
 
 func TestGenerateClaude_CLIFlags(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script test not supported on windows")
 	}
@@ -298,11 +290,11 @@ func TestGenerateClaude_CLIFlags(t *testing.T) {
 	result, err := generateClaude(
 		t.Context(), bin, "test prompt", nil,
 	)
-	require.NoError(err)
-	assert.Equal("OK", result.Content)
+	require.NoError(t, err)
+	assert.Equal(t, "OK", result.Content)
 
 	argsData, err := os.ReadFile(argsFile)
-	require.NoError(err, "reading args")
+	require.NoError(t, err, "reading args")
 	args := strings.Split(
 		strings.TrimSpace(string(argsData)), "\n",
 	)
@@ -316,14 +308,11 @@ func TestGenerateClaude_CLIFlags(t *testing.T) {
 		"--no-session-persistence",
 		"--tools",
 	} {
-		assert.Contains(joined, want)
+		assert.Contains(t, joined, want)
 	}
 }
 
 func TestGenerateCodex_CLIFlags(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script test not supported on windows")
 	}
@@ -337,11 +326,11 @@ func TestGenerateCodex_CLIFlags(t *testing.T) {
 	result, err := generateCodex(
 		t.Context(), bin, "test prompt", nil,
 	)
-	require.NoError(err)
-	assert.Equal("OK", result.Content)
+	require.NoError(t, err)
+	assert.Equal(t, "OK", result.Content)
 
 	argsData, err := os.ReadFile(argsFile)
-	require.NoError(err, "reading args")
+	require.NoError(t, err, "reading args")
 	args := strings.Split(
 		strings.TrimSpace(string(argsData)), "\n",
 	)
@@ -353,13 +342,10 @@ func TestGenerateCodex_CLIFlags(t *testing.T) {
 		"--ephemeral",
 		"-",
 	}
-	assert.Equal(wantArgs, args)
+	assert.Equal(t, wantArgs, args)
 }
 
 func TestGenerateCopilot_CLIFlags(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script test not supported on windows")
 	}
@@ -371,12 +357,12 @@ func TestGenerateCopilot_CLIFlags(t *testing.T) {
 	result, err := generateCopilot(
 		t.Context(), bin, "test prompt", nil,
 	)
-	require.NoError(err)
-	assert.Equal("Hello from copilot", result.Content)
-	assert.Equal("copilot", result.Agent)
+	require.NoError(t, err)
+	assert.Equal(t, "Hello from copilot", result.Content)
+	assert.Equal(t, "copilot", result.Agent)
 
 	argsData, err := os.ReadFile(argsFile)
-	require.NoError(err, "reading args")
+	require.NoError(t, err, "reading args")
 	args := strings.Split(
 		strings.TrimSpace(string(argsData)), "\n",
 	)
@@ -388,7 +374,7 @@ func TestGenerateCopilot_CLIFlags(t *testing.T) {
 		"--no-ask-user",
 		"--disable-builtin-mcps",
 	}
-	assert.Equal(wantArgs, args)
+	assert.Equal(t, wantArgs, args)
 }
 
 func TestGenerateCopilot_EmptyResult(t *testing.T) {
@@ -472,9 +458,6 @@ func TestGenerateClaude_SalvageOnNonZeroExit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			bin := fakeClaudeBin(
 				t, tt.stdout, tt.exitCode,
 			)
@@ -483,12 +466,12 @@ func TestGenerateClaude_SalvageOnNonZeroExit(t *testing.T) {
 			)
 
 			if tt.wantErr {
-				require.Error(err)
+				require.Error(t, err)
 				return
 			}
-			require.NoError(err)
-			assert.Equal(tt.wantResult, result.Content)
-			assert.Equal("claude", result.Agent)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantResult, result.Content)
+			assert.Equal(t, "claude", result.Agent)
 		})
 	}
 }
@@ -499,6 +482,8 @@ func TestGenerateClaude_SalvageOnNonZeroExit(t *testing.T) {
 func fakeGeminiBin(
 	t *testing.T, stdout string, exitCode int,
 ) (bin, argsFile string) {
+	t.Helper()
+
 	return createMockBinary(t, stdout, exitCode, true, "gemini")
 }
 
@@ -506,6 +491,7 @@ func fakeGeminiBinWithEnvCapture(
 	t *testing.T, stdout string, exitCode int,
 ) (bin, argsFile, envFile string) {
 	t.Helper()
+
 	dir := t.TempDir()
 	dataFile := filepath.Join(dir, "stdout.txt")
 	require.NoError(t, os.WriteFile(dataFile, []byte(stdout), 0o644))
@@ -539,8 +525,6 @@ func fakeGeminiBinWithEnvCapture(
 }
 
 func TestGenerateGemini_ModelFlag(t *testing.T) {
-	assert := assert.New(t)
-
 	streamJSON := `{"type":"message","role":"assistant","content":"Hello"}
 {"type":"result","result":"# Analysis"}
 `
@@ -553,9 +537,9 @@ func TestGenerateGemini_ModelFlag(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	assert.Equal("# Analysis", result.Content)
-	assert.Equal("gemini", result.Agent)
-	assert.Equal(geminiInsightModel, result.Model)
+	assert.Equal(t, "# Analysis", result.Content)
+	assert.Equal(t, "gemini", result.Agent)
+	assert.Equal(t, geminiInsightModel, result.Model)
 
 	// Verify the CLI was invoked with --model flag.
 	args := readArgLines(t, argsFile)
@@ -564,7 +548,7 @@ func TestGenerateGemini_ModelFlag(t *testing.T) {
 		"--model", geminiInsightModel,
 		"--output-format", "stream-json",
 	}
-	assert.Equal(wantArgs, args)
+	assert.Equal(t, wantArgs, args)
 }
 
 func TestGenerateGemini_RequiresSandboxOrUnsafeOptIn(t *testing.T) {
@@ -579,9 +563,6 @@ func TestGenerateGemini_RequiresSandboxOrUnsafeOptIn(t *testing.T) {
 }
 
 func TestGenerateGemini_SetsSandboxEnv(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	streamJSON := `{"type":"result","result":"# Analysis"}`
 	bin, argsFile, envFile := fakeGeminiBinWithEnvCapture(
 		t, streamJSON, 0,
@@ -591,15 +572,15 @@ func TestGenerateGemini_SetsSandboxEnv(t *testing.T) {
 		t.Context(), bin, "test prompt", nil,
 		AgentConfig{Sandbox: "sandbox-exec"},
 	)
-	require.NoError(err)
-	assert.Equal("# Analysis", result.Content)
-	assert.Equal([]string{
+	require.NoError(t, err)
+	assert.Equal(t, "# Analysis", result.Content)
+	assert.Equal(t, []string{
 		"--model", geminiInsightModel,
 		"--output-format", "stream-json",
 	}, readArgLines(t, argsFile))
 	envData, err := os.ReadFile(envFile)
-	require.NoError(err)
-	assert.Equal("sandbox-exec", strings.TrimSpace(string(envData)))
+	require.NoError(t, err)
+	assert.Equal(t, "sandbox-exec", strings.TrimSpace(string(envData)))
 }
 
 func TestGenerateClaude_CancelledContext(t *testing.T) {
@@ -680,9 +661,6 @@ func TestParseCLIResult(t *testing.T) {
 }
 
 func TestGenerateClaude_TruncatesLargeStdoutLogEvent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	largeResult := strings.Repeat("x", claudeStdoutLogMaxBytes*2)
 	stdout := fmt.Sprintf(`[{"type":"result","result":%q,"modelUsage":{"m1":{}}}]`, largeResult)
 	bin := fakeClaudeBin(t, stdout, 0)
@@ -694,8 +672,8 @@ func TestGenerateClaude_TruncatesLargeStdoutLogEvent(t *testing.T) {
 		"test",
 		func(ev LogEvent) { logs = append(logs, ev) },
 	)
-	require.NoError(err)
-	assert.Equal(largeResult, result.Content, "result content was truncated unexpectedly")
+	require.NoError(t, err)
+	assert.Equal(t, largeResult, result.Content, "result content was truncated unexpectedly")
 
 	var stdoutLog string
 	for _, ev := range logs {
@@ -704,7 +682,7 @@ func TestGenerateClaude_TruncatesLargeStdoutLogEvent(t *testing.T) {
 			break
 		}
 	}
-	require.NotEmpty(stdoutLog, "expected stdout log event")
-	assert.Contains(stdoutLog, "[truncated ", "expected truncation marker in stdout log")
-	assert.Less(len(stdoutLog), len(stdout), "expected truncated stdout log to be smaller than raw payload")
+	require.NotEmpty(t, stdoutLog, "expected stdout log event")
+	assert.Contains(t, stdoutLog, "[truncated ", "expected truncation marker in stdout log")
+	assert.Less(t, len(stdoutLog), len(stdout), "expected truncated stdout log to be smaller than raw payload")
 }

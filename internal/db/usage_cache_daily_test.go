@@ -28,28 +28,26 @@ func TestRecordUsageFactsPricingSeparatesReportedAndBilledProvenance(t *testing.
 		asserted[resolution.OutputCostPerMTok.Microdollars] = true
 	}
 	if !asserted[1_000_000] || !asserted[1_100_000] {
-		t.Fatalf("reported and billed provenance merged: %#v", resolutions)
+		require.Failf(t, "reported and billed provenance merged", "%#v", resolutions)
 	}
 }
 
 func TestRecordUsageFactsPricingSkipsUnusedOverflowingReportedRate(t *testing.T) {
-	require := require.New(t)
-
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "model",
 		Rates:        export.ModelRates{OutputPerMTok: money.Money{Microdollars: math.MaxInt64}},
 	}})
-	require.NoError(recordUsageFactsPricing(resolver, usageFactsGroup{
+	require.NoError(t, recordUsageFactsPricing(resolver, usageFactsGroup{
 		Agent: "posit-assistant", ProviderID: "positai", Model: "model", PricedModel: "model",
 		ReportedCount: 1,
 	}))
 	block, err := resolver.BuildBlock()
-	require.NoError(err)
-	require.Contains(block.Models, "model")
+	require.NoError(t, err)
+	require.Contains(t, block.Models, "model")
 	resolutions := block.Models["model"].Resolutions
-	require.Len(resolutions, 1)
+	require.Len(t, resolutions, 1)
 	asserted := resolutions[0].OutputCostPerMTok.Microdollars
-	require.Equal(int64(math.MaxInt64), asserted)
+	require.Equal(t, int64(math.MaxInt64), asserted)
 }
 
 func TestAssembleDailyUsageFactsPropagatesBillingError(t *testing.T) {
@@ -69,10 +67,8 @@ func TestAssembleDailyUsageFactsPropagatesBillingError(t *testing.T) {
 }
 
 func TestPositBillingPublicAPIReproduction(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
-	require.NoError(d.UpsertModelPricing([]ModelPricing{{
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern: "repro-model",
 		InputPerMTok: money.MustParseDollars("1"),
 	}}))
@@ -100,24 +96,22 @@ func TestPositBillingPublicAPIReproduction(t *testing.T) {
 	}
 	for range 2 {
 		result, err := d.GetDailyUsage(t.Context(), filter)
-		require.NoError(err)
-		require.Len(result.Daily, 1)
+		require.NoError(t, err)
+		require.Len(t, result.Daily, 1)
 		costs := make(map[string]money.Money, len(result.Daily[0].AgentBreakdowns))
 		for _, breakdown := range result.Daily[0].AgentBreakdowns {
 			costs[breakdown.Agent] = breakdown.Cost
 		}
-		require.Equal(money.MustParseDollars("1.1"), costs["posit-assistant"])
-		require.Equal(money.MustParseDollars("1"), costs["claude"])
+		require.Equal(t, money.MustParseDollars("1.1"), costs["posit-assistant"])
+		require.Equal(t, money.MustParseDollars("1"), costs["claude"])
 		t.Logf("observed cost: posit=$%.6f", float64(costs["posit-assistant"].Microdollars)/1_000_000)
 		t.Logf("observed non-Posit cost: $%.6f", float64(costs["claude"].Microdollars)/1_000_000)
 	}
 }
 
 func TestPositBillingUsesProviderPerUsageRow(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
-	require.NoError(d.UpsertModelPricing([]ModelPricing{{
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern: "mixed-provider-model",
 		InputPerMTok: money.MustParseDollars("1"),
 	}}))
@@ -141,14 +135,14 @@ func TestPositBillingUsesProviderPerUsageRow(t *testing.T) {
 	)
 
 	usage, err := d.GetSessionUsage(t.Context(), "mixed-provider", true)
-	require.NoError(err)
-	require.NotNil(usage)
-	require.Equal(money.MustParseDollars("2.1"), usage.Cost)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, money.MustParseDollars("2.1"), usage.Cost)
 
 	daily, err := d.GetDailyUsage(t.Context(), UsageFilter{
 		From: "2024-06-01", To: "2024-06-30", Timezone: "UTC",
 	})
-	require.NoError(err)
-	require.Len(daily.Daily, 1)
-	require.Equal(money.MustParseDollars("2.1"), daily.Totals.TotalCost)
+	require.NoError(t, err)
+	require.Len(t, daily.Daily, 1)
+	require.Equal(t, money.MustParseDollars("2.1"), daily.Totals.TotalCost)
 }

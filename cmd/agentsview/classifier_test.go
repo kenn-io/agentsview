@@ -88,7 +88,7 @@ func writeAutomatedPrefixesConfig(t *testing.T, dir string, prefixes []string) {
 // backfill so a classifier hash gets stored, then closes.
 func seedClassifierHash(t *testing.T, cfg config.Config) {
 	t.Helper()
-	d, err := db.Open(cfg.DBPath)
+	d, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err, "open db")
 	require.NoError(t, d.Close(), "close db")
 }
@@ -204,16 +204,14 @@ func TestClassifierRebuildGuard(t *testing.T) {
 }
 
 func TestClassifierRebuildRefusesBackgroundLaunchLock(t *testing.T) {
-	require := require.New(t)
-
 	fx := newClassifierFixture(t, nil)
-	require.NoError(os.MkdirAll(fx.Dir, 0o700))
+	require.NoError(t, os.MkdirAll(fx.Dir, 0o700))
 	launchLock, ok := acquireBackgroundLaunchLock(fx.Dir)
-	require.True(ok)
-	t.Cleanup(func() { require.NoError(launchLock.Unlock()) })
+	require.True(t, ok)
+	t.Cleanup(func() { require.NoError(t, launchLock.Unlock()) })
 
 	_, err := runClassifierRebuildTest(t, fx.Cfg, false)
-	require.Error(err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "daemon launch is in progress")
 }
 

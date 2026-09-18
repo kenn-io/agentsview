@@ -29,19 +29,16 @@ func testCommitResult(sequence int, generation int64) rawsync.CommitResult {
 }
 
 func TestStoreDeviceRoundTrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	store := openTestStore(t)
 	_, ok, err := store.Device(t.Context())
-	require.NoError(err)
-	assert.False(ok)
-	require.NoError(store.SetDevice(t.Context(), "dev_1"))
+	require.NoError(t, err)
+	assert.False(t, ok)
+	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
 	device, ok, err := store.Device(t.Context())
-	require.NoError(err)
-	assert.True(ok)
-	assert.Equal("dev_1", device)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, "dev_1", device)
 }
 
 func TestStoreAdvanceHeadRequiresReceipt(t *testing.T) {
@@ -84,187 +81,164 @@ func TestStoreAdvanceHeadRejectsInvalidCommitResult(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require := require.New(t)
-
 			t.Parallel()
 			store := openTestStore(t)
-			require.NoError(store.SetDevice(t.Context(), "dev_1"))
+			require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
 
 			err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
 				"root-1", "src-1", "", tt.commit)
-			require.ErrorIs(err, rawsync.ErrInvalid)
+			require.ErrorIs(t, err, rawsync.ErrInvalid)
 			_, ok, readErr := store.SourceHead(t.Context(), parser.AgentClaude,
 				"root-1", "src-1")
-			require.NoError(readErr)
+			require.NoError(t, readErr)
 			assert.False(t, ok, "invalid commit result must not persist a source head")
 		})
 	}
 }
 
 func TestStoreAdvanceHeadRequiresFirstGeneration(t *testing.T) {
-	require := require.New(t)
-
 	t.Parallel()
 	store := openTestStore(t)
-	require.NoError(store.SetDevice(t.Context(), "dev_1"))
+	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
 
 	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
 		"root-1", "src-1", "", testCommitResult(1, 2))
-	require.ErrorIs(err, ErrHeadConflict)
+	require.ErrorIs(t, err, ErrHeadConflict)
 	_, ok, readErr := store.SourceHead(t.Context(), parser.AgentClaude,
 		"root-1", "src-1")
-	require.NoError(readErr)
+	require.NoError(t, readErr)
 	assert.False(t, ok, "a source chain may not begin after generation one")
 }
 
 func TestStoreAdvanceHeadRejectsGenerationGap(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	store := openTestStore(t)
-	require.NoError(store.SetDevice(t.Context(), "dev_1"))
+	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
 	first := testCommitResult(1, 1)
-	require.NoError(store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
 		"root-1", "src-1", "", first))
 
 	gap := testCommitResult(3, 3)
 	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
 		"root-1", "src-1", first.Receipt, gap)
-	require.ErrorIs(err, ErrHeadConflict)
+	require.ErrorIs(t, err, ErrHeadConflict)
 	head, ok, readErr := store.SourceHead(t.Context(), parser.AgentClaude,
 		"root-1", "src-1")
-	require.NoError(readErr)
-	require.True(ok)
-	assert.Equal(first.ManifestID, head.ManifestID)
-	assert.Equal(first.Receipt, head.Receipt)
-	assert.Equal(first.Generation, head.Generation)
+	require.NoError(t, readErr)
+	require.True(t, ok)
+	assert.Equal(t, first.ManifestID, head.ManifestID)
+	assert.Equal(t, first.Receipt, head.Receipt)
+	assert.Equal(t, first.Generation, head.Generation)
 }
 
 func TestStoreHeadLifecycle(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	store := openTestStore(t)
-	require.NoError(store.SetDevice(t.Context(), "dev_1"))
+	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
 	_, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
-	require.NoError(err)
-	assert.False(ok)
+	require.NoError(t, err)
+	assert.False(t, ok)
 
 	first := testCommitResult(1, 1)
-	require.NoError(store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 	head, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(first.Receipt, head.Receipt)
-	assert.Equal(int64(1), head.Generation)
-	assert.Equal(first.ManifestID, head.ManifestID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, first.Receipt, head.Receipt)
+	assert.Equal(t, int64(1), head.Generation)
+	assert.Equal(t, first.ManifestID, head.ManifestID)
 
 	second := testCommitResult(2, 2)
-	require.NoError(store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", first.Receipt, second))
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", first.Receipt, second))
 	head, ok, err = store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(second.Receipt, head.Receipt)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, second.Receipt, head.Receipt)
 }
 
 func TestStorePersistsAcrossReopen(t *testing.T) {
-	require := require.New(t)
-
 	t.Parallel()
 	path := t.TempDir() + "/rawcheckpoint.db"
 	store, err := Open(t.Context(), path)
-	require.NoError(err)
-	require.NoError(store.SetDevice(t.Context(), "dev_persist"))
+	require.NoError(t, err)
+	require.NoError(t, store.SetDevice(t.Context(), "dev_persist"))
 	commit := testCommitResult(1, 1)
-	require.NoError(store.AdvanceHead(t.Context(), "dev_persist", parser.AgentClaude, "r", "s", "", commit))
-	require.NoError(store.Close())
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_persist", parser.AgentClaude, "r", "s", "", commit))
+	require.NoError(t, store.Close())
 
 	reopened, err := Open(t.Context(), path)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(reopened.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	head, ok, err := reopened.SourceHead(t.Context(), parser.AgentClaude, "r", "s")
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 	assert.Equal(t, commit.Receipt, head.Receipt)
 }
 
 func TestStoreAdvanceHeadRejectsStaleParent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	store := openTestStore(t)
-	require.NoError(store.SetDevice(t.Context(), "dev_1"))
+	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
 	first := testCommitResult(1, 1)
-	require.NoError(store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 
 	// A delayed second-generation result carrying the stale parent receipt
 	// must never overwrite the newer acknowledged head.
 	stale := testCommitResult(2, 2)
 	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", stale)
-	require.ErrorIs(err, ErrHeadConflict)
+	require.ErrorIs(t, err, ErrHeadConflict)
 
 	head, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(first.Receipt, head.Receipt)
-	assert.Equal(first.ManifestID, head.ManifestID)
-	assert.Equal(int64(1), head.Generation)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, first.Receipt, head.Receipt)
+	assert.Equal(t, first.ManifestID, head.ManifestID)
+	assert.Equal(t, int64(1), head.Generation)
 }
 
 func TestStoreAdvanceHeadIdempotentReplay(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	store := openTestStore(t)
-	require.NoError(store.SetDevice(t.Context(), "dev_1"))
+	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
 	first := testCommitResult(1, 1)
-	require.NoError(store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 
 	// A retried manifest carries the same parent it used for the original
 	// commit. Recognize the identical committed result without requiring the
 	// now-current receipt as a fabricated parent.
-	require.NoError(store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 	head, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(first.Receipt, head.Receipt)
-	assert.Equal(first.ManifestID, head.ManifestID)
-	assert.Equal(int64(1), head.Generation)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, first.Receipt, head.Receipt)
+	assert.Equal(t, first.ManifestID, head.ManifestID)
+	assert.Equal(t, int64(1), head.Generation)
 }
 
 func TestStoreAdvanceHeadRejectsLowerGeneration(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	store := openTestStore(t)
-	require.NoError(store.SetDevice(t.Context(), "dev_1"))
+	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
 	first := testCommitResult(1, 1)
-	require.NoError(store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
 		"root-1", "src-1", "", first))
 	current := testCommitResult(2, 2)
-	require.NoError(store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
 		"root-1", "src-1", first.Receipt, current))
 
 	older := testCommitResult(3, 1)
 	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude,
 		"root-1", "src-1", current.Receipt, older)
-	require.ErrorIs(err, ErrHeadConflict)
+	require.ErrorIs(t, err, ErrHeadConflict)
 	head, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(current.ManifestID, head.ManifestID)
-	assert.Equal(current.Receipt, head.Receipt)
-	assert.Equal(current.Generation, head.Generation)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, current.ManifestID, head.ManifestID)
+	assert.Equal(t, current.Receipt, head.Receipt)
+	assert.Equal(t, current.Generation, head.Generation)
 }
 
 func TestStoreConcurrentAdvanceHeadReturnsCASResults(t *testing.T) {
-	assert := assert.New(t)
-
 	store := openTestStore(t)
 	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
 
@@ -290,78 +264,72 @@ func TestStoreConcurrentAdvanceHeadReturnsCASResults(t *testing.T) {
 		case errors.Is(err, ErrHeadConflict):
 			conflicts++
 		default:
-			assert.NoError(err, "concurrent writers must return a CAS result")
+			require.NoError(t, err, "concurrent writers must return a CAS result")
 		}
 	}
-	assert.Equal(1, successes)
-	assert.Equal(writers-1, conflicts)
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, writers-1, conflicts)
 }
 
 func TestStoreSetDeviceChangeClearsHeads(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	store := openTestStore(t)
-	require.NoError(store.SetDevice(t.Context(), "dev_1"))
+	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
 	first := testCommitResult(1, 1)
-	require.NoError(store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 
 	// Re-provisioning under a different device identity clears per-source
 	// heads: the server chains heads per device, so the new device starts
 	// from an empty chain.
-	require.NoError(store.SetDevice(t.Context(), "dev_2"))
+	require.NoError(t, store.SetDevice(t.Context(), "dev_2"))
 	device, ok, err := store.Device(t.Context())
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal("dev_2", device)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "dev_2", device)
 	_, ok, err = store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
-	require.NoError(err)
-	assert.False(ok)
+	require.NoError(t, err)
+	assert.False(t, ok)
 
 	// The new chain advances from empty, and recording the same device
 	// again is a no-op that keeps both the head and the provisioning time.
 	fresh := testCommitResult(2, 1)
-	require.NoError(store.AdvanceHead(t.Context(), "dev_2", parser.AgentClaude, "root-1", "src-1", "", fresh))
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_2", parser.AgentClaude, "root-1", "src-1", "", fresh))
 	var createdAt string
-	require.NoError(store.db.QueryRowContext(t.Context(),
+	require.NoError(t, store.db.QueryRowContext(t.Context(),
 		`SELECT created_at FROM device_config WHERE id = 1`).Scan(&createdAt))
-	require.NoError(store.SetDevice(t.Context(), "dev_2"))
+	require.NoError(t, store.SetDevice(t.Context(), "dev_2"))
 	head, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(fresh.Receipt, head.Receipt)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, fresh.Receipt, head.Receipt)
 	var createdAtAfter string
-	require.NoError(store.db.QueryRowContext(t.Context(),
+	require.NoError(t, store.db.QueryRowContext(t.Context(),
 		`SELECT created_at FROM device_config WHERE id = 1`).Scan(&createdAtAfter))
-	assert.Equal(createdAt, createdAtAfter)
+	assert.Equal(t, createdAt, createdAtAfter)
 }
 
 func TestStoreEnsureDeviceRejectsReprovisioningWithoutMutatingState(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	store := openTestStore(t)
-	require.NoError(store.SetDevice(t.Context(), "dev_1"))
+	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
 	first := testCommitResult(1, 1)
-	require.NoError(store.AdvanceHead(
+	require.NoError(t, store.AdvanceHead(
 		t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first,
 	))
 
 	err := store.EnsureDevice(t.Context(), "dev_2")
 
-	require.ErrorIs(err, ErrDeviceMismatch)
+	require.ErrorIs(t, err, ErrDeviceMismatch)
 	device, ok, readErr := store.Device(t.Context())
-	require.NoError(readErr)
-	require.True(ok)
-	assert.Equal("dev_1", device)
+	require.NoError(t, readErr)
+	require.True(t, ok)
+	assert.Equal(t, "dev_1", device)
 	head, ok, readErr := store.SourceHead(
 		t.Context(), parser.AgentClaude, "root-1", "src-1",
 	)
-	require.NoError(readErr)
-	require.True(ok)
-	assert.Equal(first.Receipt, head.Receipt)
+	require.NoError(t, readErr)
+	require.True(t, ok)
+	assert.Equal(t, first.Receipt, head.Receipt)
 }
 
 // TestStoreAdvanceHeadRequiresConfiguredDevice: advancement before any
@@ -379,49 +347,44 @@ func TestStoreAdvanceHeadRequiresConfiguredDevice(t *testing.T) {
 // advance heads — including after re-provisioning cleared them, when a
 // stale in-flight ack from the previous device must not repopulate heads.
 func TestStoreAdvanceHeadRejectsForeignDevice(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	store := openTestStore(t)
-	require.NoError(store.SetDevice(t.Context(), "dev_1"))
+	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
 	first := testCommitResult(1, 1)
-	require.NoError(store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
+	require.NoError(t, store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first))
 
 	// A different device may not advance dev_1's chain even with the
 	// correct expected parent receipt.
 	second := testCommitResult(2, 2)
 	err := store.AdvanceHead(t.Context(), "dev_2", parser.AgentClaude, "root-1", "src-1", first.Receipt, second)
-	require.ErrorIs(err, ErrDeviceMismatch)
+	require.ErrorIs(t, err, ErrDeviceMismatch)
 	head, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(first.Receipt, head.Receipt)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, first.Receipt, head.Receipt)
 
 	// Re-provisioning clears heads; a delayed first-generation ack from
 	// dev_1 (empty expected parent) must not repopulate dev_2's chain.
-	require.NoError(store.SetDevice(t.Context(), "dev_2"))
+	require.NoError(t, store.SetDevice(t.Context(), "dev_2"))
 	err = store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1", "", first)
-	require.ErrorIs(err, ErrDeviceMismatch)
+	require.ErrorIs(t, err, ErrDeviceMismatch)
 	_, ok, err = store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
-	require.NoError(err)
-	assert.False(ok)
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
 // TestStoreAdvanceHeadAbsentSourceRequiresEmptyParent: the absent-row insert
 // is gated on an empty expected parent receipt, exactly like the
 // conflict-update path.
 func TestStoreAdvanceHeadAbsentSourceRequiresEmptyParent(t *testing.T) {
-	require := require.New(t)
-
 	t.Parallel()
 	store := openTestStore(t)
-	require.NoError(store.SetDevice(t.Context(), "dev_1"))
+	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
 	commit := testCommitResult(1, 1)
 	err := store.AdvanceHead(t.Context(), "dev_1", parser.AgentClaude, "root-1", "src-1",
 		testCommitResult(2, 1).Receipt, commit)
-	require.ErrorIs(err, ErrHeadConflict)
+	require.ErrorIs(t, err, ErrHeadConflict)
 	_, ok, err := store.SourceHead(t.Context(), parser.AgentClaude, "root-1", "src-1")
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.False(t, ok, "no row may be created for a nonempty expected parent")
 }

@@ -66,9 +66,6 @@ func usageRow(
 }
 
 func TestSessionUsageWithSubagentsCombinesCostAcrossDescendants(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	rootRow := usageRow("root", "opus", "2026-07-30T10:00:00Z", 0, "1")
 	rootRow.CacheReadTokens = 880
 	agentARow := usageRow("agent-a", "sonnet", "2026-07-30T10:01:00Z", 0, "2")
@@ -110,43 +107,43 @@ func TestSessionUsageWithSubagentsCombinesCostAcrossDescendants(t *testing.T) {
 
 	got, err := service.SessionUsageWithSubagents(
 		t.Context(), store, "root", true)
-	require.NoError(err)
-	require.NotNil(got)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 
-	assert.Equal("root", got.SessionID, "identity stays the parent's")
-	assert.Equal("claude", got.Agent)
-	assert.Equal("app", got.Project)
-	assert.Equal(2, got.SubagentCount)
-	assert.True(got.HasCost)
-	assert.Equal(money.MustParseDollars("7"), got.Cost)
+	assert.Equal(t, "root", got.SessionID, "identity stays the parent's")
+	assert.Equal(t, "claude", got.Agent)
+	assert.Equal(t, "app", got.Project)
+	assert.Equal(t, 2, got.SubagentCount)
+	assert.True(t, got.HasCost)
+	assert.Equal(t, money.MustParseDollars("7"), got.Cost)
 	// cost_usd must reflect the combined (rollup-inclusive) cost, never
 	// just the root's own cost.
-	require.NotNil(got.CostUSD)
-	assert.InDelta(7.0, *got.CostUSD, 1e-9)
-	assert.Equal(export.CostSourceComputed, got.CostSource)
-	assert.Equal([]string{"opus", "sonnet"}, got.Models)
-	assert.Equal(3, got.BreakdownCount)
-	assert.Equal(30, got.TotalOutputTokens,
+	require.NotNil(t, got.CostUSD)
+	assert.InDelta(t, 7.0, *got.CostUSD, 1e-9)
+	assert.Equal(t, export.CostSourceComputed, got.CostSource)
+	assert.Equal(t, []string{"opus", "sonnet"}, got.Models)
+	assert.Equal(t, 3, got.BreakdownCount)
+	assert.Equal(t, 30, got.TotalOutputTokens,
 		"the three complete session totals are combined")
-	assert.Equal(2000, got.PeakContextTokens,
+	assert.Equal(t, 2000, got.PeakContextTokens,
 		"peak context is a high-water mark, so it is maxed not summed")
 
-	require.Len(got.Breakdown, 3)
-	assert.Equal([]int{1, 2, 3}, []int{
+	require.Len(t, got.Breakdown, 3)
+	assert.Equal(t, []int{1, 2, 3}, []int{
 		got.Breakdown[0].Ordinal,
 		got.Breakdown[1].Ordinal,
 		got.Breakdown[2].Ordinal,
 	}, "ordinals renumber over the combined stream")
-	assert.Empty(got.Breakdown[0].SubagentSessionID,
+	assert.Empty(t, got.Breakdown[0].SubagentSessionID,
 		"the parent's own rows carry no subagent id")
-	assert.Equal("agent-a", got.Breakdown[1].SubagentSessionID)
-	assert.Equal("agent-b", got.Breakdown[2].SubagentSessionID)
-	assert.Equal("message", got.Breakdown[1].Source,
+	assert.Equal(t, "agent-a", got.Breakdown[1].SubagentSessionID)
+	assert.Equal(t, "agent-b", got.Breakdown[2].SubagentSessionID)
+	assert.Equal(t, "message", got.Breakdown[1].Source,
 		"subagent rows keep their real source")
-	assert.Equal("Prompt 1", got.Breakdown[1].Label)
-	assert.Equal(money.MustParseDollars("2"), got.Breakdown[1].Cost)
-	assert.Equal(20, got.Breakdown[1].InputTokens)
-	assert.Equal(10, got.Breakdown[1].OutputTokens)
+	assert.Equal(t, "Prompt 1", got.Breakdown[1].Label)
+	assert.Equal(t, money.MustParseDollars("2"), got.Breakdown[1].Cost)
+	assert.Equal(t, 20, got.Breakdown[1].InputTokens)
+	assert.Equal(t, 10, got.Breakdown[1].OutputTokens)
 }
 
 func TestSessionUsageWithSubagentsStopsAggregationAfterRowsLoad(t *testing.T) {
@@ -199,8 +196,6 @@ func TestSessionUsageTokenTotalsStopsDuringProjection(t *testing.T) {
 }
 
 func TestSessionUsageTokenTotalsRejectsPartialBreakdownMaterialization(t *testing.T) {
-	assert := assert.New(t)
-
 	totals, complete, err := service.SessionUsageTokenTotals(
 		t.Context(), &db.SessionUsage{
 			HasTokenData: true, TotalOutputTokens: 7, PeakContextTokens: 11,
@@ -211,10 +206,10 @@ func TestSessionUsageTokenTotalsRejectsPartialBreakdownMaterialization(t *testin
 		})
 
 	require.NoError(t, err)
-	assert.False(complete,
+	assert.False(t, complete,
 		"one materialized row cannot prove a two-row breakdown is complete")
-	assert.Equal(11, totals.InputTokens)
-	assert.Equal(7, totals.OutputTokens)
+	assert.Equal(t, 11, totals.InputTokens)
+	assert.Equal(t, 7, totals.OutputTokens)
 }
 
 // TestSessionUsageWithSubagentsCountsRowlessSessionsFromAggregates covers the
@@ -222,9 +217,6 @@ func TestSessionUsageTokenTotalsRejectsPartialBreakdownMaterialization(t *testin
 // has no echo to deduplicate and nothing else to report, so its stored
 // aggregate still counts.
 func TestSessionUsageWithSubagentsCountsRowlessSessionsFromAggregates(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root": {
@@ -250,11 +242,11 @@ func TestSessionUsageWithSubagentsCountsRowlessSessionsFromAggregates(t *testing
 
 	got, err := service.SessionUsageWithSubagents(
 		t.Context(), store, "root", false)
-	require.NoError(err)
-	require.NotNil(got)
-	assert.Equal(57, got.TotalOutputTokens,
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, 57, got.TotalOutputTokens,
 		"the rowless root (7) and subagent (40) keep their aggregates")
-	assert.True(got.HasTokenData)
+	assert.True(t, got.HasTokenData)
 }
 
 func TestSessionUsageWithSubagentsReturnsOwnUsageWithoutDescendants(t *testing.T) {
@@ -361,9 +353,6 @@ func TestSessionUsageWithSubagentsWithholdsUsageWhenRootIsUnavailable(t *testing
 }
 
 func TestSessionUsageWithSubagentsWithholdsUsageForUncoveredChild(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root": {
@@ -382,23 +371,20 @@ func TestSessionUsageWithSubagentsWithholdsUsageForUncoveredChild(t *testing.T) 
 
 	got, _, err := service.SessionUsageWithRequiredSubagents(
 		t.Context(), store, "root", []string{"agent-missing"}, false)
-	require.NoError(err)
-	require.NotNil(got)
-	assert.False(got.HasTokenData,
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.False(t, got.HasTokenData,
 		"a child with no token evidence must not silently contribute zero")
-	assert.False(got.HasCost,
+	assert.False(t, got.HasCost,
 		"root-only cost must not be reported as the complete occurrence cost")
 
 	_, complete, err := service.SessionUsageTokenTotals(
 		t.Context(), got)
-	require.NoError(err)
-	assert.False(complete)
+	require.NoError(t, err)
+	assert.False(t, complete)
 }
 
 func TestSessionUsageWithRequiredSubagentsReconcilesRootOnlyRows(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root": {
@@ -414,23 +400,21 @@ func TestSessionUsageWithRequiredSubagentsReconcilesRootOnlyRows(t *testing.T) {
 
 	got, descendants, err := service.SessionUsageWithRequiredSubagents(
 		t.Context(), store, "root", nil, true)
-	require.NoError(err)
-	require.NotNil(got)
-	assert.Empty(descendants)
-	assert.Equal(20, got.TotalOutputTokens)
-	assert.True(got.HasTokenData)
-	assert.False(got.HasCost,
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Empty(t, descendants)
+	assert.Equal(t, 20, got.TotalOutputTokens)
+	assert.True(t, got.HasTokenData)
+	assert.False(t, got.HasCost,
 		"a partial root row must not yield a partial computed cost")
 
 	_, complete, err := service.SessionUsageTokenTotals(t.Context(), got)
-	require.NoError(err)
-	assert.False(complete,
+	require.NoError(t, err)
+	assert.False(t, complete,
 		"the row does not cover the stored root output total")
 }
 
 func TestSessionUsageWithSubagentsWithholdsIncompleteCost(t *testing.T) {
-	assert := assert.New(t)
-
 	unpriced := usageRow("agent-a", "mystery", "2026-07-30T10:01:00Z", 0, "0")
 	unpriced.Priced = false
 	store := &rollupStore{
@@ -452,12 +436,12 @@ func TestSessionUsageWithSubagentsWithholdsIncompleteCost(t *testing.T) {
 	got, err := service.SessionUsageWithSubagents(
 		t.Context(), store, "root", false)
 	require.NoError(t, err)
-	assert.False(got.HasCost,
+	assert.False(t, got.HasCost,
 		"one unpriced subagent row must not yield a partial total")
-	assert.Zero(got.Cost)
-	assert.Nil(got.CostUSD,
+	assert.Zero(t, got.Cost)
+	assert.Nil(t, got.CostUSD,
 		"cost_usd must be omitted when has_cost is false")
-	assert.Equal([]string{"mystery"}, got.UnpricedModels)
+	assert.Equal(t, []string{"mystery"}, got.UnpricedModels)
 }
 
 func TestSessionUsageWithSubagentsCombinesCostProvenance(t *testing.T) {
@@ -482,9 +466,6 @@ func TestSessionUsageWithSubagentsCombinesCostProvenance(t *testing.T) {
 }
 
 func TestSessionUsageWithSubagentsKeepsCostOnlyCarrierOutOfUsage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	reportedTotal := money.MustParseDollars("0.03")
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
@@ -510,17 +491,17 @@ func TestSessionUsageWithSubagentsKeepsCostOnlyCarrierOutOfUsage(t *testing.T) {
 
 	got, err := service.SessionUsageWithSubagents(
 		t.Context(), store, "root", true)
-	require.NoError(err)
-	require.NotNil(got)
-	assert.True(got.HasCost)
-	assert.Equal(money.MustParseDollars("0.05"), got.Cost,
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.True(t, got.HasCost)
+	assert.Equal(t, money.MustParseDollars("0.05"), got.Cost,
 		"the reported carrier still settles the root cost")
-	assert.Equal(export.CostSourceMixed, got.CostSource)
-	assert.Equal([]string{"sonnet"}, got.Models,
+	assert.Equal(t, export.CostSourceMixed, got.CostSource)
+	assert.Equal(t, []string{"sonnet"}, got.Models,
 		"a cost-only carrier must not surface a synthetic model")
-	assert.Equal(1, got.BreakdownCount)
-	require.Len(got.Breakdown, 1)
-	assert.Equal("sonnet", got.Breakdown[0].Model)
+	assert.Equal(t, 1, got.BreakdownCount)
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, "sonnet", got.Breakdown[0].Model)
 }
 
 func TestSessionUsageWithSubagentsPropagatesChildLookupError(t *testing.T) {
@@ -539,9 +520,6 @@ func TestSessionUsageWithSubagentsPropagatesChildLookupError(t *testing.T) {
 // expose no usage-row provider: totals still combine, they just cannot be
 // deduplicated across transcripts.
 func TestSessionUsageWithSubagentsFallsBackToPerSessionTotals(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root": {
@@ -569,16 +547,16 @@ func TestSessionUsageWithSubagentsFallsBackToPerSessionTotals(t *testing.T) {
 
 	got, err := service.SessionUsageWithSubagents(
 		t.Context(), store, "root", true)
-	require.NoError(err)
-	assert.Equal(1, got.SubagentCount)
-	assert.True(got.HasCost)
-	assert.Equal(money.MustParseDollars("3"), got.Cost)
-	require.NotNil(got.CostUSD)
-	assert.InDelta(3.0, *got.CostUSD, 1e-9)
-	assert.Equal([]string{"opus", "sonnet"}, got.Models)
-	assert.Equal(2, got.BreakdownCount)
-	require.Len(got.Breakdown, 2)
-	assert.Empty(got.Breakdown[0].SubagentSessionID)
-	assert.Equal("agent-a", got.Breakdown[1].SubagentSessionID)
-	assert.Equal(2, got.Breakdown[1].Ordinal)
+	require.NoError(t, err)
+	assert.Equal(t, 1, got.SubagentCount)
+	assert.True(t, got.HasCost)
+	assert.Equal(t, money.MustParseDollars("3"), got.Cost)
+	require.NotNil(t, got.CostUSD)
+	assert.InDelta(t, 3.0, *got.CostUSD, 1e-9)
+	assert.Equal(t, []string{"opus", "sonnet"}, got.Models)
+	assert.Equal(t, 2, got.BreakdownCount)
+	require.Len(t, got.Breakdown, 2)
+	assert.Empty(t, got.Breakdown[0].SubagentSessionID)
+	assert.Equal(t, "agent-a", got.Breakdown[1].SubagentSessionID)
+	assert.Equal(t, 2, got.Breakdown[1].Ordinal)
 }

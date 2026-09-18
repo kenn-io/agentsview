@@ -27,7 +27,7 @@ func seedDuckWindowMessages(t *testing.T, local *db.DB, sessionID string) {
 		MessageCount: 1,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, local.UpsertSession(s), "seedDuckWindowMessages upsertSession %s", sessionID)
+	require.NoError(t, local.UpsertSession(t.Context(), s), "seedDuckWindowMessages upsertSession %s", sessionID)
 	roles := []string{
 		"user", "assistant", "user", "assistant", "system", "user",
 		"assistant", "user", "assistant", "system", "user", "assistant",
@@ -44,7 +44,7 @@ func seedDuckWindowMessages(t *testing.T, local *db.DB, sessionID string) {
 			IsSystem:      role == "system",
 		})
 	}
-	require.NoError(t, local.InsertMessages(msgs),
+	require.NoError(t, local.InsertMessages(t.Context(), msgs),
 		"seedDuckWindowMessages insertMessages %s", sessionID)
 }
 

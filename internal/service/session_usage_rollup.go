@@ -80,16 +80,14 @@ func GetSessionUsageRollup(
 			}
 		} else {
 			subagentContributing, totalCost, allPriced,
-				hasComputedCost, hasReportedCost, err =
-				sumRollupUsageFallback(ctx, store, root, usageIDs)
+				hasComputedCost, hasReportedCost, err = sumRollupUsageFallback(ctx, store, root, usageIDs)
 			if err != nil {
 				return nil, err
 			}
 		}
 	} else {
 		subagentContributing, totalCost, allPriced,
-			hasComputedCost, hasReportedCost, err =
-			sumRollupUsageFallback(ctx, store, root, usageIDs)
+			hasComputedCost, hasReportedCost, err = sumRollupUsageFallback(ctx, store, root, usageIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -202,7 +200,8 @@ func sumRollupUsageFallback(
 	root *db.SessionUsage,
 	usageIDs []string,
 ) (subagentContributing bool, totalCost money.Money, allPriced,
-	hasComputedCost, hasReportedCost bool, err error) {
+	hasComputedCost, hasReportedCost bool, err error,
+) {
 	allPriced = true
 	if root.BreakdownCount > 0 && !root.HasCost {
 		allPriced = false

@@ -785,7 +785,7 @@ func parseClineTeammates(
 		if err := json.Unmarshal(data, &rawFile); err != nil {
 			return nil, nil, fmt.Errorf("parsing cline teammate %s: %w", teammatePath, err)
 		}
-		subagent := ""
+		var subagent string
 		if rawFile.Origin != nil && rawFile.Origin.Subagent != "" {
 			if !isValidClineTeammateSubagentName(rawFile.Origin.Subagent) {
 				continue

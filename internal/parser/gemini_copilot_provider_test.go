@@ -16,9 +16,6 @@ import (
 )
 
 func TestGeminiProviderSourceMethods(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionID := "gemini-provider"
 	sourcePath := filepath.Join(
@@ -43,60 +40,57 @@ func TestGeminiProviderSourceMethods(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	plan, err := provider.WatchPlan(t.Context())
-	require.NoError(err)
-	require.Len(plan.Roots, 2)
-	assert.Equal(filepath.Join(root, "tmp"), plan.Roots[0].Path)
-	assert.True(plan.Roots[0].Recursive)
-	assert.Equal([]string{"session-*.json", "session-*.jsonl"}, plan.Roots[0].IncludeGlobs)
-	assert.Equal(root, plan.Roots[1].Path)
-	assert.False(plan.Roots[1].Recursive)
-	assert.Equal([]string{"projects.json", "trustedFolders.json"}, plan.Roots[1].IncludeGlobs)
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 2)
+	assert.Equal(t, filepath.Join(root, "tmp"), plan.Roots[0].Path)
+	assert.True(t, plan.Roots[0].Recursive)
+	assert.Equal(t, []string{"session-*.json", "session-*.jsonl"}, plan.Roots[0].IncludeGlobs)
+	assert.Equal(t, root, plan.Roots[1].Path)
+	assert.False(t, plan.Roots[1].Recursive)
+	assert.Equal(t, []string{"projects.json", "trustedFolders.json"}, plan.Roots[1].IncludeGlobs)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(sourcePath, discovered[0].DisplayPath)
-	assert.Equal("my_project", discovered[0].ProjectHint)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
+	assert.Equal(t, "my_project", discovered[0].ProjectHint)
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~gemini:" + sessionID,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(sourcePath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, found.DisplayPath)
 
 	changed, err := provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "write", WatchRoot: filepath.Join(root, "tmp")},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(sourcePath, changed[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 
-	require.NoError(os.Remove(sourcePath))
+	require.NoError(t, os.Remove(sourcePath))
 	changed, err = provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: filepath.Join(root, "tmp")},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(sourcePath, changed[0].DisplayPath)
-	assert.Equal("my_project", changed[0].ProjectHint)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, sourcePath, changed[0].DisplayPath)
+	assert.Equal(t, "my_project", changed[0].ProjectHint)
 
 	fingerprint, err := provider.Fingerprint(t.Context(), found)
-	require.Error(err)
-	require.Empty(fingerprint)
+	require.Error(t, err)
+	require.Empty(t, fingerprint)
 }
 
 func TestGeminiProviderDiscoverEmptyRootSkipsProjectMap(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
-	require.NoError(os.MkdirAll(
+	require.NoError(t, os.MkdirAll(
 		filepath.Join(root, "tmp", "unused-project", geminiChatsDir),
 		0o755,
 	))
@@ -112,19 +106,16 @@ func TestGeminiProviderDiscoverEmptyRootSkipsProjectMap(t *testing.T) {
 	t.Cleanup(func() { buildGeminiProjectMap = orig })
 
 	provider, ok := NewProvider(AgentGemini, ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	assert.Empty(discovered)
-	assert.Zero(projectMapBuilds)
+	require.NoError(t, err)
+	assert.Empty(t, discovered)
+	assert.Zero(t, projectMapBuilds)
 }
 
 func TestGeminiProviderDiscoverEachEmptyRootSkipsProjectMap(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
-	require.NoError(os.MkdirAll(
+	require.NoError(t, os.MkdirAll(
 		filepath.Join(root, "tmp", "unused-project", geminiChatsDir),
 		0o755,
 	))
@@ -140,23 +131,20 @@ func TestGeminiProviderDiscoverEachEmptyRootSkipsProjectMap(t *testing.T) {
 	t.Cleanup(func() { newGeminiDiscoveryMap = orig })
 
 	provider, ok := NewProvider(AgentGemini, ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 	discoverer, ok := provider.(StreamingDiscoverer)
-	require.True(ok)
+	require.True(t, ok)
 	var discovered []SourceRef
 	err := discoverer.DiscoverEach(t.Context(), func(source SourceRef) error {
 		discovered = append(discovered, source)
 		return nil
 	})
-	require.NoError(err)
-	assert.Empty(discovered)
-	assert.Zero(diskMapBuilds)
+	require.NoError(t, err)
+	assert.Empty(t, discovered)
+	assert.Zero(t, diskMapBuilds)
 }
 
 func TestGeminiProviderDiscoverEachBuildsOneProjectMapForSessions(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	writeSourceFile(t, filepath.Join(root, "projects.json"),
 		`{"projects":{"/projects/used":"used-project"}}`)
@@ -176,19 +164,19 @@ func TestGeminiProviderDiscoverEachBuildsOneProjectMapForSessions(t *testing.T) 
 	t.Cleanup(func() { newGeminiDiscoveryMap = orig })
 
 	provider, ok := NewProvider(AgentGemini, ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 	discoverer, ok := provider.(StreamingDiscoverer)
-	require.True(ok)
+	require.True(t, ok)
 	var discovered []SourceRef
 	err := discoverer.DiscoverEach(t.Context(), func(source SourceRef) error {
 		discovered = append(discovered, source)
 		return nil
 	})
-	require.NoError(err)
-	require.Len(discovered, 2)
-	assert.Equal("used", discovered[0].ProjectHint)
-	assert.Equal("used", discovered[1].ProjectHint)
-	assert.Equal(1, diskMapBuilds)
+	require.NoError(t, err)
+	require.Len(t, discovered, 2)
+	assert.Equal(t, "used", discovered[0].ProjectHint)
+	assert.Equal(t, "used", discovered[1].ProjectHint)
+	assert.Equal(t, 1, diskMapBuilds)
 }
 
 func TestGeminiProviderReconciliationProjectMapWorkIsArchiveBounded(t *testing.T) {
@@ -202,9 +190,6 @@ func TestGeminiProviderReconciliationProjectMapWorkIsArchiveBounded(t *testing.T
 
 	for _, sourceCount := range []int{1, 64} {
 		t.Run(fmt.Sprintf("sources_%d", sourceCount), func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			sourcePaths := make([]string, sourceCount)
 			for i := range sourcePaths {
@@ -221,9 +206,9 @@ func TestGeminiProviderReconciliationProjectMapWorkIsArchiveBounded(t *testing.T
 			provider, ok := NewProvider(AgentGemini, ProviderConfig{
 				Roots: []string{root},
 			})
-			require.True(ok)
+			require.True(t, ok)
 			resolver, ok := provider.(ReconciliationSourceResolver)
-			require.True(ok)
+			require.True(t, ok)
 
 			projectMapBuilds = 0
 			for i, path := range sourcePaths {
@@ -231,22 +216,19 @@ func TestGeminiProviderReconciliationProjectMapWorkIsArchiveBounded(t *testing.T
 				source, found, err := resolver.SourceForReconciliation(
 					t.Context(), path, project,
 				)
-				require.NoError(err)
-				require.True(found)
-				assert.Equal(path, source.DisplayPath)
-				assert.Equal(path, source.FingerprintKey)
-				assert.Equal(project, source.ProjectHint)
+				require.NoError(t, err)
+				require.True(t, found)
+				assert.Equal(t, path, source.DisplayPath)
+				assert.Equal(t, path, source.FingerprintKey)
+				assert.Equal(t, project, source.ProjectHint)
 			}
-			assert.Zero(projectMapBuilds,
+			assert.Zero(t, projectMapBuilds,
 				"exact reconciliation must not rebuild root-wide metadata per source")
 		})
 	}
 }
 
 func TestGeminiProviderProjectMetadataChangesClassifyAndFingerprint(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionID := "gemini-project-metadata"
 	projectsPath := filepath.Join(root, "projects.json")
@@ -273,31 +255,31 @@ func TestGeminiProviderProjectMetadataChangesClassifyAndFingerprint(t *testing.T
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~gemini:" + sessionID,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal("one", found.ProjectHint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "one", found.ProjectHint)
 
 	fingerprintOne, err := provider.Fingerprint(t.Context(), found)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	writeSourceFile(t, projectsPath, `{"projects":{"/Users/alice/code/two":"alias"}}`)
 	changed, err := provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: projectsPath, EventKind: "write", WatchRoot: root},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(sourcePath, changed[0].DisplayPath)
-	assert.Equal("two", changed[0].ProjectHint)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, sourcePath, changed[0].DisplayPath)
+	assert.Equal(t, "two", changed[0].ProjectHint)
 
 	fingerprintTwo, err := provider.Fingerprint(t.Context(), changed[0])
-	require.NoError(err)
-	assert.NotEqual(fingerprintOne.Hash, fingerprintTwo.Hash)
+	require.NoError(t, err)
+	assert.NotEqual(t, fingerprintOne.Hash, fingerprintTwo.Hash)
 
 	source := changed[0]
 
@@ -307,11 +289,11 @@ func TestGeminiProviderProjectMetadataChangesClassifyAndFingerprint(t *testing.T
 	// trustedFolders.json path.
 	writeUnrelatedProjectsEntry(t, root)
 	fingerprintThree := fingerprintSource(t, provider, source)
-	assert.Equal(fingerprintTwo.Hash, fingerprintThree.Hash,
+	assert.Equal(t, fingerprintTwo.Hash, fingerprintThree.Hash,
 		"unrelated projects.json entries must not invalidate the session")
 	writeUnrelatedTrustedFolder(t, root)
 	fingerprintFour := fingerprintSource(t, provider, source)
-	assert.Equal(fingerprintTwo.Hash, fingerprintFour.Hash,
+	assert.Equal(t, fingerprintTwo.Hash, fingerprintFour.Hash,
 		"unrelated trustedFolders.json entries must not invalidate the session")
 
 	// A trustedFolders.json entry that DOES change this session's resolved
@@ -341,9 +323,9 @@ func TestGeminiProviderProjectMetadataChangesClassifyAndFingerprint(t *testing.T
 	hashFoundBefore, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~gemini:" + hashSessionID,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal("unknown", hashFoundBefore.ProjectHint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "unknown", hashFoundBefore.ProjectHint)
 	fingerprintHashBefore := fingerprintSource(t, provider, hashFoundBefore)
 
 	writeSourceFile(t, filepath.Join(root, "trustedFolders.json"),
@@ -352,11 +334,11 @@ func TestGeminiProviderProjectMetadataChangesClassifyAndFingerprint(t *testing.T
 	hashFoundAfter, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~gemini:" + hashSessionID,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal("hash_project", hashFoundAfter.ProjectHint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "hash_project", hashFoundAfter.ProjectHint)
 	fingerprintHashAfter := fingerprintSource(t, provider, hashFoundAfter)
-	assert.NotEqual(fingerprintHashBefore.Hash, fingerprintHashAfter.Hash,
+	assert.NotEqual(t, fingerprintHashBefore.Hash, fingerprintHashAfter.Hash,
 		"a trustedFolders.json entry that changes this session's resolution must invalidate it")
 }
 
@@ -397,8 +379,6 @@ func fingerprintSource(t *testing.T, provider Provider, source SourceRef) Source
 // must resolve the same on-disk project so a metadata-scoped fingerprint
 // cannot drift between the two callers.
 func TestGeminiProviderFingerprintMatchesReconstructedSource(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionID := "gemini-reconstructed"
 	writeSourceFile(t, filepath.Join(root, "projects.json"),
@@ -425,14 +405,14 @@ func TestGeminiProviderFingerprintMatchesReconstructedSource(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~gemini:" + sessionID,
 	})
-	require.NoError(err)
-	require.True(ok)
-	require.Equal("reconstructed", discovered.ProjectHint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "reconstructed", discovered.ProjectHint)
 	discoveredFingerprint := fingerprintSource(t, provider, discovered)
 
 	// A bare SourceRef with no Opaque and no ProjectHint, as a caller would
@@ -450,9 +430,6 @@ func TestGeminiProviderFingerprintMatchesReconstructedSource(t *testing.T) {
 }
 
 func TestGeminiProviderParse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionID := "gemini-provider"
 	sourcePath := filepath.Join(
@@ -477,36 +454,36 @@ func TestGeminiProviderParse(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~gemini:" + sessionID,
 	})
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	fingerprint, err := provider.Fingerprint(t.Context(), found)
-	require.NoError(err)
-	assert.Equal(sourcePath, fingerprint.Key)
-	assert.Positive(fingerprint.Size)
-	assert.Positive(fingerprint.MTimeNS)
-	assert.NotEmpty(fingerprint.Hash)
+	require.NoError(t, err)
+	assert.Equal(t, sourcePath, fingerprint.Key)
+	assert.Positive(t, fingerprint.Size)
+	assert.Positive(t, fingerprint.MTimeNS)
+	assert.NotEmpty(t, fingerprint.Hash)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      found,
 		Fingerprint: fingerprint,
 	})
-	require.NoError(err)
-	require.True(outcome.ResultSetComplete)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.True(t, outcome.ResultSetComplete)
+	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0]
-	assert.Equal(DataVersionCurrent, result.DataVersion)
-	assert.Equal("gemini:"+sessionID, result.Result.Session.ID)
-	assert.Equal(AgentGemini, result.Result.Session.Agent)
-	assert.Equal("my_project", result.Result.Session.Project)
-	assert.Equal("devbox", result.Result.Session.Machine)
-	assert.Equal(fingerprint.Hash, result.Result.Session.File.Hash)
-	assert.Len(result.Result.Messages, 2)
+	assert.Equal(t, DataVersionCurrent, result.DataVersion)
+	assert.Equal(t, "gemini:"+sessionID, result.Result.Session.ID)
+	assert.Equal(t, AgentGemini, result.Result.Session.Agent)
+	assert.Equal(t, "my_project", result.Result.Session.Project)
+	assert.Equal(t, "devbox", result.Result.Session.Machine)
+	assert.Equal(t, fingerprint.Hash, result.Result.Session.File.Hash)
+	assert.Len(t, result.Result.Messages, 2)
 }
 
 // A followed project-directory symlink whose target cannot be resolved must
@@ -544,36 +521,30 @@ func TestGeminiProviderStreamingDiscoveryPropagatesProjectSymlinkErrors(t *testi
 	}
 
 	t.Run("dangling project symlink", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		root := t.TempDir()
 		writeGeminiSession(t, root, "healthy-project", "healthy")
 		target := filepath.Join(t.TempDir(), "linked-project")
-		require.NoError(os.MkdirAll(target, 0o755))
+		require.NoError(t, os.MkdirAll(target, 0o755))
 		link := filepath.Join(root, "tmp", "linked")
 		if err := os.Symlink(target, link); err != nil {
 			t.Skipf("symlink not supported: %v", err)
 		}
-		require.NoError(os.RemoveAll(target))
+		require.NoError(t, os.RemoveAll(target))
 
 		_, err := discoverEach(t, root)
 
-		require.Error(err)
-		assert.ErrorIs(err, os.ErrNotExist)
+		require.Error(t, err)
+		require.ErrorIs(t, err, os.ErrNotExist)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 
-		require.NoError(os.Remove(link))
+		require.NoError(t, os.Remove(link))
 		yielded, err := discoverEach(t, root)
-		require.NoError(err)
-		assert.Len(yielded, 1)
+		require.NoError(t, err)
+		assert.Len(t, yielded, 1)
 	})
 
 	t.Run("unstatable project symlink target", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		if runtime.GOOS == "windows" {
 			t.Skip("directory read permissions are not enforced on Windows")
 		}
@@ -584,31 +555,28 @@ func TestGeminiProviderStreamingDiscoveryPropagatesProjectSymlinkErrors(t *testi
 		writeGeminiSession(t, root, "healthy-project", "healthy")
 		targetParent := t.TempDir()
 		target := filepath.Join(targetParent, "linked-project")
-		require.NoError(os.MkdirAll(target, 0o755))
+		require.NoError(t, os.MkdirAll(target, 0o755))
 		if err := os.Symlink(target, filepath.Join(root, "tmp", "linked")); err != nil {
 			t.Skipf("symlink not supported: %v", err)
 		}
-		require.NoError(os.Chmod(targetParent, 0o000))
+		require.NoError(t, os.Chmod(targetParent, 0o000))
 		t.Cleanup(func() { _ = os.Chmod(targetParent, 0o755) })
 
 		_, err := discoverEach(t, root)
 
-		require.Error(err)
-		assert.ErrorIs(err, os.ErrPermission)
+		require.Error(t, err)
+		require.ErrorIs(t, err, os.ErrPermission)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 
-		require.NoError(os.Chmod(targetParent, 0o755))
+		require.NoError(t, os.Chmod(targetParent, 0o755))
 		yielded, err := discoverEach(t, root)
-		require.NoError(err)
-		assert.Len(yielded, 1)
+		require.NoError(t, err)
+		assert.Len(t, yielded, 1)
 	})
 }
 
 func TestCopilotProviderSourceMethods(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	barePath := filepath.Join(root, copilotStateDir, "copilot-provider.jsonl")
 	dirEvents := filepath.Join(root, copilotStateDir, "copilot-provider", "events.jsonl")
@@ -627,97 +595,97 @@ func TestCopilotProviderSourceMethods(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	plan, err := provider.WatchPlan(t.Context())
-	require.NoError(err)
-	require.Len(plan.Roots, 2)
-	assert.Equal(filepath.Join(root, copilotStateDir), plan.Roots[0].Path)
-	assert.True(plan.Roots[0].Recursive)
-	assert.Equal([]string{"*.jsonl", "workspace.yaml"}, plan.Roots[0].IncludeGlobs)
-	assert.Equal(root, plan.Roots[1].Path)
-	assert.False(plan.Roots[1].Recursive)
-	assert.Equal([]string{"session-store.db", "session-store.db-wal"},
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 2)
+	assert.Equal(t, filepath.Join(root, copilotStateDir), plan.Roots[0].Path)
+	assert.True(t, plan.Roots[0].Recursive)
+	assert.Equal(t, []string{"*.jsonl", "workspace.yaml"}, plan.Roots[0].IncludeGlobs)
+	assert.Equal(t, root, plan.Roots[1].Path)
+	assert.False(t, plan.Roots[1].Recursive)
+	assert.Equal(t, []string{"session-store.db", "session-store.db-wal"},
 		plan.Roots[1].IncludeGlobs)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(dirEvents, discovered[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, dirEvents, discovered[0].DisplayPath)
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "copilot-provider",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(dirEvents, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, dirEvents, found.DisplayPath)
 
 	for _, path := range []string{dirEvents, workspacePath} {
 		changed, err := provider.SourcesForChangedPath(
 			t.Context(),
 			ChangedPathRequest{Path: path, EventKind: "write", WatchRoot: filepath.Join(root, copilotStateDir)},
 		)
-		require.NoError(err)
-		require.Len(changed, 1)
-		assert.Equal(dirEvents, changed[0].DisplayPath)
+		require.NoError(t, err)
+		require.Len(t, changed, 1)
+		assert.Equal(t, dirEvents, changed[0].DisplayPath)
 	}
 
-	require.NoError(os.Remove(dirEvents))
+	require.NoError(t, os.Remove(dirEvents))
 	changed, err := provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: dirEvents, EventKind: "remove", WatchRoot: filepath.Join(root, copilotStateDir)},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(barePath, changed[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, barePath, changed[0].DisplayPath)
 	writeSourceFile(t, dirEvents, content)
 
-	require.NoError(os.Remove(workspacePath))
+	require.NoError(t, os.Remove(workspacePath))
 	changed, err = provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: workspacePath, EventKind: "remove", WatchRoot: filepath.Join(root, copilotStateDir)},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(dirEvents, changed[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, dirEvents, changed[0].DisplayPath)
 	writeSourceFile(t, workspacePath, "name: Workspace title\n")
 
 	fingerprint, err := provider.Fingerprint(t.Context(), found)
-	require.NoError(err)
-	assert.Equal(dirEvents, fingerprint.Key)
-	assert.Positive(fingerprint.Size)
-	assert.Positive(fingerprint.MTimeNS)
-	assert.NotEmpty(fingerprint.Hash)
+	require.NoError(t, err)
+	assert.Equal(t, dirEvents, fingerprint.Key)
+	assert.Positive(t, fingerprint.Size)
+	assert.Positive(t, fingerprint.MTimeNS)
+	assert.NotEmpty(t, fingerprint.Hash)
 
 	writeSourceFile(t, workspacePath, "name: Workspace other\n")
 	// Equal-size writes can share a filesystem timestamp tick on Windows.
 	workspaceTime := time.Unix(0, fingerprint.MTimeNS).Add(time.Second)
-	require.NoError(os.Chtimes(workspacePath, workspaceTime, workspaceTime))
+	require.NoError(t, os.Chtimes(workspacePath, workspaceTime, workspaceTime))
 	renamedFingerprint, err := provider.Fingerprint(t.Context(), found)
-	require.NoError(err)
-	assert.NotEqual(fingerprint.Hash, renamedFingerprint.Hash)
+	require.NoError(t, err)
+	assert.NotEqual(t, fingerprint.Hash, renamedFingerprint.Hash)
 	writeSourceFile(t, workspacePath, "name: Workspace title\n")
 	fingerprint, err = provider.Fingerprint(t.Context(), found)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      found,
 		Fingerprint: fingerprint,
 	})
-	require.NoError(err)
-	require.True(outcome.ResultSetComplete)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.True(t, outcome.ResultSetComplete)
+	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0]
-	assert.Equal(DataVersionCurrent, result.DataVersion)
-	assert.Equal("copilot:copilot-provider", result.Result.Session.ID)
-	assert.Equal(AgentCopilot, result.Result.Session.Agent)
-	assert.Equal("copilot_app", result.Result.Session.Project)
-	assert.Equal("Workspace title", result.Result.Session.FirstMessage)
-	assert.Equal("devbox", result.Result.Session.Machine)
-	assert.Equal(fingerprint.Hash, result.Result.Session.File.Hash)
-	assert.Equal(fingerprint.Size, result.Result.Session.File.Size)
-	assert.Equal(fingerprint.MTimeNS, result.Result.Session.File.Mtime)
-	assert.Len(result.Result.Messages, 2)
-	require.Len(result.Result.UsageEvents, 1)
-	assert.Equal("gpt-5", result.Result.UsageEvents[0].Model)
+	assert.Equal(t, DataVersionCurrent, result.DataVersion)
+	assert.Equal(t, "copilot:copilot-provider", result.Result.Session.ID)
+	assert.Equal(t, AgentCopilot, result.Result.Session.Agent)
+	assert.Equal(t, "copilot_app", result.Result.Session.Project)
+	assert.Equal(t, "Workspace title", result.Result.Session.FirstMessage)
+	assert.Equal(t, "devbox", result.Result.Session.Machine)
+	assert.Equal(t, fingerprint.Hash, result.Result.Session.File.Hash)
+	assert.Equal(t, fingerprint.Size, result.Result.Session.File.Size)
+	assert.Equal(t, fingerprint.MTimeNS, result.Result.Session.File.Mtime)
+	assert.Len(t, result.Result.Messages, 2)
+	require.Len(t, result.Result.UsageEvents, 1)
+	assert.Equal(t, "gpt-5", result.Result.UsageEvents[0].Model)
 }

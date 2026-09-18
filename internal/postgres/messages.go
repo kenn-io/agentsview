@@ -313,7 +313,7 @@ func (s *Store) SearchSession(
 }
 
 // HasFTS returns true because ILIKE search is available.
-func (s *Store) HasFTS() bool { return true }
+func (s *Store) HasFTS(ctx context.Context) bool { return true }
 
 // HasSemantic reports whether a PG vector searcher was wired at startup
 // (pg serve found a generation matching its embeddings fingerprint). When

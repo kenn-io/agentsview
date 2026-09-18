@@ -147,8 +147,8 @@ func collapseHome(cwd, home string) string {
 
 // truncName collapses internal whitespace and trims to max runes, adding
 // an ellipsis when it cut anything.
-func truncName(s string, max int) string {
-	t, cut := truncateRunes(collapseWhitespace(s), max)
+func truncName(s string, maximum int) string {
+	t, cut := truncateRunes(collapseWhitespace(s), maximum)
 	if cut {
 		return t + "…"
 	}
@@ -163,10 +163,10 @@ func collapseWhitespace(s string) string {
 
 // truncateRunes cuts s to at most max runes on a rune boundary, returning
 // the (possibly shortened) string and whether truncation occurred.
-func truncateRunes(s string, max int) (string, bool) {
-	if max <= 0 {
+func truncateRunes(s string, maximum int) (string, bool) {
+	if maximum <= 0 {
 		return s, false
 	}
-	prefix := stringutil.TruncateRunes(s, max, "")
+	prefix := stringutil.TruncateRunes(s, maximum, "")
 	return prefix, len(prefix) < len(s)
 }

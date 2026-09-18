@@ -117,6 +117,7 @@ func (db *DB) LoadProjectIdentityPublicationDelta(
 	if err != nil {
 		return delta, fmt.Errorf("listing changed project identity observations: %w", err)
 	}
+	defer rows.Close()
 	for rows.Next() {
 		var obs export.ProjectIdentityObservation
 		var observedAt string
@@ -154,6 +155,7 @@ func (db *DB) LoadProjectIdentityPublicationDelta(
 	if err != nil {
 		return delta, fmt.Errorf("listing project identity observation tombstones: %w", err)
 	}
+	defer rows.Close()
 	for rows.Next() {
 		var key ProjectIdentityObservationKey
 		if err := rows.Scan(
@@ -193,6 +195,7 @@ func (db *DB) LoadProjectIdentityPublicationDelta(
 	if err != nil {
 		return delta, fmt.Errorf("listing changed session project identity snapshots: %w", err)
 	}
+	defer rows.Close()
 	for rows.Next() {
 		var snapshot export.ProjectIdentityObservation
 		var observedAt string
@@ -335,6 +338,7 @@ func (db *DB) CopyArchiveIdentityFrom(sourcePath string) error {
 	if err != nil {
 		return fmt.Errorf("reading archive identity source: %w", err)
 	}
+	defer rows.Close()
 	for rows.Next() {
 		var key string
 		var row metadataRow
@@ -752,12 +756,12 @@ func (db *DB) upsertProjectIdentityObservationWithSnapshotProject(
 // aggregate identity while preserving parser-time snapshot evidence. The
 // transaction-local insert result permits removal of only the fallback created
 // by this session write.
-func (db *DB) UpsertSessionWithProjectIdentity(
+func (db *DB) UpsertSessionWithProjectIdentity(ctx context.Context,
 	s Session,
 	obs export.ProjectIdentityObservation,
 	snapshotProject string,
 ) error {
-	_, err := db.upsertSessionWithProjectIdentity(
+	_, err := db.upsertSessionWithProjectIdentity(ctx,
 		s, obs, snapshotProject, true,
 	)
 	return err
@@ -767,18 +771,18 @@ func (db *DB) UpsertSessionWithProjectIdentity(
 // and its parser-time project identity without reviving a source-missing
 // tombstone. The returned bool reports whether retained content must be
 // replaced before the caller makes the session visible again.
-func (db *DB) UpsertSessionPendingContentWithProjectIdentity(
+func (db *DB) UpsertSessionPendingContentWithProjectIdentity(ctx context.Context,
 	s Session,
 	obs export.ProjectIdentityObservation,
 	snapshotProject string,
 ) (bool, error) {
-	result, err := db.upsertSessionWithProjectIdentity(
+	result, err := db.upsertSessionWithProjectIdentity(ctx,
 		s, obs, snapshotProject, false,
 	)
 	return result.sourceMissing, err
 }
 
-func (db *DB) upsertSessionWithProjectIdentity(
+func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 	s Session,
 	obs export.ProjectIdentityObservation,
 	snapshotProject string,
@@ -808,16 +812,17 @@ func (db *DB) upsertSessionWithProjectIdentity(
 	obs = normalized
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return sessionUpsertResult{},
 			fmt.Errorf("beginning session identity upsert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	result, err := upsertSessionExec(
-		tx.Exec,
-		func(query string, args ...any) rowScanner {
-			return tx.QueryRow(query, args...)
+		ctx,
+		tx.ExecContext,
+		func(ctx context.Context, query string, args ...any) rowScanner {
+			return tx.QueryRowContext(ctx, query, args...)
 		},
 		s,
 		reviveSourceMissing,
@@ -920,7 +925,7 @@ func upsertProjectIdentityObservationWithSnapshotProjectTxContext(
 
 func writeSessionProjectIdentitySnapshotExec(
 	ctx context.Context,
-	exec contextExecer,
+	exec sqlContextExecer,
 	queryRow contextQueryRow,
 	obs export.ProjectIdentityObservation,
 	snapshotProject string,
@@ -1000,6 +1005,7 @@ func (db *DB) RestoreSessionProjectsFromIdentitySnapshots(
 			"listing session project identity restores: %w", err,
 		)
 	}
+	defer rows.Close()
 	for rows.Next() {
 		var restore projectRestore
 		if err := rows.Scan(
@@ -1155,7 +1161,7 @@ func reconcileSessionProjectIdentityAggregatesTx(
 
 func upsertSessionProjectIdentitySnapshotExec(
 	ctx context.Context,
-	exec contextExecer,
+	exec sqlContextExecer,
 	queryRow contextQueryRow,
 	obs export.ProjectIdentityObservation,
 	allowProjectCorrection bool,
@@ -1241,15 +1247,11 @@ func upsertSessionProjectIdentitySnapshotExec(
 	return nil
 }
 
-type contextExecer interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}
-
 type contextQueryRow func(context.Context, string, ...any) rowScanner
 
 func upsertProjectIdentityObservationExec(
 	ctx context.Context,
-	exec contextExecer,
+	exec sqlContextExecer,
 	queryRow contextQueryRow,
 	obs export.ProjectIdentityObservation,
 ) error {
@@ -1259,7 +1261,7 @@ func upsertProjectIdentityObservationExec(
 
 func upsertProjectIdentityObservationExecExcludingRemote(
 	ctx context.Context,
-	exec contextExecer,
+	exec sqlContextExecer,
 	queryRow contextQueryRow,
 	obs export.ProjectIdentityObservation,
 	excludeRemote string,
@@ -1415,6 +1417,7 @@ func scrubProjectIdentityGitRemoteCredentialsTx(
 	if err != nil {
 		return fmt.Errorf("listing project identity remotes for scrub: %w", err)
 	}
+	defer rows.Close()
 
 	type pendingScrub struct {
 		obs       export.ProjectIdentityObservation

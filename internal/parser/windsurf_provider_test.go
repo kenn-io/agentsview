@@ -16,9 +16,6 @@ import (
 )
 
 func TestWindsurfProviderDiscoversAndParsesWorkspaceSQLiteChat(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root, dbPath := windsurfProviderFixture(t, windsurfVSCodeSessionJSON(
 		"windsurf-session-1",
 		"How do I add support?",
@@ -27,45 +24,42 @@ func TestWindsurfProviderDiscoversAndParsesWorkspaceSQLiteChat(t *testing.T) {
 	provider := newTestWindsurfProvider(root)
 
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 	source := sources[0]
-	assert.Equal(AgentWindsurf, source.Provider)
-	assert.Equal("demo-workspace", source.ProjectHint)
-	assert.Equal(dbPath+"#windsurf-session-1", source.DisplayPath)
+	assert.Equal(t, AgentWindsurf, source.Provider)
+	assert.Equal(t, "demo-workspace", source.ProjectHint)
+	assert.Equal(t, dbPath+"#windsurf-session-1", source.DisplayPath)
 
 	fp, err := provider.Fingerprint(t.Context(), source)
-	require.NoError(err)
-	require.NotZero(fp.Size)
-	require.NotZero(fp.MTimeNS)
-	require.NotEmpty(fp.Hash)
+	require.NoError(t, err)
+	require.NotZero(t, fp.Size)
+	require.NotZero(t, fp.MTimeNS)
+	require.NotEmpty(t, fp.Hash)
 
 	out, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      source,
 		Fingerprint: fp,
 		Machine:     "machine-a",
 	})
-	require.NoError(err)
-	require.True(out.ResultSetComplete)
-	require.Len(out.Results, 1)
+	require.NoError(t, err)
+	require.True(t, out.ResultSetComplete)
+	require.Len(t, out.Results, 1)
 
 	result := out.Results[0].Result
-	assert.Equal("windsurf:windsurf-session-1", result.Session.ID)
-	assert.Equal(AgentWindsurf, result.Session.Agent)
-	assert.Equal("demo-workspace", result.Session.Project)
-	assert.Equal("machine-a", result.Session.Machine)
-	assert.Equal(source.DisplayPath, result.Session.File.Path)
-	require.Len(result.Messages, 2)
-	assert.Equal(RoleUser, result.Messages[0].Role)
-	assert.Equal("How do I add support?", result.Messages[0].Content)
-	assert.Equal(RoleAssistant, result.Messages[1].Role)
-	assert.Equal("Use the existing parser.", result.Messages[1].Content)
+	assert.Equal(t, "windsurf:windsurf-session-1", result.Session.ID)
+	assert.Equal(t, AgentWindsurf, result.Session.Agent)
+	assert.Equal(t, "demo-workspace", result.Session.Project)
+	assert.Equal(t, "machine-a", result.Session.Machine)
+	assert.Equal(t, source.DisplayPath, result.Session.File.Path)
+	require.Len(t, result.Messages, 2)
+	assert.Equal(t, RoleUser, result.Messages[0].Role)
+	assert.Equal(t, "How do I add support?", result.Messages[0].Content)
+	assert.Equal(t, RoleAssistant, result.Messages[1].Role)
+	assert.Equal(t, "Use the existing parser.", result.Messages[1].Content)
 }
 
 func TestWindsurfProviderStreamingDiscoveryKeepsFirstDuplicateSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	firstPayload := windsurfVSCodeSessionJSON(
 		"duplicate-session",
 		"Question from the first key",
@@ -86,42 +80,39 @@ func TestWindsurfProviderStreamingDiscoveryKeepsFirstDuplicateSession(t *testing
 	baselineRoot, _ := windsurfProviderFixture(t, firstPayload)
 	baselineProvider := newTestWindsurfProvider(baselineRoot)
 	baselineSources, err := baselineProvider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(baselineSources, 1)
+	require.NoError(t, err)
+	require.Len(t, baselineSources, 1)
 	baselineFingerprint, err := baselineProvider.Fingerprint(t.Context(), baselineSources[0])
-	require.NoError(err)
+	require.NoError(t, err)
 
 	ctx, cleanup, err := WithReconciliationCache(t.Context())
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(cleanup()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
 	var sources []SourceRef
 	err = provider.(StreamingDiscoverer).DiscoverEach(ctx, func(source SourceRef) error {
 		sources = append(sources, source)
 		return nil
 	})
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 	fingerprint, err := provider.Fingerprint(ctx, sources[0])
-	require.NoError(err)
-	assert.Equal(baselineFingerprint.Hash, fingerprint.Hash)
-	assert.Equal(baselineFingerprint.Size, fingerprint.Size)
+	require.NoError(t, err)
+	assert.Equal(t, baselineFingerprint.Hash, fingerprint.Hash)
+	assert.Equal(t, baselineFingerprint.Size, fingerprint.Size)
 
 	out, err := provider.Parse(ctx, ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fingerprint,
 	})
-	require.NoError(err)
-	require.Len(out.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, out.Results, 1)
 	messages := out.Results[0].Result.Messages
-	require.Len(messages, 2)
-	assert.Equal("Question from the first key", messages[0].Content)
-	assert.Equal("Answer from the first key.", messages[1].Content)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "Question from the first key", messages[0].Content)
+	assert.Equal(t, "Answer from the first key.", messages[1].Content)
 }
 
 func TestWindsurfProviderRehydratesExactVirtualSourceWithoutContainerFanout(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root, dbPath := windsurfProviderFixture(t, windsurfVSCodeSessionJSON(
 		"windsurf-exact", "Exact?", "Exact.",
 	))
@@ -129,25 +120,23 @@ func TestWindsurfProviderRehydratesExactVirtualSourceWithoutContainerFanout(t *t
 	virtualPath := dbPath + "#windsurf-exact"
 
 	resolver, ok := provider.(ReconciliationSourceResolver)
-	require.True(ok)
+	require.True(t, ok)
 	source, found, err := resolver.SourceForReconciliation(
 		t.Context(), virtualPath, "spooled-project",
 	)
 
-	require.NoError(err)
-	require.True(found)
-	assert.Equal(virtualPath, source.DisplayPath)
-	assert.Equal("spooled-project", source.ProjectHint)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, virtualPath, source.DisplayPath)
+	assert.Equal(t, "spooled-project", source.ProjectHint)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, _, err = resolver.SourceForReconciliation(ctx, virtualPath, "")
-	assert.ErrorIs(err, context.Canceled)
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestWindsurfProviderFingerprintHashIsContentBased(t *testing.T) {
-	require := require.New(t)
-
 	payload := windsurfVSCodeSessionJSON(
 		"windsurf-session-hash",
 		"Hash this",
@@ -159,24 +148,21 @@ func TestWindsurfProviderFingerprintHashIsContentBased(t *testing.T) {
 	providerB := newTestWindsurfProvider(rootB)
 
 	sourcesA, err := providerA.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sourcesA, 1)
+	require.NoError(t, err)
+	require.Len(t, sourcesA, 1)
 	sourcesB, err := providerB.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sourcesB, 1)
+	require.NoError(t, err)
+	require.Len(t, sourcesB, 1)
 	fpA, err := providerA.Fingerprint(t.Context(), sourcesA[0])
-	require.NoError(err)
+	require.NoError(t, err)
 	fpB, err := providerB.Fingerprint(t.Context(), sourcesB[0])
-	require.NoError(err)
+	require.NoError(t, err)
 
-	require.NotEmpty(fpA.Hash)
+	require.NotEmpty(t, fpA.Hash)
 	assert.Equal(t, fpA.Hash, fpB.Hash)
 }
 
 func TestWindsurfProviderFingerprintIgnoresSHM(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root, dbPath := windsurfProviderFixture(t, windsurfVSCodeSessionJSON(
 		"windsurf-session-shm",
 		"Ignore SHM",
@@ -184,30 +170,27 @@ func TestWindsurfProviderFingerprintIgnoresSHM(t *testing.T) {
 	))
 	provider := newTestWindsurfProvider(root)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
-	require.NoError(os.WriteFile(dbPath+"-shm", []byte("first"), 0o644))
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	require.NoError(t, os.WriteFile(dbPath+"-shm", []byte("first"), 0o644))
 	firstTime := mustParseTestTime(t, "2026-06-28T12:00:00Z")
-	require.NoError(os.Chtimes(dbPath+"-shm", firstTime, firstTime))
+	require.NoError(t, os.Chtimes(dbPath+"-shm", firstTime, firstTime))
 
 	before, err := provider.Fingerprint(t.Context(), sources[0])
-	require.NoError(err)
+	require.NoError(t, err)
 
-	require.NoError(os.WriteFile(dbPath+"-shm", []byte("second"), 0o644))
+	require.NoError(t, os.WriteFile(dbPath+"-shm", []byte("second"), 0o644))
 	secondTime := mustParseTestTime(t, "2026-06-28T13:00:00Z")
-	require.NoError(os.Chtimes(dbPath+"-shm", secondTime, secondTime))
+	require.NoError(t, os.Chtimes(dbPath+"-shm", secondTime, secondTime))
 	after, err := provider.Fingerprint(t.Context(), sources[0])
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.Equal(before.Hash, after.Hash)
-	assert.Equal(before.Size, after.Size)
-	assert.Equal(before.MTimeNS, after.MTimeNS)
+	assert.Equal(t, before.Hash, after.Hash)
+	assert.Equal(t, before.Size, after.Size)
+	assert.Equal(t, before.MTimeNS, after.MTimeNS)
 }
 
 func TestWindsurfProviderParsesTabContainerChatData(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root, _ := windsurfProviderFixture(t, `{
 		"tabs": [{
 			"tabId": "tab-session",
@@ -221,19 +204,19 @@ func TestWindsurfProviderParsesTabContainerChatData(t *testing.T) {
 	provider := newTestWindsurfProvider(root)
 
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 
 	out, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0],
 	})
-	require.NoError(err)
-	require.Len(out.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, out.Results, 1)
 	result := out.Results[0].Result
-	assert.Equal("windsurf:tab-session", result.Session.ID)
-	require.Len(result.Messages, 2)
-	assert.Equal("Question from tab", result.Messages[0].Content)
-	assert.Equal("Answer from tab", result.Messages[1].Content)
+	assert.Equal(t, "windsurf:tab-session", result.Session.ID)
+	require.Len(t, result.Messages, 2)
+	assert.Equal(t, "Question from tab", result.Messages[0].Content)
+	assert.Equal(t, "Answer from tab", result.Messages[1].Content)
 }
 
 func TestWindsurfProviderMalformedChatDataReturnsError(t *testing.T) {
@@ -252,9 +235,6 @@ func TestWindsurfProviderMalformedChatDataReturnsError(t *testing.T) {
 }
 
 func TestWindsurfProviderParsesNumericTabBubbleTypes(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root, _ := windsurfProviderFixture(t, `{
 		"tabs": [{
 			"tabId": "numeric-tab-session",
@@ -268,26 +248,23 @@ func TestWindsurfProviderParsesNumericTabBubbleTypes(t *testing.T) {
 	provider := newTestWindsurfProvider(root)
 
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 
 	out, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0],
 	})
-	require.NoError(err)
-	require.Len(out.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, out.Results, 1)
 	messages := out.Results[0].Result.Messages
-	require.Len(messages, 2)
-	assert.Equal(RoleUser, messages[0].Role)
-	assert.Equal("Numeric question", messages[0].Content)
-	assert.Equal(RoleAssistant, messages[1].Role)
-	assert.Equal("Numeric answer", messages[1].Content)
+	require.Len(t, messages, 2)
+	assert.Equal(t, RoleUser, messages[0].Role)
+	assert.Equal(t, "Numeric question", messages[0].Content)
+	assert.Equal(t, RoleAssistant, messages[1].Role)
+	assert.Equal(t, "Numeric answer", messages[1].Content)
 }
 
 func TestWindsurfProviderFallbackSessionIDUsesWorkspaceIdentity(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := filepath.Join(t.TempDir(), "Windsurf", "User")
 	dbA := filepath.Join(root, "workspaceStorage", "workspace-a", "state.vscdb")
 	dbB := filepath.Join(root, "workspaceStorage", "workspace-b", "state.vscdb")
@@ -307,9 +284,9 @@ func TestWindsurfProviderFallbackSessionIDUsesWorkspaceIdentity(t *testing.T) {
 	provider := newTestWindsurfProvider(root)
 
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 2)
-	assert.ElementsMatch([]string{
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	assert.ElementsMatch(t, []string{
 		dbA + "#workspace-workspace-a",
 		dbB + "#workspace-workspace-b",
 	}, []string{sources[0].DisplayPath, sources[1].DisplayPath})
@@ -319,20 +296,17 @@ func TestWindsurfProviderFallbackSessionIDUsesWorkspaceIdentity(t *testing.T) {
 		out, err := provider.Parse(t.Context(), ParseRequest{
 			Source: source,
 		})
-		require.NoError(err)
-		require.Len(out.Results, 1)
+		require.NoError(t, err)
+		require.Len(t, out.Results, 1)
 		ids = append(ids, out.Results[0].Result.Session.ID)
 	}
-	assert.ElementsMatch([]string{
+	assert.ElementsMatch(t, []string{
 		"windsurf:workspace-workspace-a",
 		"windsurf:workspace-workspace-b",
 	}, ids)
 }
 
 func TestWindsurfProviderFindSourceAndChangedPath(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root, dbPath := windsurfProviderFixture(t, windsurfVSCodeSessionJSON(
 		"windsurf-session-lookup",
 		"Find me",
@@ -343,18 +317,18 @@ func TestWindsurfProviderFindSourceAndChangedPath(t *testing.T) {
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "windsurf-session-lookup",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(dbPath+"#windsurf-session-lookup", found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, dbPath+"#windsurf-session-lookup", found.DisplayPath)
 
 	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID:      "windsurf:windsurf-session-lookup",
 		StoredFilePath:     dbPath + "#windsurf-session-lookup",
 		RequireFreshSource: true,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(dbPath+"#windsurf-session-lookup", found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, dbPath+"#windsurf-session-lookup", found.DisplayPath)
 
 	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path:      dbPath + "-wal",
@@ -364,9 +338,9 @@ func TestWindsurfProviderFindSourceAndChangedPath(t *testing.T) {
 			"workspaceStorage",
 		),
 	})
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(dbPath+"#windsurf-session-lookup", changed[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, dbPath+"#windsurf-session-lookup", changed[0].DisplayPath)
 
 	manifestChanged, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: filepath.Join(
@@ -379,15 +353,12 @@ func TestWindsurfProviderFindSourceAndChangedPath(t *testing.T) {
 			"workspaceStorage",
 		),
 	})
-	require.NoError(err)
-	require.Len(manifestChanged, 1)
-	assert.Equal(dbPath+"#windsurf-session-lookup", manifestChanged[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, manifestChanged, 1)
+	assert.Equal(t, dbPath+"#windsurf-session-lookup", manifestChanged[0].DisplayPath)
 }
 
 func TestWindsurfProviderDeletedDBChangedPathPreservesStoredArchive(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root, dbPath := windsurfProviderFixture(t, windsurfVSCodeSessionJSON(
 		"deleted-session",
 		"Question before delete",
@@ -400,7 +371,7 @@ func TestWindsurfProviderDeletedDBChangedPathPreservesStoredArchive(t *testing.T
 		DisplayPath:    dbPath + "#deleted-session",
 		FingerprintKey: dbPath + "#deleted-session",
 	}
-	require.NoError(os.Remove(dbPath))
+	require.NoError(t, os.Remove(dbPath))
 
 	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path:              dbPath,
@@ -408,62 +379,54 @@ func TestWindsurfProviderDeletedDBChangedPathPreservesStoredArchive(t *testing.T
 		WatchRoot:         filepath.Join(root, "workspaceStorage"),
 		StoredSourcePaths: []string{source.DisplayPath},
 	})
-	require.NoError(err)
-	assert.Empty(changed)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
 
 	fp, err := provider.Fingerprint(t.Context(), source)
-	require.NoError(err)
-	assert.Equal(source.FingerprintKey, fp.Key)
-	assert.Empty(fp.Hash)
+	require.NoError(t, err)
+	assert.Equal(t, source.FingerprintKey, fp.Key)
+	assert.Empty(t, fp.Hash)
 
 	out, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source,
 	})
-	require.NoError(err)
-	assert.True(out.ResultSetComplete)
-	assert.False(out.ForceReplace)
-	assert.Equal(SkipNoSession, out.SkipReason)
+	require.NoError(t, err)
+	assert.True(t, out.ResultSetComplete)
+	assert.False(t, out.ForceReplace)
+	assert.Equal(t, SkipNoSession, out.SkipReason)
 }
 
 func TestSplitWindsurfVirtualPathRequiresStateDB(t *testing.T) {
-	assert := assert.New(t)
-
 	dbPath, sessionID, ok := SplitWindsurfVirtualPath(
 		filepath.Join("profile", "workspaceStorage", "hash", "state.vscdb") + "#session",
 	)
 	require.True(t, ok)
-	assert.Equal("session", sessionID)
-	assert.True(strings.HasSuffix(filepath.ToSlash(dbPath), "/state.vscdb"))
+	assert.Equal(t, "session", sessionID)
+	assert.True(t, strings.HasSuffix(filepath.ToSlash(dbPath), "/state.vscdb"))
 
 	_, _, ok = SplitWindsurfVirtualPath(
 		filepath.Join("profile", "notes#draft.json") + "#session",
 	)
-	assert.False(ok)
+	assert.False(t, ok)
 }
 
 func TestWindsurfProviderWatchPlan(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	provider := newTestWindsurfProvider(filepath.Join(t.TempDir(), "Windsurf", "User"))
 
 	plan, err := provider.WatchPlan(t.Context())
-	require.NoError(err)
-	require.Len(plan.Roots, 1)
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
 	root := plan.Roots[0]
-	assert.True(root.Recursive)
-	assert.True(strings.HasSuffix(filepath.ToSlash(root.Path), "/workspaceStorage"))
-	assert.Contains(root.IncludeGlobs, "state.vscdb")
-	assert.Contains(root.IncludeGlobs, "state.vscdb-wal")
-	assert.NotContains(root.IncludeGlobs, "state.vscdb-*")
-	assert.NotContains(root.IncludeGlobs, "state.vscdb-shm")
-	assert.Contains(root.IncludeGlobs, "workspace.json")
+	assert.True(t, root.Recursive)
+	assert.True(t, strings.HasSuffix(filepath.ToSlash(root.Path), "/workspaceStorage"))
+	assert.Contains(t, root.IncludeGlobs, "state.vscdb")
+	assert.Contains(t, root.IncludeGlobs, "state.vscdb-wal")
+	assert.NotContains(t, root.IncludeGlobs, "state.vscdb-*")
+	assert.NotContains(t, root.IncludeGlobs, "state.vscdb-shm")
+	assert.Contains(t, root.IncludeGlobs, "workspace.json")
 }
 
 func TestWindsurfProviderAcceptsWorkspaceStorageRoot(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root, dbPath := windsurfProviderFixture(t, windsurfVSCodeSessionJSON(
 		"workspace-root-session",
 		"Root question",
@@ -472,19 +435,17 @@ func TestWindsurfProviderAcceptsWorkspaceStorageRoot(t *testing.T) {
 	provider := newTestWindsurfProvider(filepath.Join(root, "workspaceStorage"))
 
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
-	assert.Equal(dbPath+"#workspace-root-session", sources[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, dbPath+"#workspace-root-session", sources[0].DisplayPath)
 
 	plan, err := provider.WatchPlan(t.Context())
-	require.NoError(err)
-	require.Len(plan.Roots, 1)
-	assert.Equal(filepath.Join(root, "workspaceStorage"), plan.Roots[0].Path)
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Equal(t, filepath.Join(root, "workspaceStorage"), plan.Roots[0].Path)
 }
 
 func TestWriteWindsurfSessionJSONScopesVirtualSource(t *testing.T) {
-	assert := assert.New(t)
-
 	_, dbPath := windsurfProviderFixture(t, `{
 		"tabs": [
 			{"tabId": "export-a", "bubbles": [{"type": "user", "text": "A only"}]},
@@ -495,16 +456,13 @@ func TestWriteWindsurfSessionJSONScopesVirtualSource(t *testing.T) {
 
 	require.NoError(t, WriteWindsurfSessionJSON(&buf, dbPath, "export-a"))
 
-	assert.Contains(buf.String(), "export-a")
-	assert.Contains(buf.String(), "A only")
-	assert.NotContains(buf.String(), "export-b")
-	assert.NotContains(buf.String(), "B hidden")
+	assert.Contains(t, buf.String(), "export-a")
+	assert.Contains(t, buf.String(), "A only")
+	assert.NotContains(t, buf.String(), "export-b")
+	assert.NotContains(t, buf.String(), "B hidden")
 }
 
 func TestWriteSanitizedWindsurfStateDBCopiesOnlyChatKeys(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	_, dbPath := windsurfProviderFixture(t, windsurfVSCodeSessionJSON(
 		"sanitized-export",
 		"Export chat",
@@ -513,24 +471,24 @@ func TestWriteSanitizedWindsurfStateDBCopiesOnlyChatKeys(t *testing.T) {
 	insertWindsurfStateRow(t, dbPath, "extension.secret", "TOP-SECRET")
 	outPath := filepath.Join(t.TempDir(), "state.vscdb")
 
-	require.NoError(WriteSanitizedWindsurfStateDB(t.Context(), outPath, dbPath))
+	require.NoError(t, WriteSanitizedWindsurfStateDB(t.Context(), outPath, dbPath))
 
 	conn, err := sql.Open("sqlite3", outPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer conn.Close()
 	rows, err := conn.QueryContext(t.Context(), `SELECT key, value FROM ItemTable ORDER BY key`)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer rows.Close()
 	got := make(map[string]string)
 	for rows.Next() {
 		var key, value string
-		require.NoError(rows.Scan(&key, &value))
+		require.NoError(t, rows.Scan(&key, &value))
 		got[key] = value
 	}
-	require.NoError(rows.Err())
-	assert.Contains(got, "workbench.panel.aichat.view.aichat.chatdata")
-	assert.Contains(got["workbench.panel.aichat.view.aichat.chatdata"], "Export chat")
-	assert.NotContains(got, "extension.secret")
+	require.NoError(t, rows.Err())
+	assert.Contains(t, got, "workbench.panel.aichat.view.aichat.chatdata")
+	assert.Contains(t, got["workbench.panel.aichat.view.aichat.chatdata"], "Export chat")
+	assert.NotContains(t, got, "extension.secret")
 }
 
 func newTestWindsurfProvider(root string) Provider {
@@ -555,6 +513,7 @@ func windsurfProviderFixture(t *testing.T, payload string) (string, string) {
 
 func writeWindsurfStateDB(t *testing.T, dbPath, payload string) {
 	t.Helper()
+
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	defer conn.Close()

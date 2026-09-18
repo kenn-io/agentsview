@@ -36,15 +36,21 @@ func TestHandleListSecretsRevealGate(t *testing.T) {
 		xff        string
 		wantStatus int
 	}{
-		{"reveal from remote", "reveal=true", "203.0.113.5:1234", "",
-			http.StatusForbidden},
+		{
+			"reveal from remote", "reveal=true", "203.0.113.5:1234", "",
+			http.StatusForbidden,
+		},
 		// A reverse proxy reaches the loopback backend, so RemoteAddr is
 		// loopback; the forwarding header marks it proxied, so reveal must
 		// still be rejected.
-		{"reveal via proxied loopback", "reveal=true", "127.0.0.1:1234",
-			"203.0.113.5", http.StatusForbidden},
-		{"invalid limit", "limit=abc", "127.0.0.1:1234", "",
-			http.StatusBadRequest},
+		{
+			"reveal via proxied loopback", "reveal=true", "127.0.0.1:1234",
+			"203.0.113.5", http.StatusForbidden,
+		},
+		{
+			"invalid limit", "limit=abc", "127.0.0.1:1234", "",
+			http.StatusBadRequest,
+		},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {

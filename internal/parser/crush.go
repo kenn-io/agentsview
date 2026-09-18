@@ -293,7 +293,7 @@ func crushSessionMeta(
 	row, err := scanCrushSessionRow(db.QueryRowContext(
 		ctx, crushSessionSelect+" WHERE sessions.id = ?", sessionID,
 	))
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return dbBackedSessionMeta{}, false, nil
 	}
 	if err != nil {
@@ -336,7 +336,7 @@ func parseCrushSession(
 	row, err := scanCrushSessionRow(db.QueryRowContext(
 		ctx, crushSessionSelect+" WHERE sessions.id = ?", sessionID,
 	))
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, sql.ErrNoRows
 	}
 	if err != nil {

@@ -16,16 +16,13 @@ import (
 const importLocalOrigin = "local-b2c3d4"
 
 func TestArtifactImportEndToEndAndReplay(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	source := testExportDB(t)
 	seedSession(t, source, "one", "project")
 	seedSession(t, source, "two", "project")
 	cost := &money.Money{Microdollars: 12_345}
-	require.NoError(source.ReplaceSessionUsageEvents("one", []db.UsageEvent{{
+	require.NoError(t, source.ReplaceSessionUsageEvents(t.Context(), "one", []db.UsageEvent{{
 		SessionID: "one", Source: "provider", Model: "model",
 		Cost: cost, CostStatus: "known", CostSource: "provider",
 		DedupKey: "usage-one",
@@ -35,8 +32,8 @@ func TestArtifactImportEndToEndAndReplay(t *testing.T) {
 		t.Context(), source, store,
 		ExportOptions{Origin: contractOrigin, Full: true},
 	)
-	require.NoError(err)
-	require.True(exported.CheckpointCreated)
+	require.NoError(t, err)
+	require.True(t, exported.CheckpointCreated)
 
 	destination := testDB(t)
 	coordinator := NewStoreImportCoordinator(
@@ -44,67 +41,63 @@ func TestArtifactImportEndToEndAndReplay(t *testing.T) {
 	)
 	recordAllImportEntries(t, coordinator, store, contractOrigin)
 	result, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Equal(2, result.Sessions)
-	assert.Equal(4, result.Messages)
-	assert.Zero(result.Deferred)
-	assert.Zero(result.Quarantined)
-	assert.False(result.More)
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Sessions)
+	assert.Equal(t, 4, result.Messages)
+	assert.Zero(t, result.Deferred)
+	assert.Zero(t, result.Quarantined)
+	assert.False(t, result.More)
 
 	for _, nativeID := range []string{"one", "two"} {
 		importedID := contractOrigin + "~" + nativeID
 		session, err := destination.GetSessionFull(t.Context(), importedID)
-		require.NoError(err)
-		require.NotNil(session)
-		assert.Equal(contractOrigin, session.Machine)
-		assert.Nil(session.FilePath)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, contractOrigin, session.Machine)
+		assert.Nil(t, session.FilePath)
 		messages, err := destination.GetMessages(
 			t.Context(), importedID, 0, 10, true,
 		)
-		require.NoError(err)
-		assert.Len(messages, 2)
+		require.NoError(t, err)
+		assert.Len(t, messages, 2)
 	}
 	usage, err := destination.GetUsageEvents(
 		t.Context(), contractOrigin+"~one",
 	)
-	require.NoError(err)
-	require.Len(usage, 1)
-	assert.Equal(cost, usage[0].Cost)
+	require.NoError(t, err)
+	require.Len(t, usage, 1)
+	assert.Equal(t, cost, usage[0].Cost)
 
 	checkpointEntry := latestImportCheckpointEntry(
 		t, store, contractOrigin,
 	)
 	sequence, err := checkpointSequence(checkpointEntry.Ref.Name)
-	require.NoError(err)
-	landing, sessionMap, found, err :=
-		destination.GetArtifactCheckpointLanding(t.Context(), contractOrigin)
-	require.NoError(err)
-	require.True(found)
-	assert.Equal(sequence, landing.Sequence)
-	assert.Len(sessionMap, 2)
+	require.NoError(t, err)
+	landing, sessionMap, found, err := destination.GetArtifactCheckpointLanding(t.Context(), contractOrigin)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, sequence, landing.Sequence)
+	assert.Len(t, sessionMap, 2)
 	provenance, err := destination.ArtifactImportedManifestHashes(
 		t.Context(), contractOrigin,
 		[]string{contractOrigin + "~one", contractOrigin + "~two"},
 	)
-	require.NoError(err)
-	assert.Equal(sessionMap, provenance)
+	require.NoError(t, err)
+	assert.Equal(t, sessionMap, provenance)
 
-	require.NoError(coordinator.RecordChanged(
+	require.NoError(t, coordinator.RecordChanged(
 		t.Context(), checkpointEntry,
 	))
 	replay, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Zero(replay.Sessions)
-	assert.Zero(replay.Messages)
+	require.NoError(t, err)
+	assert.Zero(t, replay.Sessions)
+	assert.Zero(t, replay.Messages)
 	count, _, err := destination.ArtifactImportQueueStats(t.Context())
-	require.NoError(err)
-	assert.Zero(count)
+	require.NoError(t, err)
+	assert.Zero(t, count)
 }
 
 func TestStoreImportCoordinatorIgnoresLocalOrigin(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	store := newTestArtifactStore(t)
@@ -116,21 +109,18 @@ func TestStoreImportCoordinatorIgnoresLocalOrigin(t *testing.T) {
 		destination, store, contractOrigin,
 	)
 
-	require.NoError(coordinator.RecordChanged(t.Context(), entry))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), entry))
 	result, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Zero(result.Sessions)
+	require.NoError(t, err)
+	assert.Zero(t, result.Sessions)
 	count, _, err := destination.ArtifactImportQueueStats(t.Context())
-	require.NoError(err)
-	assert.Zero(count)
+	require.NoError(t, err)
+	assert.Zero(t, count)
 }
 
 func TestStoreImportCoordinatorRejectsOutOfRangeCheckpointWithoutAdvancingHead(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	store := newTestArtifactStore(t)
@@ -147,39 +137,36 @@ func TestStoreImportCoordinatorRejectsOutOfRangeCheckpointWithoutAdvancingHead(
 	}
 
 	err := coordinator.RecordChanged(t.Context(), outOfRange)
-	require.ErrorIs(err, ErrArtifactInvalid)
+	require.ErrorIs(t, err, ErrArtifactInvalid)
 	_, found, err := destination.GetArtifactPeerCheckpointHead(
 		t.Context(), contractOrigin,
 	)
-	require.NoError(err)
-	assert.False(found)
+	require.NoError(t, err)
+	assert.False(t, found)
 
 	valid := createImportTestCheckpoint(
 		t, store, contractOrigin, 1, map[string]string{},
 	)
-	require.NoError(coordinator.RecordChanged(t.Context(), valid))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), valid))
 	head, found, err := destination.GetArtifactPeerCheckpointHead(
 		t.Context(), contractOrigin,
 	)
-	require.NoError(err)
-	require.True(found)
-	assert.Equal(1, head.Sequence)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 1, head.Sequence)
 	count, _, err := destination.ArtifactImportQueueStats(t.Context())
-	require.NoError(err)
-	assert.Equal(1, count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
 }
 
 func TestStoreImportCoordinatorRetriesMissingSegmentAfterArrival(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	store := newTestArtifactStore(t)
 	segmentBody, err := encodeSegment([]db.Message{{
 		Ordinal: 0, Role: "user", Content: "arrived",
 	}})
-	require.NoError(err)
+	require.NoError(t, err)
 	segmentIdentity := identityForBytes(t, segmentBody)
 	m := importTestManifest("session")
 	m.Session.MessageCount = 1
@@ -194,34 +181,34 @@ func TestStoreImportCoordinatorRetriesMissingSegmentAfterArrival(t *testing.T) {
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(
+	require.NoError(t, coordinator.RecordChanged(
 		t.Context(), checkpointEntry,
 	))
 
 	first, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Equal(1, first.Deferred)
+	require.NoError(t, err)
+	assert.Equal(t, 1, first.Deferred)
 	count, _, err := destination.ArtifactImportQueueStats(t.Context())
-	require.NoError(err)
-	assert.Equal(1, count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
 
 	segmentRef := requireContractRef(
 		t, contractOrigin, KindSegments,
 		segmentIdentity.SHA256+".ndjson",
 	)
 	created := createContractArtifact(t, store, segmentRef, segmentBody)
-	require.NoError(coordinator.RecordChanged(
+	require.NoError(t, coordinator.RecordChanged(
 		t.Context(), created.Entry,
 	))
 	second, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Equal(1, second.Sessions)
-	assert.Zero(second.Deferred)
+	require.NoError(t, err)
+	assert.Equal(t, 1, second.Sessions)
+	assert.Zero(t, second.Deferred)
 	session, err := destination.GetSessionFull(
 		t.Context(), contractOrigin+"~session",
 	)
-	require.NoError(err)
-	require.NotNil(session)
+	require.NoError(t, err)
+	require.NotNil(t, session)
 }
 
 func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T) {
@@ -237,6 +224,8 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 		{
 			name: "future manifest",
 			prepare: func(t *testing.T, store ArtifactStore) string {
+				t.Helper()
+
 				return createHashedImportArtifact(
 					t, store, KindManifests, ".json",
 					[]byte(`{"origin":"contract-a1b2c3","v":5}`),
@@ -253,6 +242,8 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 		{
 			name: "future segment",
 			prepare: func(t *testing.T, store ArtifactStore) string {
+				t.Helper()
+
 				segment := []byte(fmt.Sprintf(
 					"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":%d}\n",
 					messageSegmentFormatVersion+1,
@@ -275,8 +266,7 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
+			t.Parallel()
 
 			store := newTestArtifactStore(t)
 			manifestHash := tc.prepare(t, store)
@@ -288,24 +278,24 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 			coordinator := NewStoreImportCoordinator(
 				destination, store, importLocalOrigin,
 			)
-			require.NoError(coordinator.RecordChanged(
+			require.NoError(t, coordinator.RecordChanged(
 				t.Context(), checkpointEntry,
 			))
 
 			result, err := coordinator.Finalize(t.Context())
-			require.NoError(err)
-			assert.Equal(1, result.Deferred)
+			require.NoError(t, err)
+			assert.Equal(t, 1, result.Deferred)
 			attempt, err := destination.ReserveArtifactImportAttemptGeneration(
 				t.Context(),
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 			pending, err := destination.PendingArtifactImports(
 				t.Context(), tc.understood, attempt, 10,
 			)
-			require.NoError(err)
-			require.Len(pending, 1)
-			assert.Equal(tc.wantManifest, pending[0].RequiredManifestVersion)
-			assert.Equal(tc.wantSegment, pending[0].RequiredSegmentVersion)
+			require.NoError(t, err)
+			require.Len(t, pending, 1)
+			assert.Equal(t, tc.wantManifest, pending[0].RequiredManifestVersion)
+			assert.Equal(t, tc.wantSegment, pending[0].RequiredSegmentVersion)
 		})
 	}
 }
@@ -313,23 +303,19 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 func TestStoreImportCoordinatorDefersLargeFutureCheckpointBeforeValidClaim(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	const futureSessionCount = artifactImportDrainLimit*2 + 1
 	store := newTestArtifactStore(t)
 	futureSessions := make(map[string]string, futureSessionCount)
 	for i := range futureSessionCount {
-		futureSessions[fmt.Sprintf("%s~future-%03d", contractOrigin, i)] =
-			fmt.Sprintf("%064x", i+1)
+		futureSessions[fmt.Sprintf("%s~future-%03d", contractOrigin, i)] = fmt.Sprintf("%064x", i+1)
 	}
 	futureBody, err := canonicalJSON(checkpoint{
 		Version: checkpointFormatVersion + 1,
 		Origin:  contractOrigin, Sequence: 1, Sessions: futureSessions,
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	futureRef := requireContractRef(
 		t, contractOrigin, KindCheckpoints, "cp-0000000001.json",
 	)
@@ -345,18 +331,18 @@ func TestStoreImportCoordinatorDefersLargeFutureCheckpointBeforeValidClaim(
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(t.Context(), futureEntry))
-	require.NoError(coordinator.RecordChanged(t.Context(), supportedEntry))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), futureEntry))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), supportedEntry))
 
 	result, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Equal(1, result.Deferred)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Deferred)
 	landing, _, found, err := destination.GetArtifactCheckpointLanding(
 		t.Context(), supportedOrigin,
 	)
-	require.NoError(err)
-	require.True(found)
-	assert.Equal(1, landing.Sequence)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 1, landing.Sequence)
 
 	_, err = destination.ArtifactCheckpointStageProgress(
 		t.Context(),
@@ -366,15 +352,12 @@ func TestStoreImportCoordinatorDefersLargeFutureCheckpointBeforeValidClaim(
 			CheckpointSize:   futureEntry.Identity.Size,
 		},
 	)
-	require.ErrorIs(err, db.ErrArtifactImportConflict)
+	require.ErrorIs(t, err, db.ErrArtifactImportConflict)
 }
 
 func TestStoreImportCoordinatorFinishesSupportedSessionsBeforeFutureGate(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	store := newTestArtifactStore(t)
@@ -401,44 +384,44 @@ func TestStoreImportCoordinatorFinishesSupportedSessionsBeforeFutureGate(
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(
+	require.NoError(t, coordinator.RecordChanged(
 		t.Context(), checkpointEntry,
 	))
 
 	first, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	require.True(first.More)
+	require.NoError(t, err)
+	require.True(t, first.More)
 	second, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	require.True(second.More)
+	require.NoError(t, err)
+	require.True(t, second.More)
 	coordinator = NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
 	imported := first.Sessions + second.Sessions
 	deferred := first.Deferred + second.Deferred
 	for rounds := 0; ; rounds++ {
-		require.Less(rounds, 10)
+		require.Less(t, rounds, 10)
 		result, err := coordinator.Finalize(t.Context())
-		require.NoError(err)
+		require.NoError(t, err)
 		imported += result.Sessions
 		deferred += result.Deferred
 		if !result.More {
 			break
 		}
 	}
-	assert.Equal(supportedSessions, imported)
-	assert.Positive(deferred)
+	assert.Equal(t, supportedSessions, imported)
+	assert.Positive(t, deferred)
 	session, err := destination.GetSessionFull(
 		t.Context(), contractOrigin+"~supported-128",
 	)
-	require.NoError(err)
-	require.NotNil(session)
-	assert.Equal("project", session.Project)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "project", session.Project)
 
 	attempt, err := destination.ReserveArtifactImportAttemptGeneration(
 		t.Context(),
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	pending, err := destination.PendingArtifactImports(
 		t.Context(),
 		db.ArtifactImportVersions{
@@ -449,17 +432,14 @@ func TestStoreImportCoordinatorFinishesSupportedSessionsBeforeFutureGate(
 		attempt,
 		10,
 	)
-	require.NoError(err)
-	require.Len(pending, 1)
-	assert.Equal(manifestFormatVersion+1, pending[0].RequiredManifestVersion)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, manifestFormatVersion+1, pending[0].RequiredManifestVersion)
 }
 
 func TestStoreImportCoordinatorQuarantinesInvalidCheckpointAndContinues(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	store := newTestArtifactStore(t)
@@ -478,34 +458,31 @@ func TestStoreImportCoordinatorQuarantinesInvalidCheckpointAndContinues(
 		t.Context(), source, store,
 		ExportOptions{Origin: contractOrigin, Full: true},
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	valid := latestImportCheckpointEntry(t, store, contractOrigin)
 
 	destination := testDB(t)
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(t.Context(), invalid.Entry))
-	require.NoError(coordinator.RecordChanged(t.Context(), valid))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), invalid.Entry))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), valid))
 	result, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Equal(1, result.Quarantined)
-	assert.Equal(1, result.Sessions)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Quarantined)
+	assert.Equal(t, 1, result.Sessions)
 	_, err = store.Stat(t.Context(), invalidRef)
-	assert.ErrorIs(err, ErrArtifactNotFound)
+	require.ErrorIs(t, err, ErrArtifactNotFound)
 	session, err := destination.GetSessionFull(
 		t.Context(), contractOrigin+"~valid",
 	)
-	require.NoError(err)
-	require.NotNil(session)
+	require.NoError(t, err)
+	require.NotNil(t, session)
 }
 
 func TestStoreImportCoordinatorRecoversCrashAfterCheckpointQuarantine(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	base := newTestArtifactStore(t)
@@ -529,40 +506,36 @@ func TestStoreImportCoordinatorRecoversCrashAfterCheckpointQuarantine(
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(t.Context(), invalid.Entry))
-	require.NoError(coordinator.RecordChanged(t.Context(), valid))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), invalid.Entry))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), valid))
 
 	_, err := coordinator.Finalize(t.Context())
-	require.ErrorIs(err, injected)
+	require.ErrorIs(t, err, injected)
 	coordinator = NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
 	result, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Equal(1, result.Quarantined)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Quarantined)
 	count, _, err := destination.ArtifactImportQueueStats(t.Context())
-	require.NoError(err)
-	assert.Zero(count)
+	require.NoError(t, err)
+	assert.Zero(t, count)
 	_, _, found, err := destination.GetArtifactCheckpointLanding(
 		t.Context(), contractOrigin,
 	)
-	require.NoError(err)
-	assert.True(found)
+	require.NoError(t, err)
+	assert.True(t, found)
 }
 
 func TestStoreImportCoordinatorDiscardsPartialStageAfterQuarantineCrash(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	base := newTestArtifactStore(t)
 	sessionMap := make(map[string]string, artifactImportDrainLimit+1)
 	for i := range artifactImportDrainLimit {
-		sessionMap[fmt.Sprintf("%s~valid-%03d", contractOrigin, i)] =
-			fmt.Sprintf("%064x", i+1)
+		sessionMap[fmt.Sprintf("%s~valid-%03d", contractOrigin, i)] = fmt.Sprintf("%064x", i+1)
 	}
 	sessionMap[contractOrigin+"~zzz-invalid"] = "invalid"
 	checkpointEntry := createImportTestCheckpoint(
@@ -577,13 +550,13 @@ func TestStoreImportCoordinatorDiscardsPartialStageAfterQuarantineCrash(
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(
+	require.NoError(t, coordinator.RecordChanged(
 		t.Context(), checkpointEntry,
 	))
 
 	first, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	require.True(first.More)
+	require.NoError(t, err)
+	require.True(t, first.More)
 	landing := db.ArtifactCheckpointLanding{
 		Origin:           contractOrigin,
 		Sequence:         1,
@@ -593,29 +566,27 @@ func TestStoreImportCoordinatorDiscardsPartialStageAfterQuarantineCrash(
 	progress, err := destination.ArtifactCheckpointStageProgress(
 		t.Context(), landing,
 	)
-	require.NoError(err)
-	assert.Equal(artifactImportDrainLimit, progress.DecodedCount)
+	require.NoError(t, err)
+	assert.Equal(t, artifactImportDrainLimit, progress.DecodedCount)
 
 	_, err = coordinator.Finalize(t.Context())
-	require.ErrorIs(err, injected)
+	require.ErrorIs(t, err, injected)
 	coordinator = NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
 	result, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Equal(1, result.Quarantined)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Quarantined)
 	count, _, err := destination.ArtifactImportQueueStats(t.Context())
-	require.NoError(err)
-	assert.Zero(count)
+	require.NoError(t, err)
+	assert.Zero(t, count)
 	_, err = destination.ArtifactCheckpointStageProgress(
 		t.Context(), landing,
 	)
-	require.ErrorIs(err, db.ErrArtifactImportConflict)
+	require.ErrorIs(t, err, db.ErrArtifactImportConflict)
 }
 
 func TestStoreImportCoordinatorRetainsClaimOnOperationalStoreError(t *testing.T) {
-	require := require.New(t)
-
 	t.Parallel()
 
 	base := newTestArtifactStore(t)
@@ -630,21 +601,18 @@ func TestStoreImportCoordinatorRetainsClaimOnOperationalStoreError(t *testing.T)
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(
+	require.NoError(t, coordinator.RecordChanged(
 		t.Context(), checkpointEntry,
 	))
 
 	_, err := coordinator.Finalize(t.Context())
-	require.ErrorIs(err, operational)
+	require.ErrorIs(t, err, operational)
 	count, _, err := destination.ArtifactImportQueueStats(t.Context())
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 }
 
 func TestStoreImportCoordinatorSuppressesExcludedAndTrashedSessions(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	store := newTestArtifactStore(t)
@@ -664,45 +632,42 @@ func TestStoreImportCoordinatorSuppressesExcludedAndTrashedSessions(t *testing.T
 	excludedID := contractOrigin + "~excluded"
 	trashedID := contractOrigin + "~trashed"
 	seedSession(t, destination, excludedID, "local")
-	require.NoError(destination.DeleteSession(excludedID))
+	require.NoError(t, destination.DeleteSession(t.Context(), excludedID))
 	seedSession(t, destination, trashedID, "local")
-	require.NoError(destination.SoftDeleteSession(trashedID))
+	require.NoError(t, destination.SoftDeleteSession(t.Context(), trashedID))
 
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(
+	require.NoError(t, coordinator.RecordChanged(
 		t.Context(), checkpointEntry,
 	))
 	result, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Zero(result.Sessions)
-	assert.Zero(result.Deferred)
+	require.NoError(t, err)
+	assert.Zero(t, result.Sessions)
+	assert.Zero(t, result.Deferred)
 
 	excluded, err := destination.GetSessionFull(t.Context(), excludedID)
-	require.NoError(err)
-	assert.Nil(excluded)
+	require.NoError(t, err)
+	assert.Nil(t, excluded)
 	trashed, err := destination.GetSessionFull(t.Context(), trashedID)
-	require.NoError(err)
-	require.NotNil(trashed)
-	assert.NotNil(trashed.DeletedAt)
+	require.NoError(t, err)
+	require.NotNil(t, trashed)
+	assert.NotNil(t, trashed.DeletedAt)
 	provenance, err := destination.ArtifactImportedManifestHashes(
 		t.Context(), contractOrigin, []string{excludedID, trashedID},
 	)
-	require.NoError(err)
-	assert.Equal(sessionMap, provenance)
+	require.NoError(t, err)
+	assert.Equal(t, sessionMap, provenance)
 	_, landedMap, found, err := destination.GetArtifactCheckpointLanding(
 		t.Context(), contractOrigin,
 	)
-	require.NoError(err)
-	require.True(found)
-	assert.Equal(sessionMap, landedMap)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, sessionMap, landedMap)
 }
 
 func TestStoreImportCoordinatorRetriesTrashedManifestAfterRestore(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	store := newTestArtifactStore(t)
@@ -720,10 +685,10 @@ func TestStoreImportCoordinatorRetriesTrashedManifestAfterRestore(t *testing.T) 
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(t.Context(), first))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), first))
 	_, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	require.NoError(destination.SoftDeleteSession(gid))
+	require.NoError(t, err)
+	require.NoError(t, destination.SoftDeleteSession(t.Context(), gid))
 
 	secondManifest := importTestManifest("session")
 	secondHash := createImportTestClosure(
@@ -734,67 +699,64 @@ func TestStoreImportCoordinatorRetriesTrashedManifestAfterRestore(t *testing.T) 
 	second := createImportTestCheckpoint(
 		t, store, contractOrigin, 2, map[string]string{gid: secondHash},
 	)
-	require.NoError(coordinator.RecordChanged(t.Context(), second))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), second))
 	deferred, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Equal(1, deferred.Deferred)
-	assert.Zero(deferred.Sessions)
+	require.NoError(t, err)
+	assert.Equal(t, 1, deferred.Deferred)
+	assert.Zero(t, deferred.Sessions)
 
 	provenance, err := destination.ArtifactImportedManifestHashes(
 		t.Context(), contractOrigin, []string{gid},
 	)
-	require.NoError(err)
-	assert.Equal(map[string]string{gid: firstHash}, provenance)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{gid: firstHash}, provenance)
 	landing, landedMap, found, err := destination.GetArtifactCheckpointLanding(
 		t.Context(), contractOrigin,
 	)
-	require.NoError(err)
-	require.True(found)
-	assert.Equal(1, landing.Sequence)
-	assert.Equal(map[string]string{gid: firstHash}, landedMap)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 1, landing.Sequence)
+	assert.Equal(t, map[string]string{gid: firstHash}, landedMap)
 	count, _, err := destination.ArtifactImportQueueStats(t.Context())
-	require.NoError(err)
-	assert.Equal(1, count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
 
 	coordinator = NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	restored, err := destination.RestoreSession(gid)
-	require.NoError(err)
-	require.EqualValues(1, restored)
-	require.NoError(coordinator.RecordChanged(t.Context(), second))
+	restored, err := destination.RestoreSession(t.Context(), gid)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, restored)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), second))
 	applied, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Equal(1, applied.Sessions)
-	assert.Zero(applied.Deferred)
+	require.NoError(t, err)
+	assert.Equal(t, 1, applied.Sessions)
+	assert.Zero(t, applied.Deferred)
 
 	messages, err := destination.GetAllMessages(t.Context(), gid)
-	require.NoError(err)
-	require.Len(messages, 1)
-	assert.Equal("version B", messages[0].Content)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "version B", messages[0].Content)
 	provenance, err = destination.ArtifactImportedManifestHashes(
 		t.Context(), contractOrigin, []string{gid},
 	)
-	require.NoError(err)
-	assert.Equal(map[string]string{gid: secondHash}, provenance)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{gid: secondHash}, provenance)
 	landing, landedMap, found, err = destination.GetArtifactCheckpointLanding(
 		t.Context(), contractOrigin,
 	)
-	require.NoError(err)
-	require.True(found)
-	assert.Equal(2, landing.Sequence)
-	assert.Equal(map[string]string{gid: secondHash}, landedMap)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 2, landing.Sequence)
+	assert.Equal(t, map[string]string{gid: secondHash}, landedMap)
 	count, _, err = destination.ArtifactImportQueueStats(t.Context())
-	require.NoError(err)
-	assert.Zero(count)
+	require.NoError(t, err)
+	assert.Zero(t, count)
 }
 
 func TestStoreImportCoordinatorContinuesAfterConcurrentCheckpointSupersession(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	store := newTestArtifactStore(t)
@@ -827,40 +789,37 @@ func TestStoreImportCoordinatorContinuesAfterConcurrentCheckpointSupersession(
 			return coordinator.RecordChanged(t.Context(), second)
 		},
 	}
-	require.NoError(coordinator.RecordChanged(t.Context(), first))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), first))
 
 	superseded, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	require.True(superseded.More)
+	require.NoError(t, err)
+	require.True(t, superseded.More)
 	for rounds := 0; ; rounds++ {
-		require.Less(rounds, 5)
+		require.Less(t, rounds, 5)
 		result, err := coordinator.Finalize(t.Context())
-		require.NoError(err)
+		require.NoError(t, err)
 		if !result.More {
 			break
 		}
 	}
 
 	messages, err := destination.GetAllMessages(t.Context(), gid)
-	require.NoError(err)
-	require.Len(messages, 1)
-	assert.Equal("version B", messages[0].Content)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "version B", messages[0].Content)
 	landing, landedMap, found, err := destination.GetArtifactCheckpointLanding(
 		t.Context(), contractOrigin,
 	)
-	require.NoError(err)
-	require.True(found)
-	assert.Equal(2, landing.Sequence)
-	assert.Equal(map[string]string{gid: secondHash}, landedMap)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 2, landing.Sequence)
+	assert.Equal(t, map[string]string{gid: secondHash}, landedMap)
 	count, _, err := destination.ArtifactImportQueueStats(t.Context())
-	require.NoError(err)
-	assert.Zero(count)
+	require.NoError(t, err)
+	assert.Zero(t, count)
 }
 
 func TestStoreImportCoordinatorSuppressesLocalSessionIDCollision(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	store := newTestArtifactStore(t)
@@ -879,37 +838,34 @@ func TestStoreImportCoordinatorSuppressesLocalSessionIDCollision(t *testing.T) {
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(
+	require.NoError(t, coordinator.RecordChanged(
 		t.Context(), checkpointEntry,
 	))
 	result, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Zero(result.Sessions)
+	require.NoError(t, err)
+	assert.Zero(t, result.Sessions)
 
 	session, err := destination.GetSessionFull(t.Context(), collidingID)
-	require.NoError(err)
-	require.NotNil(session)
-	assert.Equal("local-project", session.Project)
-	assert.Equal("local", session.Machine)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "local-project", session.Project)
+	assert.Equal(t, "local", session.Machine)
 	messages, err := destination.GetMessages(
 		t.Context(), collidingID, 0, 10, true,
 	)
-	require.NoError(err)
-	require.Len(messages, 2)
-	assert.NotEqual("peer content", messages[0].Content)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.NotEqual(t, "peer content", messages[0].Content)
 	provenance, err := destination.ArtifactImportedManifestHashes(
 		t.Context(), contractOrigin, []string{collidingID},
 	)
-	require.NoError(err)
-	assert.Equal(map[string]string{collidingID: manifestHash}, provenance)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{collidingID: manifestHash}, provenance)
 }
 
 func TestStoreImportCoordinatorKeepsCheckpointPendingAfterInvalidDependency(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	store := newTestArtifactStore(t)
@@ -928,29 +884,27 @@ func TestStoreImportCoordinatorKeepsCheckpointPendingAfterInvalidDependency(
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(
+	require.NoError(t, coordinator.RecordChanged(
 		t.Context(), checkpointEntry,
 	))
 
 	result, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Equal(1, result.Quarantined)
-	assert.Equal(1, result.Deferred)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Quarantined)
+	assert.Equal(t, 1, result.Deferred)
 	count, _, err := destination.ArtifactImportQueueStats(t.Context())
-	require.NoError(err)
-	assert.Equal(1, count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
 	_, _, found, err := destination.GetArtifactCheckpointLanding(
 		t.Context(), contractOrigin,
 	)
-	require.NoError(err)
-	assert.False(found)
+	require.NoError(t, err)
+	assert.False(t, found)
 }
 
 func TestStoreImportCoordinatorDoesNotDeleteSessionOmittedByNewCheckpoint(
 	t *testing.T,
 ) {
-	require := require.New(t)
-
 	t.Parallel()
 
 	store := newTestArtifactStore(t)
@@ -966,26 +920,26 @@ func TestStoreImportCoordinatorDoesNotDeleteSessionOmittedByNewCheckpoint(
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(t.Context(), first))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), first))
 	_, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
+	require.NoError(t, err)
 
 	second := createImportTestCheckpoint(
 		t, store, contractOrigin, 2, map[string]string{},
 	)
-	require.NoError(coordinator.RecordChanged(t.Context(), second))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), second))
 	_, err = coordinator.Finalize(t.Context())
-	require.NoError(err)
+	require.NoError(t, err)
 	session, err := destination.GetSessionFull(
 		t.Context(), contractOrigin+"~session",
 	)
-	require.NoError(err)
-	require.NotNil(session)
+	require.NoError(t, err)
+	require.NotNil(t, session)
 	messages, err := destination.GetMessages(
 		t.Context(), session.ID, 0, 10, true,
 	)
-	require.NoError(err)
-	require.Len(messages, 1)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
 	assert.Equal(t, "kept", messages[0].Content)
 }
 
@@ -1026,16 +980,15 @@ func TestStoreImportCoordinatorCrashWindowsConverge(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
+			t.Parallel()
 
 			root := t.TempDir()
 			databasePath := filepath.Join(root, "archive.db")
 			storeRoot := filepath.Join(root, "artifacts")
 			store, err := newProtocolTestStore(storeRoot)
-			require.NoError(err)
-			database, err := db.Open(databasePath)
-			require.NoError(err)
+			require.NoError(t, err)
+			database, err := db.Open(t.Context(), databasePath)
+			require.NoError(t, err)
 
 			ordinal := 0
 			m := importTestManifest("session")
@@ -1065,66 +1018,62 @@ func TestStoreImportCoordinatorCrashWindowsConverge(t *testing.T) {
 			if tc.recordErr {
 				err = coordinator.RecordChanged(t.Context(), checkpointEntry)
 			} else {
-				require.NoError(coordinator.RecordChanged(
+				require.NoError(t, coordinator.RecordChanged(
 					t.Context(), checkpointEntry,
 				))
 				_, err = coordinator.Finalize(t.Context())
 			}
-			require.ErrorIs(err, injected)
-			require.NoError(database.Close())
-			require.NoError(store.Close())
+			require.ErrorIs(t, err, injected)
+			require.NoError(t, database.Close())
+			require.NoError(t, store.Close())
 
-			database, err = db.Open(databasePath)
-			require.NoError(err)
+			database, err = db.Open(t.Context(), databasePath)
+			require.NoError(t, err)
 			store, err = newProtocolTestStore(storeRoot)
-			require.NoError(err)
+			require.NoError(t, err)
 			coordinator = NewStoreImportCoordinator(
 				database, store, importLocalOrigin,
 			)
-			require.NoError(coordinator.RecordChanged(
+			require.NoError(t, coordinator.RecordChanged(
 				t.Context(), checkpointEntry,
 			))
 			_, err = coordinator.Finalize(t.Context())
-			require.NoError(err)
+			require.NoError(t, err)
 
 			head, found, err := database.GetArtifactPeerCheckpointHead(
 				t.Context(), contractOrigin,
 			)
-			require.NoError(err)
-			require.True(found)
-			assert.Equal(1, head.Sequence)
-			landing, _, found, err :=
-				database.GetArtifactCheckpointLanding(
-					t.Context(), contractOrigin,
-				)
-			require.NoError(err)
-			require.True(found)
-			assert.Equal(1, landing.Sequence)
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, 1, head.Sequence)
+			landing, _, found, err := database.GetArtifactCheckpointLanding(
+				t.Context(), contractOrigin,
+			)
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, 1, landing.Sequence)
 			count, _, err := database.ArtifactImportQueueStats(t.Context())
-			require.NoError(err)
-			assert.Zero(count)
+			require.NoError(t, err)
+			assert.Zero(t, count)
 			messages, err := database.GetMessages(
 				t.Context(), contractOrigin+"~session", 0, 10, true,
 			)
-			require.NoError(err)
-			require.Len(messages, 1)
-			assert.Equal("once", messages[0].Content)
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "once", messages[0].Content)
 			usage, err := database.GetUsageEvents(
 				t.Context(), contractOrigin+"~session",
 			)
-			require.NoError(err)
-			require.Len(usage, 1)
-			assert.Equal("usage", usage[0].DedupKey)
-			require.NoError(database.Close())
-			require.NoError(store.Close())
+			require.NoError(t, err)
+			require.Len(t, usage, 1)
+			assert.Equal(t, "usage", usage[0].DedupKey)
+			require.NoError(t, database.Close())
+			require.NoError(t, store.Close())
 		})
 	}
 }
 
 func TestStoreImportCoordinatorBoundsUnchangedCheckpointWork(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	const unchangedSessions = 10_000
@@ -1139,7 +1088,7 @@ func TestStoreImportCoordinatorBoundsUnchangedCheckpointWork(t *testing.T) {
 		gid := fmt.Sprintf("%s~unchanged-%05d", contractOrigin, i)
 		hash := fmt.Sprintf("%064x", i+1)
 		sessionMap[gid] = hash
-		require.NoError(destination.RecordArtifactImportedSession(
+		require.NoError(t, destination.RecordArtifactImportedSession(
 			t.Context(),
 			db.ArtifactImportedSession{
 				Origin:            contractOrigin,
@@ -1170,56 +1119,52 @@ func TestStoreImportCoordinatorBoundsUnchangedCheckpointWork(t *testing.T) {
 			stagePages = append(stagePages, count)
 		},
 	}
-	require.NoError(coordinator.RecordChanged(
+	require.NoError(t, coordinator.RecordChanged(
 		t.Context(), checkpointEntry,
 	))
 	totalSessions := 0
 	for rounds := 0; ; rounds++ {
-		require.Less(rounds, 100)
+		require.Less(t, rounds, 100)
 		result, err := coordinator.Finalize(t.Context())
-		require.NoError(err)
+		require.NoError(t, err)
 		totalSessions += result.Sessions
 		if !result.More {
 			break
 		}
 	}
-	assert.Equal(1, totalSessions)
-	require.Len(pendingLimits, 79)
+	assert.Equal(t, 1, totalSessions)
+	require.Len(t, pendingLimits, 79)
 	for _, limit := range pendingLimits {
-		assert.Equal(artifactImportDrainLimit, limit)
+		assert.Equal(t, artifactImportDrainLimit, limit)
 	}
-	require.Len(pendingCounts, 79)
+	require.Len(t, pendingCounts, 79)
 	for _, count := range pendingCounts {
-		assert.Equal(1, count)
+		assert.Equal(t, 1, count)
 	}
 	for _, size := range append(stagePages, provenancePages...) {
-		assert.LessOrEqual(size, artifactImportDrainLimit)
+		assert.LessOrEqual(t, size, artifactImportDrainLimit)
 	}
-	require.Len(stagePages, 79)
-	assert.Equal(17, stagePages[len(stagePages)-1])
-	assert.Equal([]int{1}, provenancePages)
-	assert.Equal(1, store.opens[KindCheckpoints])
-	assert.Equal(1, store.opens[KindManifests])
-	assert.Equal(1, store.opens[KindSegments])
-	assert.Equal(1, store.stats[KindManifests])
-	assert.Equal(1, store.stats[KindSegments])
-	assert.Equal(3, store.openOrigins[contractOrigin])
+	require.Len(t, stagePages, 79)
+	assert.Equal(t, 17, stagePages[len(stagePages)-1])
+	assert.Equal(t, []int{1}, provenancePages)
+	assert.Equal(t, 1, store.opens[KindCheckpoints])
+	assert.Equal(t, 1, store.opens[KindManifests])
+	assert.Equal(t, 1, store.opens[KindSegments])
+	assert.Equal(t, 1, store.stats[KindManifests])
+	assert.Equal(t, 1, store.stats[KindSegments])
+	assert.Equal(t, 3, store.openOrigins[contractOrigin])
 }
 
 func TestStoreImportCoordinatorPagesLargeChangedCheckpointAcrossDrains(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	const changedSessions = 300
 	base := newTestArtifactStore(t)
 	sessionMap := make(map[string]string, changedSessions)
 	for i := range changedSessions {
-		sessionMap[fmt.Sprintf("%s~missing-%03d", contractOrigin, i)] =
-			fmt.Sprintf("%064x", i+1)
+		sessionMap[fmt.Sprintf("%s~missing-%03d", contractOrigin, i)] = fmt.Sprintf("%064x", i+1)
 	}
 	checkpointEntry := createImportTestCheckpoint(
 		t, base, contractOrigin, 1, sessionMap,
@@ -1229,7 +1174,7 @@ func TestStoreImportCoordinatorPagesLargeChangedCheckpointAcrossDrains(
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(
+	require.NoError(t, coordinator.RecordChanged(
 		t.Context(), checkpointEntry,
 	))
 
@@ -1237,30 +1182,27 @@ func TestStoreImportCoordinatorPagesLargeChangedCheckpointAcrossDrains(
 	previousStats := 0
 	for i := range 5 {
 		result, err := coordinator.Finalize(t.Context())
-		require.NoError(err)
-		assert.Equal(i < 4, result.More)
+		require.NoError(t, err)
+		assert.Equal(t, i < 4, result.More)
 		currentStats := store.stats[KindManifests]
 		attempts = append(attempts, currentStats-previousStats)
 		previousStats = currentStats
 	}
-	assert.Equal([]int{0, 0, 84, 128, 88}, attempts)
-	assert.Equal(1, store.opens[KindCheckpoints])
+	assert.Equal(t, []int{0, 0, 84, 128, 88}, attempts)
+	assert.Equal(t, 1, store.opens[KindCheckpoints])
 	count, _, err := destination.ArtifactImportQueueStats(t.Context())
-	require.NoError(err)
-	assert.Equal(1, count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
 	_, _, found, err := destination.GetArtifactCheckpointLanding(
 		t.Context(), contractOrigin,
 	)
-	require.NoError(err)
-	assert.False(found)
+	require.NoError(t, err)
+	assert.False(t, found)
 }
 
 func TestStoreImportCoordinatorPreservesSignalsDuringActiveAttempt(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	const sessionCount = 300
@@ -1268,7 +1210,7 @@ func TestStoreImportCoordinatorPreservesSignalsDuringActiveAttempt(
 	segmentBody, err := encodeSegment([]db.Message{{
 		Ordinal: 0, Role: "user", Content: "arrived",
 	}})
-	require.NoError(err)
+	require.NoError(t, err)
 	segmentHash := createHashedImportArtifact(
 		t, store, KindSegments, ".ndjson", segmentBody,
 	)
@@ -1277,13 +1219,12 @@ func TestStoreImportCoordinatorPreservesSignalsDuringActiveAttempt(
 	arrivedManifest.Session.UserMessageCount = 1
 	arrivedManifest.Segments = []string{segmentHash}
 	arrivedBody, err := canonicalJSON(arrivedManifest)
-	require.NoError(err)
+	require.NoError(t, err)
 	arrivedIdentity := identityForBytes(t, arrivedBody)
 	sessionMap := make(map[string]string, sessionCount)
 	sessionMap[contractOrigin+"~000-arrived"] = arrivedIdentity.SHA256
 	for i := 1; i < sessionCount; i++ {
-		sessionMap[fmt.Sprintf("%s~missing-%03d", contractOrigin, i)] =
-			fmt.Sprintf("%064x", i+1)
+		sessionMap[fmt.Sprintf("%s~missing-%03d", contractOrigin, i)] = fmt.Sprintf("%064x", i+1)
 	}
 	checkpointEntry := createImportTestCheckpoint(
 		t, store, contractOrigin, 1, sessionMap,
@@ -1292,46 +1233,44 @@ func TestStoreImportCoordinatorPreservesSignalsDuringActiveAttempt(
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(
+	require.NoError(t, coordinator.RecordChanged(
 		t.Context(), checkpointEntry,
 	))
 
 	for range 3 {
 		result, err := coordinator.Finalize(t.Context())
-		require.NoError(err)
-		require.True(result.More)
+		require.NoError(t, err)
+		require.True(t, result.More)
 	}
 	arrivedRef := requireContractRef(
 		t, contractOrigin, KindManifests,
 		arrivedIdentity.SHA256+".json",
 	)
 	arrived := createContractArtifact(t, store, arrivedRef, arrivedBody)
-	require.NoError(coordinator.RecordChanged(t.Context(), arrived.Entry))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), arrived.Entry))
 
 	imported := 0
 	for rounds := 0; ; rounds++ {
-		require.Less(rounds, 10)
+		require.Less(t, rounds, 10)
 		result, err := coordinator.Finalize(t.Context())
-		require.NoError(err)
+		require.NoError(t, err)
 		imported += result.Sessions
 		if !result.More {
 			break
 		}
 	}
-	assert.Equal(1, imported)
+	assert.Equal(t, 1, imported)
 	session, err := destination.GetSessionFull(
 		t.Context(), contractOrigin+"~000-arrived",
 	)
-	require.NoError(err)
-	require.NotNil(session)
-	assert.Equal("project", session.Project)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "project", session.Project)
 }
 
 func TestStoreImportCoordinatorPreservesSignalDuringCompletedPrune(
 	t *testing.T,
 ) {
-	require := require.New(t)
-
 	t.Parallel()
 
 	store := newTestArtifactStore(t)
@@ -1340,14 +1279,14 @@ func TestStoreImportCoordinatorPreservesSignalDuringCompletedPrune(
 		destination, store, importLocalOrigin,
 	)
 	_, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
+	require.NoError(t, err)
 	manifest := importTestManifest("signal")
 	manifestHash := createImportTestManifest(t, store, manifest, false)
 	manifestRef := requireContractRef(
 		t, contractOrigin, KindManifests, manifestHash+".json",
 	)
 	manifestEntry, err := store.Stat(t.Context(), manifestRef)
-	require.NoError(err)
+	require.NoError(t, err)
 	coordinator.hooks = &importCoordinatorHooks{
 		afterPrune: func() error {
 			coordinator.hooks.afterPrune = nil
@@ -1356,21 +1295,18 @@ func TestStoreImportCoordinatorPreservesSignalDuringCompletedPrune(
 	}
 
 	result, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.True(t, result.More)
 }
 
 func TestStoreImportCoordinatorRereadsCheckpointOnceAfterRestart(t *testing.T) {
-	require := require.New(t)
-
 	t.Parallel()
 
 	const changedSessions = 300
 	base := newTestArtifactStore(t)
 	sessionMap := make(map[string]string, changedSessions)
 	for i := range changedSessions {
-		sessionMap[fmt.Sprintf("%s~missing-%03d", contractOrigin, i)] =
-			fmt.Sprintf("%064x", i+1)
+		sessionMap[fmt.Sprintf("%s~missing-%03d", contractOrigin, i)] = fmt.Sprintf("%064x", i+1)
 	}
 	checkpointEntry := createImportTestCheckpoint(
 		t, base, contractOrigin, 1, sessionMap,
@@ -1380,20 +1316,20 @@ func TestStoreImportCoordinatorRereadsCheckpointOnceAfterRestart(t *testing.T) {
 	first := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(first.RecordChanged(t.Context(), checkpointEntry))
+	require.NoError(t, first.RecordChanged(t.Context(), checkpointEntry))
 
 	result, err := first.Finalize(t.Context())
-	require.NoError(err)
-	require.True(result.More)
-	require.Equal(1, store.opens[KindCheckpoints])
+	require.NoError(t, err)
+	require.True(t, result.More)
+	require.Equal(t, 1, store.opens[KindCheckpoints])
 
 	restarted := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
 	for rounds := 0; ; rounds++ {
-		require.Less(rounds, 10)
+		require.Less(t, rounds, 10)
 		result, err = restarted.Finalize(t.Context())
-		require.NoError(err)
+		require.NoError(t, err)
 		if !result.More {
 			break
 		}
@@ -1403,25 +1339,22 @@ func TestStoreImportCoordinatorRereadsCheckpointOnceAfterRestart(t *testing.T) {
 }
 
 func TestStoreImportCoordinatorRecoversTerminalCheckpointPage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	root := t.TempDir()
 	databasePath := filepath.Join(root, "archive.db")
 	storeRoot := filepath.Join(root, "artifacts")
 	store, err := newProtocolTestStore(storeRoot)
-	require.NoError(err)
-	destination, err := db.Open(databasePath)
-	require.NoError(err)
+	require.NoError(t, err)
+	destination, err := db.Open(t.Context(), databasePath)
+	require.NoError(t, err)
 	body, err := canonicalJSON(checkpoint{
 		Version:  checkpointFormatVersion,
 		Origin:   contractOrigin,
 		Sequence: 1,
 		Sessions: map[string]string{},
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	ref := requireContractRef(
 		t, contractOrigin, KindCheckpoints, "cp-0000000001.json",
 	)
@@ -1429,64 +1362,61 @@ func TestStoreImportCoordinatorRecoversTerminalCheckpointPage(t *testing.T) {
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(t.Context(), entry))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), entry))
 
 	_, sessions, err := decodeImportCheckpointHeader(
 		body, contractOrigin, entry.Ref.Name,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	page, nextOffset, done, err := decodeImportCheckpointSessionPage(
 		sessions, contractOrigin, 0, artifactImportDrainLimit,
 	)
-	require.NoError(err)
-	require.Empty(page)
-	require.True(done)
+	require.NoError(t, err)
+	require.Empty(t, page)
+	require.True(t, done)
 	stage := db.ArtifactCheckpointLanding{
 		Origin:           contractOrigin,
 		Sequence:         1,
 		CheckpointSHA256: entry.Identity.SHA256,
 		CheckpointSize:   entry.Identity.Size,
 	}
-	require.NoError(destination.BeginArtifactCheckpointStage(
+	require.NoError(t, destination.BeginArtifactCheckpointStage(
 		t.Context(), stage, checkpointFormatVersion,
 	))
-	require.NoError(destination.StageArtifactCheckpointSessionPage(
+	require.NoError(t, destination.StageArtifactCheckpointSessionPage(
 		t.Context(), stage, nil, 0, nextOffset,
 	))
-	require.NoError(destination.Close())
-	require.NoError(store.Close())
+	require.NoError(t, destination.Close())
+	require.NoError(t, store.Close())
 
-	destination, err = db.Open(databasePath)
-	require.NoError(err)
+	destination, err = db.Open(t.Context(), databasePath)
+	require.NoError(t, err)
 	defer destination.Close()
 	store, err = newProtocolTestStore(storeRoot)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer store.Close()
 	restarted := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
 	result, err := restarted.Finalize(t.Context())
-	require.NoError(err)
-	assert.Zero(result.Quarantined)
+	require.NoError(t, err)
+	assert.Zero(t, result.Quarantined)
 	complete, err := destination.ArtifactCheckpointStageComplete(
 		t.Context(), stage,
 	)
-	require.NoError(err)
-	assert.True(complete)
+	require.NoError(t, err)
+	assert.True(t, complete)
 	landing, _, found, err := destination.GetArtifactCheckpointLanding(
 		t.Context(), contractOrigin,
 	)
-	require.NoError(err)
-	require.True(found)
-	assert.Equal(1, landing.Sequence)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 1, landing.Sequence)
 	_, err = store.Stat(t.Context(), ref)
-	require.NoError(err)
+	require.NoError(t, err)
 }
 
 func TestStoreImportCoordinatorDoesNotDoubleImportSignals(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	base := newTestArtifactStore(t)
@@ -1509,61 +1439,61 @@ func TestStoreImportCoordinatorDoesNotDoubleImportSignals(t *testing.T) {
 		t, contractOrigin, KindManifests, manifestHash+".json",
 	)
 	manifestEntry, err := base.Stat(t.Context(), manifestRef)
-	require.NoError(err)
+	require.NoError(t, err)
 	segmentRef := requireContractRef(
 		t, contractOrigin, KindSegments, m.Segments[0]+".ndjson",
 	)
 	segmentEntry, err := base.Stat(t.Context(), segmentRef)
-	require.NoError(err)
+	require.NoError(t, err)
 	destination := testDB(t)
 	coordinator := NewStoreImportCoordinator(
 		destination, base, importLocalOrigin,
 	)
-	require.NoError(coordinator.RecordChanged(t.Context(), checkpoint))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), checkpoint))
 	initialGeneration := coordinator.generation
-	require.NoError(coordinator.RecordChanged(t.Context(), manifestEntry))
-	require.NoError(coordinator.RecordChanged(t.Context(), segmentEntry))
-	assert.Equal(initialGeneration+2, coordinator.generation)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), manifestEntry))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), segmentEntry))
+	assert.Equal(t, initialGeneration+2, coordinator.generation)
 	count, _, err := destination.ArtifactImportQueueStats(t.Context())
-	require.NoError(err)
-	assert.Equal(1, count)
-	require.NoError(coordinator.RecordChanged(t.Context(), checkpoint))
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), checkpoint))
 	count, _, err = destination.ArtifactImportQueueStats(t.Context())
-	require.NoError(err)
-	assert.Equal(1, count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
 
 	first, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Equal(1, first.Sessions)
-	require.NoError(coordinator.RecordChanged(t.Context(), checkpoint))
+	require.NoError(t, err)
+	assert.Equal(t, 1, first.Sessions)
+	require.NoError(t, coordinator.RecordChanged(t.Context(), checkpoint))
 	replay, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Zero(replay.Sessions)
+	require.NoError(t, err)
+	assert.Zero(t, replay.Sessions)
 
 	higher := createImportTestCheckpoint(
 		t, base, contractOrigin, 2,
 		map[string]string{contractOrigin + "~session": manifestHash},
 	)
-	require.NoError(coordinator.RecordChanged(t.Context(), higher))
+	require.NoError(t, coordinator.RecordChanged(t.Context(), higher))
 	unchanged, err := coordinator.Finalize(t.Context())
-	require.NoError(err)
-	assert.Zero(unchanged.Sessions)
+	require.NoError(t, err)
+	assert.Zero(t, unchanged.Sessions)
 	messages, err := destination.GetMessages(
 		t.Context(), contractOrigin+"~session", 0, 10, true,
 	)
-	require.NoError(err)
-	assert.Len(messages, 1)
+	require.NoError(t, err)
+	assert.Len(t, messages, 1)
 	usage, err := destination.GetUsageEvents(
 		t.Context(), contractOrigin+"~session",
 	)
-	require.NoError(err)
-	assert.Len(usage, 1)
+	require.NoError(t, err)
+	assert.Len(t, usage, 1)
 	landing, _, found, err := destination.GetArtifactCheckpointLanding(
 		t.Context(), contractOrigin,
 	)
-	require.NoError(err)
-	require.True(found)
-	assert.Equal(2, landing.Sequence)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, 2, landing.Sequence)
 }
 
 type countingImportStore struct {
@@ -1638,6 +1568,7 @@ func latestImportCheckpointEntry(
 	t *testing.T, store ArtifactStore, origin string,
 ) Entry {
 	t.Helper()
+
 	entries := listAllContractEntries(
 		t, store, origin, KindCheckpoints, maxArtifactListPageSize,
 	)

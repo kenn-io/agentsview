@@ -22,6 +22,8 @@ func TestDatabaseAndContainerProvidersStreamLargeArchives(t *testing.T) {
 		setup func(*testing.T) Provider
 	}{
 		{name: "aider", setup: func(t *testing.T) Provider {
+			t.Helper()
+
 			root := t.TempDir()
 			for i := range sessions {
 				dir := filepath.Join(root, fmt.Sprintf("project-%03d", i))
@@ -37,6 +39,8 @@ func TestDatabaseAndContainerProvidersStreamLargeArchives(t *testing.T) {
 			return provider
 		}},
 		{name: "kiro", setup: func(t *testing.T) Provider {
+			t.Helper()
+
 			dbPath, db := newKiroSQLiteTestDB(t)
 			for i := range sessions {
 				seedKiroSQLiteSession(t, db, "/tmp/project", fmt.Sprintf("session-%03d", i),
@@ -47,28 +51,30 @@ func TestDatabaseAndContainerProvidersStreamLargeArchives(t *testing.T) {
 			return provider
 		}},
 		{name: "hermes", setup: func(t *testing.T) Provider {
-			require := require.New(t)
+			t.Helper()
 
 			root := t.TempDir()
 			createHermesStateDB(t, root)
 			db, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
-			require.NoError(err)
+			require.NoError(t, err)
 			for i := 1; i < sessions; i++ {
 				id := fmt.Sprintf("session-%03d", i)
 				_, err = db.ExecContext(t.Context(), `INSERT INTO sessions
 					(id, source, started_at, estimated_cost_usd, actual_cost_usd)
 					VALUES (?, 'cli', ?, 0, 0)`, id, i)
-				require.NoError(err)
+				require.NoError(t, err)
 				_, err = db.ExecContext(t.Context(), `INSERT INTO messages (session_id, role, content, timestamp)
 					VALUES (?, 'user', 'hello', ?)`, id, i)
-				require.NoError(err)
+				require.NoError(t, err)
 			}
-			require.NoError(db.Close())
+			require.NoError(t, db.Close())
 			provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: []string{root}})
-			require.True(ok)
+			require.True(t, ok)
 			return provider
 		}},
 		{name: "visualstudio-copilot", setup: func(t *testing.T) Provider {
+			t.Helper()
+
 			root := t.TempDir()
 			path := filepath.Join(root, "20260714T120000_00000000_VSGitHubCopilot_traces.jsonl")
 			var data strings.Builder
@@ -85,6 +91,8 @@ func TestDatabaseAndContainerProvidersStreamLargeArchives(t *testing.T) {
 			return provider
 		}},
 		{name: "windsurf", setup: func(t *testing.T) Provider {
+			t.Helper()
+
 			root := filepath.Join(t.TempDir(), "Windsurf", "User")
 			dbPath := filepath.Join(root, "workspaceStorage", "workspace", windsurfStateDBName)
 			require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
@@ -106,12 +114,9 @@ func TestDatabaseAndContainerProvidersStreamLargeArchives(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			provider := tc.setup(t)
 			streaming, ok := provider.(StreamingDiscoverer)
-			require.True(ok)
+			require.True(t, ok)
 			maxBuffered := 0
 			ctx := WithStreamingDiscoveryBufferObserver(t.Context(), func(buffered int) {
 				maxBuffered = max(maxBuffered, buffered)
@@ -121,15 +126,15 @@ func TestDatabaseAndContainerProvidersStreamLargeArchives(t *testing.T) {
 				count++
 				return nil
 			})
-			require.NoError(err)
-			assert.Equal(sessions, count)
-			assert.LessOrEqual(maxBuffered, streamingDirectoryBatchSize)
+			require.NoError(t, err)
+			assert.Equal(t, sessions, count)
+			assert.LessOrEqual(t, maxBuffered, streamingDirectoryBatchSize)
 
 			stop := errors.New("stop after first source")
 			err = streaming.DiscoverEach(t.Context(), func(SourceRef) error {
 				return stop
 			})
-			require.ErrorIs(err, stop)
+			require.ErrorIs(t, err, stop)
 		})
 	}
 }
@@ -141,6 +146,8 @@ func TestSharedContainerReconciliationCacheAvoidsPerMemberRescans(t *testing.T) 
 		setup func(*testing.T) Provider
 	}{
 		{name: "visualstudio-copilot", setup: func(t *testing.T) Provider {
+			t.Helper()
+
 			root := t.TempDir()
 			path := filepath.Join(root, "20260714T120000_00000000_VSGitHubCopilot_traces.jsonl")
 			var data strings.Builder
@@ -157,6 +164,8 @@ func TestSharedContainerReconciliationCacheAvoidsPerMemberRescans(t *testing.T) 
 			return provider
 		}},
 		{name: "windsurf", setup: func(t *testing.T) Provider {
+			t.Helper()
+
 			root := filepath.Join(t.TempDir(), "Windsurf", "User")
 			dbPath := filepath.Join(root, "workspaceStorage", "workspace", windsurfStateDBName)
 			require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
@@ -179,26 +188,24 @@ func TestSharedContainerReconciliationCacheAvoidsPerMemberRescans(t *testing.T) 
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require := require.New(t)
-
 			provider := tc.setup(t)
 			scans := 0
 			ctx := WithSharedContainerScanObserver(t.Context(), func() { scans++ })
 			ctx, cleanup, err := WithReconciliationCache(ctx)
-			require.NoError(err)
-			t.Cleanup(func() { require.NoError(cleanup()) })
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, cleanup()) })
 			var sources []SourceRef
 			err = provider.(StreamingDiscoverer).DiscoverEach(ctx, func(source SourceRef) error {
 				sources = append(sources, source)
 				return nil
 			})
-			require.NoError(err)
-			require.Len(sources, sessions)
+			require.NoError(t, err)
+			require.Len(t, sources, sessions)
 			for _, source := range sources {
 				fingerprint, err := provider.Fingerprint(ctx, source)
-				require.NoError(err)
+				require.NoError(t, err)
 				_, err = provider.Parse(ctx, ParseRequest{Source: source, Fingerprint: fingerprint})
-				require.NoError(err)
+				require.NoError(t, err)
 			}
 			assert.Equal(t, 1, scans)
 		})

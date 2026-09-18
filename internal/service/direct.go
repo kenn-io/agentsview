@@ -431,7 +431,7 @@ func (b *directBackend) Sync(
 
 	path := in.Path
 	if path == "" {
-		storedPath := b.local.GetSessionFilePath(in.ID)
+		storedPath := b.local.GetSessionFilePath(ctx, in.ID)
 		if storedPath == "" {
 			return nil, fmt.Errorf(
 				"sync: no file_path recorded for session %q", in.ID,
@@ -683,7 +683,10 @@ func (b *directBackend) Search(
 	if req.DateFrom != "" && req.DateTo != "" && req.DateFrom > req.DateTo {
 		return nil, &db.SearchInputError{Msg: "search: date_from must not be after date_to"}
 	}
-	if !b.db.HasFTS() {
+	if !b.db.HasFTS(ctx) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		return nil, ErrSearchUnavailable
 	}
 	// Match the HTTP handler's clampLimit semantics: <=0 -> default,
@@ -1213,6 +1216,8 @@ func collectCursorAttribution(ctx context.Context,
 			"unsupported_filter",
 			"Cursor attribution is machine-local and cannot be scoped by project filters",
 		), true
+	case cursorAttributionLoad:
+		// Load attribution for the supported window below.
 	}
 	from, err := time.Parse(time.RFC3339, stats.Window.Since)
 	if err != nil {

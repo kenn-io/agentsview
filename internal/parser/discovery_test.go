@@ -323,8 +323,6 @@ func TestFindClaudeSourceFile(t *testing.T) {
 
 func TestAmpProviderFindsSourceFile(t *testing.T) {
 	t.Run("Found", func(t *testing.T) {
-		require := require.New(t)
-
 		dir := t.TempDir()
 		rel := "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd.json"
 		setupFileSystem(t, dir, map[string]string{
@@ -334,15 +332,15 @@ func TestAmpProviderFindsSourceFile(t *testing.T) {
 			Roots:   []string{dir},
 			Machine: "local",
 		})
-		require.True(ok)
+		require.True(t, ok)
 		got, ok, err := provider.FindSource(
 			t.Context(),
 			FindSourceRequest{
 				RawSessionID: "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd",
 			},
 		)
-		require.NoError(err)
-		require.True(ok)
+		require.NoError(t, err)
+		require.True(t, ok)
 		want := filepath.Join(dir, rel)
 		assert.Equal(t, want, got.DisplayPath)
 	})
@@ -797,19 +795,16 @@ func TestBuildGeminiProjectMapTrustedFolders(t *testing.T) {
 }
 
 func TestBuildGeminiProjectMapBothFiles(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 
 	pJSON := `{"projects":{"/Users/alice/code/proj-a":"proj-a"}}`
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "projects.json"),
 		[]byte(pJSON), 0o644,
 	), "write")
 
 	tfJSON := `{"trustedFolders":["/Users/alice/code/proj-b"]}`
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "trustedFolders.json"),
 		[]byte(tfJSON), 0o644,
 	), "write")
@@ -817,25 +812,22 @@ func TestBuildGeminiProjectMapBothFiles(t *testing.T) {
 	m := BuildGeminiProjectMap(dir)
 
 	hashA := geminiPathHash("/Users/alice/code/proj-a")
-	assert.Equal("proj_a", m[hashA], "proj-a hash")
+	assert.Equal(t, "proj_a", m[hashA], "proj-a hash")
 	hashB := geminiPathHash("/Users/alice/code/proj-b")
-	assert.Equal("proj_b", m[hashB], "proj-b hash")
+	assert.Equal(t, "proj_b", m[hashB], "proj-b hash")
 }
 
 func TestBuildGeminiProjectMapProjectsWin(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 
 	pJSON := `{"projects":{"/Users/alice/code/my-app":"my-app"}}`
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "projects.json"),
 		[]byte(pJSON), 0o644,
 	), "write")
 
 	tfJSON := `{"trustedFolders":["/Users/alice/code/my-app"]}`
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "trustedFolders.json"),
 		[]byte(tfJSON), 0o644,
 	), "write")
@@ -843,8 +835,8 @@ func TestBuildGeminiProjectMapProjectsWin(t *testing.T) {
 	m := BuildGeminiProjectMap(dir)
 
 	hash := geminiPathHash("/Users/alice/code/my-app")
-	assert.Equal("my_app", m[hash], "hash")
-	assert.Equal("my_app", m["my-app"], "name key")
+	assert.Equal(t, "my_app", m[hash], "hash")
+	assert.Equal(t, "my_app", m["my-app"], "name key")
 }
 
 // --- Copilot discovery tests ---
@@ -1018,15 +1010,13 @@ func TestFindCopilotSourceFile(t *testing.T) {
 // --- Symlink tests ---
 
 func TestIsDirOrSymlink(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 
 	realDir := filepath.Join(dir, "real-dir")
-	require.NoError(os.MkdirAll(realDir, 0o755), "mkdir")
+	require.NoError(t, os.MkdirAll(realDir, 0o755), "mkdir")
 
 	realFile := filepath.Join(dir, "file.txt")
-	require.NoError(os.WriteFile(realFile, []byte("hi"), 0o644), "write")
+	require.NoError(t, os.WriteFile(realFile, []byte("hi"), 0o644), "write")
 
 	if err := os.Symlink(
 		realDir, filepath.Join(dir, "link-to-dir"),
@@ -1034,17 +1024,17 @@ func TestIsDirOrSymlink(t *testing.T) {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
-	require.NoError(os.Symlink(
+	require.NoError(t, os.Symlink(
 		realFile, filepath.Join(dir, "link-to-file"),
 	), "symlink")
 
-	require.NoError(os.Symlink(
+	require.NoError(t, os.Symlink(
 		filepath.Join(dir, "gone"),
 		filepath.Join(dir, "broken"),
 	), "symlink")
 
 	entries, err := os.ReadDir(dir)
-	require.NoError(err, "readdir")
+	require.NoError(t, err, "readdir")
 
 	want := map[string]bool{
 		"real-dir":     true,
@@ -1065,12 +1055,10 @@ func TestIsDirOrSymlink(t *testing.T) {
 }
 
 func TestFindClaudeSourceFile_Symlink(t *testing.T) {
-	require := require.New(t)
-
 	externalDir := t.TempDir()
 	realDir := filepath.Join(externalDir, "real-project")
-	require.NoError(os.MkdirAll(realDir, 0o755), "mkdir")
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.MkdirAll(realDir, 0o755), "mkdir")
+	require.NoError(t, os.WriteFile(
 		filepath.Join(realDir, "sess-abc.jsonl"),
 		[]byte("{}"), 0o644,
 	), "write")
@@ -1082,7 +1070,7 @@ func TestFindClaudeSourceFile_Symlink(t *testing.T) {
 	}
 
 	got := claudeFindSourceFile(searchDir, "sess-abc")
-	require.NotEmpty(got, "expected to find session via symlink")
+	require.NotEmpty(t, got, "expected to find session via symlink")
 	assert.Equal(t, linkDir, filepath.Dir(got),
 		"expected path through symlink")
 }
@@ -1454,8 +1442,6 @@ func TestIsPiSessionFile(t *testing.T) {
 }
 
 func TestDiscoverVibeSessionsIntegration(t *testing.T) {
-	assert := assert.New(t)
-
 	// Test discovery with testdata
 	files := discoverVibeTestSessions(t, "testdata/vibe")
 
@@ -1464,12 +1450,12 @@ func TestDiscoverVibeSessionsIntegration(t *testing.T) {
 
 	// Verify all files are Vibe sessions
 	for _, f := range files {
-		assert.Equal(AgentVibe, f.Agent)
-		assert.Contains(f.Path, "messages.jsonl")
+		assert.Equal(t, AgentVibe, f.Agent)
+		assert.Contains(t, f.Path, "messages.jsonl")
 	}
 
 	// Should find at least 3 sessions (basic, with_tools, empty)
-	assert.GreaterOrEqual(len(files), 3)
+	assert.GreaterOrEqual(t, len(files), 3)
 }
 
 func TestFindVibeSourceFileIntegration(t *testing.T) {

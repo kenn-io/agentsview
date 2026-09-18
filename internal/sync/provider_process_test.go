@@ -22,7 +22,7 @@ import (
 var (
 	processProviderPiebaldSchemaOnce  stdsync.Once
 	processProviderPiebaldSchemaBytes []byte
-	processProviderPiebaldSchemaErr   error
+	errProcessProviderPiebaldSchema   error
 )
 
 const processProviderPiebaldSchema = `
@@ -94,12 +94,9 @@ const processProviderPiebaldSchema = `
 `
 
 func TestProcessFileProviderForgeVirtualSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	dbPath := writeProcessProviderForgeDB(t, root)
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentForge: {root},
 		},
@@ -107,31 +104,28 @@ func TestProcessFileProviderForgeVirtualSource(t *testing.T) {
 	})
 
 	files := requireClassifyProviderChangedPath(t, engine, dbPath)
-	require.Len(files, 1)
-	assert.Equal(dbPath+"#conv-001", files[0].Path)
-	assert.Equal(parser.AgentForge, files[0].Agent)
-	assert.False(files[0].ForceParse)
+	require.Len(t, files, 1)
+	assert.Equal(t, dbPath+"#conv-001", files[0].Path)
+	assert.Equal(t, parser.AgentForge, files[0].Agent)
+	assert.False(t, files[0].ForceParse)
 
 	res := engine.processFile(t.Context(), files[0])
 
-	require.NoError(res.err)
-	require.Len(res.results, 1)
-	assert.True(res.forceReplace)
-	assert.NotZero(res.mtime)
-	assert.Equal("forge:conv-001", res.results[0].Session.ID)
-	assert.Equal(parser.AgentForge, res.results[0].Session.Agent)
-	assert.Equal("devbox", res.results[0].Session.Machine)
-	assert.Len(res.results[0].Messages, 2)
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 1)
+	assert.True(t, res.forceReplace)
+	assert.NotZero(t, res.mtime)
+	assert.Equal(t, "forge:conv-001", res.results[0].Session.ID)
+	assert.Equal(t, parser.AgentForge, res.results[0].Session.Agent)
+	assert.Equal(t, "devbox", res.results[0].Session.Machine)
+	assert.Len(t, res.results[0].Messages, 2)
 }
 
 func TestProviderChangedPathUsesSourceMachine(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	dbPath := writeProcessProviderForgeDB(t, root)
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentForge: {root},
 		},
@@ -142,32 +136,29 @@ func TestProviderChangedPathUsesSourceMachine(t *testing.T) {
 	})
 
 	files, err := engine.classifyProviderChangedPath(t.Context(), dbPath)
-	require.NoError(err)
-	require.Len(files, 1)
-	assert.Equal("archivebox", files[0].Machine)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	assert.Equal(t, "archivebox", files[0].Machine)
 
 	res := engine.processFile(t.Context(), files[0])
 
-	require.NoError(res.err)
-	require.Len(res.results, 1)
-	assert.Equal("archivebox", res.results[0].Session.Machine)
-	assert.Equal("forge:conv-001", res.results[0].Session.ID)
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 1)
+	assert.Equal(t, "archivebox", res.results[0].Session.Machine)
+	assert.Equal(t, "forge:conv-001", res.results[0].Session.ID)
 
 	engine.SyncPathsContext(t.Context(), []string{dbPath})
 	sess, err := database.GetSessionFull(t.Context(), "forge:conv-001")
-	require.NoError(err)
-	require.NotNil(sess)
-	assert.Equal("archivebox", sess.Machine)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "archivebox", sess.Machine)
 }
 
 func TestProviderPeriodicSyncUsesSourceMachine(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	writeProcessProviderForgeDB(t, root)
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentForge: {root},
 		},
@@ -179,22 +170,19 @@ func TestProviderPeriodicSyncUsesSourceMachine(t *testing.T) {
 
 	stats := engine.SyncAll(t.Context(), nil)
 
-	assert.False(stats.Aborted)
+	assert.False(t, stats.Aborted)
 	sess, err := database.GetSessionFull(t.Context(), "forge:conv-001")
-	require.NoError(err)
-	require.NotNil(sess)
-	assert.Equal("archivebox", sess.Machine)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "archivebox", sess.Machine)
 }
 
 func TestProviderPeriodicSyncPreservesFreshDBBackedSourceMachine(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	writeProcessProviderForgeDB(t, root)
 	database := openTestDB(t)
 	newEngine := func(machine string) *Engine {
-		return NewEngine(database, EngineConfig{
+		return NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentForge: {root},
 			},
@@ -206,26 +194,23 @@ func TestProviderPeriodicSyncPreservesFreshDBBackedSourceMachine(t *testing.T) {
 	}
 
 	first := newEngine("oldbox").SyncAll(t.Context(), nil)
-	require.Equal(1, first.Synced)
+	require.Equal(t, 1, first.Synced)
 	second := newEngine("newbox").SyncAll(t.Context(), nil)
-	require.Zero(second.Synced)
+	require.Zero(t, second.Synced)
 
 	sess, err := database.GetSessionFull(t.Context(), "forge:conv-001")
-	require.NoError(err)
-	require.NotNil(sess)
-	assert.Equal("oldbox", sess.Machine)
-	assert.Equal(2, sess.MessageCount)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "oldbox", sess.Machine)
+	assert.Equal(t, 2, sess.MessageCount)
 }
 
 func TestProviderPeriodicSyncPreservesTrashedDBBackedSourceMachine(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	writeProcessProviderForgeDB(t, root)
 	database := openTestDB(t)
 	newEngine := func(machine string) *Engine {
-		return NewEngine(database, EngineConfig{
+		return NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentForge: {root},
 			},
@@ -236,31 +221,28 @@ func TestProviderPeriodicSyncPreservesTrashedDBBackedSourceMachine(t *testing.T)
 		})
 	}
 
-	require.Equal(1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
-	require.NoError(database.SoftDeleteSession("forge:conv-001"))
-	require.Zero(newEngine("newbox").SyncAll(t.Context(), nil).Synced)
+	require.Equal(t, 1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "forge:conv-001"))
+	require.Zero(t, newEngine("newbox").SyncAll(t.Context(), nil).Synced)
 
 	active, err := database.GetSession(t.Context(), "forge:conv-001")
-	require.NoError(err)
-	assert.Nil(active)
+	require.NoError(t, err)
+	assert.Nil(t, active)
 	trashed, err := database.GetSessionFull(t.Context(), "forge:conv-001")
-	require.NoError(err)
-	require.NotNil(trashed)
-	assert.Equal("oldbox", trashed.Machine)
-	assert.NotNil(trashed.DeletedAt)
-	assert.Nil(trashed.DeletionCause)
-	assert.Zero(newEngine("newbox").SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, err)
+	require.NotNil(t, trashed)
+	assert.Equal(t, "oldbox", trashed.Machine)
+	assert.NotNil(t, trashed.DeletedAt)
+	assert.Nil(t, trashed.DeletionCause)
+	assert.Zero(t, newEngine("newbox").SyncAll(t.Context(), nil).Synced)
 }
 
 func TestProviderResyncPreservesTrashedDBBackedSourceMachine(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	writeProcessProviderForgeDB(t, root)
 	database := openTestDB(t)
 	newEngine := func(machine string) *Engine {
-		return NewEngine(database, EngineConfig{
+		return NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentForge: {root},
 			},
@@ -271,27 +253,24 @@ func TestProviderResyncPreservesTrashedDBBackedSourceMachine(t *testing.T) {
 		})
 	}
 
-	require.Equal(1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
-	require.NoError(database.SoftDeleteSession("forge:conv-001"))
+	require.Equal(t, 1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "forge:conv-001"))
 	stats := newEngine("newbox").ResyncAll(t.Context(), nil)
-	require.False(stats.Aborted)
+	require.False(t, stats.Aborted)
 
 	trashed, err := database.GetSessionFull(t.Context(), "forge:conv-001")
-	require.NoError(err)
-	require.NotNil(trashed)
-	assert.Equal("oldbox", trashed.Machine)
-	assert.NotNil(trashed.DeletedAt)
+	require.NoError(t, err)
+	require.NotNil(t, trashed)
+	assert.Equal(t, "oldbox", trashed.Machine)
+	assert.NotNil(t, trashed.DeletedAt)
 }
 
 func TestProcessFileProviderSkipsStoredFreshSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	dbPath := writeProcessProviderForgeDB(t, root)
 	virtualPath := dbPath + "#conv-001"
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentForge: {root},
 		},
@@ -302,8 +281,8 @@ func TestProcessFileProviderSkipsStoredFreshSource(t *testing.T) {
 		Path:  virtualPath,
 		Agent: parser.AgentForge,
 	})
-	require.NoError(first.err)
-	require.Len(first.results, 1)
+	require.NoError(t, first.err)
+	require.Len(t, first.results, 1)
 	written, _, failed, _ := engine.writeBatch(
 		[]pendingWrite{{
 			sess:         first.results[0].Session,
@@ -314,31 +293,28 @@ func TestProcessFileProviderSkipsStoredFreshSource(t *testing.T) {
 		syncWriteDefault,
 		false,
 	)
-	require.Equal(0, failed)
-	require.Equal(1, written)
-	require.Empty(engine.skipCache)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
+	require.Empty(t, engine.skipCache)
 
 	second := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  virtualPath,
 		Agent: parser.AgentForge,
 	})
 
-	require.NoError(second.err)
-	assert.True(second.skip)
-	assert.True(second.cacheSkip)
-	assert.Equal(first.mtime, second.mtime)
-	assert.Empty(second.results)
+	require.NoError(t, second.err)
+	assert.True(t, second.skip)
+	assert.True(t, second.cacheSkip)
+	assert.Equal(t, first.mtime, second.mtime)
+	assert.Empty(t, second.results)
 }
 
 func TestProcessFileProviderPiebaldVirtualSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "app.db")
 	piebaldDB := openProcessProviderPiebaldDB(t, dbPath)
 	seedProcessProviderPiebaldChat(t, piebaldDB)
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentPiebald: {root},
 		},
@@ -350,14 +326,14 @@ func TestProcessFileProviderPiebaldVirtualSource(t *testing.T) {
 		Agent: parser.AgentPiebald,
 	})
 
-	require.NoError(res.err)
-	require.Len(res.results, 1)
-	assert.True(res.forceReplace)
-	assert.NotZero(res.mtime)
-	assert.Equal("piebald:42", res.results[0].Session.ID)
-	assert.Equal(parser.AgentPiebald, res.results[0].Session.Agent)
-	assert.Equal("devbox", res.results[0].Session.Machine)
-	assert.Len(res.results[0].Messages, 2)
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 1)
+	assert.True(t, res.forceReplace)
+	assert.NotZero(t, res.mtime)
+	assert.Equal(t, "piebald:42", res.results[0].Session.ID)
+	assert.Equal(t, parser.AgentPiebald, res.results[0].Session.Agent)
+	assert.Equal(t, "devbox", res.results[0].Session.Machine)
+	assert.Len(t, res.results[0].Messages, 2)
 }
 
 // TestProcessFileProviderPiebaldSkipsStoredFreshSource verifies
@@ -369,16 +345,13 @@ func TestProcessFileProviderPiebaldVirtualSource(t *testing.T) {
 // the legacy syncPiebald/piebaldPendingSessionIDs skip and the Forge
 // SkipsStoredFreshSource behavior; the in-memory skip cache stays empty.
 func TestProcessFileProviderPiebaldSkipsStoredFreshSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "app.db")
 	piebaldDB := openProcessProviderPiebaldDB(t, dbPath)
 	seedProcessProviderPiebaldChat(t, piebaldDB)
 	virtualPath := dbPath + "#42"
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentPiebald: {root},
 		},
@@ -389,8 +362,8 @@ func TestProcessFileProviderPiebaldSkipsStoredFreshSource(t *testing.T) {
 		Path:  virtualPath,
 		Agent: parser.AgentPiebald,
 	})
-	require.NoError(first.err)
-	require.Len(first.results, 1)
+	require.NoError(t, first.err)
+	require.Len(t, first.results, 1)
 	written, _, failed, _ := engine.writeBatch(
 		[]pendingWrite{{
 			sess:         first.results[0].Session,
@@ -401,30 +374,27 @@ func TestProcessFileProviderPiebaldSkipsStoredFreshSource(t *testing.T) {
 		syncWriteDefault,
 		false,
 	)
-	require.Equal(0, failed)
-	require.Equal(1, written)
-	require.Empty(engine.skipCache)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
+	require.Empty(t, engine.skipCache)
 
 	second := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  virtualPath,
 		Agent: parser.AgentPiebald,
 	})
 
-	require.NoError(second.err)
-	assert.True(second.skip)
-	assert.Equal(first.mtime, second.mtime)
-	assert.Empty(second.results)
+	require.NoError(t, second.err)
+	assert.True(t, second.skip)
+	assert.Equal(t, first.mtime, second.mtime)
+	assert.Empty(t, second.results)
 }
 
 func TestProcessFileProviderWarpVirtualSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "warp.sqlite")
 	warpDB := openProcessProviderWarpDB(t, dbPath)
 	seedProcessProviderWarpConversation(t, warpDB)
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentWarp: {root},
 		},
@@ -436,23 +406,20 @@ func TestProcessFileProviderWarpVirtualSource(t *testing.T) {
 		Agent: parser.AgentWarp,
 	})
 
-	require.NoError(res.err)
-	require.Len(res.results, 1)
-	assert.True(res.forceReplace)
-	assert.NotZero(res.mtime)
-	assert.Equal("warp:conv-001", res.results[0].Session.ID)
-	assert.Equal(parser.AgentWarp, res.results[0].Session.Agent)
-	assert.Equal("devbox", res.results[0].Session.Machine)
-	assert.NotEmpty(res.results[0].Messages)
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 1)
+	assert.True(t, res.forceReplace)
+	assert.NotZero(t, res.mtime)
+	assert.Equal(t, "warp:conv-001", res.results[0].Session.ID)
+	assert.Equal(t, parser.AgentWarp, res.results[0].Session.Agent)
+	assert.Equal(t, "devbox", res.results[0].Session.Machine)
+	assert.NotEmpty(t, res.results[0].Messages)
 }
 
 func TestProcessFileProviderZCodeVirtualSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	dbPath := writeProcessProviderZCodeDB(t, filepath.Join(root, ".zcode", "cli"))
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentZCode: {filepath.Join(root, ".zcode", "cli")},
 		},
@@ -460,28 +427,28 @@ func TestProcessFileProviderZCodeVirtualSource(t *testing.T) {
 	})
 
 	files := requireClassifyProviderChangedPath(t, engine, dbPath)
-	require.Len(files, 1)
-	assert.Equal(dbPath+"#session-001", files[0].Path)
-	assert.Equal(parser.AgentZCode, files[0].Agent)
-	assert.False(files[0].ForceParse)
+	require.Len(t, files, 1)
+	assert.Equal(t, dbPath+"#session-001", files[0].Path)
+	assert.Equal(t, parser.AgentZCode, files[0].Agent)
+	assert.False(t, files[0].ForceParse)
 
 	res := engine.processFile(t.Context(), files[0])
 
-	require.NoError(res.err)
-	require.Len(res.results, 1)
-	assert.True(res.forceReplace)
-	assert.NotZero(res.mtime)
-	assert.Equal("zcode:session-001", res.results[0].Session.ID)
-	assert.Equal(parser.AgentZCode, res.results[0].Session.Agent)
-	assert.Equal("devbox", res.results[0].Session.Machine)
-	require.Len(res.results[0].Messages, 3)
-	assert.Equal(parser.RoleAssistant, res.results[0].Messages[1].Role)
-	assert.True(res.results[0].Messages[1].HasToolUse)
-	require.Len(res.results[0].Messages[1].ToolCalls, 1)
-	assert.Equal("call-read", res.results[0].Messages[1].ToolCalls[0].ToolUseID)
-	require.Len(res.results[0].UsageEvents, 1)
-	assert.Equal(1, res.results[0].UsageEvents[0].InputTokens)
-	assert.Equal(2, res.results[0].UsageEvents[0].OutputTokens)
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 1)
+	assert.True(t, res.forceReplace)
+	assert.NotZero(t, res.mtime)
+	assert.Equal(t, "zcode:session-001", res.results[0].Session.ID)
+	assert.Equal(t, parser.AgentZCode, res.results[0].Session.Agent)
+	assert.Equal(t, "devbox", res.results[0].Session.Machine)
+	require.Len(t, res.results[0].Messages, 3)
+	assert.Equal(t, parser.RoleAssistant, res.results[0].Messages[1].Role)
+	assert.True(t, res.results[0].Messages[1].HasToolUse)
+	require.Len(t, res.results[0].Messages[1].ToolCalls, 1)
+	assert.Equal(t, "call-read", res.results[0].Messages[1].ToolCalls[0].ToolUseID)
+	require.Len(t, res.results[0].UsageEvents, 1)
+	assert.Equal(t, 1, res.results[0].UsageEvents[0].InputTokens)
+	assert.Equal(t, 2, res.results[0].UsageEvents[0].OutputTokens)
 }
 
 func TestProcessFileUsesProviderDBBackedFamily(t *testing.T) {
@@ -499,9 +466,6 @@ func TestProcessFileUsesProviderDBBackedFamily(t *testing.T) {
 }
 
 func TestProcessFileProviderAuthoritativeUsesInjectedProvider(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "owned.jsonl")
 	provider := newProcessFixtureProvider(
@@ -535,25 +499,22 @@ func TestProcessFileProviderAuthoritativeUsesInjectedProvider(t *testing.T) {
 		Agent: parser.AgentCowork,
 	})
 
-	require.NoError(res.err)
-	require.Len(res.results, 1)
-	assert.False(res.skip)
-	assert.True(res.forceReplace)
-	assert.Equal(fingerprint.MTimeNS, res.mtime)
-	assert.Equal([]string{"find-source", "fingerprint", "parse"}, provider.calls)
-	require.Len(provider.findRequests, 1)
-	assert.True(provider.findRequests[0].RequireFreshSource)
-	assert.Equal(sourcePath, provider.findRequests[0].StoredFilePath)
-	assert.Equal(parser.AgentCowork, res.results[0].Session.Agent)
-	assert.Equal("cowork:owned", res.results[0].Session.ID)
-	assert.Equal("devbox", res.results[0].Session.Machine)
-	assert.Equal("fixture-project", res.results[0].Session.Project)
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 1)
+	assert.False(t, res.skip)
+	assert.True(t, res.forceReplace)
+	assert.Equal(t, fingerprint.MTimeNS, res.mtime)
+	assert.Equal(t, []string{"find-source", "fingerprint", "parse"}, provider.calls)
+	require.Len(t, provider.findRequests, 1)
+	assert.True(t, provider.findRequests[0].RequireFreshSource)
+	assert.Equal(t, sourcePath, provider.findRequests[0].StoredFilePath)
+	assert.Equal(t, parser.AgentCowork, res.results[0].Session.Agent)
+	assert.Equal(t, "cowork:owned", res.results[0].Session.ID)
+	assert.Equal(t, "devbox", res.results[0].Session.Machine)
+	assert.Equal(t, "fixture-project", res.results[0].Session.Project)
 }
 
 func TestProcessFileProviderAuthoritativeKeepsRetryStatePerResult(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "retry.jsonl")
 	provider := newProcessFixtureProvider(
@@ -592,11 +553,11 @@ func TestProcessFileProviderAuthoritativeKeepsRetryStatePerResult(t *testing.T) 
 		Agent: parser.AgentCowork,
 	})
 
-	require.NoError(res.err)
-	require.Len(res.results, 2)
-	assert.False(res.needsRetryForSession("cowork:current"))
-	assert.True(res.needsRetryForSession("cowork:retry"))
-	assert.False(res.suppressesPresenceSweepForRetry())
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 2)
+	assert.False(t, res.needsRetryForSession("cowork:current"))
+	assert.True(t, res.needsRetryForSession("cowork:retry"))
+	assert.False(t, res.suppressesPresenceSweepForRetry())
 }
 
 func TestSyncSingleSessionKeepsRetryStatePerResult(t *testing.T) {
@@ -640,9 +601,9 @@ func TestSyncSingleSessionKeepsRetryStatePerResult(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, db.CurrentDataVersion(),
-		engine.db.GetSessionDataVersion("cowork:current"),
+		engine.db.GetSessionDataVersion(t.Context(), "cowork:current"),
 		"a sibling retry must not leave the valid session stale")
-	assert.Less(t, engine.db.GetSessionDataVersion("cowork:retry"),
+	assert.Less(t, engine.db.GetSessionDataVersion(t.Context(), "cowork:retry"),
 		db.CurrentDataVersion(),
 		"the retrying session must remain stale")
 }
@@ -679,9 +640,6 @@ func TestSyncSingleSessionPartialFullWritesQueueNewChild(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			sourcePath, fingerprint := writeProcessProviderSource(
 				t, root, "partial-write.jsonl",
@@ -720,18 +678,18 @@ func TestSyncSingleSessionPartialFullWritesQueueNewChild(t *testing.T) {
 			provider.Caps.Source.MultiSessionSource = parser.CapabilitySupported
 			engine := newProcessFixtureEngine(t, root, provider)
 			database := engine.db
-			require.NoError(database.UpsertSession(db.Session{
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 				ID: "cowork:spawner", Agent: string(parser.AgentCowork),
 				Project: "fixture-project", Machine: "devbox", FilePath: &sourcePath,
 			}))
-			require.NoError(database.UpsertSession(db.Session{
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 				ID: "cowork:child", Agent: string(parser.AgentCowork),
 				Project: "fixture-project", Machine: "devbox",
 			}))
 
 			raw, err := sql.Open("sqlite3", database.Path())
-			require.NoError(err)
-			t.Cleanup(func() { require.NoError(raw.Close()) })
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, raw.Close()) })
 			_, err = raw.ExecContext(t.Context(), tc.failureSQL+`;
 				CREATE TRIGGER fail_partial_parent_repair
 				BEFORE UPDATE OF parent_session_id ON sessions
@@ -739,35 +697,33 @@ func TestSyncSingleSessionPartialFullWritesQueueNewChild(t *testing.T) {
 				BEGIN
 					SELECT RAISE(FAIL, 'injected partial parent repair failure');
 				END`)
-			require.NoError(err)
+			require.NoError(t, err)
 
 			syncErr := engine.SyncSingleSession("cowork:spawner")
 
-			require.ErrorContains(syncErr, tc.wantError)
-			assert.ErrorContains(syncErr, "injected partial parent repair failure",
+			require.ErrorContains(t, syncErr, tc.wantError)
+			require.ErrorContains(t, syncErr, "injected partial parent repair failure",
 				"committed message content must activate deferred repair")
 			var edgeCount int
-			require.NoError(database.Reader().QueryRow(`
+			require.NoError(t, database.Reader().QueryRow(t.Context(), `
 				SELECT count(*) FROM tool_calls
 				WHERE session_id = 'cowork:spawner'
 				  AND subagent_session_id = 'cowork:child'`,
 			).Scan(&edgeCount))
-			assert.Equal(1, edgeCount,
+			assert.Equal(t, 1, edgeCount,
 				"the partial write must commit its new spawn edge")
 			var queuedRepairs int
-			require.NoError(database.Reader().QueryRow(`
+			require.NoError(t, database.Reader().QueryRow(t.Context(), `
 				SELECT count(*) FROM subagent_parent_repair_queue
 				WHERE session_id = 'cowork:child'`,
 			).Scan(&queuedRepairs))
-			assert.Equal(1, queuedRepairs,
+			assert.Equal(t, 1, queuedRepairs,
 				"the new child must remain durable after partial failure")
 		})
 	}
 }
 
 func TestSyncSingleSessionPartialFullWriteRepairsAttemptedSession(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(
 		t, root, "partial-parent-write.jsonl",
@@ -792,17 +748,17 @@ func TestSyncSingleSessionPartialFullWriteRepairsAttemptedSession(t *testing.T) 
 	database := engine.db
 	actualParent := "cowork:spawner"
 	started := "2026-01-01T00:00:00Z"
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: actualParent, Agent: string(parser.AgentCowork),
 		Project: "fixture-project", Machine: "devbox", StartedAt: &started,
 		MessageCount: 1,
 	}))
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "cowork:child", Agent: string(parser.AgentCowork),
 		Project: "fixture-project", Machine: "devbox",
 		ParentSessionID: &actualParent, RelationshipType: string(parser.RelSubagent),
 	}))
-	require.NoError(database.InsertMessages([]db.Message{{
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
 		SessionID: actualParent, Ordinal: 0, Role: string(parser.RoleAssistant),
 		Content: "spawn child", HasToolUse: true,
 		ToolCalls: []db.ToolCall{{
@@ -812,8 +768,8 @@ func TestSyncSingleSessionPartialFullWriteRepairsAttemptedSession(t *testing.T) 
 	}}))
 
 	raw, err := sql.Open("sqlite3", database.Path())
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(raw.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
 	_, err = raw.ExecContext(t.Context(), fmt.Sprintf(`
 		CREATE TRIGGER fail_child_write_completion
 		BEFORE UPDATE OF data_version ON sessions
@@ -821,22 +777,20 @@ func TestSyncSingleSessionPartialFullWriteRepairsAttemptedSession(t *testing.T) 
 		BEGIN
 			SELECT RAISE(FAIL, 'injected child completion failure');
 		END`, db.CurrentDataVersion()))
-	require.NoError(err)
+	require.NoError(t, err)
 
 	syncErr := engine.SyncSingleSession("cowork:child")
 
-	require.ErrorContains(syncErr, "injected child completion failure")
+	require.ErrorContains(t, syncErr, "injected child completion failure")
 	stored, err := database.GetSession(t.Context(), "cowork:child")
-	require.NoError(err)
-	require.NotNil(stored)
-	require.NotNil(stored.ParentSessionID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.NotNil(t, stored.ParentSessionID)
 	assert.Equal(t, actualParent, *stored.ParentSessionID,
 		"deferred repair must reconcile the partially written session itself")
 }
 
 func TestProcessFileProviderAuthoritativeSuppressesUncleanSkipCache(t *testing.T) {
-	assert := assert.New(t)
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "unclean.jsonl")
 	provider := newProcessFixtureProvider(
@@ -864,14 +818,12 @@ func TestProcessFileProviderAuthoritativeSuppressesUncleanSkipCache(t *testing.T
 	})
 
 	require.NoError(t, res.err)
-	assert.True(res.cacheSkip)
-	assert.True(res.noCacheSkip)
-	assert.True(res.suppressPresenceSweep)
+	assert.True(t, res.cacheSkip)
+	assert.True(t, res.noCacheSkip)
+	assert.True(t, res.suppressPresenceSweep)
 }
 
 func TestProcessFileProviderAuthoritativeUsesSkipReasonCacheKey(t *testing.T) {
-	assert := assert.New(t)
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "skip.jsonl")
 	source := processFixtureSource(sourcePath)
@@ -892,18 +844,15 @@ func TestProcessFileProviderAuthoritativeUsesSkipReasonCacheKey(t *testing.T) {
 	})
 
 	require.NoError(t, res.err)
-	assert.True(res.skip)
-	assert.True(res.cacheSkip)
-	assert.False(res.noCacheSkip)
-	assert.Equal(providerAgentSkipCacheKey(source.FingerprintKey, parser.AgentCowork),
+	assert.True(t, res.skip)
+	assert.True(t, res.cacheSkip)
+	assert.False(t, res.noCacheSkip)
+	assert.Equal(t, providerAgentSkipCacheKey(source.FingerprintKey, parser.AgentCowork),
 		res.skipCacheKey(sourcePath),
 	)
 }
 
 func TestProcessFileProviderAuthoritativeForceParseAllowsStaleSourceLookup(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "force.jsonl")
 	provider := newProcessFixtureProvider(
@@ -931,11 +880,11 @@ func TestProcessFileProviderAuthoritativeForceParseAllowsStaleSourceLookup(t *te
 		ForceParse: true,
 	})
 
-	require.NoError(res.err)
-	require.Len(provider.findRequests, 1)
-	assert.False(provider.findRequests[0].RequireFreshSource)
-	require.Len(provider.parseRequests, 1)
-	assert.True(provider.parseRequests[0].ForceParse)
+	require.NoError(t, res.err)
+	require.Len(t, provider.findRequests, 1)
+	assert.False(t, provider.findRequests[0].RequireFreshSource)
+	require.Len(t, provider.parseRequests, 1)
+	assert.True(t, provider.parseRequests[0].ForceParse)
 }
 
 func TestProcessFileProviderAuthoritativeNotFoundFails(t *testing.T) {
@@ -955,14 +904,11 @@ func TestProcessFileProviderAuthoritativeNotFoundFails(t *testing.T) {
 	})
 
 	require.Error(t, res.err)
-	assert.ErrorContains(t, res.err, "provider source not found")
+	require.ErrorContains(t, res.err, "provider source not found")
 	assert.Equal(t, []string{"find-source"}, provider.calls)
 }
 
 func TestSyncSingleSessionProviderAuthoritativeBypassesProviderSkipCache(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "single.jsonl")
 	source := processFixtureSource(sourcePath)
@@ -987,9 +933,9 @@ func TestSyncSingleSessionProviderAuthoritativeBypassesProviderSkipCache(t *test
 	engine := newProcessFixtureEngine(t, root, provider)
 	engine.cacheSkip(source.FingerprintKey, fingerprint.MTimeNS)
 
-	require.NoError(engine.SyncSingleSession("cowork:single"))
+	require.NoError(t, engine.SyncSingleSession("cowork:single"))
 
-	assert.Equal(
+	assert.Equal(t,
 		[]string{
 			"find-source",
 			"find-source",
@@ -998,20 +944,18 @@ func TestSyncSingleSessionProviderAuthoritativeBypassesProviderSkipCache(t *test
 		},
 		provider.calls,
 	)
-	require.Len(provider.findRequests, 2)
-	assert.Equal("single", provider.findRequests[0].RawSessionID)
-	assert.False(provider.findRequests[1].RequireFreshSource)
-	require.Len(provider.parseRequests, 1)
-	assert.True(provider.parseRequests[0].ForceParse)
+	require.Len(t, provider.findRequests, 2)
+	assert.Equal(t, "single", provider.findRequests[0].RawSessionID)
+	assert.False(t, provider.findRequests[1].RequireFreshSource)
+	require.Len(t, provider.parseRequests, 1)
+	assert.True(t, provider.parseRequests[0].ForceParse)
 	engine.skipMu.RLock()
 	_, cached := engine.skipCache[source.FingerprintKey]
 	engine.skipMu.RUnlock()
-	assert.False(cached)
+	assert.False(t, cached)
 }
 
 func TestProcessFileClaudeCachedSourceWithoutStoredSessionSkipsParse(t *testing.T) {
-	assert := assert.New(t)
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "noninteractive.jsonl")
 	fingerprint.Hash = "unchanged-content"
@@ -1029,7 +973,7 @@ func TestProcessFileClaudeCachedSourceWithoutStoredSessionSkipsParse(t *testing.
 		FingerprintHashRequiredForFreshness: true,
 		SkipCacheFreshWithoutStoredRow:      true,
 	}
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -1050,17 +994,14 @@ func TestProcessFileClaudeCachedSourceWithoutStoredSessionSkipsParse(t *testing.
 	})
 
 	require.NoError(t, res.err)
-	assert.True(res.skip)
-	assert.Equal([]string{"find-source", "fingerprint"}, provider.calls)
-	assert.Empty(provider.parseRequests)
+	assert.True(t, res.skip)
+	assert.Equal(t, []string{"find-source", "fingerprint"}, provider.calls)
+	assert.Empty(t, provider.parseRequests)
 }
 
 func TestProcessFileRowlessCachedSourceChangedHashReparses(t *testing.T) {
 	for _, agent := range []parser.AgentType{parser.AgentClaude, parser.AgentCodex} {
 		t.Run(string(agent), func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			sourcePath, fingerprint := writeProcessProviderSource(
 				t, root, "became-interactive.jsonl",
@@ -1089,7 +1030,7 @@ func TestProcessFileRowlessCachedSourceChangedHashReparses(t *testing.T) {
 				FingerprintHashRequiredForFreshness: true,
 				SkipCacheFreshWithoutStoredRow:      true,
 			}
-			engine := NewEngine(openTestDB(t), EngineConfig{
+			engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{agent: {root}},
 				Machine:   "devbox",
 				ProviderFactories: []parser.ProviderFactory{
@@ -1111,10 +1052,10 @@ func TestProcessFileRowlessCachedSourceChangedHashReparses(t *testing.T) {
 				Path: sourcePath, Agent: agent,
 			})
 
-			require.NoError(res.err)
-			assert.False(res.skip)
-			assert.Equal([]string{"find-source", "fingerprint", "parse"}, provider.calls)
-			require.Len(provider.parseRequests, 1)
+			require.NoError(t, res.err)
+			assert.False(t, res.skip)
+			assert.Equal(t, []string{"find-source", "fingerprint", "parse"}, provider.calls)
+			require.Len(t, provider.parseRequests, 1)
 		})
 	}
 }
@@ -1142,14 +1083,14 @@ func TestNewEngineNormalizesLegacySourceHashSkipDuplicates(t *testing.T) {
 		hashBase  = plain + "?source_hash="
 		unrelated = "/archive/unrelated.jsonl"
 	)
-	require.NoError(t, database.ReplaceSkippedFiles(map[string]int64{
+	require.NoError(t, database.ReplaceSkippedFiles(t.Context(), map[string]int64{
 		plain:            1,
 		hashBase + "old": 2,
 		hashBase + "new": 3,
 		unrelated:        4,
 	}))
 
-	engine := NewEngine(database, EngineConfig{})
+	engine := NewEngine(t.Context(), database, EngineConfig{})
 	t.Cleanup(engine.Close)
 
 	assert.Equal(t, map[string]int64{unrelated: 4}, engine.SnapshotSkipCache(),
@@ -1157,9 +1098,6 @@ func TestNewEngineNormalizesLegacySourceHashSkipDuplicates(t *testing.T) {
 }
 
 func TestProcessFileClaudeCachedStoredSessionChangedHashReparses(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "stored.jsonl")
 	fingerprint.Hash = "new-content"
@@ -1177,7 +1115,7 @@ func TestProcessFileClaudeCachedStoredSessionChangedHashReparses(t *testing.T) {
 		FingerprintHashRequiredForFreshness: true,
 		SkipCacheFreshWithoutStoredRow:      true,
 	}
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -1200,8 +1138,8 @@ func TestProcessFileClaudeCachedStoredSessionChangedHashReparses(t *testing.T) {
 		syncWriteDefault,
 		false,
 	)
-	require.Equal(1, written)
-	require.Zero(failed)
+	require.Equal(t, 1, written)
+	require.Zero(t, failed)
 	engine.cacheSkip(source.FingerprintKey, fingerprint.MTimeNS)
 
 	res := engine.processFile(t.Context(), parser.DiscoveredFile{
@@ -1209,16 +1147,13 @@ func TestProcessFileClaudeCachedStoredSessionChangedHashReparses(t *testing.T) {
 		Agent: parser.AgentClaude,
 	})
 
-	require.NoError(res.err)
-	assert.False(res.skip)
-	assert.Equal([]string{"find-source", "fingerprint", "parse"}, provider.calls)
-	require.Len(provider.parseRequests, 1)
+	require.NoError(t, res.err)
+	assert.False(t, res.skip)
+	assert.Equal(t, []string{"find-source", "fingerprint", "parse"}, provider.calls)
+	require.Len(t, provider.parseRequests, 1)
 }
 
 func TestProcessFileProviderDevinSkipsStoredFreshSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	dbPath, transcriptPath := writeProcessProviderDevinFixture(
 		t,
@@ -1230,7 +1165,7 @@ func TestProcessFileProviderDevinSkipsStoredFreshSource(t *testing.T) {
 	)
 	virtualPath := parser.VirtualSourcePath(dbPath, "session-001")
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentDevin: {root},
 		},
@@ -1241,12 +1176,12 @@ func TestProcessFileProviderDevinSkipsStoredFreshSource(t *testing.T) {
 		Path:  virtualPath,
 		Agent: parser.AgentDevin,
 	})
-	require.NoError(first.err)
-	require.Len(first.results, 1)
-	require.Equal(virtualPath, engine.FindSourceFile("devin:session-001"))
+	require.NoError(t, first.err)
+	require.Len(t, first.results, 1)
+	require.Equal(t, virtualPath, engine.FindSourceFile(t.Context(), "devin:session-001"))
 	storedMtime := first.results[0].Session.File.Mtime
-	require.NotZero(storedMtime)
-	assert.GreaterOrEqual(storedMtime, transcriptProcessProviderMtime(t, transcriptPath))
+	require.NotZero(t, storedMtime)
+	assert.GreaterOrEqual(t, storedMtime, transcriptProcessProviderMtime(t, transcriptPath))
 
 	written, _, failed, _ := engine.writeBatch(
 		[]pendingWrite{{
@@ -1258,30 +1193,27 @@ func TestProcessFileProviderDevinSkipsStoredFreshSource(t *testing.T) {
 		syncWriteDefault,
 		false,
 	)
-	require.Equal(0, failed)
-	require.Equal(1, written)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
 
-	_, dbStoredMtime, ok := database.GetSessionFileInfo("devin:session-001")
-	require.True(ok)
-	assert.Equal(storedMtime, dbStoredMtime)
-	assert.Equal(storedMtime, engine.SourceMtime(t.Context(), "devin:session-001"))
+	_, dbStoredMtime, ok := database.GetSessionFileInfo(t.Context(), "devin:session-001")
+	require.True(t, ok)
+	assert.Equal(t, storedMtime, dbStoredMtime)
+	assert.Equal(t, storedMtime, engine.SourceMtime(t.Context(), "devin:session-001"))
 
 	second := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  virtualPath,
 		Agent: parser.AgentDevin,
 	})
 
-	require.NoError(second.err)
-	assert.True(second.skip)
-	assert.True(second.cacheSkip)
-	assert.Equal(storedMtime, second.mtime)
-	assert.Empty(second.results)
+	require.NoError(t, second.err)
+	assert.True(t, second.skip)
+	assert.True(t, second.cacheSkip)
+	assert.Equal(t, storedMtime, second.mtime)
+	assert.Empty(t, second.results)
 }
 
 func TestProcessFileProviderDevinReparsesTranscriptOnlyChange(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	dbPath, transcriptPath := writeProcessProviderDevinFixture(
 		t,
@@ -1293,7 +1225,7 @@ func TestProcessFileProviderDevinReparsesTranscriptOnlyChange(t *testing.T) {
 	)
 	virtualPath := parser.VirtualSourcePath(dbPath, "session-002")
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentDevin: {root},
 		},
@@ -1304,8 +1236,8 @@ func TestProcessFileProviderDevinReparsesTranscriptOnlyChange(t *testing.T) {
 		Path:  virtualPath,
 		Agent: parser.AgentDevin,
 	})
-	require.NoError(first.err)
-	require.Len(first.results, 1)
+	require.NoError(t, first.err)
+	require.Len(t, first.results, 1)
 	written, _, failed, _ := engine.writeBatch(
 		[]pendingWrite{{
 			sess:         first.results[0].Session,
@@ -1316,26 +1248,26 @@ func TestProcessFileProviderDevinReparsesTranscriptOnlyChange(t *testing.T) {
 		syncWriteDefault,
 		false,
 	)
-	require.Equal(0, failed)
-	require.Equal(1, written)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
 	before := engine.SourceMtime(t.Context(), "devin:session-002")
 
 	future := time.Now().Add(2 * time.Second)
 	writeProcessProviderDevinTranscript(t, transcriptPath, "Updated reply")
-	require.NoError(os.Chtimes(transcriptPath, future, future))
+	require.NoError(t, os.Chtimes(transcriptPath, future, future))
 
 	after := engine.SourceMtime(t.Context(), "devin:session-002")
-	assert.Greater(after, before)
+	assert.Greater(t, after, before)
 
 	second := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  virtualPath,
 		Agent: parser.AgentDevin,
 	})
-	require.NoError(second.err)
-	assert.False(second.skip)
-	require.Len(second.results, 1)
-	assert.Greater(second.results[0].Session.File.Mtime, first.results[0].Session.File.Mtime)
-	assert.Equal("Updated reply", second.results[0].Messages[1].Content)
+	require.NoError(t, second.err)
+	assert.False(t, second.skip)
+	require.Len(t, second.results, 1)
+	assert.Greater(t, second.results[0].Session.File.Mtime, first.results[0].Session.File.Mtime)
+	assert.Equal(t, "Updated reply", second.results[0].Messages[1].Content)
 }
 
 func TestProcessFileProviderDevinSameSizeSameMtimeTranscriptRewriteReparses(t *testing.T) {
@@ -1350,9 +1282,6 @@ func TestProcessFileProviderDevinSameSizeSameMtimeTranscriptRewriteReparses(t *t
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			dbPath, transcriptPath := writeProcessProviderDevinFixture(
 				t,
@@ -1364,7 +1293,7 @@ func TestProcessFileProviderDevinSameSizeSameMtimeTranscriptRewriteReparses(t *t
 			)
 			virtualPath := parser.VirtualSourcePath(dbPath, "session-same-mtime")
 			database := dbtest.OpenTestDB(t)
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentDevin: {root},
 				},
@@ -1375,14 +1304,14 @@ func TestProcessFileProviderDevinSameSizeSameMtimeTranscriptRewriteReparses(t *t
 				Path:  virtualPath,
 				Agent: parser.AgentDevin,
 			})
-			require.NoError(first.err)
-			require.Len(first.results, 1)
-			require.Len(first.results[0].Messages, 2)
-			assert.Equal("Initial reply", first.results[0].Messages[1].Content)
+			require.NoError(t, first.err)
+			require.Len(t, first.results, 1)
+			require.Len(t, first.results[0].Messages, 2)
+			assert.Equal(t, "Initial reply", first.results[0].Messages[1].Content)
 			initialMtime := first.results[0].Session.File.Mtime
 			initialHash := first.results[0].Session.File.Hash
-			require.NotZero(initialMtime)
-			require.NotEmpty(initialHash)
+			require.NotZero(t, initialMtime)
+			require.NotEmpty(t, initialHash)
 
 			written, _, failed, _ := engine.writeBatch(
 				[]pendingWrite{{
@@ -1394,24 +1323,24 @@ func TestProcessFileProviderDevinSameSizeSameMtimeTranscriptRewriteReparses(t *t
 				syncWriteDefault,
 				false,
 			)
-			require.Equal(0, failed)
-			require.Equal(1, written)
+			require.Equal(t, 0, failed)
+			require.Equal(t, 1, written)
 
 			infoBefore, err := os.Stat(transcriptPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			writeProcessProviderDevinTranscript(t, transcriptPath, "Changed reply")
 			initialTime := time.Unix(0, initialMtime)
-			require.NoError(os.Chtimes(transcriptPath, initialTime, initialTime))
+			require.NoError(t, os.Chtimes(transcriptPath, initialTime, initialTime))
 			infoAfter, err := os.Stat(transcriptPath)
-			require.NoError(err)
-			require.Equal(infoBefore.Size(), infoAfter.Size(),
+			require.NoError(t, err)
+			require.Equal(t, infoBefore.Size(), infoAfter.Size(),
 				"test must keep size stable so hash is the only freshness signal")
 
 			if tt.seedCache {
 				engine.cacheSkip(virtualPath, initialMtime)
 			}
 			if tt.freshSync {
-				engine = NewEngine(database, EngineConfig{
+				engine = NewEngine(t.Context(), database, EngineConfig{
 					AgentDirs: map[parser.AgentType][]string{
 						parser.AgentDevin: {root},
 					},
@@ -1423,20 +1352,17 @@ func TestProcessFileProviderDevinSameSizeSameMtimeTranscriptRewriteReparses(t *t
 				Path:  virtualPath,
 				Agent: parser.AgentDevin,
 			})
-			require.NoError(second.err)
-			assert.False(second.skip)
-			require.Len(second.results, 1)
-			require.Len(second.results[0].Messages, 2)
-			assert.Equal("Changed reply", second.results[0].Messages[1].Content)
-			assert.NotEqual(initialHash, second.results[0].Session.File.Hash)
+			require.NoError(t, second.err)
+			assert.False(t, second.skip)
+			require.Len(t, second.results, 1)
+			require.Len(t, second.results[0].Messages, 2)
+			assert.Equal(t, "Changed reply", second.results[0].Messages[1].Content)
+			assert.NotEqual(t, initialHash, second.results[0].Session.File.Hash)
 		})
 	}
 }
 
 func TestProcessFileProviderDevinRepeatedHashRewriteIgnoresStaleHashedCache(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	dbPath, transcriptPath := writeProcessProviderDevinFixture(
 		t,
@@ -1452,7 +1378,7 @@ func TestProcessFileProviderDevinRepeatedHashRewriteIgnoresStaleHashedCache(t *t
 		Agent: parser.AgentDevin,
 	}
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentDevin: {root},
 		},
@@ -1460,51 +1386,48 @@ func TestProcessFileProviderDevinRepeatedHashRewriteIgnoresStaleHashedCache(t *t
 	})
 
 	first := engine.processFile(t.Context(), file)
-	require.NoError(first.err)
-	require.Len(first.results, 1)
-	require.Len(first.results[0].Messages, 2)
-	assert.Equal("Initial reply", first.results[0].Messages[1].Content)
+	require.NoError(t, first.err)
+	require.Len(t, first.results, 1)
+	require.Len(t, first.results[0].Messages, 2)
+	assert.Equal(t, "Initial reply", first.results[0].Messages[1].Content)
 	initialMtime := first.results[0].Session.File.Mtime
 	initialHash := first.results[0].Session.File.Hash
-	require.NotZero(initialMtime)
-	require.NotEmpty(initialHash)
-	require.Contains(first.cacheKey, "?source_hash="+initialHash)
+	require.NotZero(t, initialMtime)
+	require.NotEmpty(t, initialHash)
+	require.Contains(t, first.cacheKey, "?source_hash="+initialHash)
 	writeProcessProviderDevinResult(t, engine, first)
 
 	engine.cacheSkip(first.cacheKey, initialMtime)
 
 	writeProcessProviderDevinTranscript(t, transcriptPath, "Changed reply")
 	initialTime := time.Unix(0, initialMtime)
-	require.NoError(os.Chtimes(transcriptPath, initialTime, initialTime))
+	require.NoError(t, os.Chtimes(transcriptPath, initialTime, initialTime))
 	second := engine.processFile(t.Context(), file)
-	require.NoError(second.err)
-	assert.False(second.skip)
-	require.Len(second.results, 1)
-	require.Len(second.results[0].Messages, 2)
-	assert.Equal("Changed reply", second.results[0].Messages[1].Content)
+	require.NoError(t, second.err)
+	assert.False(t, second.skip)
+	require.Len(t, second.results, 1)
+	require.Len(t, second.results[0].Messages, 2)
+	assert.Equal(t, "Changed reply", second.results[0].Messages[1].Content)
 	changedHash := second.results[0].Session.File.Hash
-	require.NotEmpty(changedHash)
-	require.NotEqual(initialHash, changedHash)
-	require.Contains(second.cacheKey, "?source_hash="+changedHash)
+	require.NotEmpty(t, changedHash)
+	require.NotEqual(t, initialHash, changedHash)
+	require.Contains(t, second.cacheKey, "?source_hash="+changedHash)
 	writeProcessProviderDevinResult(t, engine, second)
-	engine.clearSkip(second.cacheKey)
+	engine.clearSkip(t.Context(), second.cacheKey)
 
 	writeProcessProviderDevinTranscript(t, transcriptPath, "Initial reply")
-	require.NoError(os.Chtimes(transcriptPath, initialTime, initialTime))
+	require.NoError(t, os.Chtimes(transcriptPath, initialTime, initialTime))
 
 	third := engine.processFile(t.Context(), file)
-	require.NoError(third.err)
-	assert.False(third.skip)
-	require.Len(third.results, 1)
-	require.Len(third.results[0].Messages, 2)
-	assert.Equal("Initial reply", third.results[0].Messages[1].Content)
-	assert.Equal(initialHash, third.results[0].Session.File.Hash)
+	require.NoError(t, third.err)
+	assert.False(t, third.skip)
+	require.Len(t, third.results, 1)
+	require.Len(t, third.results[0].Messages, 2)
+	assert.Equal(t, "Initial reply", third.results[0].Messages[1].Content)
+	assert.Equal(t, initialHash, third.results[0].Session.File.Hash)
 }
 
 func TestSyncAllProviderDevinMissingDBPreservesArchive(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	dbPath, _ := writeProcessProviderDevinFixture(
 		t,
@@ -1515,7 +1438,7 @@ func TestSyncAllProviderDevinMissingDBPreservesArchive(t *testing.T) {
 		1700000005,
 	)
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentDevin: {root},
 		},
@@ -1523,7 +1446,7 @@ func TestSyncAllProviderDevinMissingDBPreservesArchive(t *testing.T) {
 	})
 
 	stats := engine.SyncAll(t.Context(), nil)
-	require.Equal(1, stats.Synced)
+	require.Equal(t, 1, stats.Synced)
 	assertProviderProcessMessageContent(
 		t,
 		database,
@@ -1532,9 +1455,9 @@ func TestSyncAllProviderDevinMissingDBPreservesArchive(t *testing.T) {
 		"Archived reply",
 	)
 
-	require.NoError(os.Remove(dbPath))
+	require.NoError(t, os.Remove(dbPath))
 	stats = engine.SyncAll(t.Context(), nil)
-	assert.Equal(0, stats.Synced)
+	assert.Equal(t, 0, stats.Synced)
 	assertProviderProcessMessageContent(
 		t,
 		database,
@@ -1542,12 +1465,13 @@ func TestSyncAllProviderDevinMissingDBPreservesArchive(t *testing.T) {
 		"Ship it",
 		"Archived reply",
 	)
-	assert.Empty(engine.FindSourceFile("devin:session-003"))
-	assert.Zero(engine.SourceMtime(t.Context(), "devin:session-003"))
+	assert.Empty(t, engine.FindSourceFile(t.Context(), "devin:session-003"))
+	assert.Zero(t, engine.SourceMtime(t.Context(), "devin:session-003"))
 }
 
 func writeProcessProviderForgeDB(t *testing.T, root string) string {
 	t.Helper()
+
 	dbPath := filepath.Join(root, ".forge.db")
 	database, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
@@ -1589,6 +1513,7 @@ func writeProcessProviderDevinResult(
 	result processResult,
 ) {
 	t.Helper()
+
 	require.Len(t, result.results, 1)
 	written, _, failed, _ := engine.writeBatch(
 		[]pendingWrite{{
@@ -1613,6 +1538,7 @@ func writeProcessProviderDevinFixture(
 	lastActivityAtSec int64,
 ) (string, string) {
 	t.Helper()
+
 	cliDir := filepath.Join(root, "cli")
 	transcriptsDir := filepath.Join(cliDir, "transcripts")
 	require.NoError(t, os.MkdirAll(transcriptsDir, 0o755))
@@ -1705,7 +1631,7 @@ func newProcessFixtureEngine(
 	provider *processFixtureProvider,
 ) *Engine {
 	t.Helper()
-	return NewEngine(openTestDB(t), EngineConfig{
+	return NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCowork: {root},
 		},
@@ -1879,9 +1805,9 @@ func openProcessProviderPiebaldDB(t *testing.T, path string) *sql.DB {
 func copyProcessProviderPiebaldSchemaTemplate(t *testing.T, path string) {
 	t.Helper()
 	processProviderPiebaldSchemaOnce.Do(func() {
-		processProviderPiebaldSchemaBytes, processProviderPiebaldSchemaErr = buildProcessProviderPiebaldSchemaTemplate()
+		processProviderPiebaldSchemaBytes, errProcessProviderPiebaldSchema = buildProcessProviderPiebaldSchemaTemplate()
 	})
-	require.NoError(t, processProviderPiebaldSchemaErr)
+	require.NoError(t, errProcessProviderPiebaldSchema)
 	require.NoError(t, os.WriteFile(path, processProviderPiebaldSchemaBytes, 0o644))
 }
 
@@ -1897,7 +1823,7 @@ func buildProcessProviderPiebaldSchemaTemplate() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open piebald provider schema template: %w", err)
 	}
-	if _, err = database.Exec(processProviderPiebaldSchema); err != nil {
+	if _, err = database.ExecContext(context.Background(), processProviderPiebaldSchema); err != nil {
 		_ = database.Close()
 		return nil, fmt.Errorf("create piebald provider schema template: %w", err)
 	}

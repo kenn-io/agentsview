@@ -10,9 +10,6 @@ import (
 )
 
 func TestQwenPawProviderSourceMethods(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	rootPath := qwenPawProviderWriteSession(
 		t, root, "default", "", "root_1", "root question",
@@ -24,14 +21,14 @@ func TestQwenPawProviderSourceMethods(t *testing.T) {
 		t, root, "default", ".weixin-legacy", "hidden_1", "hidden",
 	)
 	deepDir := filepath.Join(root, "default", "sessions", "console", "nested")
-	require.NoError(os.MkdirAll(deepDir, 0o755))
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.MkdirAll(deepDir, 0o755))
+	require.NoError(t, os.WriteFile(
 		filepath.Join(deepDir, "deep.json"),
 		[]byte(qwenPawProviderFixture("deep")),
 		0o644,
 	))
-	require.NoError(os.MkdirAll(filepath.Join(root, "default", "dialog"), 0o755))
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "default", "dialog"), 0o755))
+	require.NoError(t, os.WriteFile(
 		filepath.Join(root, "default", "dialog", "legacy.jsonl"),
 		[]byte("{}\n"),
 		0o644,
@@ -41,72 +38,72 @@ func TestQwenPawProviderSourceMethods(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	plan, err := provider.WatchPlan(t.Context())
-	require.NoError(err)
-	require.Len(plan.Roots, 1)
-	assert.Equal(root, plan.Roots[0].Path)
-	assert.True(plan.Roots[0].Recursive)
-	assert.Equal([]string{"*.json"}, plan.Roots[0].IncludeGlobs)
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Equal(t, root, plan.Roots[0].Path)
+	assert.True(t, plan.Roots[0].Recursive)
+	assert.Equal(t, []string{"*.json"}, plan.Roots[0].IncludeGlobs)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 2)
-	assert.ElementsMatch([]string{rootPath, consolePath}, []string{
+	require.NoError(t, err)
+	require.Len(t, discovered, 2)
+	assert.ElementsMatch(t, []string{rootPath, consolePath}, []string{
 		discovered[0].DisplayPath,
 		discovered[1].DisplayPath,
 	})
 	for _, source := range discovered {
-		assert.Equal(AgentQwenPaw, source.Provider)
-		assert.Equal("default", source.ProjectHint)
-		assert.Equal(source.DisplayPath, source.FingerprintKey)
+		assert.Equal(t, AgentQwenPaw, source.Provider)
+		assert.Equal(t, "default", source.ProjectHint)
+		assert.Equal(t, source.DisplayPath, source.FingerprintKey)
 	}
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~qwenpaw:default:root_1",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(rootPath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, rootPath, found.DisplayPath)
 
 	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "default:console:console_1",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(consolePath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, consolePath, found.DisplayPath)
 
 	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: rootPath,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(rootPath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, rootPath, found.DisplayPath)
 
 	fingerprint, err := provider.Fingerprint(t.Context(), found)
-	require.NoError(err)
-	assert.Equal(rootPath, fingerprint.Key)
-	assert.Positive(fingerprint.Size)
-	assert.Positive(fingerprint.MTimeNS)
-	assert.NotEmpty(fingerprint.Hash)
+	require.NoError(t, err)
+	assert.Equal(t, rootPath, fingerprint.Key)
+	assert.Positive(t, fingerprint.Size)
+	assert.Positive(t, fingerprint.MTimeNS)
+	assert.NotEmpty(t, fingerprint.Hash)
 
 	changed, err := provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: rootPath, EventKind: "write", WatchRoot: root},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(rootPath, changed[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, rootPath, changed[0].DisplayPath)
 
-	require.NoError(os.Remove(consolePath))
+	require.NoError(t, os.Remove(consolePath))
 	changed, err = provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: consolePath, EventKind: "remove", WatchRoot: root},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(consolePath, changed[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, consolePath, changed[0].DisplayPath)
 
 	changed, err = provider.SourcesForChangedPath(
 		t.Context(),
@@ -116,14 +113,11 @@ func TestQwenPawProviderSourceMethods(t *testing.T) {
 			WatchRoot: filepath.Join(root, "..", "other-root"),
 		},
 	)
-	require.NoError(err)
-	assert.Empty(changed)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
 }
 
 func TestQwenPawProviderParse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath := qwenPawProviderWriteSession(
 		t, root, "default", "console", "console_1", "provider question",
@@ -132,25 +126,25 @@ func TestQwenPawProviderParse(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: SourceFingerprint{Key: sourcePath, Hash: "abc123"},
 	})
-	require.NoError(err)
-	require.True(outcome.ResultSetComplete)
-	require.True(outcome.ForceReplace)
-	require.Len(outcome.Results, 1)
-	assert.Equal(DataVersionCurrent, outcome.Results[0].DataVersion)
-	assert.Equal("qwenpaw:default:console:console_1", outcome.Results[0].Result.Session.ID)
-	assert.Equal("default", outcome.Results[0].Result.Session.Project)
-	assert.Equal("devbox", outcome.Results[0].Result.Session.Machine)
-	assert.Equal("abc123", outcome.Results[0].Result.Session.File.Hash)
-	assert.Len(outcome.Results[0].Result.Messages, 2)
+	require.NoError(t, err)
+	require.True(t, outcome.ResultSetComplete)
+	require.True(t, outcome.ForceReplace)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, DataVersionCurrent, outcome.Results[0].DataVersion)
+	assert.Equal(t, "qwenpaw:default:console:console_1", outcome.Results[0].Result.Session.ID)
+	assert.Equal(t, "default", outcome.Results[0].Result.Session.Project)
+	assert.Equal(t, "devbox", outcome.Results[0].Result.Session.Machine)
+	assert.Equal(t, "abc123", outcome.Results[0].Result.Session.File.Hash)
+	assert.Len(t, outcome.Results[0].Result.Messages, 2)
 }
 
 // TestQwenPawProviderFindSourceResolvesStoredPathOutsideRoots locks in the
@@ -160,9 +154,6 @@ func TestQwenPawProviderParse(t *testing.T) {
 // ProjectHint, so a reparse keeps the canonical qwenpaw:<workspace>:<stem> ID
 // instead of orphaning it under an empty workspace.
 func TestQwenPawProviderFindSourceResolvesStoredPathOutsideRoots(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	storedRoot := t.TempDir()
 	storedPath := qwenPawProviderWriteSession(
 		t, storedRoot, "my_ws", "", "default_1", "outside question",
@@ -174,37 +165,34 @@ func TestQwenPawProviderFindSourceResolvesStoredPathOutsideRoots(t *testing.T) {
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: storedPath,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(storedPath, found.DisplayPath)
-	assert.Equal("my_ws", found.ProjectHint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, storedPath, found.DisplayPath)
+	assert.Equal(t, "my_ws", found.ProjectHint)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  found,
 		Machine: "devbox",
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
-	assert.Equal("qwenpaw:my_ws:default_1", outcome.Results[0].Result.Session.ID)
-	assert.Equal("my_ws", outcome.Results[0].Result.Session.Project)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "qwenpaw:my_ws:default_1", outcome.Results[0].Result.Session.ID)
+	assert.Equal(t, "my_ws", outcome.Results[0].Result.Session.Project)
 
 	// A stored path that is not a valid qwenpaw source shape stays unresolved.
 	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: filepath.Join(storedRoot, "loose.json"),
 	})
-	require.NoError(err)
-	assert.False(ok)
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
 func TestQwenPawProviderDiscoversSymlinkedWorkspace(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	targetRoot := t.TempDir()
 	qwenPawProviderWriteSession(
@@ -221,26 +209,23 @@ func TestQwenPawProviderDiscoversSymlinkedWorkspace(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(sourcePath, discovered[0].DisplayPath)
-	assert.Equal("default", discovered[0].ProjectHint)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
+	assert.Equal(t, "default", discovered[0].ProjectHint)
 }
 
 func TestQwenPawProviderPrunesSymlinkedSessionNamespaces(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath := qwenPawProviderWriteSession(
 		t, root, "default", "", "root_1", "root question",
 	)
 	targetDir := filepath.Join(t.TempDir(), "console-target")
-	require.NoError(os.MkdirAll(targetDir, 0o755))
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.MkdirAll(targetDir, 0o755))
+	require.NoError(t, os.WriteFile(
 		filepath.Join(targetDir, "linked_1.json"),
 		[]byte(qwenPawProviderFixture("linked question")),
 		0o644,
@@ -255,12 +240,12 @@ func TestQwenPawProviderPrunesSymlinkedSessionNamespaces(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(sourcePath, discovered[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
 	changed, err := provider.SourcesForChangedPath(
 		t.Context(),
@@ -270,8 +255,8 @@ func TestQwenPawProviderPrunesSymlinkedSessionNamespaces(t *testing.T) {
 			WatchRoot: root,
 		},
 	)
-	require.NoError(err)
-	assert.Empty(changed)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
 }
 
 func qwenPawProviderWriteSession(

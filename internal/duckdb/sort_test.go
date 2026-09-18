@@ -15,9 +15,10 @@ import (
 // against the DuckDB dialect (CAST placeholders, COALESCE sentinel).
 func syncedStoreFromWrites(t *testing.T, writes []db.SessionBatchWrite) *Store {
 	t.Helper()
+
 	ctx := t.Context()
 	local := newLocalDB(t)
-	_, err := local.WriteSessionBatchAtomic(writes)
+	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))

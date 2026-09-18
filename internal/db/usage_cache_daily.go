@@ -176,7 +176,6 @@ func (db *DB) assembleDailyUsageFacts(
 
 func recordUsageFactsPricing(
 	resolver *export.PricingResolver, group usageFactsGroup,
-
 ) error {
 	timestamp := usagePricingTimestamp(group.PricingTimestamp)
 	_, baseLookup := resolver.ResolveAt(

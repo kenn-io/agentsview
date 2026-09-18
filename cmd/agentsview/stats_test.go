@@ -343,9 +343,6 @@ func TestStatsCommand_OutcomeFlagsRegistered(t *testing.T) {
 }
 
 func TestStatsCommandUsesDiscoveredDaemon(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := newAgentDataDir(t)
 
 	var gotQuery url.Values
@@ -379,20 +376,18 @@ func TestStatsCommandUsesDiscoveredDaemon(t *testing.T) {
 		"--timezone", "UTC",
 	)
 
-	require.NoError(err, "stats output:\n%s", out)
-	assert.Equal("2026-04-01", gotQuery.Get("since"))
-	assert.Equal("2026-04-15", gotQuery.Get("until"))
-	assert.Equal("codex", gotQuery.Get("agent"))
-	assert.Equal("UTC", gotQuery.Get("timezone"))
+	require.NoError(t, err, "stats output:\n%s", out)
+	assert.Equal(t, "2026-04-01", gotQuery.Get("since"))
+	assert.Equal(t, "2026-04-15", gotQuery.Get("until"))
+	assert.Equal(t, "codex", gotQuery.Get("agent"))
+	assert.Equal(t, "UTC", gotQuery.Get("timezone"))
 
 	var got db.SessionStats
-	require.NoError(json.Unmarshal([]byte(out), &got))
-	assert.Equal(5, got.Totals.SessionsAll)
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.Equal(t, 5, got.Totals.SessionsAll)
 }
 
 func TestStatsCommandReportsDaemonValidationError(t *testing.T) {
-	assert := assert.New(t)
-
 	dataDir := newAgentDataDir(t)
 
 	var called bool
@@ -412,9 +407,9 @@ func TestStatsCommandReportsDaemonValidationError(t *testing.T) {
 	)
 
 	require.Error(t, err, "stats output:\n%s", out)
-	assert.True(called, "stats should use the discovered daemon")
-	assert.Contains(err.Error(), "HTTP 400")
-	assert.Contains(err.Error(), "invalid timezone: Fake/Zone")
+	assert.True(t, called, "stats should use the discovered daemon")
+	assert.Contains(t, err.Error(), "HTTP 400")
+	assert.Contains(t, err.Error(), "invalid timezone: Fake/Zone")
 }
 
 func TestStatsCommandUsesReadOnlyDaemon(t *testing.T) {
@@ -468,14 +463,12 @@ var updateGolden = flag.Bool(
 //
 //	go test ./cmd/agentsview -run TestStatsGolden -update
 func TestStatsGolden(t *testing.T) {
-	require := require.New(t)
-
 	setupGoldenStatsDataDir(t)
 
 	out := runDefaultStatsJSON(t)
 
 	var got map[string]any
-	require.NoError(json.Unmarshal([]byte(out), &got),
+	require.NoError(t, json.Unmarshal([]byte(out), &got),
 		"unmarshal stats output, output:\n%s", out)
 	delete(got, "generated_at")
 
@@ -484,12 +477,12 @@ func TestStatsGolden(t *testing.T) {
 	)
 	if *updateGolden {
 		buf, err := json.Marshal(got, jsontext.WithIndent("  "))
-		require.NoError(err, "marshal golden")
+		require.NoError(t, err, "marshal golden")
 		buf = append(buf, '\n')
-		require.NoError(os.MkdirAll(
+		require.NoError(t, os.MkdirAll(
 			filepath.Dir(goldenPath), 0o755,
 		), "mkdir testdata")
-		require.NoError(os.WriteFile(
+		require.NoError(t, os.WriteFile(
 			goldenPath, buf, 0o644,
 		), "write golden")
 		t.Logf("rewrote %s (%d bytes)", goldenPath, len(buf))
@@ -497,21 +490,15 @@ func TestStatsGolden(t *testing.T) {
 	}
 
 	raw, err := os.ReadFile(goldenPath)
-	require.NoError(err, "read golden (run with -update to generate)")
+	require.NoError(t, err, "read golden (run with -update to generate)")
 	var want map[string]any
-	require.NoError(json.Unmarshal(raw, &want), "unmarshal golden")
+	require.NoError(t, json.Unmarshal(raw, &want), "unmarshal golden")
 	delete(want, "generated_at")
 
 	if !assert.Equal(t, want, got) {
 		gotBuf, _ := json.Marshal(got, jsontext.WithIndent("  "))
 		wantBuf, _ := json.Marshal(want, jsontext.WithIndent("  "))
-		t.Fatalf(
-			"stats JSON mismatch — regenerate with "+
-				"`go test ./cmd/agentsview -run "+
-				"TestStatsGolden -update` if intentional.\n"+
-				"--- got ---\n%s\n--- want ---\n%s",
-			gotBuf, wantBuf,
-		)
+		require.FailNowf(t, "stats JSON mismatch", "regenerate with `go test ./cmd/agentsview -run TestStatsGolden -update` if intentional.\n--- got ---\n%s\n--- want ---\n%s", gotBuf, wantBuf)
 	}
 }
 
@@ -531,15 +518,16 @@ func TestStatsReadOnlyOpenAppliesCustomPricing(t *testing.T) {
 var (
 	goldenFixtureTemplateOnce  sync.Once
 	goldenFixtureTemplateFiles map[string][]byte
-	goldenFixtureTemplateErr   error
+	errGoldenFixtureTemplate   error
 )
 
 func copyGoldenFixtureDB(t *testing.T, dbPath string) {
 	t.Helper()
+
 	goldenFixtureTemplateOnce.Do(func() {
-		goldenFixtureTemplateFiles, goldenFixtureTemplateErr = buildGoldenFixtureTemplateFiles(t)
+		goldenFixtureTemplateFiles, errGoldenFixtureTemplate = buildGoldenFixtureTemplateFiles(t)
 	})
-	require.NoError(t, goldenFixtureTemplateErr, "build golden fixture template")
+	require.NoError(t, errGoldenFixtureTemplate, "build golden fixture template")
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755),
 		"create golden fixture dir")
 	for _, suffix := range []string{"", "-wal", "-shm"} {
@@ -554,14 +542,10 @@ func copyGoldenFixtureDB(t *testing.T, dbPath string) {
 
 func buildGoldenFixtureTemplateFiles(t *testing.T) (map[string][]byte, error) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "agentsview-golden-stats-*")
-	if err != nil {
-		return nil, fmt.Errorf("create golden fixture template dir: %w", err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	dbPath := filepath.Join(dir, "sessions.db")
-	d, err := db.Open(dbPath)
+	d, err := db.Open(t.Context(), dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open golden fixture template db: %w", err)
 	}
@@ -797,7 +781,7 @@ func seedGoldenSession(
 		TotalOutputTokens:    totalOutput,
 		HasTotalOutputTokens: totalOutput > 0,
 	}
-	require.NoError(t, d.UpsertSession(session), "upsert %s", spec.id)
+	require.NoError(t, d.UpsertSession(t.Context(), session), "upsert %s", spec.id)
 
 	if spec.outcome != "" || spec.healthGrade != "" ||
 		spec.retryCount > 0 || spec.editChurn > 0 ||
@@ -807,7 +791,7 @@ func seedGoldenSession(
 			g := spec.healthGrade
 			grade = &g
 		}
-		require.NoError(t, d.UpdateSessionSignals(spec.id, db.SessionSignalUpdate{
+		require.NoError(t, d.UpdateSessionSignals(t.Context(), spec.id, db.SessionSignalUpdate{
 			Outcome:         spec.outcome,
 			HealthGrade:     grade,
 			ToolRetryCount:  spec.retryCount,
@@ -818,7 +802,7 @@ func seedGoldenSession(
 
 	msgs := buildGoldenMessages(spec)
 	if len(msgs) > 0 {
-		require.NoError(t, d.InsertMessages(msgs),
+		require.NoError(t, d.InsertMessages(t.Context(), msgs),
 			"insert messages %s", spec.id)
 	}
 }

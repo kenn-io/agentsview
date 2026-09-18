@@ -41,7 +41,7 @@ func TestDaemonRestartSIGTERMHelperProcess(t *testing.T) {
 	deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error {
 		return syscall.Kill(os.Getpid(), syscall.SIGTERM)
 	}
-	deps.startBackground = func(
+	deps.startBackground = func(ctx context.Context,
 		_ config.Config, _ []string, _ serveReplacementOptions,
 		policy backgroundLaunchPolicy,
 	) (backgroundLaunchResult, error) {

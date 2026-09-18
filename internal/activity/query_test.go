@@ -23,52 +23,44 @@ func mustRFC3339(t *testing.T, s string) time.Time {
 }
 
 func TestResolveQuery_PresetDayUTC(t *testing.T) {
-	assert := assert.New(t)
-
 	now := mustRFC3339(t, "2030-01-01T00:00:00Z")
 	q, err := ResolveQuery(QueryInput{Preset: "day", Date: "2026-06-16", Timezone: "UTC"}, now)
 	require.NoError(t, err)
-	assert.Equal(mustRFC3339(t, "2026-06-16T00:00:00Z"), q.RangeStart)
-	assert.Equal(mustRFC3339(t, "2026-06-17T00:00:00Z"), q.RangeEnd)
-	assert.Equal(BucketMinute, q.Bucket.Unit)
-	assert.Equal(300, q.Bucket.NominalSeconds)
-	assert.False(q.Partial, "past day is complete")
-	assert.Equal(q.RangeEnd, q.EffectiveEnd, "complete day clamps to range_end")
-	assert.InDelta(300.0, q.GapCapSeconds, 0)
+	assert.Equal(t, mustRFC3339(t, "2026-06-16T00:00:00Z"), q.RangeStart)
+	assert.Equal(t, mustRFC3339(t, "2026-06-17T00:00:00Z"), q.RangeEnd)
+	assert.Equal(t, BucketMinute, q.Bucket.Unit)
+	assert.Equal(t, 300, q.Bucket.NominalSeconds)
+	assert.False(t, q.Partial, "past day is complete")
+	assert.Equal(t, q.RangeEnd, q.EffectiveEnd, "complete day clamps to range_end")
+	assert.InDelta(t, 300.0, q.GapCapSeconds, 0)
 }
 
 func TestResolveQuery_EmptyInputDefaultsToToday(t *testing.T) {
-	assert := assert.New(t)
-
 	now := mustRFC3339(t, "2026-06-17T09:30:00Z")
 	q, err := ResolveQuery(QueryInput{}, now)
 	require.NoError(t, err)
-	assert.Equal(mustRFC3339(t, "2026-06-17T00:00:00Z"), q.RangeStart)
-	assert.Equal(mustRFC3339(t, "2026-06-18T00:00:00Z"), q.RangeEnd)
-	assert.Equal(BucketMinute, q.Bucket.Unit, "empty input defaults to the day preset")
+	assert.Equal(t, mustRFC3339(t, "2026-06-17T00:00:00Z"), q.RangeStart)
+	assert.Equal(t, mustRFC3339(t, "2026-06-18T00:00:00Z"), q.RangeEnd)
+	assert.Equal(t, BucketMinute, q.Bucket.Unit, "empty input defaults to the day preset")
 }
 
 func TestResolveQuery_PresetWeekISOMonday(t *testing.T) {
-	assert := assert.New(t)
-
 	now := mustRFC3339(t, "2030-01-01T00:00:00Z")
 	// 2026-06-17 is a Wednesday; ISO week starts Monday 2026-06-15.
 	q, err := ResolveQuery(QueryInput{Preset: "week", Date: "2026-06-17", Timezone: "UTC"}, now)
 	require.NoError(t, err)
-	assert.Equal(mustRFC3339(t, "2026-06-15T00:00:00Z"), q.RangeStart)
-	assert.Equal(mustRFC3339(t, "2026-06-22T00:00:00Z"), q.RangeEnd)
-	assert.Equal(BucketHour, q.Bucket.Unit, "7d range auto-buckets hourly")
+	assert.Equal(t, mustRFC3339(t, "2026-06-15T00:00:00Z"), q.RangeStart)
+	assert.Equal(t, mustRFC3339(t, "2026-06-22T00:00:00Z"), q.RangeEnd)
+	assert.Equal(t, BucketHour, q.Bucket.Unit, "7d range auto-buckets hourly")
 }
 
 func TestResolveQuery_PresetMonthUTC(t *testing.T) {
-	assert := assert.New(t)
-
 	now := mustRFC3339(t, "2030-01-01T00:00:00Z")
 	q, err := ResolveQuery(QueryInput{Preset: "month", Date: "2026-02-14", Timezone: "UTC"}, now)
 	require.NoError(t, err)
-	assert.Equal(mustRFC3339(t, "2026-02-01T00:00:00Z"), q.RangeStart)
-	assert.Equal(mustRFC3339(t, "2026-03-01T00:00:00Z"), q.RangeEnd)
-	assert.Equal(BucketDay, q.Bucket.Unit, "28d range auto-buckets daily")
+	assert.Equal(t, mustRFC3339(t, "2026-02-01T00:00:00Z"), q.RangeStart)
+	assert.Equal(t, mustRFC3339(t, "2026-03-01T00:00:00Z"), q.RangeEnd)
+	assert.Equal(t, BucketDay, q.Bucket.Unit, "28d range auto-buckets daily")
 }
 
 func TestResolveQuery_PresetDayDSTSpringForward(t *testing.T) {
@@ -198,51 +190,42 @@ func TestResolveQuery_FutureRangeClamps(t *testing.T) {
 }
 
 func TestBuildBuckets_FixedDurationWithShortFinal(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	l := time.UTC
 	start := mustRFC3339(t, "2026-06-16T10:00:00Z")
 	end := mustRFC3339(t, "2026-06-16T10:12:00Z") // 12 minutes
 	ws, err := BuildBuckets(start, end, BucketSpec{BucketMinute, 300}, l)
-	require.NoError(err)
-	require.Len(ws, 3, "12 minutes / 5 = 2 full + 1 short bucket")
-	assert.Equal(start, ws[0].Start)
-	assert.Equal(mustRFC3339(t, "2026-06-16T10:05:00Z"), ws[0].End)
-	assert.Equal(mustRFC3339(t, "2026-06-16T10:10:00Z"), ws[2].Start)
-	assert.Equal(end, ws[2].End, "final bucket clipped to range end")
+	require.NoError(t, err)
+	require.Len(t, ws, 3, "12 minutes / 5 = 2 full + 1 short bucket")
+	assert.Equal(t, start, ws[0].Start)
+	assert.Equal(t, mustRFC3339(t, "2026-06-16T10:05:00Z"), ws[0].End)
+	assert.Equal(t, mustRFC3339(t, "2026-06-16T10:10:00Z"), ws[2].Start)
+	assert.Equal(t, end, ws[2].End, "final bucket clipped to range end")
 }
 
 func TestBuildBuckets_CalendarDayLocalBoundaries(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	l := loc(t, "America/New_York")
 	// Two local days; the boundary is local midnight (04:00Z in EDT).
 	start := mustRFC3339(t, "2026-06-16T04:00:00Z")
 	end := mustRFC3339(t, "2026-06-18T04:00:00Z")
 	ws, err := BuildBuckets(start, end, BucketSpec{BucketDay, 86400}, l)
-	require.NoError(err)
-	require.Len(ws, 2)
-	assert.Equal(start, ws[0].Start)
-	assert.Equal(mustRFC3339(t, "2026-06-17T04:00:00Z"), ws[0].End,
+	require.NoError(t, err)
+	require.Len(t, ws, 2)
+	assert.Equal(t, start, ws[0].Start)
+	assert.Equal(t, mustRFC3339(t, "2026-06-17T04:00:00Z"), ws[0].End,
 		"calendar day boundary is local midnight")
-	assert.Equal(end, ws[1].End)
+	assert.Equal(t, end, ws[1].End)
 }
 
 func TestBuildBuckets_CalendarDaySpansDST(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	l := loc(t, "America/New_York")
 	// Spring forward 2026-03-08 (23h local day) then a normal 24h day.
 	start := mustRFC3339(t, "2026-03-08T05:00:00Z") // 2026-03-08 00:00 EST
 	end := mustRFC3339(t, "2026-03-10T04:00:00Z")   // 2026-03-10 00:00 EDT
 	ws, err := BuildBuckets(start, end, BucketSpec{BucketDay, 86400}, l)
-	require.NoError(err)
-	require.Len(ws, 2)
-	assert.Equal(23*time.Hour, ws[0].End.Sub(ws[0].Start), "spring-forward calendar day is 23h")
-	assert.Equal(24*time.Hour, ws[1].End.Sub(ws[1].Start), "following day is 24h")
+	require.NoError(t, err)
+	require.Len(t, ws, 2)
+	assert.Equal(t, 23*time.Hour, ws[0].End.Sub(ws[0].Start), "spring-forward calendar day is 23h")
+	assert.Equal(t, 24*time.Hour, ws[1].End.Sub(ws[1].Start), "following day is 24h")
 }
 
 func TestBuildBuckets_CalendarDayFallBack25h(t *testing.T) {

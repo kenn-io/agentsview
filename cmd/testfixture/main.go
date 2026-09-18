@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -60,22 +61,29 @@ var specs = []sessionSpec{
 }
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 	out := flag.String("out", "", "output database path")
 	duckDBOut := flag.String("duckdb-out", "", "optional output DuckDB mirror path")
 	flag.Parse()
 	if *out == "" {
-		fmt.Fprintln(os.Stderr, "usage: testfixture -out <path>")
-		os.Exit(1)
+		return errors.New("usage: testfixture -out <path>")
 	}
 
 	if err := os.Remove(*out); err != nil &&
 		!errors.Is(err, os.ErrNotExist) {
-		log.Fatalf("removing existing db: %v", err)
+		return fmt.Errorf("removing existing db: %w", err)
 	}
 
-	database, err := db.Open(*out)
+	database, err := db.Open(ctx, *out)
 	if err != nil {
-		log.Fatalf("opening db: %v", err)
+		return fmt.Errorf("opening db: %w", err)
 	}
 	defer database.Close()
 
@@ -96,7 +104,7 @@ func main() {
 			CacheReadPerMTok:     money.Money{Microdollars: 1_500_000},
 		},
 	}); err != nil {
-		log.Fatalf("seeding model pricing: %v", err)
+		return fmt.Errorf("seeding model pricing: %w", err)
 	}
 
 	// Use a recent base date so fixture data stays within the
@@ -105,10 +113,10 @@ func main() {
 		Truncate(24 * time.Hour).Add(10 * time.Hour)
 
 	for i, spec := range specs {
-		if err := createSessionFixture(
+		if err := createSessionFixture(ctx,
 			database, spec, i, base,
 		); err != nil {
-			log.Fatalf("creating fixture %s: %v", spec.suffix, err)
+			return fmt.Errorf("creating fixture %s: %w", spec.suffix, err)
 		}
 		fmt.Printf(
 			"  test-session-%s: %d messages\n",
@@ -116,31 +124,32 @@ func main() {
 		)
 	}
 
-	if err := createDurationShowcaseFixture(
+	if err := createDurationShowcaseFixture(ctx,
 		database, base.Add(72*time.Hour),
 	); err != nil {
-		log.Fatalf("creating duration showcase: %v", err)
+		return fmt.Errorf("creating duration showcase: %w", err)
 	}
 
-	if err := createRecentEditsFixture(
+	if err := createRecentEditsFixture(ctx,
 		database, base.Add(96*time.Hour),
 	); err != nil {
-		log.Fatalf("creating recent-edits fixture: %v", err)
+		return fmt.Errorf("creating recent-edits fixture: %w", err)
 	}
 
 	if err := createProjectReclassificationFixture(
 		database, base.Add(120*time.Hour),
 	); err != nil {
-		log.Fatalf("creating project-reclassification fixture: %v", err)
+		return fmt.Errorf("creating project-reclassification fixture: %w", err)
 	}
 
 	fmt.Printf("Fixture DB written to %s\n", *out)
 	if *duckDBOut != "" {
 		if err := writeDuckDBMirror(database, *duckDBOut); err != nil {
-			log.Fatalf("writing DuckDB mirror: %v", err)
+			return fmt.Errorf("writing DuckDB mirror: %w", err)
 		}
 		fmt.Printf("Fixture DuckDB mirror written to %s\n", *duckDBOut)
 	}
+	return nil
 }
 
 func createProjectReclassificationFixture(
@@ -177,12 +186,12 @@ func createProjectReclassificationFixture(
 			FirstMessage:     new(firstMessage),
 			Cwd:              item.cwd,
 		}
-		if err := database.UpsertSession(session); err != nil {
+		if err := database.UpsertSession(ctx, session); err != nil {
 			return fmt.Errorf(
 				"upserting project-reclassification session: %w", err,
 			)
 		}
-		if err := database.InsertMessages(generateMessages(
+		if err := database.InsertMessages(ctx, generateMessages(
 			sessionID, session.MessageCount, startedAt, model,
 		)); err != nil {
 			return fmt.Errorf(
@@ -235,7 +244,7 @@ func writeDuckDBMirror(database *db.DB, path string) error {
 	return nil
 }
 
-func createSessionFixture(
+func createSessionFixture(ctx context.Context,
 	database *db.DB, spec sessionSpec,
 	index int, base time.Time,
 ) error {
@@ -269,7 +278,7 @@ func createSessionFixture(
 			"First message for " + spec.project,
 		)
 	}
-	if err := database.UpsertSession(sess); err != nil {
+	if err := database.UpsertSession(ctx, sess); err != nil {
 		return fmt.Errorf("upserting session: %w", err)
 	}
 
@@ -292,7 +301,7 @@ func createSessionFixture(
 			sessionID, spec.msgCount, startedAt, model,
 		)
 	}
-	if err := database.InsertMessages(msgs); err != nil {
+	if err := database.InsertMessages(ctx, msgs); err != nil {
 		return fmt.Errorf("inserting messages: %w", err)
 	}
 	return nil
@@ -462,7 +471,7 @@ func generateContent(role string, idx, total int) string {
 }
 
 // Copilot emits execution endpoints; the linked Task has a closed child interval.
-func createDurationShowcaseFixture(
+func createDurationShowcaseFixture(ctx context.Context,
 	database *db.DB, start time.Time,
 ) error {
 	const (
@@ -504,12 +513,12 @@ func createDurationShowcaseFixture(
 			"Inspect middleware request flow",
 		),
 	}
-	if err := database.UpsertSession(subSess); err != nil {
+	if err := database.UpsertSession(ctx, subSess); err != nil {
 		return fmt.Errorf(
 			"upserting subagent session: %w", err,
 		)
 	}
-	if err := database.InsertMessages(
+	if err := database.InsertMessages(ctx,
 		subAgentMessages,
 	); err != nil {
 		return fmt.Errorf(
@@ -540,12 +549,12 @@ func createDurationShowcaseFixture(
 			"Investigate auth middleware performance",
 		),
 	}
-	if err := database.UpsertSession(parentSess); err != nil {
+	if err := database.UpsertSession(ctx, parentSess); err != nil {
 		return fmt.Errorf(
 			"upserting showcase session: %w", err,
 		)
 	}
-	if err := database.InsertMessages(
+	if err := database.InsertMessages(ctx,
 		parentMessages,
 	); err != nil {
 		return fmt.Errorf(
@@ -885,7 +894,7 @@ func buildDurationSubagentMessages(
 // filters on category IN ('Edit','Write') AND file_path IS NOT NULL, so
 // FilePath must be set directly on the ToolCall — InputJSON alone does
 // not propagate to the file_path column.
-func createRecentEditsFixture(
+func createRecentEditsFixture(ctx context.Context,
 	database *db.DB, start time.Time,
 ) error {
 	const (
@@ -909,7 +918,7 @@ func createRecentEditsFixture(
 		UserMessageCount: 1,
 		FirstMessage:     new(firstMsg),
 	}
-	if err := database.UpsertSession(sess); err != nil {
+	if err := database.UpsertSession(ctx, sess); err != nil {
 		return fmt.Errorf("upserting recent-edits session: %w", err)
 	}
 
@@ -963,7 +972,7 @@ func createRecentEditsFixture(
 			ContentLength: 13,
 		},
 	}
-	if err := database.InsertMessages(msgs); err != nil {
+	if err := database.InsertMessages(ctx, msgs); err != nil {
 		return fmt.Errorf(
 			"inserting recent-edits messages: %w", err,
 		)

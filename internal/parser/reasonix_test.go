@@ -39,59 +39,50 @@ func writeReasonixMetadata(
 }
 
 func TestParseReasonixSession_Basic(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	path := writeReasonixJSONL(t,
 		`{"role":"user","content":"Write a simple function"}`,
 		`{"role":"assistant","content":"Here's a function","reasoning_content":"I need to write a function"}`,
 	)
 
 	sess, msgs, _, err := parseReasonixSession(path, "test-machine")
-	require.NoError(err)
-	require.NotNil(sess, "expected non-nil session")
-	require.Len(msgs, 2)
+	require.NoError(t, err)
+	require.NotNil(t, sess, "expected non-nil session")
+	require.Len(t, msgs, 2)
 
-	assert.Equal(AgentReasonix, sess.Agent, "agent")
-	assert.Equal("test-machine", sess.Machine, "machine")
-	assert.Equal("Write a simple function", sess.FirstMessage, "first_message")
-	assert.Contains(sess.ID, "reasonix:", "session ID prefix")
+	assert.Equal(t, AgentReasonix, sess.Agent, "agent")
+	assert.Equal(t, "test-machine", sess.Machine, "machine")
+	assert.Equal(t, "Write a simple function", sess.FirstMessage, "first_message")
+	assert.Contains(t, sess.ID, "reasonix:", "session ID prefix")
 
 	// Check message roles
-	assert.Equal(RoleUser, msgs[0].Role, "msgs[0].Role")
-	assert.Equal(RoleAssistant, msgs[1].Role, "msgs[1].Role")
+	assert.Equal(t, RoleUser, msgs[0].Role, "msgs[0].Role")
+	assert.Equal(t, RoleAssistant, msgs[1].Role, "msgs[1].Role")
 
 	// Check that reasoning content is included in display content
-	assert.Contains(msgs[1].Content, "[Thinking]", "thinking block in content")
-	assert.True(msgs[1].HasThinking, "HasThinking flag")
+	assert.Contains(t, msgs[1].Content, "[Thinking]", "thinking block in content")
+	assert.True(t, msgs[1].HasThinking, "HasThinking flag")
 }
 
 func TestParseReasonixSession_ToolCalls(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	path := writeReasonixJSONL(t,
 		`{"role":"user","content":"Read the file"}`,
 		`{"role":"assistant","content":"I'll read it","tool_calls":[{"id":"call_1","name":"read_file","arguments":"{\"path\":\"config.json\"}"}]}`,
 	)
 
 	_, msgs, _, err := parseReasonixSession(path, "m")
-	require.NoError(err)
-	require.Len(msgs, 2)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
 
 	// Check tool call message
 	tcMsg := msgs[1]
-	assert.True(tcMsg.HasToolUse, "expected HasToolUse")
-	require.Len(tcMsg.ToolCalls, 1)
-	assert.Equal("call_1", tcMsg.ToolCalls[0].ToolUseID)
-	assert.Equal("read_file", tcMsg.ToolCalls[0].ToolName)
-	assert.JSONEq(`{"path":"config.json"}`, tcMsg.ToolCalls[0].InputJSON)
+	assert.True(t, tcMsg.HasToolUse, "expected HasToolUse")
+	require.Len(t, tcMsg.ToolCalls, 1)
+	assert.Equal(t, "call_1", tcMsg.ToolCalls[0].ToolUseID)
+	assert.Equal(t, "read_file", tcMsg.ToolCalls[0].ToolName)
+	assert.Equal(t, `{"path":"config.json"}`, tcMsg.ToolCalls[0].InputJSON)
 }
 
 func TestParseReasonixSession_ToolResults(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	path := writeReasonixJSONL(t,
 		`{"role":"user","content":"Read the file"}`,
 		`{"role":"assistant","content":"I'll read it","tool_calls":[{"id":"call_1","name":"read_file","arguments":"{\"path\":\"config.json\"}"}]}`,
@@ -99,21 +90,19 @@ func TestParseReasonixSession_ToolResults(t *testing.T) {
 	)
 
 	_, msgs, _, err := parseReasonixSession(path, "m")
-	require.NoError(err)
-	require.Len(msgs, 3)
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
 
 	resultMsg := msgs[2]
-	require.Len(resultMsg.ToolResults, 1)
-	assert.Equal(RoleUser, resultMsg.Role)
-	assert.Empty(resultMsg.Content)
-	assert.Equal("call_1", resultMsg.ToolResults[0].ToolUseID)
-	assert.Equal(len("file contents here"), resultMsg.ToolResults[0].ContentLength)
-	assert.Equal("file contents here", DecodeContent(resultMsg.ToolResults[0].ContentRaw))
+	require.Len(t, resultMsg.ToolResults, 1)
+	assert.Equal(t, RoleUser, resultMsg.Role)
+	assert.Empty(t, resultMsg.Content)
+	assert.Equal(t, "call_1", resultMsg.ToolResults[0].ToolUseID)
+	assert.Equal(t, len("file contents here"), resultMsg.ToolResults[0].ContentLength)
+	assert.Equal(t, "file contents here", DecodeContent(resultMsg.ToolResults[0].ContentRaw))
 }
 
 func TestParseReasonixSession_TimestampSessionID(t *testing.T) {
-	require := require.New(t)
-
 	path := writeReasonixJSONL(t,
 		`{"role":"user","content":"Hello"}`,
 	)
@@ -121,17 +110,15 @@ func TestParseReasonixSession_TimestampSessionID(t *testing.T) {
 	// Rename to match timestamp-based format
 	dir := filepath.Dir(path)
 	timestampPath := filepath.Join(dir, "20260617-081849.643965200-deepseek-v4-pro.jsonl")
-	require.NoError(os.Rename(path, timestampPath))
+	require.NoError(t, os.Rename(path, timestampPath))
 
 	sess, _, _, err := parseReasonixSession(timestampPath, "m")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 	assert.Equal(t, "reasonix:20260617-081849.643965200-deepseek-v4-pro", sess.ID)
 }
 
 func TestParseReasonixSession_SubagentID(t *testing.T) {
-	require := require.New(t)
-
 	path := writeReasonixJSONL(t,
 		`{"role":"user","content":"Subagent task"}`,
 	)
@@ -139,37 +126,32 @@ func TestParseReasonixSession_SubagentID(t *testing.T) {
 	// Rename to match subagent format
 	dir := filepath.Dir(path)
 	subagentPath := filepath.Join(dir, "sa_20260612_105316_000000000_6b991b514f0a.jsonl")
-	require.NoError(os.Rename(path, subagentPath))
+	require.NoError(t, os.Rename(path, subagentPath))
 
 	sess, _, _, err := parseReasonixSession(subagentPath, "m")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 	assert.Equal(t, "reasonix:sa_20260612_105316_000000000_6b991b514f0a", sess.ID)
 }
 
 func TestParseReasonixSession_SpaceInSessionDir(t *testing.T) {
-	require := require.New(t)
-
 	baseDir := t.TempDir()
 	// Create directory with space in name
 	sessionDir := filepath.Join(baseDir, "session dir with spaces")
-	require.NoError(os.MkdirAll(sessionDir, 0o755))
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
 
 	path := filepath.Join(sessionDir, "20260617-081849.643965200-gpt4.jsonl")
 	content := `{"role":"user","content":"Test message"}`
-	require.NoError(os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
 	sess, _, _, err := parseReasonixSession(path, "m")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 	// Should extract just the filename, not the directory
 	assert.Equal(t, "reasonix:20260617-081849.643965200-gpt4", sess.ID)
 }
 
 func TestParseReasonixSession_MetadataFallback(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	path := writeReasonixJSONL(t,
 		`{"role":"user","content":"Test"}`,
 		`{"role":"assistant","content":"Response"}`,
@@ -187,24 +169,21 @@ func TestParseReasonixSession_MetadataFallback(t *testing.T) {
 	writeReasonixMetadata(t, path, meta)
 
 	sess, _, _, err := parseReasonixSession(path, "m")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
 	// Parse expected times from metadata
 	expectedStart, err := time.Parse(time.RFC3339Nano, meta.CreatedAt)
-	require.NoError(err)
+	require.NoError(t, err)
 	expectedEnd, err := time.Parse(time.RFC3339Nano, meta.UpdatedAt)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// Verify metadata timestamps were preserved (not overwritten by time.Now())
-	assert.Equal(expectedStart, sess.StartedAt, "StartedAt should match CreatedAt from metadata")
-	assert.Equal(expectedEnd, sess.EndedAt, "EndedAt should match UpdatedAt from metadata")
+	assert.Equal(t, expectedStart, sess.StartedAt, "StartedAt should match CreatedAt from metadata")
+	assert.Equal(t, expectedEnd, sess.EndedAt, "EndedAt should match UpdatedAt from metadata")
 }
 
 func TestParseReasonixSession_MetadataFields(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	path := writeReasonixJSONL(t,
 		`{"role":"user","content":"Test"}`,
 		`{"role":"assistant","content":"Response"}`,
@@ -221,11 +200,11 @@ func TestParseReasonixSession_MetadataFields(t *testing.T) {
 	writeReasonixMetadata(t, path, meta)
 
 	sess, _, _, err := parseReasonixSession(path, "m")
-	require.NoError(err)
-	require.NotNil(sess)
-	assert.Equal("Metadata title", sess.SessionName)
-	assert.Equal(workspaceRoot, sess.Cwd)
-	assert.Equal("my_app", sess.Project)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "Metadata title", sess.SessionName)
+	assert.Equal(t, workspaceRoot, sess.Cwd)
+	assert.Equal(t, "my_app", sess.Project)
 }
 
 func TestParseReasonixSession_PartialMetadataFallsBackToFileMtime(t *testing.T) {
@@ -250,32 +229,26 @@ func TestParseReasonixSession_PartialMetadataFallsBackToFileMtime(t *testing.T) 
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			path := writeReasonixJSONL(t,
 				`{"role":"user","content":"Test"}`,
 				`{"role":"assistant","content":"Response"}`,
 			)
 			wantMtime := time.Date(2024, time.March, 14, 15, 9, 26, 0, time.UTC)
-			require.NoError(os.Chtimes(path, wantMtime, wantMtime))
+			require.NoError(t, os.Chtimes(path, wantMtime, wantMtime))
 			info, err := os.Stat(path)
-			require.NoError(err)
+			require.NoError(t, err)
 			writeReasonixMetadata(t, path, tt.meta)
 
 			sess, _, _, err := parseReasonixSession(path, "m")
-			require.NoError(err)
-			require.NotNil(sess)
-			assert.Equal(info.ModTime(), sess.StartedAt)
-			assert.Equal(info.ModTime(), sess.EndedAt)
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+			assert.Equal(t, info.ModTime(), sess.StartedAt)
+			assert.Equal(t, info.ModTime(), sess.EndedAt)
 		})
 	}
 }
 
 func TestParseReasonixSession_ArchiveWithoutMeta(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	path := writeReasonixJSONL(t,
 		`{"role":"user","content":"Archived message"}`,
 		`{"role":"assistant","content":"Archived response"}`,
@@ -284,105 +257,92 @@ func TestParseReasonixSession_ArchiveWithoutMeta(t *testing.T) {
 	// Don't write metadata sidecar - archive files often lack .meta
 
 	sess, msgs, _, err := parseReasonixSession(path, "m")
-	require.NoError(err)
-	require.NotNil(sess)
-	require.Len(msgs, 2)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, msgs, 2)
 
 	// Should still parse successfully with fallback times
-	assert.NotZero(sess.StartedAt)
-	assert.NotZero(sess.EndedAt)
+	assert.NotZero(t, sess.StartedAt)
+	assert.NotZero(t, sess.EndedAt)
 }
 
 func TestDiscoverReasonixSessions_ProjectSessions(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	baseDir := t.TempDir()
 
 	// Create project session structure
 	projectDir := filepath.Join(baseDir, "projects", "my-project", "sessions")
 	sessionDir := filepath.Join(projectDir, "session-123")
-	require.NoError(os.MkdirAll(sessionDir, 0o755))
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
 
 	sessionFile := filepath.Join(sessionDir, "session-123.jsonl")
-	require.NoError(os.WriteFile(sessionFile, []byte(`{"role":"user","content":"test"}`), 0o644))
+	require.NoError(t, os.WriteFile(sessionFile, []byte(`{"role":"user","content":"test"}`), 0o644))
 
 	files := discoverReasonixSessions(baseDir)
-	require.Len(files, 1)
-	assert.Equal(sessionFile, files[0].Path)
-	assert.Equal("my-project", files[0].Project)
-	assert.Equal(AgentReasonix, files[0].Agent)
+	require.Len(t, files, 1)
+	assert.Equal(t, sessionFile, files[0].Path)
+	assert.Equal(t, "my-project", files[0].Project)
+	assert.Equal(t, AgentReasonix, files[0].Agent)
 }
 
 func TestDiscoverReasonixSessions_ProjectBareSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	baseDir := t.TempDir()
 
 	sessionsDir := filepath.Join(baseDir, "projects", "my-project", "sessions")
-	require.NoError(os.MkdirAll(sessionsDir, 0o755))
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
 
 	sessionFile := filepath.Join(sessionsDir, "session-123.jsonl")
-	require.NoError(os.WriteFile(sessionFile, []byte(`{"role":"user","content":"test"}`), 0o644))
+	require.NoError(t, os.WriteFile(sessionFile, []byte(`{"role":"user","content":"test"}`), 0o644))
 
 	files := discoverReasonixSessions(baseDir)
-	require.Len(files, 1)
-	assert.Equal(sessionFile, files[0].Path)
-	assert.Equal("my-project", files[0].Project)
-	assert.Equal(AgentReasonix, files[0].Agent)
+	require.Len(t, files, 1)
+	assert.Equal(t, sessionFile, files[0].Path)
+	assert.Equal(t, "my-project", files[0].Project)
+	assert.Equal(t, AgentReasonix, files[0].Agent)
 }
 
 func TestDiscoverReasonixSessions_GlobalSessions(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	baseDir := t.TempDir()
 
 	// Create global session (bare .jsonl)
 	sessionsDir := filepath.Join(baseDir, "sessions")
-	require.NoError(os.MkdirAll(sessionsDir, 0o755))
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
 
 	sessionFile := filepath.Join(sessionsDir, "global-session.jsonl")
-	require.NoError(os.WriteFile(sessionFile, []byte(`{"role":"user","content":"test"}`), 0o644))
+	require.NoError(t, os.WriteFile(sessionFile, []byte(`{"role":"user","content":"test"}`), 0o644))
 
 	files := discoverReasonixSessions(baseDir)
-	require.Len(files, 1)
-	assert.Equal(sessionFile, files[0].Path)
-	assert.Equal(AgentReasonix, files[0].Agent)
+	require.Len(t, files, 1)
+	assert.Equal(t, sessionFile, files[0].Path)
+	assert.Equal(t, AgentReasonix, files[0].Agent)
 }
 
 func TestDiscoverReasonixSessions_Subagents(t *testing.T) {
-	require := require.New(t)
-
 	baseDir := t.TempDir()
 
 	// Create subagent session
 	subagentsDir := filepath.Join(baseDir, "sessions", "subagents")
-	require.NoError(os.MkdirAll(subagentsDir, 0o755))
+	require.NoError(t, os.MkdirAll(subagentsDir, 0o755))
 
 	subagentFile := filepath.Join(subagentsDir, "sa_20260612_105316_000000000_hash.jsonl")
-	require.NoError(os.WriteFile(subagentFile, []byte(`{"role":"user","content":"test"}`), 0o644))
+	require.NoError(t, os.WriteFile(subagentFile, []byte(`{"role":"user","content":"test"}`), 0o644))
 
 	files := discoverReasonixSessions(baseDir)
-	require.Len(files, 1)
+	require.Len(t, files, 1)
 	assert.Equal(t, subagentFile, files[0].Path)
 }
 
 func TestDiscoverReasonixSessions_Archive(t *testing.T) {
-	require := require.New(t)
-
 	baseDir := t.TempDir()
 
 	// Create archive session
 	archiveDir := filepath.Join(baseDir, "archive")
-	require.NoError(os.MkdirAll(archiveDir, 0o755))
+	require.NoError(t, os.MkdirAll(archiveDir, 0o755))
 
 	archiveFile := filepath.Join(archiveDir, "20260612-104235.267202400.jsonl")
-	require.NoError(os.WriteFile(archiveFile, []byte(`{"role":"user","content":"test"}`), 0o644))
+	require.NoError(t, os.WriteFile(archiveFile, []byte(`{"role":"user","content":"test"}`), 0o644))
 
 	files := discoverReasonixSessions(baseDir)
-	require.Len(files, 1)
+	require.Len(t, files, 1)
 	assert.Equal(t, archiveFile, files[0].Path)
 }
 

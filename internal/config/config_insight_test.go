@@ -46,8 +46,6 @@ func TestInsightsConfigAPIKey(t *testing.T) {
 }
 
 func TestInsightsConfigTOMLLoadAndFinalize(t *testing.T) {
-	assert := assert.New(t)
-
 	cfg := loadMinimalWithConfig(t, map[string]any{
 		"insights": map[string]any{
 			"endpoint":    " http://127.0.0.1:11434/v1 ",
@@ -56,10 +54,10 @@ func TestInsightsConfigTOMLLoadAndFinalize(t *testing.T) {
 			"allow_http":  true,
 		},
 	})
-	assert.Equal("http://127.0.0.1:11434/v1", cfg.Insights.Endpoint)
-	assert.Equal("llama3.1", cfg.Insights.Model)
-	assert.Equal("AGENTSVIEW_INSIGHTS_KEY", cfg.Insights.APIKeyEnv)
-	assert.True(cfg.Insights.AllowHTTP)
+	assert.Equal(t, "http://127.0.0.1:11434/v1", cfg.Insights.Endpoint)
+	assert.Equal(t, "llama3.1", cfg.Insights.Model)
+	assert.Equal(t, "AGENTSVIEW_INSIGHTS_KEY", cfg.Insights.APIKeyEnv)
+	assert.True(t, cfg.Insights.AllowHTTP)
 
 	err := loadMinimalErrWithConfig(t, map[string]any{
 		"insights": map[string]any{
@@ -68,5 +66,5 @@ func TestInsightsConfigTOMLLoadAndFinalize(t *testing.T) {
 		},
 	})
 	require.Error(t, err)
-	assert.Contains(err.Error(), "plaintext")
+	assert.Contains(t, err.Error(), "plaintext")
 }

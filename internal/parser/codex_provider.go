@@ -662,7 +662,7 @@ func (p *codexProvider) ParseIncremental(
 			return IncrementalOutcome{ForceReplace: true},
 				IncrementalNeedsFullParse, nil
 		}
-		result, err = p.parseSessionFromCheckpoint(
+		result, err = p.parseSessionFromCheckpoint(ctx,
 			path,
 			req.Offset,
 			req.StartOrdinal,
@@ -674,7 +674,7 @@ func (p *codexProvider) ParseIncremental(
 			req.StoredPendingUsageOrdinal,
 		)
 	} else {
-		result, err = p.parseSessionFromSnapshot(
+		result, err = p.parseSessionFromSnapshot(ctx,
 			path,
 			req.Offset,
 			req.StartOrdinal,

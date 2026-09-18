@@ -42,8 +42,10 @@ var errLocalDaemonUnreachable = errors.New(
 	"local daemon owns the SQLite archive but is not responding",
 )
 
-var startBackgroundServeForTransport = autoStartBackgroundServe
-var waitForDaemonStartupForTransport = WaitForDaemonStartupContext
+var (
+	startBackgroundServeForTransport = autoStartBackgroundServe
+	waitForDaemonStartupForTransport = WaitForDaemonStartupContext
+)
 
 // autoStartBackgroundServe guards transport auto-start against test
 // binaries: os.Executable inside `go test` is the test executable, so a
@@ -376,6 +378,9 @@ func waitForBackgroundLaunchBeforeArchiveWrite(
 	progress := daemonLaunchProgressWriter{w: os.Stderr}
 	var lastUpdate time.Time
 	for isBackgroundLaunchActive(dataDir) {
+		if backgroundServeProbeHook != nil {
+			backgroundServeProbeHook()
+		}
 		if err := ctx.Err(); err != nil {
 			return true, err
 		}
@@ -507,7 +512,7 @@ func daemonOriginURL(rawURL string) string {
 // newService builds the SessionService matching the detected
 // transport. The returned cleanup function must be called when
 // the caller is done with the service.
-func newService(
+func newService(ctx context.Context,
 	cfg config.Config, tr transport,
 ) (service.SessionService, func(), error) {
 	switch tr.Mode {
@@ -518,7 +523,7 @@ func newService(
 		if err := directIncompatibleDaemonError(tr); err != nil {
 			return nil, nil, err
 		}
-		d, err := openReadOnlyDB(cfg)
+		d, err := openReadOnlyDB(ctx, cfg)
 		if err != nil {
 			return nil, nil, fmt.Errorf(
 				"opening db: %w", err,

@@ -17,19 +17,16 @@ import (
 )
 
 func TestCodexCapturedForkReplayTotals(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := os.Getenv("AGENTSVIEW_CODEX_REPLAY_ROOT")
 	if root == "" {
 		t.Skip("set AGENTSVIEW_CODEX_REPLAY_ROOT to run captured fork replay")
 	}
 
 	files, err := filepath.Glob(filepath.Join(root, "*.jsonl"))
-	require.NoError(err)
-	require.Len(files, 6)
+	require.NoError(t, err)
+	require.Len(t, files, 6)
 	children := capturedCodexForkChildren(t, files)
-	require.Len(children, 5)
+	require.Len(t, children, 5)
 
 	provider := newCodexTestProvider(t, root)
 	var totalOutput int
@@ -63,7 +60,7 @@ func TestCodexCapturedForkReplayTotals(t *testing.T) {
 	resolver := export.NewPricingResolver(rows)
 	for _, path := range children {
 		sess, messages, parseErr := provider.parseSession(path, "local", false)
-		require.NoError(parseErr)
+		require.NoError(t, parseErr)
 		for _, message := range messages {
 			totalOutput += message.OutputTokens
 			if len(message.TokenUsage) != 0 {
@@ -73,17 +70,17 @@ func TestCodexCapturedForkReplayTotals(t *testing.T) {
 					CacheRead  int `json:"cache_read_input_tokens"`
 					CacheWrite int `json:"cache_creation_input_tokens"`
 				}
-				require.NoError(json.Unmarshal(message.TokenUsage, &usage))
+				require.NoError(t, json.Unmarshal(message.TokenUsage, &usage))
 				totalInput += usage.Input
 				totalCacheRead += usage.CacheRead
 				lookup := resolver.Lookup(message.Model)
-				require.True(lookup.OK, "pricing %s", message.Model)
+				require.True(t, lookup.OK, "pricing %s", message.Model)
 				cost, costErr := lookup.Rates.CostForTokens(
 					usage.Input, usage.Output, 0, usage.CacheWrite, 0, usage.CacheRead,
 				)
-				require.NoError(costErr)
+				require.NoError(t, costErr)
 				totalCost, costErr = money.Add(totalCost, cost)
-				require.NoError(costErr)
+				require.NoError(t, costErr)
 			}
 		}
 		totalMessages += len(messages)
@@ -91,11 +88,11 @@ func TestCodexCapturedForkReplayTotals(t *testing.T) {
 			len(messages), sess.TotalOutputTokens, sess.FirstMessage)
 	}
 
-	assert.Equal(96_476, totalOutput)
-	assert.Equal(907_715, totalInput)
-	assert.Equal(15_941_888, totalCacheRead)
-	assert.Equal(171, totalMessages)
-	assert.Equal(money.Money{Microdollars: 15_403_799}, totalCost)
+	assert.Equal(t, 96_476, totalOutput)
+	assert.Equal(t, 907_715, totalInput)
+	assert.Equal(t, 15_941_888, totalCacheRead)
+	assert.Equal(t, 171, totalMessages)
+	assert.Equal(t, money.Money{Microdollars: 15_403_799}, totalCost)
 }
 
 func capturedCodexForkChildren(t *testing.T, files []string) []string {
@@ -113,27 +110,24 @@ func capturedCodexForkChildren(t *testing.T, files []string) []string {
 }
 
 func TestCodexCapturedForkLineReplayTotals(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	sourceRoot := os.Getenv("AGENTSVIEW_CODEX_REPLAY_ROOT")
 	if sourceRoot == "" {
 		t.Skip("set AGENTSVIEW_CODEX_REPLAY_ROOT to run captured fork replay")
 	}
 	files, err := filepath.Glob(filepath.Join(sourceRoot, "*.jsonl"))
-	require.NoError(err)
-	require.Len(files, 6)
+	require.NoError(t, err)
+	require.Len(t, files, 6)
 
 	replayRoot := t.TempDir()
 	children := capturedCodexForkChildren(t, files)
-	require.Len(children, 5)
+	require.Len(t, children, 5)
 	for _, sourcePath := range files {
 		data, readErr := os.ReadFile(sourcePath)
-		require.NoError(readErr)
+		require.NoError(t, readErr)
 		targetPath := filepath.Join(replayRoot, filepath.Base(sourcePath))
 		firstLine, _, _ := strings.Cut(string(data), "\n")
 		if gjson.Get(firstLine, "payload.forked_from_id").Str == "" {
-			require.NoError(os.WriteFile(targetPath, data, 0o600))
+			require.NoError(t, os.WriteFile(targetPath, data, 0o600))
 		}
 	}
 
@@ -143,7 +137,7 @@ func TestCodexCapturedForkLineReplayTotals(t *testing.T) {
 	for _, sourcePath := range children {
 		targetPath := filepath.Join(replayRoot, filepath.Base(sourcePath))
 		source, openErr := os.Open(sourcePath)
-		require.NoError(openErr)
+		require.NoError(t, openErr)
 		scanner := bufio.NewScanner(source)
 		scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 
@@ -154,46 +148,46 @@ func TestCodexCapturedForkLineReplayTotals(t *testing.T) {
 			file, fileErr := os.OpenFile(
 				targetPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600,
 			)
-			require.NoError(fileErr)
+			require.NoError(t, fileErr)
 			_, fileErr = file.Write(line)
-			require.NoError(fileErr)
-			require.NoError(file.Close())
+			require.NoError(t, fileErr)
+			require.NoError(t, file.Close())
 
 			if offset == 0 {
 				_, messages, fileErr = provider.parseSession(
 					targetPath, "local", false,
 				)
-				require.NoError(fileErr)
+				require.NoError(t, fileErr)
 				offset = int64(len(line))
 				continue
 			}
 
-			result, parseErr := provider.parseSessionFromDetailed(
+			result, parseErr := provider.parseSessionFromDetailed(t.Context(),
 				targetPath, offset, len(messages), false,
 			)
 			if IsIncrementalFullParseFallback(parseErr) {
 				_, messages, parseErr = provider.parseSession(
 					targetPath, "local", false,
 				)
-				require.NoError(parseErr)
+				require.NoError(t, parseErr)
 				offset += int64(len(line))
 				continue
 			}
-			require.NoError(parseErr)
+			require.NoError(t, parseErr)
 			messages = append(messages, result.messages...)
 			offset += result.consumedBytes
 			provider.cursorCache.Put(
 				targetPath, offset, result.inode, result.device, result.cursor,
 			)
 		}
-		require.NoError(scanner.Err())
-		require.NoError(source.Close())
+		require.NoError(t, scanner.Err())
+		require.NoError(t, source.Close())
 		for _, message := range messages {
 			totalOutput += message.OutputTokens
 		}
 		totalMessages += len(messages)
 	}
 
-	assert.Equal(96_476, totalOutput)
-	assert.Equal(171, totalMessages)
+	assert.Equal(t, 96_476, totalOutput)
+	assert.Equal(t, 171, totalMessages)
 }

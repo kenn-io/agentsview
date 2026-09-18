@@ -142,9 +142,9 @@ func WriteHermesSessionJSONL(ctx context.Context,
 			if err == nil {
 				return nil
 			}
-			var lookupErr hermesStateLookupError
+			_, hasLookupErr := errors.AsType[hermesStateLookupError](err)
 			if !errors.Is(err, os.ErrNotExist) &&
-				!errors.As(err, &lookupErr) {
+				!hasLookupErr {
 				return err
 			}
 			storedStateErr = err
@@ -165,7 +165,7 @@ func WriteHermesSessionJSONL(ctx context.Context,
 		return errors.New("hermes provider unavailable")
 	}
 	source, found, err := hp.FindSource(
-		context.Background(),
+		ctx,
 		FindSourceRequest{RawSessionID: rawSessionID},
 	)
 	if err != nil {
@@ -1129,7 +1129,7 @@ func hermesStateDBHasSession(ctx context.Context, stateDB string, rawID string) 
 	if err == nil {
 		return true, nil
 	}
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	return false, fmt.Errorf("query hermes session %s: %w", rawID, err)
@@ -1280,8 +1280,10 @@ func hermesStateMemberSourceRef(root, stateDB, sessionID string) SourceRef {
 		Key:            path,
 		DisplayPath:    path,
 		FingerprintKey: path,
-		Opaque: hermesSource{Root: filepath.Clean(root), Path: path,
-			StateDB: filepath.Clean(stateDB), SessionID: sessionID},
+		Opaque: hermesSource{
+			Root: filepath.Clean(root), Path: path,
+			StateDB: filepath.Clean(stateDB), SessionID: sessionID,
+		},
 	}
 }
 
@@ -1635,11 +1637,11 @@ func cacheHermesMemberCore(
 		conn, stateDB, id,
 	)
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
 	h := sha256.New()
 	if err := addHermesStateSessionFingerprint(h, ss, messages); err != nil {
-		return nil
+		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
 	marshaler, ok := h.(encoding.BinaryMarshaler)
 	if !ok {
@@ -1647,13 +1649,13 @@ func cacheHermesMemberCore(
 	}
 	state, err := marshaler.MarshalBinary()
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
 	payload, err := json.Marshal(hermesMemberFingerprintCore{
 		HashState: state, SelectedPath: selectedPath,
 	})
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
 	return reconciliationCachePut(
 		ctx, hermesMemberCoreCacheKey(fingerprintKey), string(payload),

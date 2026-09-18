@@ -37,14 +37,12 @@ func (c persistProbeContext) Err() error {
 // changed — an undercount would suppress the extraction-scheduler
 // notification for work that did commit.
 func TestScanSecretsCountsSessionPersistedBeforeCancellation(t *testing.T) {
-	require := require.New(t)
-
 	fx := newEngineFixture(t)
-	require.NoError(fx.db.UpsertSession(db.Session{
+	require.NoError(t, fx.db.UpsertSession(t.Context(), db.Session{
 		ID: "s1", Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 1, UserMessageCount: 1,
 	}))
-	require.NoError(fx.db.ReplaceSessionMessages("s1", []db.Message{
+	require.NoError(t, fx.db.ReplaceSessionMessages(t.Context(), "s1", []db.Message{
 		{
 			SessionID: "s1", Ordinal: 0, Role: "user",
 			Content: "no secrets here, just prose",
@@ -54,8 +52,8 @@ func TestScanSecretsCountsSessionPersistedBeforeCancellation(t *testing.T) {
 	ver := secrets.RulesVersion()
 	persisted := func() bool {
 		s, err := fx.db.GetSession(t.Context(), "s1")
-		require.NoError(err)
-		require.NotNil(s)
+		require.NoError(t, err)
+		require.NotNil(t, s)
 		return s.SecretsRulesVersion == ver
 	}
 	// The context reads as canceled from the moment s1's scan result
@@ -63,8 +61,8 @@ func TestScanSecretsCountsSessionPersistedBeforeCancellation(t *testing.T) {
 	// the persist.
 	sum, err := fx.engine.ScanSecrets(
 		persistProbeContext{probe: persisted}, SecretScanInput{Backfill: true}, nil)
-	require.ErrorIs(err, context.Canceled)
-	require.True(persisted(), "scan must have persisted s1 before canceling")
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, persisted(), "scan must have persisted s1 before canceling")
 	assert.Equal(t, 1, sum.Scanned,
 		"a session persisted before the cancellation was observed must be counted")
 }

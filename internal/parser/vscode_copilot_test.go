@@ -126,38 +126,35 @@ func TestParseVSCodeCopilotSession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			dir := t.TempDir()
 			path := filepath.Join(dir, "test-session.json")
-			require.NoError(os.WriteFile(
-				path, []byte(tt.json), 0644,
+			require.NoError(t, os.WriteFile(
+				path, []byte(tt.json), 0o644,
 			))
 
 			sess, msgs, err := parseVSCodeCopilotTestSession(t,
 				path, "testproject", "local",
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 
 			if tt.wantNil {
-				assert.Nil(sess, "expected nil session")
+				assert.Nil(t, sess, "expected nil session")
 				return
 			}
 
-			require.NotNil(sess, "expected non-nil session")
+			require.NotNil(t, sess, "expected non-nil session")
 
-			assert.Len(msgs, tt.wantMessages, "messages")
+			assert.Len(t, msgs, tt.wantMessages, "messages")
 
 			if tt.wantTitle != "" {
-				assert.Equal(tt.wantTitle, sess.FirstMessage, "first message")
+				assert.Equal(t, tt.wantTitle, sess.FirstMessage, "first message")
 			}
 
 			if tt.wantAgent != "" {
-				assert.Equal(tt.wantAgent, sess.Agent, "agent")
+				assert.Equal(t, tt.wantAgent, sess.Agent, "agent")
 			}
 
-			assert.Equal("testproject", sess.Project, "project")
+			assert.Equal(t, "testproject", sess.Project, "project")
 
 			if tt.wantToolUse {
 				found := false
@@ -167,7 +164,7 @@ func TestParseVSCodeCopilotSession(t *testing.T) {
 						break
 					}
 				}
-				assert.True(found, "expected tool use in messages")
+				assert.True(t, found, "expected tool use in messages")
 			}
 		})
 	}
@@ -183,9 +180,6 @@ func TestParseVSCodeCopilotSession_NonExistent(t *testing.T) {
 }
 
 func TestParseVSCodeCopilotSession_MixedTextAndTools(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	data := `{
 		"version": 3,
 		"sessionId": "mixed-001",
@@ -205,10 +199,10 @@ func TestParseVSCodeCopilotSession_MixedTextAndTools(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.json")
-	require.NoError(os.WriteFile(path, []byte(data), 0644))
+	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
 
 	_, msgs, err := parseVSCodeCopilotTestSession(t, path, "proj", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// Find assistant message
 	var assistant *ParsedMessage
@@ -218,24 +212,21 @@ func TestParseVSCodeCopilotSession_MixedTextAndTools(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(assistant, "no assistant message")
+	require.NotNil(t, assistant, "no assistant message")
 
-	assert.True(assistant.HasToolUse, "expected HasToolUse=true")
+	assert.True(t, assistant.HasToolUse, "expected HasToolUse=true")
 
 	// Content should include both tool markers and text
-	assert.NotEmpty(assistant.Content, "expected non-empty content")
+	assert.NotEmpty(t, assistant.Content, "expected non-empty content")
 
 	// Tool calls should have InputJSON populated
-	require.Len(assistant.ToolCalls, 1)
+	require.Len(t, assistant.ToolCalls, 1)
 	tc := assistant.ToolCalls[0]
-	assert.NotEmpty(tc.InputJSON, "expected non-empty InputJSON")
-	assert.Equal("Read", tc.Category, "category")
+	assert.NotEmpty(t, tc.InputJSON, "expected non-empty InputJSON")
+	assert.Equal(t, "Read", tc.Category, "category")
 }
 
 func TestParseVSCodeCopilotSession_TerminalToolData(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	data := `{
 		"version": 3,
 		"sessionId": "term-001",
@@ -254,10 +245,10 @@ func TestParseVSCodeCopilotSession_TerminalToolData(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.json")
-	require.NoError(os.WriteFile(path, []byte(data), 0644))
+	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
 
 	_, msgs, err := parseVSCodeCopilotTestSession(t, path, "proj", "local")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var assistant *ParsedMessage
 	for i := range msgs {
@@ -266,55 +257,52 @@ func TestParseVSCodeCopilotSession_TerminalToolData(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(assistant, "no assistant message")
+	require.NotNil(t, assistant, "no assistant message")
 
-	require.Len(assistant.ToolCalls, 1)
+	require.Len(t, assistant.ToolCalls, 1)
 	tc := assistant.ToolCalls[0]
-	assert.Equal("Bash", tc.Category, "category")
-	assert.NotEmpty(tc.InputJSON, "expected non-empty InputJSON")
+	assert.Equal(t, "Bash", tc.Category, "category")
+	assert.NotEmpty(t, tc.InputJSON, "expected non-empty InputJSON")
 
 	// Content should include the command
-	assert.Contains(assistant.Content, "npm test",
+	assert.Contains(t, assistant.Content, "npm test",
 		"content should contain command, got: %s", assistant.Content)
 }
 
 func TestParseVSCodeCopilotSession_VSCode132ResponseItems(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 	path := filepath.Join(dir, "vscode-132.jsonl")
 	lines := []string{
 		`{"kind":0,"v":{"version":3,"sessionId":"vscode-132","creationDate":1786000235709,"requests":[]}}`,
 		`{"kind":2,"k":["requests"],"v":[{"requestId":"request-1","timestamp":1786000291425,"message":{"text":"Read test.txt and run its command."},"response":[{"value":"I'll read "},{"kind":"inlineReference","inlineReference":{"fsPath":"/workspace/test.txt","external":"file:///workspace/test.txt","path":"/workspace/test.txt","scheme":"file"}},{"value":" first. "},{"kind":"toolInvocationSerialized","pastTenseMessage":{"value":"Read instructions"},"isConfirmed":{"type":1},"isComplete":true,"toolCallId":"call-read-instructions","toolId":"copilot_readFile"},{"kind":"toolInvocationSerialized","pastTenseMessage":{"value":"Read test.txt"},"isConfirmed":{"type":1},"isComplete":true,"toolCallId":"call-read-test","toolId":"copilot_readFile"},{"kind":"inlineReference","inlineReference":{"fsPath":"/workspace/test.txt","external":"file:///workspace/test.txt","path":"/workspace/test.txt","scheme":"file"}},{"value":" contains the command."},{"kind":"toolInvocationSerialized","pastTenseMessage":{"value":"Running uname"},"isConfirmed":{"type":1},"isComplete":true,"toolSpecificData":{"kind":"terminal","commandLine":{"original":"uname -a","forDisplay":"uname -a"}},"toolCallId":"call-terminal","toolId":"run_in_terminal"},{"value":" Done."}],"modelId":"gpt-5.6-terra"}]}`,
 	}
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		path, []byte(strings.Join(lines, "\n")+"\n"), 0o644,
 	))
 
 	_, msgs, err := parseVSCodeCopilotTestSession(
 		t, path, "project", "machine",
 	)
-	require.NoError(err)
-	require.Len(msgs, 2, "user and assistant messages")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2, "user and assistant messages")
 
 	assistant := msgs[1]
-	assert.True(assistant.HasToolUse)
-	require.Len(assistant.ToolCalls, 3)
-	assert.Equal([]string{"copilot_readFile", "copilot_readFile", "run_in_terminal"},
+	assert.True(t, assistant.HasToolUse)
+	require.Len(t, assistant.ToolCalls, 3)
+	assert.Equal(t, []string{"copilot_readFile", "copilot_readFile", "run_in_terminal"},
 		[]string{
 			assistant.ToolCalls[0].ToolName,
 			assistant.ToolCalls[1].ToolName,
 			assistant.ToolCalls[2].ToolName,
 		},
 	)
-	assert.JSONEq(`{"command":"uname -a","message":"Running uname"}`,
+	assert.JSONEq(t, `{"command":"uname -a","message":"Running uname"}`,
 		assistant.ToolCalls[2].InputJSON,
 	)
-	assert.Contains(assistant.Content,
+	assert.Contains(t, assistant.Content,
 		"I'll read `/workspace/test.txt` first.",
 	)
-	assert.Contains(assistant.Content,
+	assert.Contains(t, assistant.Content,
 		"`/workspace/test.txt` contains the command.",
 	)
 }
@@ -344,7 +332,7 @@ func TestReadVSCodeWorkspaceManifest(t *testing.T) {
 	content := `{"folder":"file:///Users/dev/projects/agentsview"}`
 	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "workspace.json"),
-		[]byte(content), 0644,
+		[]byte(content), 0o644,
 	))
 
 	assert.Equal(t, "agentsview", ReadVSCodeWorkspaceManifest(dir))
@@ -354,9 +342,6 @@ func TestReadVSCodeWorkspaceManifest(t *testing.T) {
 }
 
 func TestDiscoverVSCodeCopilotSessions(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 
 	// Create workspace structure
@@ -364,31 +349,31 @@ func TestDiscoverVSCodeCopilotSessions(t *testing.T) {
 	chatDir := filepath.Join(
 		root, "workspaceStorage", hash, "chatSessions",
 	)
-	require.NoError(os.MkdirAll(chatDir, 0755))
+	require.NoError(t, os.MkdirAll(chatDir, 0o755))
 
 	// workspace.json
 	wsJSON := `{"folder":"file:///Users/dev/projects/myproject"}`
 	wsPath := filepath.Join(
 		root, "workspaceStorage", hash, "workspace.json",
 	)
-	require.NoError(os.WriteFile(wsPath, []byte(wsJSON), 0644))
+	require.NoError(t, os.WriteFile(wsPath, []byte(wsJSON), 0o644))
 
 	// Chat session file
 	sessionJSON := `{"version":3,"sessionId":"sess1","requests":[{"requestId":"r1","message":{"text":"hi"},"response":[{"value":"hello"}],"timestamp":1755340000000}]}`
 	sessPath := filepath.Join(chatDir, "sess1.json")
-	require.NoError(os.WriteFile(sessPath, []byte(sessionJSON), 0644))
+	require.NoError(t, os.WriteFile(sessPath, []byte(sessionJSON), 0o644))
 
 	// globalStorage/emptyWindowChatSessions
 	globalDir := filepath.Join(
 		root, "globalStorage", "emptyWindowChatSessions",
 	)
-	require.NoError(os.MkdirAll(globalDir, 0755))
+	require.NoError(t, os.MkdirAll(globalDir, 0o755))
 	globalPath := filepath.Join(globalDir, "global-sess.json")
-	require.NoError(os.WriteFile(globalPath, []byte(sessionJSON), 0644))
+	require.NoError(t, os.WriteFile(globalPath, []byte(sessionJSON), 0o644))
 
 	files := discoverVSCodeCopilotTestSessions(t, root)
 
-	require.Len(files, 2)
+	require.Len(t, files, 2)
 
 	// Check workspace session
 	var wsFile, globalFile DiscoveredFile
@@ -401,10 +386,10 @@ func TestDiscoverVSCodeCopilotSessions(t *testing.T) {
 		}
 	}
 
-	assert.NotEmpty(wsFile.Path, "missing workspace session file")
-	assert.Equal(AgentVSCodeCopilot, wsFile.Agent, "agent")
+	assert.NotEmpty(t, wsFile.Path, "missing workspace session file")
+	assert.Equal(t, AgentVSCodeCopilot, wsFile.Agent, "agent")
 
-	assert.NotEmpty(globalFile.Path, "missing global session file")
+	assert.NotEmpty(t, globalFile.Path, "missing global session file")
 }
 
 func TestNormalizeVSCodeToolName(t *testing.T) {
@@ -478,8 +463,6 @@ func TestExtractVSCopilotInputJSON(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			var inv, past, td jsontext.Value
 			if tt.invMsg != "" {
 				inv = jsontext.Value(tt.invMsg)
@@ -493,7 +476,7 @@ func TestExtractVSCopilotInputJSON(t *testing.T) {
 			got := extractVSCopilotInputJSON(inv, past, td)
 
 			if tt.wantKey == "" {
-				assert.Empty(got, "expected empty")
+				assert.Empty(t, got, "expected empty")
 				return
 			}
 
@@ -501,8 +484,8 @@ func TestExtractVSCopilotInputJSON(t *testing.T) {
 			err := json.Unmarshal([]byte(got), &m)
 			require.NoError(t, err, "invalid JSON")
 			val, ok := m[tt.wantKey].(string)
-			assert.True(ok, "value not a string")
-			assert.Equal(tt.wantVal, val, "value for key %q", tt.wantKey)
+			assert.True(t, ok, "value not a string")
+			assert.Equal(t, tt.wantVal, val, "value for key %q", tt.wantKey)
 		})
 	}
 }
@@ -570,36 +553,33 @@ func TestParseVSCodeCopilotSession_JSONL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			dir := t.TempDir()
 			path := filepath.Join(dir, "test-session.jsonl")
 
 			content := strings.Join(tt.lines, "\n") + "\n"
-			require.NoError(os.WriteFile(
-				path, []byte(content), 0644,
+			require.NoError(t, os.WriteFile(
+				path, []byte(content), 0o644,
 			))
 
 			sess, msgs, err := parseVSCodeCopilotTestSession(t,
 				path, "testproject", "local",
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 
 			if tt.wantNil {
-				assert.Nil(sess, "expected nil session")
+				assert.Nil(t, sess, "expected nil session")
 				return
 			}
 
-			require.NotNil(sess, "expected non-nil session")
+			require.NotNil(t, sess, "expected non-nil session")
 
-			assert.Len(msgs, tt.wantMessages, "messages")
+			assert.Len(t, msgs, tt.wantMessages, "messages")
 
 			if tt.wantTitle != "" {
-				assert.Equal(tt.wantTitle, sess.FirstMessage, "first message")
+				assert.Equal(t, tt.wantTitle, sess.FirstMessage, "first message")
 			}
 
-			assert.Equal(AgentVSCodeCopilot, sess.Agent, "agent")
+			assert.Equal(t, AgentVSCodeCopilot, sess.Agent, "agent")
 
 			if tt.wantToolUse {
 				found := false
@@ -609,7 +589,7 @@ func TestParseVSCodeCopilotSession_JSONL(t *testing.T) {
 						break
 					}
 				}
-				assert.True(found, "expected tool use in messages")
+				assert.True(t, found, "expected tool use in messages")
 			}
 		})
 	}
@@ -628,6 +608,8 @@ func TestReconstructJSONL(t *testing.T) {
 				`{"kind":0,"v":{"sessionId":"s1","version":3}}`,
 			},
 			check: func(t *testing.T, data []byte) {
+				t.Helper()
+
 				var m map[string]any
 				require.NoError(t, json.Unmarshal(data, &m))
 				assert.Equal(t, "s1", m["sessionId"], "sessionId")
@@ -640,6 +622,8 @@ func TestReconstructJSONL(t *testing.T) {
 				`{"kind":1,"k":["a","b"],"v":"new"}`,
 			},
 			check: func(t *testing.T, data []byte) {
+				t.Helper()
+
 				var m map[string]any
 				require.NoError(t, json.Unmarshal(data, &m))
 				a := m["a"].(map[string]any)
@@ -653,6 +637,8 @@ func TestReconstructJSONL(t *testing.T) {
 				`{"kind":2,"k":["items"],"v":["b","c"]}`,
 			},
 			check: func(t *testing.T, data []byte) {
+				t.Helper()
+
 				var m map[string]any
 				require.NoError(t, json.Unmarshal(data, &m))
 				items := m["items"].([]any)
@@ -667,6 +653,8 @@ func TestReconstructJSONL(t *testing.T) {
 				`{"kind":2,"k":["items"],"v":["b"],"i":1}`,
 			},
 			check: func(t *testing.T, data []byte) {
+				t.Helper()
+
 				var m map[string]any
 				require.NoError(t, json.Unmarshal(data, &m))
 				items := m["items"].([]any)
@@ -681,6 +669,8 @@ func TestReconstructJSONL(t *testing.T) {
 				`{"kind":2,"k":["items"],"v":["z"],"i":-1}`,
 			},
 			check: func(t *testing.T, data []byte) {
+				t.Helper()
+
 				var m map[string]any
 				require.NoError(t, json.Unmarshal(data, &m))
 				items := m["items"].([]any)
@@ -696,6 +686,8 @@ func TestReconstructJSONL(t *testing.T) {
 				`{"kind":3,"k":["b"]}`,
 			},
 			check: func(t *testing.T, data []byte) {
+				t.Helper()
+
 				var m map[string]any
 				require.NoError(t, json.Unmarshal(data, &m))
 				_, ok := m["b"]
@@ -710,6 +702,8 @@ func TestReconstructJSONL(t *testing.T) {
 				`{"kind":1,"k":["arr",1],"v":"Y"}`,
 			},
 			check: func(t *testing.T, data []byte) {
+				t.Helper()
+
 				var m map[string]any
 				require.NoError(t, json.Unmarshal(data, &m))
 				arr := m["arr"].([]any)
@@ -720,6 +714,8 @@ func TestReconstructJSONL(t *testing.T) {
 			name:  "empty file returns nil",
 			lines: []string{},
 			check: func(t *testing.T, data []byte) {
+				t.Helper()
+
 				assert.Nil(t, data, "expected nil")
 			},
 		},
@@ -732,7 +728,7 @@ func TestReconstructJSONL(t *testing.T) {
 
 			content := strings.Join(tt.lines, "\n") + "\n"
 			require.NoError(t, os.WriteFile(
-				path, []byte(content), 0644,
+				path, []byte(content), 0o644,
 			))
 
 			data, err := reconstructJSONL(path)
@@ -747,9 +743,6 @@ func TestReconstructJSONL(t *testing.T) {
 }
 
 func TestReconstructJSONLOversizedCopilotIssueShape(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 	path := filepath.Join(dir, "oversized.jsonl")
 	response := oversizedVSCodeCopilotResponse(
@@ -760,41 +753,39 @@ func TestReconstructJSONLOversizedCopilotIssueShape(t *testing.T) {
 	var raw struct {
 		V jsontext.Value `json:"v"`
 	}
-	require.NoError(json.Unmarshal([]byte(line), &raw))
-	require.Greater(len(raw.V), testVSCodeCopilotHardRecordLimit/2)
-	require.Less(len([]byte(line)), 20*1024)
-	require.NoError(os.WriteFile(path, []byte(line), 0644))
+	require.NoError(t, json.Unmarshal([]byte(line), &raw))
+	require.Greater(t, len(raw.V), testVSCodeCopilotHardRecordLimit/2)
+	require.Less(t, len([]byte(line)), 20*1024)
+	require.NoError(t, os.WriteFile(path, []byte(line), 0o644))
 
 	sess, msgs, err := parseVSCodeCopilotTestSession(t,
 		path, "proj", "local",
 	)
-	require.NoError(err)
-	require.NotNil(sess)
-	assert.Equal("vscode-copilot:large", sess.ID)
-	assert.Len(msgs, 2)
-	require.True(msgs[1].HasToolUse)
-	require.Len(msgs[1].ToolCalls, 1)
-	assert.Contains(msgs[1].Content, indexedResponse)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "vscode-copilot:large", sess.ID)
+	assert.Len(t, msgs, 2)
+	require.True(t, msgs[1].HasToolUse)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Contains(t, msgs[1].Content, indexedResponse)
 
 	data, err := reconstructJSONLWithLimit(path, testVSCodeCopilotHardRecordLimit)
-	require.NoError(err)
+	require.NoError(t, err)
 	var state map[string]any
-	require.NoError(json.Unmarshal(data, &state))
+	require.NoError(t, json.Unmarshal(data, &state))
 	request := state["requests"].([]any)[0].(map[string]any)
 	responseState := request["response"].([]any)[0].(map[string]any)
 	resultDetails := responseState["resultDetails"].(map[string]any)
-	assert.Empty(resultDetails["output"])
-	assert.Equal("retained input", resultDetails["input"])
+	assert.Empty(t, resultDetails["output"])
+	assert.Equal(t, "retained input", resultDetails["input"])
 	toolData := responseState["toolSpecificData"].(map[string]any)
 	terminal := toolData["terminalCommandOutput"].(map[string]any)
-	assert.Len(terminal["text"], 1024)
-	assert.Equal(float64(200), terminal["lineCount"])
-	assert.Equal(float64(0), toolData["terminalCommandState"].(map[string]any)["exitCode"])
+	assert.Len(t, terminal["text"], 1024)
+	assert.InDelta(t, float64(200), terminal["lineCount"], 0)
+	assert.InDelta(t, float64(0), toolData["terminalCommandState"].(map[string]any)["exitCode"], 0)
 }
 
 func TestReconstructJSONLOversizedKindOneAndTwo(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	response := oversizedVSCodeCopilotResponse(
 		testVSCodeCopilotHardRecordLimit/2 + 512,
@@ -806,20 +797,20 @@ func TestReconstructJSONLOversizedKindOneAndTwo(t *testing.T) {
 	}
 	path := filepath.Join(dir, "mutations.jsonl")
 	for _, line := range lines {
-		require.Less(len(line), 12*1024)
+		require.Less(t, len(line), 12*1024)
 	}
-	require.NoError(os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644))
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
 	data, err := reconstructJSONLWithLimit(path, testVSCodeCopilotHardRecordLimit)
-	require.NoError(err)
+	require.NoError(t, err)
 	var state struct {
 		Requests []struct {
 			Response []map[string]any `json:"response"`
 		} `json:"requests"`
 	}
-	require.NoError(json.Unmarshal(data, &state))
-	require.Len(state.Requests, 2)
-	require.Len(state.Requests[0].Response, 1)
-	require.Len(state.Requests[1].Response, 1)
+	require.NoError(t, json.Unmarshal(data, &state))
+	require.Len(t, state.Requests, 2)
+	require.Len(t, state.Requests[0].Response, 1)
+	require.Len(t, state.Requests[1].Response, 1)
 	for _, item := range []map[string]any{
 		state.Requests[0].Response[0], state.Requests[1].Response[0],
 	} {
@@ -867,30 +858,27 @@ func TestReconstructJSONLResultOutputDestinationMatrix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			lines := []string{initial}
 			if tt.name != "kind zero" {
 				lines = append(lines, tt.line)
 			}
 			path := filepath.Join(t.TempDir(), "matrix.jsonl")
-			require.NoError(os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644))
+			require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
 
 			data, err := reconstructJSONLWithLimit(path, testVSCodeCopilotHardRecordLimit)
-			require.NoError(err)
+			require.NoError(t, err)
 			var state map[string]any
-			require.NoError(json.Unmarshal(data, &state))
+			require.NoError(t, json.Unmarshal(data, &state))
 			requests := state["requests"].([]any)
 			item := requests[0].(map[string]any)["response"].([]any)[0].(map[string]any)
 			if tt.name == "kind two outside with nested output" {
 				item = requests[1].(map[string]any)["response"].([]any)[0].(map[string]any)
 			}
 			result := item["resultDetails"].(map[string]any)
-			assert.Empty(result["output"])
-			assert.Equal("keep input", result["input"])
-			assert.Equal("keep sibling", result["outputLabel"])
-			assert.Equal("unrelated", item["output"])
+			assert.Empty(t, result["output"])
+			assert.Equal(t, "keep input", result["input"])
+			assert.Equal(t, "keep sibling", result["outputLabel"])
+			assert.Equal(t, "unrelated", item["output"])
 		})
 	}
 }
@@ -939,22 +927,19 @@ func TestReconstructJSONLResultDetailsArrayProjection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			path := filepath.Join(t.TempDir(), "result-details-array.jsonl")
-			require.NoError(os.WriteFile(path, []byte(strings.Join(tt.lines, "\n")+"\n"), 0644))
+			require.NoError(t, os.WriteFile(path, []byte(strings.Join(tt.lines, "\n")+"\n"), 0o644))
 			data, err := reconstructJSONLWithLimit(path, testVSCodeCopilotHardRecordLimit)
-			require.NoError(err)
+			require.NoError(t, err)
 			var state map[string]any
-			require.NoError(json.Unmarshal(data, &state))
+			require.NoError(t, json.Unmarshal(data, &state))
 			for i, want := range tt.want {
 				details := state["requests"].([]any)[i].(map[string]any)["response"].([]any)[0].(map[string]any)["resultDetails"].([]any)
-				require.Len(details, 1)
+				require.Len(t, details, 1)
 				item := details[0].(map[string]any)
-				assert.Equal(want, item["input"])
-				assert.Empty(item["output"])
-				assert.Equal("keep", item["label"])
+				assert.Equal(t, want, item["input"])
+				assert.Empty(t, item["output"])
+				assert.Equal(t, "keep", item["label"])
 			}
 		})
 	}
@@ -986,20 +971,17 @@ func TestReconstructJSONLIndexedResultDetailsMutations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			path := filepath.Join(t.TempDir(), "indexed-result-details.jsonl")
 			content := strings.Join([]string{initial, tt.line}, "\n") + "\n"
-			require.NoError(os.WriteFile(path, []byte(content), 0644))
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 			data, err := reconstructJSONLWithLimit(path, testVSCodeCopilotHardRecordLimit)
-			require.NoError(err)
+			require.NoError(t, err)
 			var state map[string]any
-			require.NoError(json.Unmarshal(data, &state))
+			require.NoError(t, json.Unmarshal(data, &state))
 			item := state["requests"].([]any)[0].(map[string]any)["response"].([]any)[0].(map[string]any)["resultDetails"].([]any)[0].(map[string]any)
-			assert.Equal(tt.want, item["input"])
-			assert.Empty(item["output"])
-			assert.Equal("keep", item["label"])
+			assert.Equal(t, tt.want, item["input"])
+			assert.Empty(t, item["output"])
+			assert.Equal(t, "keep", item["label"])
 		})
 	}
 }
@@ -1022,28 +1004,22 @@ func TestReconstructJSONLNestedResultDetailsMutations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			path := filepath.Join(t.TempDir(), "nested-result-details.jsonl")
 			content := strings.Join([]string{initial, tt.line}, "\n") + "\n"
-			require.NoError(os.WriteFile(path, []byte(content), 0644))
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 			data, err := reconstructJSONLWithLimit(path, testVSCodeCopilotHardRecordLimit)
-			require.NoError(err)
+			require.NoError(t, err)
 			var state map[string]any
-			require.NoError(json.Unmarshal(data, &state))
+			require.NoError(t, json.Unmarshal(data, &state))
 			details := state["requests"].([]any)[0].(map[string]any)["response"].([]any)[0].(map[string]any)["resultDetails"].(map[string]any)["nested"].(map[string]any)["resultDetails"].(map[string]any)
-			assert.Equal("nested", details["input"])
-			assert.Empty(details["output"])
-			assert.Equal("keep", details["label"])
+			assert.Equal(t, "nested", details["input"])
+			assert.Empty(t, details["output"])
+			assert.Equal(t, "keep", details["label"])
 		})
 	}
 }
 
 func TestReconstructJSONLCumulativeResultOutputPushes(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	lines := []string{
 		`{"kind":0,"v":{"sessionId":"cumulative","requests":[{"response":[{"resultDetails":{"input":"keep","output":[]}}]}]}}`,
 	}
@@ -1051,100 +1027,89 @@ func TestReconstructJSONLCumulativeResultOutputPushes(t *testing.T) {
 		lines = append(lines, `{"kind":2,"k":["requests",0,"response",0,"resultDetails","output"],"v":[{"value":"drop"}]}`)
 	}
 	path := filepath.Join(t.TempDir(), "cumulative.jsonl")
-	require.NoError(os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644))
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
 	data, err := reconstructJSONLWithLimit(path, testVSCodeCopilotHardRecordLimit)
-	require.NoError(err)
+	require.NoError(t, err)
 	var state map[string]any
-	require.NoError(json.Unmarshal(data, &state))
+	require.NoError(t, json.Unmarshal(data, &state))
 	result := state["requests"].([]any)[0].(map[string]any)["response"].([]any)[0].(map[string]any)["resultDetails"].(map[string]any)
-	assert.Empty(result["output"])
-	assert.Equal("keep", result["input"])
+	assert.Empty(t, result["output"])
+	assert.Equal(t, "keep", result["input"])
 }
 
 func TestReconstructJSONLKindTwoExactResultDetailsProjectsItems(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	lines := []string{
 		`{"kind":0,"v":{"sessionId":"exact-details","requests":[{"response":[{"resultDetails":[]}]}]}}`,
 		`{"kind":2,"k":["requests",0,"response",0,"resultDetails"],"v":[{"input":"keep","output":[{"value":"drop"}]}]}`,
 	}
 	path := filepath.Join(t.TempDir(), "exact-result-details.jsonl")
-	require.NoError(os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0644))
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644))
 	data, err := reconstructJSONLWithLimit(path, testVSCodeCopilotHardRecordLimit)
-	require.NoError(err)
+	require.NoError(t, err)
 	var state map[string]any
-	require.NoError(json.Unmarshal(data, &state))
+	require.NoError(t, json.Unmarshal(data, &state))
 	details := state["requests"].([]any)[0].(map[string]any)["response"].([]any)[0].(map[string]any)["resultDetails"].([]any)
-	require.Len(details, 1)
+	require.Len(t, details, 1)
 	item := details[0].(map[string]any)
-	assert.Equal("keep", item["input"])
-	assert.Empty(item["output"])
+	assert.Equal(t, "keep", item["input"])
+	assert.Empty(t, item["output"])
 }
 
 func TestReconstructJSONLHardCeiling(t *testing.T) {
-	require := require.New(t)
-
 	path := filepath.Join(t.TempDir(), "hard-ceiling.jsonl")
 	f, err := os.Create(path)
-	require.NoError(err)
-	_, err = f.Write([]byte(strings.Repeat(
+	require.NoError(t, err)
+	_, err = f.WriteString(strings.Repeat(
 		"x", testVSCodeCopilotHardRecordLimit+1,
-	)))
-	require.NoError(err)
-	require.NoError(f.Close())
+	))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 
 	_, err = reconstructJSONLWithLimit(path, testVSCodeCopilotHardRecordLimit)
-	require.Error(err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "safety ceiling")
 }
 
 func TestReconstructJSONLRejectsTrailingJSON(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	path := filepath.Join(t.TempDir(), "trailing.jsonl")
 	lines := []string{
 		`{"kind":0,"v":{"version":3,"sessionId":"trailing","requests":[]}}`,
 		`{"kind":2,"k":["requests"],"v":[]}{"kind":2}`,
 		`{"kind":2,"k":["requests"],"v":[{"message":{"text":"after malformed"},"response":[{"value":"kept"}]}]}`,
 	}
-	require.NoError(os.WriteFile(path,
-		[]byte(strings.Join(lines, "\n")+"\n"), 0644,
+	require.NoError(t, os.WriteFile(path,
+		[]byte(strings.Join(lines, "\n")+"\n"), 0o644,
 	))
 
 	data, err := reconstructJSONL(path)
-	require.NoError(err)
+	require.NoError(t, err)
 	var state struct {
 		SessionID string `json:"sessionId"`
 		Requests  []any  `json:"requests"`
 	}
-	require.NoError(json.Unmarshal(data, &state))
-	assert.Equal("trailing", state.SessionID)
-	assert.Len(state.Requests, 1)
+	require.NoError(t, json.Unmarshal(data, &state))
+	assert.Equal(t, "trailing", state.SessionID)
+	assert.Len(t, state.Requests, 1)
 }
 
 func TestReconstructJSONLAtHardCeiling(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	prefix := `{"kind":0,"v":{"version":3,"sessionId":"normal-boundary","requests":[{"message":{"text":"boundary"},"response":[{"value":"`
 	suffix := `"}]}]}}`
 	value := strings.Repeat("x", testVSCodeCopilotHardRecordLimit)
 	line := prefix + value + suffix
 	value = value[:len(value)-(len([]byte(line))-testVSCodeCopilotHardRecordLimit)]
 	line = prefix + value + suffix
-	require.Len([]byte(line), testVSCodeCopilotHardRecordLimit)
-	require.Less(len([]byte(line)), 20*1024)
+	require.Len(t, []byte(line), testVSCodeCopilotHardRecordLimit)
+	require.Less(t, len([]byte(line)), 20*1024)
 
 	path := filepath.Join(t.TempDir(), "normal-boundary.jsonl")
-	require.NoError(os.WriteFile(path, []byte(line), 0644))
+	require.NoError(t, os.WriteFile(path, []byte(line), 0o644))
 	data, err := reconstructJSONLWithLimit(path, testVSCodeCopilotHardRecordLimit)
-	require.NoError(err)
+	require.NoError(t, err)
 	var state map[string]any
-	require.NoError(json.Unmarshal(data, &state))
-	assert.Equal("normal-boundary", state["sessionId"])
-	assert.Len(state["requests"].([]any)[0].(map[string]any)["response"].([]any)[0].(map[string]any)["value"], len(value))
+	require.NoError(t, json.Unmarshal(data, &state))
+	assert.Equal(t, "normal-boundary", state["sessionId"])
+	assert.Len(t, state["requests"].([]any)[0].(map[string]any)["response"].([]any)[0].(map[string]any)["value"], len(value))
 }
 
 func oversizedVSCodeCopilotResponse(outputSize int) string {
@@ -1160,7 +1125,7 @@ func oversizedVSCodeCopilotResponse(outputSize int) string {
 
 func TestVSCodeCopilotReplayLimitRejectsInvalid(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "unused.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte(`{"kind":0,"v":{}}`), 0644))
+	require.NoError(t, os.WriteFile(path, []byte(`{"kind":0,"v":{}}`), 0o644))
 	for name, test := range map[string]struct {
 		limit int
 		want  string
@@ -1186,60 +1151,57 @@ func TestVSCodeCopilotReplayDefaults(t *testing.T) {
 }
 
 func TestDiscoverVSCodeCopilot_JSONLDedup(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 
 	hash := "abc123def456"
 	chatDir := filepath.Join(
 		root, "workspaceStorage", hash, "chatSessions",
 	)
-	require.NoError(os.MkdirAll(chatDir, 0755))
+	require.NoError(t, os.MkdirAll(chatDir, 0o755))
 
 	wsJSON := `{"folder":"file:///Users/dev/projects/myproject"}`
 	wsPath := filepath.Join(
 		root, "workspaceStorage", hash, "workspace.json",
 	)
-	require.NoError(os.WriteFile(wsPath, []byte(wsJSON), 0644))
+	require.NoError(t, os.WriteFile(wsPath, []byte(wsJSON), 0o644))
 
 	// Session with both .json and .jsonl - jsonl should win
 	sessionJSON := `{"version":3,"sessionId":"dup1","requests":[{"requestId":"r1","message":{"text":"hi"},"response":[{"value":"hello"}],"timestamp":1755340000000}]}`
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(chatDir, "dup1.json"),
-		[]byte(sessionJSON), 0644,
+		[]byte(sessionJSON), 0o644,
 	))
 	jsonlContent := `{"kind":0,"v":{"version":3,"sessionId":"dup1","creationDate":1755340000000,"requests":[{"requestId":"r1","timestamp":1755340000000,"message":{"text":"hi"},"response":[{"value":"hello"}]}]}}` + "\n"
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(chatDir, "dup1.jsonl"),
-		[]byte(jsonlContent), 0644,
+		[]byte(jsonlContent), 0o644,
 	))
 
 	// Session with only .jsonl
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(chatDir, "only-jsonl.jsonl"),
-		[]byte(jsonlContent), 0644,
+		[]byte(jsonlContent), 0o644,
 	))
 
 	// Session with only .json
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(chatDir, "only-json.json"),
-		[]byte(sessionJSON), 0644,
+		[]byte(sessionJSON), 0o644,
 	))
 
 	files := discoverVSCodeCopilotTestSessions(t, root)
 
 	// Should get 3 files: dup1.jsonl, only-jsonl.jsonl, only-json.json
-	if !assert.Len(files, 3, "expected 3 files") {
+	if !assert.Len(t, files, 3, "expected 3 files") {
 		for _, f := range files {
 			t.Logf("  %s", f.Path)
 		}
-		t.FailNow()
+		require.FailNow(t, "expected 3 files")
 	}
 
 	// Verify dup1.json was excluded (dup1.jsonl present)
 	for _, f := range files {
-		assert.NotEqual("dup1.json", filepath.Base(f.Path),
+		assert.NotEqual(t, "dup1.json", filepath.Base(f.Path),
 			"dup1.json should be excluded when dup1.jsonl exists")
 	}
 }
@@ -1281,9 +1243,6 @@ func TestFindVSCodeCopilotSourceFile(t *testing.T) {
 }
 
 func TestParseVSCodeCopilotSession_TokenUsage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	// Two turns carry result.metadata token accounting (the
 	// post-credits VSCode Copilot format); a third turn has no
 	// metadata and must not produce a usage event.
@@ -1329,38 +1288,36 @@ func TestParseVSCodeCopilotSession_TokenUsage(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "usage.json")
-	require.NoError(os.WriteFile(path, []byte(sessionJSON), 0644))
+	require.NoError(t, os.WriteFile(path, []byte(sessionJSON), 0o644))
 
 	sess, _, err := parseVSCodeCopilotTestSession(t, path, "proj", "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
 	// Only the two turns with metadata yield usage events.
-	require.Len(sess.UsageEvents, 2, "usage events")
+	require.Len(t, sess.UsageEvents, 2, "usage events")
 
 	for i, ev := range sess.UsageEvents {
-		assert.Equal("vscode-copilot", ev.Source, "event[%d] source", i)
-		assert.Equal("claude-opus-4-8", ev.Model, "event[%d] model", i)
-		assert.NotEmpty(ev.OccurredAt, "event[%d] occurredAt", i)
+		assert.Equal(t, "vscode-copilot", ev.Source, "event[%d] source", i)
+		assert.Equal(t, "claude-opus-4-8", ev.Model, "event[%d] model", i)
+		assert.NotEmpty(t, ev.OccurredAt, "event[%d] occurredAt", i)
 	}
 
-	assert.Equal(35875, sess.UsageEvents[0].InputTokens)
-	assert.Equal(221, sess.UsageEvents[0].OutputTokens)
-	assert.Equal(41055, sess.UsageEvents[1].InputTokens)
-	assert.Equal(69, sess.UsageEvents[1].OutputTokens)
+	assert.Equal(t, 35875, sess.UsageEvents[0].InputTokens)
+	assert.Equal(t, 221, sess.UsageEvents[0].OutputTokens)
+	assert.Equal(t, 41055, sess.UsageEvents[1].InputTokens)
+	assert.Equal(t, 69, sess.UsageEvents[1].OutputTokens)
 
 	// Session output total sums the per-turn output tokens.
-	assert.True(sess.HasTotalOutputTokens, "has total output")
-	assert.Equal(290, sess.TotalOutputTokens, "total output")
+	assert.True(t, sess.HasTotalOutputTokens, "has total output")
+	assert.Equal(t, 290, sess.TotalOutputTokens, "total output")
 
 	// Peak context is the largest per-turn promptTokens.
-	assert.True(sess.HasPeakContextTokens, "has peak context")
-	assert.Equal(41055, sess.PeakContextTokens, "peak context")
+	assert.True(t, sess.HasPeakContextTokens, "has peak context")
+	assert.Equal(t, 41055, sess.PeakContextTokens, "peak context")
 }
 
 func TestParseVSCodeCopilotSession_TokenUsageModelFallback(t *testing.T) {
-	require := require.New(t)
-
 	// No resolvedModel: fall back to the prefixed modelId and
 	// normalize the claude version dots to hyphens.
 	sessionJSON := `{
@@ -1379,20 +1336,17 @@ func TestParseVSCodeCopilotSession_TokenUsageModelFallback(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "usage2.json")
-	require.NoError(os.WriteFile(path, []byte(sessionJSON), 0644))
+	require.NoError(t, os.WriteFile(path, []byte(sessionJSON), 0o644))
 
 	sess, _, err := parseVSCodeCopilotTestSession(t, path, "proj", "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
-	require.Len(sess.UsageEvents, 1)
+	require.Len(t, sess.UsageEvents, 1)
 	assert.Equal(t, "claude-sonnet-4-6", sess.UsageEvents[0].Model)
 }
 
 func TestParseVSCodeCopilotSession_NoTokenUsage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	// A session whose requests carry no token metadata yields no
 	// usage events and leaves output totals unset (cost -> n/a).
 	sessionJSON := `{
@@ -1409,32 +1363,32 @@ func TestParseVSCodeCopilotSession_NoTokenUsage(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nousage.json")
-	require.NoError(os.WriteFile(path, []byte(sessionJSON), 0644))
+	require.NoError(t, os.WriteFile(path, []byte(sessionJSON), 0o644))
 
 	sess, _, err := parseVSCodeCopilotTestSession(t, path, "proj", "local")
-	require.NoError(err)
-	require.NotNil(sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 
-	assert.Empty(sess.UsageEvents, "no usage events expected")
-	assert.False(sess.HasTotalOutputTokens, "no total output expected")
-	assert.False(sess.HasPeakContextTokens, "no peak context expected")
+	assert.Empty(t, sess.UsageEvents, "no usage events expected")
+	assert.False(t, sess.HasTotalOutputTokens, "no total output expected")
+	assert.False(t, sess.HasPeakContextTokens, "no peak context expected")
 }
 
 func TestFormatVSCodeCopilotToolCallsRecordsRenderings(t *testing.T) {
-	assert := assert.New(t)
-
 	calls := []ParsedToolCall{
-		{ToolName: "run_in_terminal", Category: "Bash",
-			InputJSON: `{"command":"printenv TOKEN"}`},
+		{
+			ToolName: "run_in_terminal", Category: "Bash",
+			InputJSON: `{"command":"printenv TOKEN"}`,
+		},
 		{ToolName: "read_file", Category: "Read"},
 	}
 
 	text := formatVSCodeCopilotToolCalls(calls)
 
-	assert.Equal("[Bash: run_in_terminal]\n$ printenv TOKEN", calls[0].Rendering)
-	assert.Equal("[Read: read_file]", calls[1].Rendering)
-	assert.Contains(text, calls[0].Rendering)
-	assert.Contains(text, calls[1].Rendering)
+	assert.Equal(t, "[Bash: run_in_terminal]\n$ printenv TOKEN", calls[0].Rendering)
+	assert.Equal(t, "[Read: read_file]", calls[1].Rendering)
+	assert.Contains(t, text, calls[0].Rendering)
+	assert.Contains(t, text, calls[1].Rendering)
 }
 
 func TestParseVSCodeCopilotSession_AssistantMessageModel(t *testing.T) {
@@ -1498,9 +1452,6 @@ func TestParseVSCodeCopilotSession_AssistantMessageModel(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			sessionJSON := `{
 				"version": 3,
 				"sessionId": "model-1",
@@ -1511,19 +1462,19 @@ func TestParseVSCodeCopilotSession_AssistantMessageModel(t *testing.T) {
 
 			dir := t.TempDir()
 			path := filepath.Join(dir, "model.json")
-			require.NoError(os.WriteFile(path, []byte(sessionJSON), 0644))
+			require.NoError(t, os.WriteFile(path, []byte(sessionJSON), 0o644))
 
 			_, msgs, err := parseVSCodeCopilotTestSession(t, path, "proj", "local")
-			require.NoError(err)
-			require.Len(msgs, 2*len(tc.wantModels), "user and assistant per turn")
+			require.NoError(t, err)
+			require.Len(t, msgs, 2*len(tc.wantModels), "user and assistant per turn")
 
 			for i, want := range tc.wantModels {
 				user := msgs[2*i]
 				assistant := msgs[2*i+1]
-				assert.Equal(RoleUser, user.Role, "turn %d user role", i)
-				assert.Empty(user.Model, "turn %d user model", i)
-				assert.Equal(RoleAssistant, assistant.Role, "turn %d assistant role", i)
-				assert.Equal(want, assistant.Model, "turn %d assistant model", i)
+				assert.Equal(t, RoleUser, user.Role, "turn %d user role", i)
+				assert.Empty(t, user.Model, "turn %d user model", i)
+				assert.Equal(t, RoleAssistant, assistant.Role, "turn %d assistant role", i)
+				assert.Equal(t, want, assistant.Model, "turn %d assistant model", i)
 			}
 		})
 	}

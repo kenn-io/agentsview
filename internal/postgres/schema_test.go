@@ -117,6 +117,13 @@ func (c *schemaProbeConn) ExecContext(
 	)
 	c.state.mu.Unlock()
 	normalized := strings.ToLower(query)
+	if strings.HasPrefix(strings.TrimSpace(normalized), "select") {
+		for _, queryErr := range c.state.queryErrors {
+			if strings.Contains(normalized, strings.ToLower(queryErr.contains)) {
+				return nil, queryErr.err
+			}
+		}
+	}
 	if strings.Contains(normalized, "alter table") {
 		c.state.mu.Lock()
 		c.state.alterTableExecs = append(
@@ -386,9 +393,6 @@ func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {
 func TestEnsureSchemaFallsBackWhenPLpgSQLUsageHelperIsUnsupported(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	pg, state := newSchemaProbeDB(t, map[string][]string{
 		"sessions": {
 			"has_total_output_tokens",
@@ -409,16 +413,16 @@ func TestEnsureSchemaFallsBackWhenPLpgSQLUsageHelperIsUnsupported(
 		err:      &pgconn.PgError{Code: "0A000", Message: `unimplemented: PL/pgSQL exception blocks`},
 	}}
 
-	require.NoError(EnsureSchema(t.Context(), pg, "agentsview"))
+	require.NoError(t, EnsureSchema(t.Context(), pg, "agentsview"))
 
 	executed := strings.ToLower(state.executedSQL())
 	primary := strings.Index(executed, "language plpgsql")
 	fallback := strings.Index(executed, "language sql")
-	require.NotEqual(-1, primary, "must feature-probe PL/pgSQL helper")
-	require.NotEqual(-1, fallback, "must install SQL fallback")
-	assert.Less(primary, fallback, "fallback must follow failed probe")
-	assert.Contains(executed, "json_valid(raw_value)")
-	assert.Contains(state.queriedSQL(), "agentsview_json_integer")
+	require.NotEqual(t, -1, primary, "must feature-probe PL/pgSQL helper")
+	require.NotEqual(t, -1, fallback, "must install SQL fallback")
+	assert.Less(t, primary, fallback, "fallback must follow failed probe")
+	assert.Contains(t, executed, "json_valid(raw_value)")
+	assert.Contains(t, state.queriedSQL(), "agentsview_json_integer")
 }
 
 func TestEnsureSchemaMigratesSessionDeletionCause(t *testing.T) {
@@ -459,8 +463,6 @@ func TestEnsureSchemaMigratesSessionDeletionCause(t *testing.T) {
 }
 
 func TestEnsureSchemaBackfillsCurationBaselinesWhenAdded(t *testing.T) {
-	assert := assert.New(t)
-
 	existing := map[string][]string{
 		"sessions": {
 			"owner_marker",
@@ -507,19 +509,17 @@ func TestEnsureSchemaBackfillsCurationBaselinesWhenAdded(t *testing.T) {
 	require.NoError(t, EnsureSchema(t.Context(), pg, "agentsview"))
 
 	executed := strings.ToLower(state.executedSQL())
-	assert.Contains(executed,
+	assert.Contains(t, executed,
 		"set source_display_name = display_name")
-	assert.Contains(executed,
+	assert.Contains(t, executed,
 		"where source_display_name is null")
-	assert.Contains(executed,
+	assert.Contains(t, executed,
 		"set source_deleted_at = deleted_at")
-	assert.Contains(executed,
+	assert.Contains(t, executed,
 		"where source_deleted_at is null")
 }
 
 func TestEnsureSchemaRetriesCurationBaselineBackfillUntilMarked(t *testing.T) {
-	assert := assert.New(t)
-
 	existing := map[string][]string{
 		"sessions": {
 			"source_display_name",
@@ -540,11 +540,11 @@ func TestEnsureSchemaRetriesCurationBaselineBackfillUntilMarked(t *testing.T) {
 	require.NoError(t, EnsureSchema(t.Context(), pg, "agentsview"))
 
 	executed := strings.ToLower(state.executedSQL())
-	assert.Contains(executed,
+	assert.Contains(t, executed,
 		"set source_display_name = display_name")
-	assert.Contains(executed,
+	assert.Contains(t, executed,
 		"set source_deleted_at = deleted_at")
-	assert.True(state.execArgValueSeen("source_curation_baseline_backfill_v1"),
+	assert.True(t, state.execArgValueSeen("source_curation_baseline_backfill_v1"),
 		"source curation backfill completion marker should be written")
 }
 
@@ -583,8 +583,6 @@ func TestEnsureSchemaChecksDataVersionBeforeDDL(t *testing.T) {
 }
 
 func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
-	assert := assert.New(t)
-
 	pg, state := newSchemaProbeDB(t, nil)
 	state.existingTables = map[string]bool{
 		"model_pricing":                                   true,
@@ -608,19 +606,19 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 	require.NoError(t, syncer.EnsureSchema(t.Context()))
 
 	executed := strings.ToLower(state.executedSQL())
-	assert.NotContains(executed, "create table if not exists sessions",
+	assert.NotContains(t, executed, "create table if not exists sessions",
 		"compatible PG schema must skip legacy table DDL")
-	assert.NotContains(executed, "create index if not exists idx_sessions_parent",
+	assert.NotContains(t, executed, "create index if not exists idx_sessions_parent",
 		"compatible PG schema must skip legacy index DDL")
-	assert.NotContains(executed, "alter index",
+	assert.NotContains(t, executed, "alter index",
 		"compatible PG schema must skip legacy index migrations")
-	assert.Equal(0, state.alterTableExecCount(),
+	assert.Equal(t, 0, state.alterTableExecCount(),
 		"compatible PG schema must not run column migrations")
-	assert.Contains(executed, "create table if not exists raw_objects",
+	assert.Contains(t, executed, "create table if not exists raw_objects",
 		"raw custody tables must be bootstrapped independently")
-	assert.Contains(executed, "create index if not exists idx_raw_ingest_jobs_ready",
+	assert.Contains(t, executed, "create index if not exists idx_raw_ingest_jobs_ready",
 		"raw custody indexes must be bootstrapped independently")
-	assert.Contains(executed, "insert into sync_metadata",
+	assert.Contains(t, executed, "insert into sync_metadata",
 		"compatible PG schema must still run row-level data repairs")
 }
 
@@ -661,7 +659,7 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 
 func TestCheckSchemaCompatIgnoresPushOnlySchema(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{
+	state.execErrors = []schemaProbeQueryError{
 		{contains: "owner_marker", err: &pgconn.PgError{Code: "42703", Message: `column "owner_marker" does not exist`}},
 	}
 
@@ -671,7 +669,7 @@ func TestCheckSchemaCompatIgnoresPushOnlySchema(t *testing.T) {
 
 func TestCheckSchemaCompatRequiresMachineLabelMetadata(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "from sync_metadata",
 		err:      &pgconn.PgError{Code: "42P01", Message: `relation "sync_metadata" does not exist`},
 	}}
@@ -697,7 +695,7 @@ func TestCheckSchemaCompatRequiresUsageJSONHelper(t *testing.T) {
 
 func TestCheckSchemaCompatRequiresCurationBaselineColumns(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "source_display_name",
 		err:      &pgconn.PgError{Code: "42703", Message: `column "source_display_name" does not exist`},
 	}}
@@ -710,7 +708,7 @@ func TestCheckSchemaCompatRequiresCurationBaselineColumns(t *testing.T) {
 
 func TestCheckSchemaCompatRequiresDeletionCause(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "deletion_cause",
 		err:      &pgconn.PgError{Code: "42703", Message: `column "deletion_cause" does not exist`},
 	}}
@@ -723,7 +721,7 @@ func TestCheckSchemaCompatRequiresDeletionCause(t *testing.T) {
 
 func TestCheckSchemaCompatRequiresParserParentSessionID(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "parser_parent_session_id",
 		err:      &pgconn.PgError{Code: "42703", Message: `column "parser_parent_session_id" does not exist`},
 	}}
@@ -736,7 +734,7 @@ func TestCheckSchemaCompatRequiresParserParentSessionID(t *testing.T) {
 
 func TestCheckSchemaCompatRequiresUsageEventMicrodollars(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "cost_microdollars",
 		err:      &pgconn.PgError{Code: "42703", Message: `column "cost_microdollars" does not exist`},
 	}}
@@ -750,7 +748,7 @@ func TestCheckSchemaCompatRequiresUsageEventMicrodollars(t *testing.T) {
 
 func TestCheckSchemaCompatRequiresMessageProviderID(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "provider_id",
 		err:      &pgconn.PgError{Code: "42703", Message: `column "provider_id" does not exist`},
 	}}
@@ -764,7 +762,7 @@ func TestCheckSchemaCompatRequiresMessageProviderID(t *testing.T) {
 
 func TestCheckSchemaCompatRequiresUsageEventProviderID(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "id, provider_id, cost_microdollars",
 		err:      &pgconn.PgError{Code: "42703", Message: `column "provider_id" does not exist`},
 	}}
@@ -780,7 +778,7 @@ func TestCheckSchemaCompatRequiresModelPricingMicrodollarsWhenPresent(
 	t *testing.T,
 ) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "input_microdollars_per_mtok",
 		err:      &pgconn.PgError{Code: "42703", Message: `column "input_microdollars_per_mtok" does not exist`},
 	}}
@@ -794,7 +792,7 @@ func TestCheckSchemaCompatRequiresModelPricingMicrodollarsWhenPresent(
 
 func TestCheckSchemaCompatAllowsMissingOptionalModelPricing(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "from model_pricing",
 		err:      &pgconn.PgError{Code: "42P01", Message: `relation "model_pricing" does not exist`},
 	}}
@@ -804,7 +802,7 @@ func TestCheckSchemaCompatAllowsMissingOptionalModelPricing(t *testing.T) {
 
 func TestCheckSchemaCompatPropagatesModelPricingPermissionFailure(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "from model_pricing",
 		err:      &pgconn.PgError{Code: "42501", Message: `permission denied for table model_pricing`},
 	}}
@@ -819,7 +817,7 @@ func TestCheckSchemaCompatPropagatesModelPricingPermissionFailure(t *testing.T) 
 
 func TestCheckSchemaCompatRequiresExcludedSessions(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "from excluded_sessions",
 		err:      &pgconn.PgError{Code: "42P01", Message: `relation "excluded_sessions" does not exist`},
 	}}
@@ -832,7 +830,7 @@ func TestCheckSchemaCompatRequiresExcludedSessions(t *testing.T) {
 
 func TestCheckSchemaCompatRequiresSessionAliases(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "from session_aliases",
 		err:      &pgconn.PgError{Code: "42P01", Message: `relation "session_aliases" does not exist`},
 	}}
@@ -845,7 +843,7 @@ func TestCheckSchemaCompatRequiresSessionAliases(t *testing.T) {
 
 func TestCheckSchemaCompatRequiresProjectIdentityObservations(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "from source_project_identity_observations",
 		err:      &pgconn.PgError{Code: "42P01", Message: `relation "source_project_identity_observations" does not exist`},
 	}}
@@ -859,7 +857,7 @@ func TestCheckSchemaCompatRequiresProjectIdentityObservations(t *testing.T) {
 
 func TestCheckSchemaCompatRequiresSessionProjectIdentitySnapshots(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "from source_session_project_identity_snapshots",
 		err:      &pgconn.PgError{Code: "42P01", Message: `relation "source_session_project_identity_snapshots" does not exist`},
 	}}
@@ -873,7 +871,7 @@ func TestCheckSchemaCompatRequiresSessionProjectIdentitySnapshots(t *testing.T) 
 
 func TestCheckSchemaCompatRequiresSourceArchives(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "from source_archives",
 		err:      &pgconn.PgError{Code: "42P01", Message: `relation "source_archives" does not exist`},
 	}}
@@ -887,7 +885,7 @@ func TestCheckSchemaCompatRequiresSourceArchives(t *testing.T) {
 
 func TestCheckSchemaCompatRequiresSessionProvenanceColumns(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "source_archive_id, source_database_generation, file_path",
 		err:      &pgconn.PgError{Code: "42703", Message: `column "source_archive_id" does not exist`},
 	}}
@@ -901,7 +899,7 @@ func TestCheckSchemaCompatRequiresSessionProvenanceColumns(t *testing.T) {
 
 func TestCheckSchemaCompatRequiresWorktreeProjectMappings(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
+	state.execErrors = []schemaProbeQueryError{{
 		contains: "from source_worktree_project_mappings",
 		err:      &pgconn.PgError{Code: "42P01", Message: `relation "source_worktree_project_mappings" does not exist`},
 	}}
@@ -1069,8 +1067,6 @@ func TestSyncEnsureSchemaRunsDDLWhenSchemaIncompatible(t *testing.T) {
 }
 
 func TestEnsureSchemaCreatesAnalyticsCoveringIndexes(t *testing.T) {
-	assert := assert.New(t)
-
 	db, state := newSchemaProbeDB(t, map[string][]string{
 		"sessions": {
 			"owner_marker",
@@ -1088,13 +1084,13 @@ func TestEnsureSchemaCreatesAnalyticsCoveringIndexes(t *testing.T) {
 	require.NoError(t, EnsureSchema(t.Context(), db, "agentsview"))
 
 	sql := state.executedSQL()
-	assert.Contains(sql,
+	assert.Contains(t, sql,
 		"CREATE INDEX IF NOT EXISTS idx_tool_calls_session_category")
-	assert.Contains(sql,
+	assert.Contains(t, sql,
 		"CREATE INDEX IF NOT EXISTS idx_messages_velocity")
-	assert.Contains(sql,
+	assert.Contains(t, sql,
 		"CREATE INDEX IF NOT EXISTS idx_messages_usage_covering")
-	assert.Contains(sql,
+	assert.Contains(t, sql,
 		"DROP INDEX IF EXISTS idx_messages_usage_timestamp")
 }
 

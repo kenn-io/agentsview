@@ -85,7 +85,7 @@ func (e *testEnv) assertResyncRoundTrip(
 	t.Helper()
 
 	// Clear mtime to force resync on next check.
-	err := e.db.Update(func(tx *sql.Tx) error {
+	err := e.db.Update(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET file_mtime = NULL"+
 				" WHERE id = ?",
@@ -97,7 +97,7 @@ func (e *testEnv) assertResyncRoundTrip(
 
 	require.NoError(t, e.engine.SyncSingleSession(sessionID))
 
-	_, mtime, ok := e.db.GetSessionFileInfo(sessionID)
+	_, mtime, ok := e.db.GetSessionFileInfo(t.Context(), sessionID)
 	require.True(t, ok, "session file info not found")
 	assert.NotZero(t, mtime, "SyncSingleSession did not store mtime")
 
@@ -147,7 +147,7 @@ func assertToolCallCount(
 ) {
 	t.Helper()
 	var got int
-	err := database.Reader().QueryRow(
+	err := database.Reader().QueryRow(t.Context(),
 		"SELECT COUNT(*) FROM tool_calls"+
 			" WHERE session_id = ?",
 		sessionID,
@@ -163,13 +163,14 @@ func (e *testEnv) updateSessionProject(
 	t *testing.T, sessionID, project string,
 ) {
 	t.Helper()
+
 	sess, err := e.db.GetSessionFull(
 		t.Context(), sessionID,
 	)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, sess, "session %q not found", sessionID)
 	sess.Project = project
-	require.NoError(t, e.db.UpsertSession(*sess), "UpsertSession")
+	require.NoError(t, e.db.UpsertSession(t.Context(), *sess), "UpsertSession")
 }
 
 // openCodeTestDB manages an OpenCode SQLite database for tests.
@@ -191,27 +192,27 @@ type kiroSQLiteTestDB struct {
 var (
 	openCodeLikeSchemaOnce  stdsync.Once
 	openCodeLikeSchemaBytes []byte
-	openCodeLikeSchemaErr   error
+	errOpenCodeLikeSchema   error
 
 	kiroSQLiteSchemaOnce  stdsync.Once
 	kiroSQLiteSchemaBytes []byte
-	kiroSQLiteSchemaErr   error
+	errKiroSQLiteSchema   error
 
 	antigravityCLISchemaOnce  stdsync.Once
 	antigravityCLISchemaBytes []byte
-	antigravityCLISchemaErr   error
+	errAntigravityCLISchema   error
 
 	piebaldSchemaOnce  stdsync.Once
 	piebaldSchemaBytes []byte
-	piebaldSchemaErr   error
+	errPiebaldSchema   error
 
 	shelleySchemaOnce  stdsync.Once
 	shelleySchemaBytes []byte
-	shelleySchemaErr   error
+	errShelleySchema   error
 
 	zedSchemaOnce  stdsync.Once
 	zedSchemaBytes []byte
-	zedSchemaErr   error
+	errZedSchema   error
 
 	kiroSQLiteFixtureCache stdsync.Map
 )
@@ -290,7 +291,7 @@ func createOpenCodeLikeDB(
 	t.Helper()
 	copySQLiteSchemaTemplate(
 		t, path, label, &openCodeLikeSchemaOnce,
-		&openCodeLikeSchemaBytes, &openCodeLikeSchemaErr,
+		&openCodeLikeSchemaBytes, &errOpenCodeLikeSchema,
 		openCodeLikeSchema,
 	)
 	d, err := sql.Open("sqlite3", path)
@@ -304,7 +305,7 @@ func createKiroSQLiteDB(t *testing.T, dir string) *kiroSQLiteTestDB {
 	path := filepath.Join(dir, "data.sqlite3")
 	copySQLiteSchemaTemplate(
 		t, path, "kiro sqlite", &kiroSQLiteSchemaOnce,
-		&kiroSQLiteSchemaBytes, &kiroSQLiteSchemaErr,
+		&kiroSQLiteSchemaBytes, &errKiroSQLiteSchema,
 		kiroSQLiteSchema,
 	)
 	d, err := sql.Open("sqlite3", path)
@@ -350,12 +351,7 @@ func sqliteSchemaTemplateBytes(
 ) []byte {
 	t.Helper()
 	once.Do(func() {
-		dir, err := os.MkdirTemp("", "agentsview-"+label+"-schema-*")
-		if err != nil {
-			*templateErr = fmt.Errorf("create %s schema template dir: %w", label, err)
-			return
-		}
-		defer os.RemoveAll(dir)
+		dir := t.TempDir()
 
 		path := filepath.Join(dir, "template.db")
 		d, err := sql.Open("sqlite3", path)
@@ -664,6 +660,7 @@ func (oc *openCodeStorageFixture) writeJSON(
 	t *testing.T, path string, data any,
 ) string {
 	t.Helper()
+
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755), "mkdir %s", filepath.Dir(path))
 	raw, err := json.Marshal(data)
 	require.NoError(t, err, "marshal %s", path)

@@ -181,6 +181,7 @@ CREATE INDEX ix_conversation_items_conversation_id_position
 
 func writeOmnigentSplitSyncDB(t *testing.T, root string, count int) string {
 	t.Helper()
+
 	path := filepath.Join(root, "chat.db")
 	database, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
@@ -227,6 +228,7 @@ func migrateOmnigentSplitSyncDBWorkspace(
 	t *testing.T, path string, workspaceID int64, conversationIDs ...string,
 ) {
 	t.Helper()
+
 	database, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
@@ -257,11 +259,12 @@ func migrateOmnigentSplitSyncDBWorkspace(
 // migrateOmnigentSyncDBToLegacyShape rewrites a split-generation chat.db in
 // place into the single-table legacy shape (a VARCHAR kind column on
 // conversations, no omnigent_conversation_metadata table), which
-// detectOmnigentSchema reports as ErrOmnigentUnsupportedSchema. The physical
+// detectOmnigentSchema reports as OmnigentUnsupportedSchemaError. The physical
 // file path stays the same, so sessions archived before the migration must
 // survive the container becoming unsupported.
 func migrateOmnigentSyncDBToLegacyShape(t *testing.T, path string) {
 	t.Helper()
+
 	database, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
@@ -299,6 +302,7 @@ func syncOmnigentArchive(
 	t *testing.T, engine *sync.Engine, archive *db.DB, want int,
 ) {
 	t.Helper()
+
 	engine.SyncAll(t.Context(), nil)
 	stats := engine.LastSyncStats()
 	require.Zero(t, stats.Failed)
@@ -332,14 +336,11 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 	}
 	for _, archiveSize := range []int{130, 1030} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
 			changedID := fmt.Sprintf("conv_%04d", archiveSize/2)
 			archive := dbtest.OpenTestDB(t)
-			engine := sync.NewEngine(archive, sync.EngineConfig{
+			engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentOmnigent: {root},
 				},
@@ -347,34 +348,34 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 			})
 			syncOmnigentArchive(t, engine, archive, archiveSize)
 			engine.SyncAll(t.Context(), nil)
-			assert.Zero(engine.LastSyncStats().Synced,
+			assert.Zero(t, engine.LastSyncStats().Synced,
 				"unchanged full sync should not rewrite member sessions")
 
 			writer, err := sql.Open("sqlite3", dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			changedAt := time.Now().Unix()
 			_, err = writer.ExecContext(t.Context(),
 				`UPDATE conversations SET updated_at = ?
 				 WHERE workspace_id = 0 AND id = ?`,
 				changedAt, changedID)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(), `INSERT INTO conversation_items
 				(workspace_id, conversation_id, id, position, type, data, search_text)
 				VALUES (0, ?, ?, 1, 1, ?, 'changed')`, changedID, changedID+"_1",
 				`{"role":"assistant","content":[{"type":"output_text","text":"changed"}]}`)
-			require.NoError(err)
-			require.NoError(writer.Close())
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
 
 			engine.SyncPaths([]string{dbPath + "-wal"})
-			assert.Equal(1, engine.LastSyncStats().Synced,
+			assert.Equal(t, 1, engine.LastSyncStats().Synced,
 				"one changed conversation should produce one archive write")
 			changed, err := archive.GetSessionFull(
 				t.Context(), "omnigent:0:"+changedID)
-			require.NoError(err)
-			require.NotNil(changed)
-			assert.Equal(2, changed.MessageCount)
-			require.NotNil(changed.FileMtime)
-			assert.Equal(changedAt*1_000_000_000, *changed.FileMtime)
+			require.NoError(t, err)
+			require.NotNil(t, changed)
+			assert.Equal(t, 2, changed.MessageCount)
+			require.NotNil(t, changed.FileMtime)
+			assert.Equal(t, changedAt*1_000_000_000, *changed.FileMtime)
 
 			unchangedID := "conv_0001"
 			if changedID == unchangedID {
@@ -382,55 +383,55 @@ func TestSyncOmnigentChangedPathWorkIsBounded(t *testing.T) {
 			}
 			unchanged, err := archive.GetSession(
 				t.Context(), "omnigent:0:"+unchangedID)
-			require.NoError(err)
-			require.NotNil(unchanged)
-			assert.Equal(1, unchanged.MessageCount)
+			require.NoError(t, err)
+			require.NotNil(t, unchanged)
+			assert.Equal(t, 1, unchanged.MessageCount)
 			engine.SyncAll(t.Context(), nil)
-			assert.Zero(engine.LastSyncStats().Synced,
+			assert.Zero(t, engine.LastSyncStats().Synced,
 				"member sync followed by unchanged full sync should not rewrite")
 
 			writer, err = sql.Open("sqlite3", dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			tx, err := writer.BeginTx(t.Context(), nil)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = tx.ExecContext(t.Context(),
 				`DELETE FROM conversation_items
 				  WHERE workspace_id = 0 AND conversation_id = 'conv_0001'`)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = tx.ExecContext(t.Context(),
 				`DELETE FROM omnigent_conversation_metadata
 				  WHERE workspace_id = 0 AND id = 'conv_0001'`)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = tx.ExecContext(t.Context(),
 				`DELETE FROM conversations WHERE workspace_id = 0 AND id = 'conv_0001'`)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = tx.ExecContext(t.Context(), `INSERT INTO conversations
 				(workspace_id, id, created_at, updated_at, title, root_conversation_id)
 				VALUES (0, 'replacement', 1, ?, 'replacement', 'replacement')`,
 				time.Now().Unix())
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = tx.ExecContext(t.Context(), `INSERT INTO omnigent_conversation_metadata
 				(workspace_id, id, kind, workspace)
 				VALUES (0, 'replacement', 1, '/work/project')`)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = tx.ExecContext(t.Context(), `INSERT INTO conversation_items
 				(workspace_id, conversation_id, id, position, type, data, search_text)
 				VALUES (0, 'replacement', 'replacement_0', 0, 1, ?, 'replacement')`,
 				`{"role":"user","content":[{"type":"input_text","text":"replacement"}]}`)
-			require.NoError(err)
-			require.NoError(tx.Commit())
-			require.NoError(writer.Close())
+			require.NoError(t, err)
+			require.NoError(t, tx.Commit())
+			require.NoError(t, writer.Close())
 
 			engine.SyncPaths([]string{dbPath})
 			deleted, err := archive.GetSession(
 				t.Context(), "omnigent:0:conv_0001")
-			require.NoError(err)
-			assert.NotNil(deleted,
+			require.NoError(t, err)
+			assert.NotNil(t, deleted,
 				"changed-path work must defer archive-wide deletion proof")
 			replacement, err := archive.GetSession(
 				t.Context(), "omnigent:0:replacement")
-			require.NoError(err)
-			require.NotNil(replacement,
+			require.NoError(t, err)
+			require.NotNil(t, replacement,
 				"one changed-path pass must sync the replacement conversation")
 		})
 	}
@@ -448,7 +449,7 @@ func TestSyncOmnigentUnchangedAfterBoundedInitializationDoesNoWork(t *testing.T)
 		delegate: omnigentDefaultProviderFactory(t),
 		count:    &parseCount,
 	}
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -477,7 +478,7 @@ func TestSyncOmnigentInitialContainerFailureIsRetried(t *testing.T) {
 		failPath: dbPath,
 		failOnce: &failed,
 	}
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -495,9 +496,6 @@ func TestSyncOmnigentInitialContainerFailureIsRetried(t *testing.T) {
 }
 
 func TestSyncOmnigentFailedMemberIsReplayedByScheduledContainerSync(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -511,7 +509,7 @@ func TestSyncOmnigentFailedMemberIsReplayedByScheduledContainerSync(t *testing.T
 		failPath: parser.VirtualSourcePath(dbPath, "0:conv_0000"),
 		failOnce: &failed,
 	}
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -522,38 +520,35 @@ func TestSyncOmnigentFailedMemberIsReplayedByScheduledContainerSync(t *testing.T
 	syncOmnigentArchive(t, engine, archive, 1)
 
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(),
 		`UPDATE conversations SET updated_at = ?
 		 WHERE workspace_id = 0 AND id = 'conv_0000'`,
 		time.Now().Unix(),
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `INSERT INTO conversation_items
 		(workspace_id, conversation_id, id, position, type, data, search_text)
 		VALUES (0, 'conv_0000', 'conv_0000_1', 1, 1, ?, 'second')`,
 		`{"role":"assistant","content":[{"type":"output_text","text":"second"}]}`)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	err = engine.SyncPathsContext(t.Context(), []string{dbPath})
-	require.Error(err)
-	assert.Equal(1, engine.LastSyncStats().Failed)
-	require.True(failed.Load(), "the changed virtual member must fail once")
+	require.Error(t, err)
+	assert.Equal(t, 1, engine.LastSyncStats().Failed)
+	require.True(t, failed.Load(), "the changed virtual member must fail once")
 
 	stats := engine.SyncAll(t.Context(), nil)
-	assert.Zero(stats.Failed)
+	assert.Zero(t, stats.Failed)
 	updated, err := archive.GetSessionFull(t.Context(), "omnigent:0:conv_0000")
-	require.NoError(err)
-	require.NotNil(updated)
-	assert.Equal(2, updated.MessageCount,
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, 2, updated.MessageCount,
 		"the scheduled container pass must replay the failed member")
 }
 
 func TestSyncAllSinceOmnigentCutoffDefersStaleMemberUntilFullSync(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -567,7 +562,7 @@ func TestSyncAllSinceOmnigentCutoffDefersStaleMemberUntilFullSync(t *testing.T) 
 		failPath: parser.VirtualSourcePath(dbPath, "0:conv_0000"),
 		failOnce: &failed,
 	}
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -578,39 +573,39 @@ func TestSyncAllSinceOmnigentCutoffDefersStaleMemberUntilFullSync(t *testing.T) 
 	syncOmnigentArchive(t, engine, archive, 1)
 
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(),
 		`UPDATE conversations SET updated_at = ?
 		 WHERE workspace_id = 0 AND id = 'conv_0000'`,
 		time.Now().Unix(),
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `INSERT INTO conversation_items
 		(workspace_id, conversation_id, id, position, type, data, search_text)
 		VALUES (0, 'conv_0000', 'conv_0000_1', 1, 1, ?, 'second')`,
 		`{"role":"assistant","content":[{"type":"output_text","text":"second"}]}`)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
-	require.Error(engine.SyncPathsContext(t.Context(), []string{dbPath}))
-	require.True(failed.Load(), "the changed virtual member must fail once")
+	require.Error(t, engine.SyncPathsContext(t.Context(), []string{dbPath}))
+	require.True(t, failed.Load(), "the changed virtual member must fail once")
 
 	stats := engine.SyncAllSince(
 		t.Context(), time.Now().Add(time.Hour), nil,
 	)
-	require.Zero(stats.Failed)
+	require.Zero(t, stats.Failed)
 	deferred, err := archive.GetSessionFull(t.Context(), "omnigent:0:conv_0000")
-	require.NoError(err)
-	require.NotNil(deferred)
-	assert.Equal(1, deferred.MessageCount,
+	require.NoError(t, err)
+	require.NotNil(t, deferred)
+	assert.Equal(t, 1, deferred.MessageCount,
 		"a cutoff newer than the container may defer the stale member")
 
 	stats = engine.SyncAll(t.Context(), nil)
-	require.Zero(stats.Failed)
+	require.Zero(t, stats.Failed)
 	updated, err := archive.GetSessionFull(t.Context(), "omnigent:0:conv_0000")
-	require.NoError(err)
-	require.NotNil(updated)
-	assert.Equal(2, updated.MessageCount,
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, 2, updated.MessageCount,
 		"the next full container pass must repair the stale member")
 }
 
@@ -640,9 +635,6 @@ func TestOmnigentStaleMemberSurvivesUnrelatedScopedSync(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			rootA := t.TempDir()
 			rootB := t.TempDir()
 			dbA := writeOmnigentSplitSyncDB(t, rootA, 1)
@@ -656,7 +648,7 @@ func TestOmnigentStaleMemberSurvivesUnrelatedScopedSync(t *testing.T) {
 				failPath: parser.VirtualSourcePath(dbA, "0:conv_0000"),
 				failOnce: &failed,
 			}
-			engine := sync.NewEngine(archive, sync.EngineConfig{
+			engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentOmnigent: {rootA, rootB},
 				},
@@ -667,25 +659,25 @@ func TestOmnigentStaleMemberSurvivesUnrelatedScopedSync(t *testing.T) {
 			syncOmnigentArchive(t, engine, archive, 2)
 
 			appendOmnigentSyncMessage(t, dbA, "missed")
-			require.Error(engine.SyncPathsContext(t.Context(), []string{dbA}))
-			require.True(failed.Load())
+			require.Error(t, engine.SyncPathsContext(t.Context(), []string{dbA}))
+			require.True(t, failed.Load())
 
-			require.NoError(tc.sync(engine, dbB))
+			require.NoError(t, tc.sync(engine, dbB))
 			stale, err := archive.GetSessionFull(
 				t.Context(), "omnigent:0:conv_0000",
 			)
-			require.NoError(err)
-			require.NotNil(stale)
-			assert.Equal(1, stale.MessageCount)
+			require.NoError(t, err)
+			require.NotNil(t, stale)
+			assert.Equal(t, 1, stale.MessageCount)
 
 			stats := engine.SyncAll(t.Context(), nil)
-			require.Zero(stats.Failed)
+			require.Zero(t, stats.Failed)
 			repaired, err := archive.GetSessionFull(
 				t.Context(), "omnigent:0:conv_0000",
 			)
-			require.NoError(err)
-			require.NotNil(repaired)
-			assert.Equal(2, repaired.MessageCount,
+			require.NoError(t, err)
+			require.NotNil(t, repaired)
+			assert.Equal(t, 2, repaired.MessageCount,
 				"the next full container pass must repair root A's stale member")
 		})
 	}
@@ -693,6 +685,7 @@ func TestOmnigentStaleMemberSurvivesUnrelatedScopedSync(t *testing.T) {
 
 func appendOmnigentSyncMessage(t *testing.T, dbPath, text string) {
 	t.Helper()
+
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(),
@@ -717,6 +710,7 @@ func appendOmnigentSyncMessage(t *testing.T, dbPath, text string) {
 
 func setOmnigentSyncWorkspace(t *testing.T, dbPath string, workspaceID int64) {
 	t.Helper()
+
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	for _, table := range []string{
@@ -739,9 +733,6 @@ func TestSyncOmnigentFullSyncWritesOnlyChangedMembers(t *testing.T) {
 	}
 	for _, archiveSize := range []int{130, 1030} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
 			archive := dbtest.OpenTestDB(t)
@@ -751,7 +742,7 @@ func TestSyncOmnigentFullSyncWritesOnlyChangedMembers(t *testing.T) {
 				count:    &parseCount,
 				results:  &resultCount,
 			}
-			engine := sync.NewEngine(archive, sync.EngineConfig{
+			engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentOmnigent: {root},
 				},
@@ -763,32 +754,32 @@ func TestSyncOmnigentFullSyncWritesOnlyChangedMembers(t *testing.T) {
 			parseCount.Store(0)
 			resultCount.Store(0)
 			engine.SyncAll(t.Context(), nil)
-			assert.Zero(parseCount.Load(),
+			assert.Zero(t, parseCount.Load(),
 				"an unchanged container must be skipped without parsing")
-			assert.Zero(resultCount.Load(),
+			assert.Zero(t, resultCount.Load(),
 				"an unchanged container must emit no results")
 
 			writer, err := sql.Open("sqlite3", dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(), `UPDATE conversations
 				SET updated_at = ? WHERE workspace_id = 0 AND id = 'conv_0000'`,
 				time.Now().Unix())
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(), `INSERT INTO conversation_items
 				(workspace_id, conversation_id, id, position, type, data, search_text)
 				VALUES (0, 'conv_0000', 'changed', 1, 1, ?, 'changed')`,
 				`{"role":"assistant","content":[{"type":"output_text","text":"changed"}]}`)
-			require.NoError(err)
-			require.NoError(writer.Close())
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
 
 			parseCount.Store(0)
 			resultCount.Store(0)
 			engine.SyncAll(t.Context(), nil)
-			assert.Equal(1, engine.LastSyncStats().Synced,
+			assert.Equal(t, 1, engine.LastSyncStats().Synced,
 				"only the changed member may be rewritten")
-			assert.Equal(int64(1), parseCount.Load(),
+			assert.Equal(t, int64(1), parseCount.Load(),
 				"a changed container must be parsed once as a whole")
-			assert.Equal(int64(archiveSize), resultCount.Load(),
+			assert.Equal(t, int64(archiveSize), resultCount.Load(),
 				"a whole-container parse emits every member for unchanged dedup")
 		})
 	}
@@ -801,14 +792,11 @@ func TestSyncOmnigentRestartCacheWarmsBoundedChangeTracker(t *testing.T) {
 	var watcherResultCounts []int64
 	for _, archiveSize := range []int{130, 1030} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
 			archive := dbtest.OpenTestDB(t)
 
-			firstEngine := sync.NewEngine(archive, sync.EngineConfig{
+			firstEngine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentOmnigent: {root},
 				},
@@ -823,7 +811,7 @@ func TestSyncOmnigentRestartCacheWarmsBoundedChangeTracker(t *testing.T) {
 				count:    &parseCount,
 				results:  &resultCount,
 			}
-			restarted := sync.NewEngine(archive, sync.EngineConfig{
+			restarted := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentOmnigent: {root},
 				},
@@ -833,17 +821,17 @@ func TestSyncOmnigentRestartCacheWarmsBoundedChangeTracker(t *testing.T) {
 			t.Cleanup(restarted.Close)
 
 			restarted.SyncAll(t.Context(), nil)
-			require.Zero(restarted.LastSyncStats().Failed)
-			assert.Zero(parseCount.Load(),
+			require.Zero(t, restarted.LastSyncStats().Failed)
+			assert.Zero(t, parseCount.Load(),
 				"restart validation should reuse the persisted container cache")
 
 			appendOmnigentSyncMessage(t, dbPath, "after_restart")
 			parseCount.Store(0)
 			resultCount.Store(0)
-			require.NoError(restarted.SyncPathsContext(t.Context(), []string{dbPath}))
-			require.Zero(restarted.LastSyncStats().Failed)
-			assert.Equal(parseCount.Load(), resultCount.Load())
-			assert.Equal(int64(1), resultCount.Load(),
+			require.NoError(t, restarted.SyncPathsContext(t.Context(), []string{dbPath}))
+			require.Zero(t, restarted.LastSyncStats().Failed)
+			assert.Equal(t, parseCount.Load(), resultCount.Load())
+			assert.Equal(t, int64(1), resultCount.Load(),
 				"the restart-warmed tracker must replay only the changed member")
 			watcherResultCounts = append(
 				watcherResultCounts, resultCount.Load(),
@@ -856,8 +844,6 @@ func TestSyncOmnigentRestartCacheWarmsBoundedChangeTracker(t *testing.T) {
 }
 
 func TestResyncOmnigentForcesCompleteDiscovery(t *testing.T) {
-	assert := assert.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -870,7 +856,7 @@ func TestResyncOmnigentForcesCompleteDiscovery(t *testing.T) {
 		count:    &parseCount,
 		results:  &resultCount,
 	}
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -882,26 +868,23 @@ func TestResyncOmnigentForcesCompleteDiscovery(t *testing.T) {
 	parseCount.Store(0)
 	resultCount.Store(0)
 	stats := engine.ResyncAll(t.Context(), nil)
-	assert.False(stats.Aborted)
-	assert.Equal(3, stats.Synced)
-	assert.Equal(int64(1), parseCount.Load())
-	assert.Equal(int64(3), resultCount.Load(),
+	assert.False(t, stats.Aborted)
+	assert.Equal(t, 3, stats.Synced)
+	assert.Equal(t, int64(1), parseCount.Load())
+	assert.Equal(t, int64(3), resultCount.Load(),
 		"archive rebuild must bypass incremental discovery")
 }
 
 func TestSyncOmnigentCompleteContainerMissingConversationPreservesArchive(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
 	dbPath := writeOmnigentSplitSyncDB(t, root, 2)
 	archive := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -911,46 +894,43 @@ func TestSyncOmnigentCompleteContainerMissingConversationPreservesArchive(
 	syncOmnigentArchive(t, engine, archive, 2)
 
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(),
 		`DELETE FROM conversation_items
 		  WHERE workspace_id = 0 AND conversation_id = 'conv_0001'`,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(),
 		`DELETE FROM omnigent_conversation_metadata
 		  WHERE workspace_id = 0 AND id = 'conv_0001'`,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(),
 		`DELETE FROM conversations WHERE workspace_id = 0 AND id = 'conv_0001'`)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	stats := engine.SyncAll(t.Context(), nil)
-	require.Zero(stats.Failed)
+	require.Zero(t, stats.Failed)
 	active, err := archive.GetSession(t.Context(), "omnigent:0:conv_0001")
-	require.NoError(err)
-	assert.NotNil(active)
+	require.NoError(t, err)
+	assert.NotNil(t, active)
 	archived, err := archive.GetSessionFull(t.Context(), "omnigent:0:conv_0001")
-	require.NoError(err)
+	require.NoError(t, err)
 	assertSourceMissingState(t, archived)
-	assert.Equal(1, archived.MessageCount)
+	assert.Equal(t, 1, archived.MessageCount)
 }
 
 func TestSyncOmnigentCompleteEmptyContainerPreservesFinalConversation(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
 	dbPath := writeOmnigentSplitSyncDB(t, root, 1)
 	archive := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -960,30 +940,27 @@ func TestSyncOmnigentCompleteEmptyContainerPreservesFinalConversation(
 	syncOmnigentArchive(t, engine, archive, 1)
 
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `DELETE FROM conversation_items`)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `DELETE FROM omnigent_conversation_metadata`)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `DELETE FROM conversations`)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	stats := engine.SyncAll(t.Context(), nil)
-	require.Zero(stats.Failed)
+	require.Zero(t, stats.Failed)
 	active, err := archive.GetSession(t.Context(), "omnigent:0:conv_0000")
-	require.NoError(err)
-	assert.NotNil(active)
+	require.NoError(t, err)
+	assert.NotNil(t, active)
 	archived, err := archive.GetSessionFull(t.Context(), "omnigent:0:conv_0000")
-	require.NoError(err)
+	require.NoError(t, err)
 	assertSourceMissingState(t, archived)
-	assert.Equal(1, archived.MessageCount)
+	assert.Equal(t, 1, archived.MessageCount)
 }
 
 func TestSyncOmnigentDataVersionFailurePreventsContainerCache(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -992,15 +969,15 @@ func TestSyncOmnigentDataVersionFailurePreventsContainerCache(t *testing.T) {
 	writeOmnigentSplitSyncDB(t, root, 2)
 	archive := dbtest.OpenTestDB(t)
 	raw, err := sql.Open("sqlite3", archive.Path())
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(raw.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
 	_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER fail_omnigent_data_version
 		BEFORE UPDATE OF data_version ON sessions
 		WHEN NEW.id = 'omnigent:0:conv_0000'
 		BEGIN
 			SELECT RAISE(FAIL, 'injected data-version failure');
 		END`)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var parseCount atomic.Int64
 	factory := omnigentParseCountingFactory{
@@ -1008,8 +985,8 @@ func TestSyncOmnigentDataVersionFailurePreventsContainerCache(t *testing.T) {
 		count:    &parseCount,
 	}
 	claudeFactory, ok := parser.ProviderFactoryByType(parser.AgentClaude)
-	require.True(ok)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	require.True(t, ok)
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 			parser.AgentClaude:   {claudeRoot},
@@ -1018,12 +995,12 @@ func TestSyncOmnigentDataVersionFailurePreventsContainerCache(t *testing.T) {
 		ProviderFactories: []parser.ProviderFactory{factory, claudeFactory},
 	})
 	engine.SyncAll(t.Context(), nil)
-	assert.Equal(1, engine.LastSyncStats().Failed)
-	assert.Less(archive.GetSessionDataVersion("omnigent:0:conv_0000"),
+	assert.Equal(t, 1, engine.LastSyncStats().Failed)
+	assert.Less(t, archive.GetSessionDataVersion(t.Context(), "omnigent:0:conv_0000"),
 		db.CurrentDataVersion())
 
 	_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_omnigent_data_version`)
-	require.NoError(err)
+	require.NoError(t, err)
 	claudePath := filepath.Join(claudeRoot, "project", "unrelated.jsonl")
 	dbtest.WriteTestFile(t, claudePath, []byte(
 		testjsonl.NewSessionBuilder().
@@ -1031,28 +1008,25 @@ func TestSyncOmnigentDataVersionFailurePreventsContainerCache(t *testing.T) {
 			String(),
 	))
 	engine.SyncPaths([]string{claudePath})
-	require.Zero(engine.LastSyncStats().Failed,
+	require.Zero(t, engine.LastSyncStats().Failed,
 		"the unrelated watcher pass must complete successfully")
 
 	parseCount.Store(0)
 	engine.SyncAll(t.Context(), nil)
-	assert.Equal(int64(1), parseCount.Load(),
+	assert.Equal(t, int64(1), parseCount.Load(),
 		"stale virtual member must bypass the container cache")
-	assert.Equal(db.CurrentDataVersion(),
-		archive.GetSessionDataVersion("omnigent:0:conv_0000"))
+	assert.Equal(t, db.CurrentDataVersion(),
+		archive.GetSessionDataVersion(t.Context(), "omnigent:0:conv_0000"))
 }
 
 func TestSyncOmnigentFailedCurrentUpdateForcesContentReplacement(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
 	dbPath := writeOmnigentSplitSyncDB(t, root, 1)
 	archive := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -1060,11 +1034,11 @@ func TestSyncOmnigentFailedCurrentUpdateForcesContentReplacement(t *testing.T) {
 	})
 	defer engine.Close()
 	engine.SyncAll(t.Context(), nil)
-	require.Equal(db.CurrentDataVersion(),
-		archive.GetSessionDataVersion("omnigent:0:conv_0000"))
+	require.Equal(t, db.CurrentDataVersion(),
+		archive.GetSessionDataVersion(t.Context(), "omnigent:0:conv_0000"))
 
 	raw, err := sql.Open("sqlite3", archive.Path())
-	require.NoError(err)
+	require.NoError(t, err)
 	defer raw.Close()
 	_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER fail_omnigent_message_append
 		BEFORE INSERT ON messages
@@ -1072,34 +1046,34 @@ func TestSyncOmnigentFailedCurrentUpdateForcesContentReplacement(t *testing.T) {
 		BEGIN
 			SELECT RAISE(FAIL, 'injected message append failure');
 		END`)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `UPDATE conversations SET updated_at = ?
 		WHERE workspace_id = 0 AND id = 'conv_0000'`, time.Now().Unix())
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `INSERT INTO conversation_items
 		(workspace_id, conversation_id, id, position, type, data, search_text)
 		VALUES (0, 'conv_0000', 'conv_0000_1', 1, 1, ?, 'second')`,
 		`{"role":"assistant","content":[{"type":"output_text","text":"second"}]}`)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 	engine.SyncAll(t.Context(), nil)
-	assert.Equal(1, engine.LastSyncStats().Failed)
-	assert.Less(archive.GetSessionDataVersion("omnigent:0:conv_0000"),
+	assert.Equal(t, 1, engine.LastSyncStats().Failed)
+	assert.Less(t, archive.GetSessionDataVersion(t.Context(), "omnigent:0:conv_0000"),
 		db.CurrentDataVersion(),
 		"an incomplete current-session update must persist retry state")
 
 	_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_omnigent_message_append`)
-	require.NoError(err)
+	require.NoError(t, err)
 	engine.SyncAll(t.Context(), nil)
 	messages, err := archive.GetMessages(
 		t.Context(), "omnigent:0:conv_0000", 0, 10, true,
 	)
-	require.NoError(err)
-	require.Len(messages, 2)
-	assert.Equal("second", messages[1].Content)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "second", messages[1].Content)
 }
 
 // TestSyncSingleSessionOmnigentFailedWriteDemotesDataVersion covers the
@@ -1109,16 +1083,13 @@ func TestSyncOmnigentFailedCurrentUpdateForcesContentReplacement(t *testing.T) {
 // instead of comparing it as unchanged. Shared-container members have no
 // per-file mtime to invalidate, so the demotion is the only retry signal.
 func TestSyncSingleSessionOmnigentFailedWriteDemotesDataVersion(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
 	dbPath := writeOmnigentSplitSyncDB(t, root, 1)
 	archive := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -1126,23 +1097,23 @@ func TestSyncSingleSessionOmnigentFailedWriteDemotesDataVersion(t *testing.T) {
 	})
 	defer engine.Close()
 	engine.SyncAll(t.Context(), nil)
-	require.Equal(db.CurrentDataVersion(),
-		archive.GetSessionDataVersion("omnigent:0:conv_0000"))
+	require.Equal(t, db.CurrentDataVersion(),
+		archive.GetSessionDataVersion(t.Context(), "omnigent:0:conv_0000"))
 
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `UPDATE conversations SET updated_at = ?
 		WHERE workspace_id = 0 AND id = 'conv_0000'`, time.Now().Unix())
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `INSERT INTO conversation_items
 		(workspace_id, conversation_id, id, position, type, data, search_text)
 		VALUES (0, 'conv_0000', 'conv_0000_1', 1, 1, ?, 'second')`,
 		`{"role":"assistant","content":[{"type":"output_text","text":"second"}]}`)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	raw, err := sql.Open("sqlite3", archive.Path())
-	require.NoError(err)
+	require.NoError(t, err)
 	defer raw.Close()
 	_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER fail_omnigent_message_append
 		BEFORE INSERT ON messages
@@ -1150,50 +1121,47 @@ func TestSyncSingleSessionOmnigentFailedWriteDemotesDataVersion(t *testing.T) {
 		BEGIN
 			SELECT RAISE(FAIL, 'injected message append failure');
 		END`)
-	require.NoError(err)
+	require.NoError(t, err)
 
-	require.Error(engine.SyncSingleSession("omnigent:0:conv_0000"),
+	require.Error(t, engine.SyncSingleSession("omnigent:0:conv_0000"),
 		"the injected write failure must surface to the resync caller")
-	assert.Less(archive.GetSessionDataVersion("omnigent:0:conv_0000"),
+	assert.Less(t, archive.GetSessionDataVersion(t.Context(), "omnigent:0:conv_0000"),
 		db.CurrentDataVersion(),
 		"a failed single-session write must demote the data version")
 
 	_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_omnigent_message_append`)
-	require.NoError(err)
+	require.NoError(t, err)
 	engine.SyncAll(t.Context(), nil)
-	assert.Equal(db.CurrentDataVersion(),
-		archive.GetSessionDataVersion("omnigent:0:conv_0000"))
+	assert.Equal(t, db.CurrentDataVersion(),
+		archive.GetSessionDataVersion(t.Context(), "omnigent:0:conv_0000"))
 	messages, err := archive.GetMessages(
 		t.Context(), "omnigent:0:conv_0000", 0, 10, true,
 	)
-	require.NoError(err)
-	require.Len(messages, 2,
+	require.NoError(t, err)
+	require.Len(t, messages, 2,
 		"the demoted member must be repaired by the next container pass")
-	assert.Equal("second", messages[1].Content)
+	assert.Equal(t, "second", messages[1].Content)
 }
 
 func TestSyncOmnigentPersistsJSONStringToolResult(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
 	dbPath := writeOmnigentSplitSyncDB(t, root, 1)
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `INSERT INTO conversation_items
 		(workspace_id, conversation_id, id, position, type, data, search_text) VALUES
 		(0, 'conv_0000', 'call', 1, 2,
 		 '{"call_id":"call-json","name":"inspect","arguments":"{}"}', ''),
 		(0, 'conv_0000', 'result', 2, 3,
 		 '{"call_id":"call-json","output":"{\"ok\":true}"}', '')`)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	archive := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -1202,37 +1170,34 @@ func TestSyncOmnigentPersistsJSONStringToolResult(t *testing.T) {
 	engine.SyncAll(t.Context(), nil)
 
 	messages := fetchMessages(t, archive, "omnigent:0:conv_0000")
-	require.Len(messages, 2)
-	require.Len(messages[1].ToolCalls, 1)
-	assert.Equal(`{"ok":true}`, messages[1].ToolCalls[0].ResultContent)
-	assert.Equal(len(`{"ok":true}`),
+	require.Len(t, messages, 2)
+	require.Len(t, messages[1].ToolCalls, 1)
+	assert.Equal(t, `{"ok":true}`, messages[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, len(`{"ok":true}`),
 		messages[1].ToolCalls[0].ResultContentLength)
 }
 
 func TestSyncOmnigentFallbackUsageAppearsInAnalytics(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
 	dbPath := writeOmnigentSplitSyncDB(t, root, 1)
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `INSERT INTO agent_configuration
 		(workspace_id, conversation_id, model_override)
 		VALUES (0, 'conv_0000', 'claude-sonnet')`)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `UPDATE omnigent_conversation_metadata
 		SET session_usage =
 		    '{"input_tokens":120,"output_tokens":30,"total_cost_usd":0.25}'
 		WHERE workspace_id = 0 AND id = 'conv_0000'`)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	archive := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -1241,30 +1206,27 @@ func TestSyncOmnigentFallbackUsageAppearsInAnalytics(t *testing.T) {
 	engine.SyncAll(t.Context(), nil)
 
 	events, err := archive.GetUsageEvents(t.Context(), "omnigent:0:conv_0000")
-	require.NoError(err)
-	require.Len(events, 1)
-	assert.Equal("claude-sonnet", events[0].Model)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "claude-sonnet", events[0].Model)
 	daily, err := archive.GetDailyUsage(t.Context(), db.UsageFilter{
 		From: "2023-11-01", To: "2023-11-30",
 	})
-	require.NoError(err)
-	require.Len(daily.Daily, 1)
-	assert.Equal(120, daily.Daily[0].InputTokens)
-	assert.Equal(30, daily.Daily[0].OutputTokens)
-	assert.Equal(money.Money{Microdollars: 250_000}, daily.Daily[0].TotalCost)
+	require.NoError(t, err)
+	require.Len(t, daily.Daily, 1)
+	assert.Equal(t, 120, daily.Daily[0].InputTokens)
+	assert.Equal(t, 30, daily.Daily[0].OutputTokens)
+	assert.Equal(t, money.Money{Microdollars: 250_000}, daily.Daily[0].TotalCost)
 }
 
 func TestSyncOmnigentInPlaceEditIsReconciledByFullSync(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
 	dbPath := writeOmnigentSplitSyncDB(t, root, 1)
 	archive := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -1273,14 +1235,14 @@ func TestSyncOmnigentInPlaceEditIsReconciledByFullSync(t *testing.T) {
 	engine.SyncAll(t.Context(), nil)
 
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `UPDATE conversation_items
 		SET data = ?, search_text = 'edited'
 		WHERE workspace_id = 0 AND conversation_id = 'conv_0000'
 		  AND id = 'conv_0000_0'`,
 		`{"role":"user","content":[{"type":"input_text","text":"edited"}]}`)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	// An in-place edit to an existing row inserts no new rowid and advances
 	// neither the item nor the conversation high-water mark, so it is
@@ -1289,12 +1251,12 @@ func TestSyncOmnigentInPlaceEditIsReconciledByFullSync(t *testing.T) {
 	engine.SyncPaths([]string{dbPath})
 	deferred, err := archive.GetAllMessages(
 		t.Context(), "omnigent:0:conv_0000")
-	require.NoError(err)
-	require.Len(deferred, 1)
-	assert.Equal("initial", deferred[0].Content,
+	require.NoError(t, err)
+	require.Len(t, deferred, 1)
+	assert.Equal(t, "initial", deferred[0].Content,
 		"the changed-path scan must defer an edit it cannot see")
 
-	engine = sync.NewEngine(archive, sync.EngineConfig{
+	engine = sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -1303,22 +1265,20 @@ func TestSyncOmnigentInPlaceEditIsReconciledByFullSync(t *testing.T) {
 	engine.SyncAll(t.Context(), nil)
 	updated, err := archive.GetAllMessages(
 		t.Context(), "omnigent:0:conv_0000")
-	require.NoError(err)
-	require.Len(updated, 1)
-	assert.Equal("edited", updated[0].Content,
+	require.NoError(t, err)
+	require.Len(t, updated, 1)
+	assert.Equal(t, "edited", updated[0].Content,
 		"the scheduled full sync must reconcile edits the scan deferred")
 }
 
 func TestSyncOmnigentArchiveAuditDetectsInPlaceItemEdit(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
 	dbPath := writeOmnigentSplitSyncDB(t, root, 1)
 	archive := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -1327,53 +1287,50 @@ func TestSyncOmnigentArchiveAuditDetectsInPlaceItemEdit(t *testing.T) {
 	engine.SyncAll(t.Context(), nil)
 
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `UPDATE conversation_items
 		SET data = ?, search_text = 'edited'
 		WHERE workspace_id = 0 AND conversation_id = 'conv_0000'
 		  AND id = 'conv_0000_0'`,
 		`{"role":"user","content":[{"type":"input_text","text":"edited"}]}`)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
-	require.NoError(engine.ReconcileWatchRoots(
+	require.NoError(t, engine.ReconcileWatchRoots(
 		t.Context(), []string{root}, false,
 	))
 	messages, err := archive.GetAllMessages(
 		t.Context(), "omnigent:0:conv_0000")
-	require.NoError(err)
-	require.Len(messages, 1)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
 	assert.Equal(t, "edited", messages[0].Content)
 }
 
 func TestAuditOmnigentDetectsMultiWorkspaceMetadataOnlyEdit(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
 	dbPath := writeOmnigentSplitSyncDB(t, root, 128)
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `INSERT INTO conversations
 		(workspace_id, id, created_at, updated_at, title, root_conversation_id)
 		VALUES (7, 'conv_workspace', 1, 2, 'before', 'conv_workspace')`)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `INSERT INTO omnigent_conversation_metadata
 		(workspace_id, id, kind, workspace)
 		VALUES (7, 'conv_workspace', 1, '/work/before')`)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `INSERT INTO conversation_items
 		(workspace_id, conversation_id, id, position, type, data, search_text)
 		VALUES (7, 'conv_workspace', 'workspace_item', 0, 1, ?, 'initial')`,
 		`{"role":"user","content":[{"type":"input_text","text":"initial"}]}`)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	archive := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -1383,31 +1340,31 @@ func TestAuditOmnigentDetectsMultiWorkspaceMetadataOnlyEdit(t *testing.T) {
 	syncOmnigentArchive(t, engine, archive, 129)
 
 	writer, err = sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `UPDATE omnigent_conversation_metadata
 		SET workspace = '/work/after'
 		WHERE workspace_id = 7 AND id = 'conv_workspace'`)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	engine.SyncPaths([]string{dbPath})
 	deferred, err := archive.GetSession(
 		t.Context(), "omnigent:7:conv_workspace",
 	)
-	require.NoError(err)
-	require.NotNil(deferred)
-	assert.Equal("/work/before", deferred.Cwd,
+	require.NoError(t, err)
+	require.NotNil(t, deferred)
+	assert.Equal(t, "/work/before", deferred.Cwd,
 		"bounded watcher discovery may defer a metadata-only edit")
 
-	require.NoError(engine.ReconcileWatchRoots(
+	require.NoError(t, engine.ReconcileWatchRoots(
 		t.Context(), []string{root}, false,
 	))
 	reconciled, err := archive.GetSession(
 		t.Context(), "omnigent:7:conv_workspace",
 	)
-	require.NoError(err)
-	require.NotNil(reconciled)
-	assert.Equal("/work/after", reconciled.Cwd,
+	require.NoError(t, err)
+	require.NotNil(t, reconciled)
+	assert.Equal(t, "/work/after", reconciled.Cwd,
 		"authoritative reconciliation must refresh multi-workspace metadata")
 }
 
@@ -1419,9 +1376,6 @@ func TestScheduledOmnigentReconciliationCatchesMetadataOnlyUsageEdit(t *testing.
 	boundedParseCounts := make(map[int]int64)
 	for _, archiveSize := range []int{130, 1030} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
 			archive := dbtest.OpenTestDB(t)
@@ -1430,7 +1384,7 @@ func TestScheduledOmnigentReconciliationCatchesMetadataOnlyUsageEdit(t *testing.
 				delegate: omnigentDefaultProviderFactory(t),
 				count:    &parseCount,
 			}
-			engine := sync.NewEngine(archive, sync.EngineConfig{
+			engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentOmnigent: {root},
 				},
@@ -1441,40 +1395,40 @@ func TestScheduledOmnigentReconciliationCatchesMetadataOnlyUsageEdit(t *testing.
 			syncOmnigentArchive(t, engine, archive, archiveSize)
 
 			writer, err := sql.Open("sqlite3", dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(), `
 				UPDATE omnigent_conversation_metadata
 				   SET session_usage = ?
 				 WHERE workspace_id = 0 AND id = 'conv_0000'`,
 				`{"input_tokens":321,"output_tokens":45}`,
 			)
-			require.NoError(err)
-			require.NoError(writer.Close())
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
 
 			engine.SyncPaths([]string{dbPath})
 			deferred, err := archive.GetUsageEvents(t.Context(), targetID)
-			require.NoError(err)
-			assert.Empty(deferred,
+			require.NoError(t, err)
+			assert.Empty(t, deferred,
 				"the bounded watcher scan may defer a metadata-only edit")
 
 			parseCount.Store(0)
-			require.NoError(engine.ReconcileProviderRoots(
+			require.NoError(t, engine.ReconcileProviderRoots(
 				t.Context(), parser.AgentOmnigent, []string{root},
 			))
-			assert.Equal(int64(1), parseCount.Load(),
+			assert.Equal(t, int64(1), parseCount.Load(),
 				"a metadata-only edit must cost one whole-container parse")
 			events, err := archive.GetUsageEvents(t.Context(), targetID)
-			require.NoError(err)
-			require.Len(events, 1)
-			assert.Equal(321, events[0].InputTokens)
-			assert.Equal(45, events[0].OutputTokens)
+			require.NoError(t, err)
+			require.Len(t, events, 1)
+			assert.Equal(t, 321, events[0].InputTokens)
+			assert.Equal(t, 45, events[0].OutputTokens)
 			boundedParseCounts[archiveSize] = parseCount.Load()
 
 			parseCount.Store(0)
-			require.NoError(engine.ReconcileProviderRoots(
+			require.NoError(t, engine.ReconcileProviderRoots(
 				t.Context(), parser.AgentOmnigent, []string{root},
 			))
-			assert.Zero(parseCount.Load(),
+			assert.Zero(t, parseCount.Load(),
 				"an unchanged container must cost the next scheduled pass nothing")
 		})
 	}
@@ -1489,30 +1443,27 @@ func TestSyncPathsOmnigentRootMetadataRefreshesExistingSubagent(t *testing.T) {
 	observed := make(map[int]int64)
 	for _, archiveSize := range []int{130, 1030} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
 			writer, err := sql.Open("sqlite3", dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(), `
 				UPDATE conversations
 				   SET parent_conversation_id = 'conv_0000',
 				       root_conversation_id = 'conv_0000'
 				 WHERE workspace_id = 0 AND id = 'conv_0001'`)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(), `
 				UPDATE omnigent_conversation_metadata
 				   SET workspace = '/work/before', git_branch = 'main'
 				 WHERE workspace_id = 0 AND id = 'conv_0000'`)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(), `
 				UPDATE omnigent_conversation_metadata
 				   SET kind = 2, workspace = '', git_branch = ''
 				 WHERE workspace_id = 0 AND id = 'conv_0001'`)
-			require.NoError(err)
-			require.NoError(writer.Close())
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
 
 			archive := dbtest.OpenTestDB(t)
 			var resultCount atomic.Int64
@@ -1521,7 +1472,7 @@ func TestSyncPathsOmnigentRootMetadataRefreshesExistingSubagent(t *testing.T) {
 				count:    new(atomic.Int64),
 				results:  &resultCount,
 			}
-			engine := sync.NewEngine(archive, sync.EngineConfig{
+			engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentOmnigent: {root},
 				},
@@ -1532,44 +1483,44 @@ func TestSyncPathsOmnigentRootMetadataRefreshesExistingSubagent(t *testing.T) {
 			syncOmnigentArchive(t, engine, archive, archiveSize)
 			childID := "omnigent:0:conv_0001"
 			before, err := archive.GetSession(t.Context(), childID)
-			require.NoError(err)
-			require.NotNil(before)
-			assert.Equal("/work/before", before.Cwd)
-			assert.Equal("before", before.Project)
-			assert.Equal("main", before.GitBranch)
+			require.NoError(t, err)
+			require.NotNil(t, before)
+			assert.Equal(t, "/work/before", before.Cwd)
+			assert.Equal(t, "before", before.Project)
+			assert.Equal(t, "main", before.GitBranch)
 
 			writer, err = sql.Open("sqlite3", dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(), `
 				UPDATE conversations
 				   SET updated_at = ?
 				 WHERE workspace_id = 0 AND id = 'conv_0000'`,
 				time.Now().Unix(),
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(), `
 				UPDATE omnigent_conversation_metadata
 				   SET workspace = '/work/after', git_branch = 'review'
 				 WHERE workspace_id = 0 AND id = 'conv_0000'`)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(), `INSERT INTO conversation_items
 				(workspace_id, conversation_id, id, position, type, data, search_text)
 				VALUES (0, 'conv_0000', 'conv_0000_refresh', 1, 1, ?, 'refresh')`,
 				`{"role":"assistant","content":[{"type":"output_text","text":"refresh"}]}`)
-			require.NoError(err)
-			require.NoError(writer.Close())
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
 
 			resultCount.Store(0)
-			require.NoError(engine.SyncPathsContext(
+			require.NoError(t, engine.SyncPathsContext(
 				t.Context(), []string{dbPath},
 			))
 			observed[archiveSize] = resultCount.Load()
 			after, err := archive.GetSession(t.Context(), childID)
-			require.NoError(err)
-			require.NotNil(after)
-			assert.Equal("/work/after", after.Cwd)
-			assert.Equal("after", after.Project)
-			assert.Equal("review", after.GitBranch)
+			require.NoError(t, err)
+			require.NotNil(t, after)
+			assert.Equal(t, "/work/after", after.Cwd)
+			assert.Equal(t, "after", after.Project)
+			assert.Equal(t, "review", after.GitBranch)
 		})
 	}
 	assert.Equal(t, observed[130], observed[1030],
@@ -1583,9 +1534,6 @@ func TestScheduledOmnigentReconciliationIsBoundedByChangedMembers(t *testing.T) 
 	observed := make(map[int]int64)
 	for _, archiveSize := range []int{130, 1030} {
 		t.Run(fmt.Sprintf("archive_%d", archiveSize), func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, archiveSize)
 			archive := dbtest.OpenTestDB(t)
@@ -1594,7 +1542,7 @@ func TestScheduledOmnigentReconciliationIsBoundedByChangedMembers(t *testing.T) 
 				delegate: omnigentDefaultProviderFactory(t),
 				count:    &parseCount,
 			}
-			engine := sync.NewEngine(archive, sync.EngineConfig{
+			engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentOmnigent: {root},
 				},
@@ -1605,72 +1553,72 @@ func TestScheduledOmnigentReconciliationIsBoundedByChangedMembers(t *testing.T) 
 			syncOmnigentArchive(t, engine, archive, archiveSize)
 
 			parseCount.Store(0)
-			require.NoError(engine.ReconcileProviderRoots(
+			require.NoError(t, engine.ReconcileProviderRoots(
 				t.Context(), parser.AgentOmnigent, []string{root},
 			))
-			assert.Zero(parseCount.Load(),
+			assert.Zero(t, parseCount.Load(),
 				"an unchanged container must cost a scheduled pass zero parses")
 
 			changedID := fmt.Sprintf("conv_%04d", archiveSize/2)
 			writer, err := sql.Open("sqlite3", dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(),
 				`UPDATE conversations SET updated_at = ?
 				 WHERE workspace_id = 0 AND id = ?`,
 				time.Now().Unix(), changedID,
 			)
-			require.NoError(err)
-			require.NoError(writer.Close())
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
 
 			parseCount.Store(0)
-			require.NoError(engine.ReconcileProviderRoots(
+			require.NoError(t, engine.ReconcileProviderRoots(
 				t.Context(), parser.AgentOmnigent, []string{root},
 			))
 			observed[archiveSize] = parseCount.Load()
-			assert.Equal(int64(1), parseCount.Load(),
+			assert.Equal(t, int64(1), parseCount.Load(),
 				"a changed container must cost one whole-container parse")
 
 			deletedID := fmt.Sprintf("conv_%04d", archiveSize-1)
 			writer, err = sql.Open("sqlite3", dbPath)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(),
 				`DELETE FROM conversation_items
 				  WHERE workspace_id = 0 AND conversation_id = ?`,
 				deletedID,
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(),
 				`DELETE FROM omnigent_conversation_metadata
 				  WHERE workspace_id = 0 AND id = ?`, deletedID,
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = writer.ExecContext(t.Context(),
 				`DELETE FROM conversations WHERE workspace_id = 0 AND id = ?`,
 				deletedID,
 			)
-			require.NoError(err)
-			require.NoError(writer.Close())
+			require.NoError(t, err)
+			require.NoError(t, writer.Close())
 
-			require.NoError(engine.ReconcileProviderRoots(
+			require.NoError(t, engine.ReconcileProviderRoots(
 				t.Context(), parser.AgentOmnigent, []string{root},
 			))
 			active, err := archive.GetSession(
 				t.Context(), "omnigent:0:"+deletedID,
 			)
-			require.NoError(err)
-			assert.NotNil(active,
+			require.NoError(t, err)
+			assert.NotNil(t, active,
 				"the deleted member must remain browsable")
 			archived, err := archive.GetSessionFull(
 				t.Context(), "omnigent:0:"+deletedID,
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 			assertSourceMissingState(t, archived)
-			assert.Equal(1, archived.MessageCount)
+			assert.Equal(t, 1, archived.MessageCount)
 			survivor, err := archive.GetSession(
 				t.Context(), "omnigent:0:conv_0000",
 			)
-			require.NoError(err)
-			assert.NotNil(survivor)
+			require.NoError(t, err)
+			assert.NotNil(t, survivor)
 		})
 	}
 	assert.Equal(t, observed[130], observed[1030],
@@ -1690,11 +1638,11 @@ func TestSyncPathsOmnigentSchemaChangeHonorsLegacyDeletionState(t *testing.T) {
 			name: "trashed",
 			deleteOld: func(t *testing.T, archive *db.DB, id string) {
 				t.Helper()
-				require.NoError(t, archive.SoftDeleteSession(id))
+				require.NoError(t, archive.SoftDeleteSession(t.Context(), id))
 			},
 			assertOld: func(t *testing.T, archive *db.DB, id string) {
 				t.Helper()
-				assert.True(t, archive.IsSessionTrashed(id),
+				assert.True(t, archive.IsSessionTrashed(t.Context(), id),
 					"legacy user-trash state must remain recoverable")
 			},
 		},
@@ -1702,11 +1650,11 @@ func TestSyncPathsOmnigentSchemaChangeHonorsLegacyDeletionState(t *testing.T) {
 			name: "permanently_excluded",
 			deleteOld: func(t *testing.T, archive *db.DB, id string) {
 				t.Helper()
-				require.NoError(t, archive.DeleteSession(id))
+				require.NoError(t, archive.DeleteSession(t.Context(), id))
 			},
 			assertOld: func(t *testing.T, archive *db.DB, id string) {
 				t.Helper()
-				assert.True(t, archive.IsSessionExcluded(id),
+				assert.True(t, archive.IsSessionExcluded(t.Context(), id),
 					"legacy permanent exclusion must remain recorded")
 			},
 		},
@@ -1716,7 +1664,7 @@ func TestSyncPathsOmnigentSchemaChangeHonorsLegacyDeletionState(t *testing.T) {
 			root := t.TempDir()
 			dbPath := writeOmnigentSplitSyncDB(t, root, 1)
 			archive := dbtest.OpenTestDB(t)
-			engine := sync.NewEngine(archive, sync.EngineConfig{
+			engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentOmnigent: {root},
 				},
@@ -1736,16 +1684,13 @@ func TestSyncPathsOmnigentSchemaChangeHonorsLegacyDeletionState(t *testing.T) {
 }
 
 func TestSyncOmnigentRetiresDeletedConversationAndPreservesSurvivors(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
 	dbPath := writeOmnigentSplitSyncDB(t, root, 65)
 	archive := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -1753,39 +1698,39 @@ func TestSyncOmnigentRetiresDeletedConversationAndPreservesSurvivors(t *testing.
 	})
 	syncOmnigentArchive(t, engine, archive, 65)
 	deleted, err := archive.GetSession(t.Context(), "omnigent:0:conv_0064")
-	require.NoError(err)
-	require.NotNil(deleted)
+	require.NoError(t, err)
+	require.NotNil(t, deleted)
 
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(),
 		`DELETE FROM conversation_items
 		  WHERE workspace_id = 0 AND conversation_id = 'conv_0064'`)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(),
 		`DELETE FROM omnigent_conversation_metadata
 		  WHERE workspace_id = 0 AND id = 'conv_0064'`)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(),
 		`DELETE FROM conversations WHERE workspace_id = 0 AND id = 'conv_0064'`)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	engine.SyncAll(t.Context(), nil)
 	deleted, err = archive.GetSession(t.Context(), "omnigent:0:conv_0064")
-	require.NoError(err)
-	assert.NotNil(deleted)
+	require.NoError(t, err)
+	assert.NotNil(t, deleted)
 	archived, err := archive.GetSessionFull(
 		t.Context(), "omnigent:0:conv_0064",
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	assertSourceMissingState(t, archived)
-	assert.Equal(1, archived.MessageCount,
+	assert.Equal(t, 1, archived.MessageCount,
 		"source-missing retirement must preserve archived messages")
 	survivor, err := archive.GetSession(
 		t.Context(), "omnigent:0:conv_0000")
-	require.NoError(err)
-	assert.NotNil(survivor)
+	require.NoError(t, err)
+	assert.NotNil(t, survivor)
 }
 
 // TestSyncOmnigentCwdFilterDeletionAppliesWithUnchangedSurvivors pins the
@@ -1797,15 +1742,13 @@ func TestSyncOmnigentRetiresDeletedConversationAndPreservesSurvivors(t *testing.
 func TestSyncOmnigentCwdFilterDeletionAppliesWithUnchangedSurvivors(
 	t *testing.T,
 ) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
 	dbPath := writeOmnigentSplitSyncDB(t, root, 2)
 	archive := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -1816,7 +1759,7 @@ func TestSyncOmnigentCwdFilterDeletionAppliesWithUnchangedSurvivors(
 	syncOmnigentArchive(t, engine, archive, 2)
 
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	for _, stmt := range []string{
 		`DELETE FROM conversation_items
 		  WHERE workspace_id = 0 AND conversation_id = 'conv_0000'`,
@@ -1825,20 +1768,20 @@ func TestSyncOmnigentCwdFilterDeletionAppliesWithUnchangedSurvivors(
 		`DELETE FROM conversations WHERE workspace_id = 0 AND id = 'conv_0000'`,
 	} {
 		_, err = writer.ExecContext(t.Context(), stmt)
-		require.NoError(err)
+		require.NoError(t, err)
 	}
-	require.NoError(writer.Close())
+	require.NoError(t, writer.Close())
 
 	engine.SyncAll(t.Context(), nil)
 	retired, err := archive.GetSessionFull(
 		t.Context(), "omnigent:0:conv_0000",
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	assertSourceMissingState(t, retired)
 	survivor, err := archive.GetSession(
 		t.Context(), "omnigent:0:conv_0001",
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.NotNil(t, survivor)
 }
 
@@ -1848,22 +1791,20 @@ func TestSyncOmnigentCwdFilterDeletionAppliesWithUnchangedSurvivors(
 // archived row remains active) even though an allowed member's deletion
 // in the same pass is applied — a source-wide gate would retire both.
 func TestSyncOmnigentCwdFilterFreezesDisallowedMissingMember(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
 	dbPath := writeOmnigentSplitSyncDB(t, root, 3)
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = writer.ExecContext(t.Context(), `UPDATE omnigent_conversation_metadata
 		SET workspace = '/other/place' WHERE workspace_id = 0 AND id = 'conv_0001'`)
-	require.NoError(err)
-	require.NoError(writer.Close())
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	archive := dbtest.OpenTestDB(t)
-	unfiltered := sync.NewEngine(archive, sync.EngineConfig{
+	unfiltered := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -1873,7 +1814,7 @@ func TestSyncOmnigentCwdFilterFreezesDisallowedMissingMember(t *testing.T) {
 	unfiltered.Close()
 
 	writer, err = sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	for _, id := range []string{"conv_0000", "conv_0001"} {
 		for _, stmt := range []string{
 			`DELETE FROM conversation_items
@@ -1883,12 +1824,12 @@ func TestSyncOmnigentCwdFilterFreezesDisallowedMissingMember(t *testing.T) {
 			`DELETE FROM conversations WHERE workspace_id = 0 AND id = ?`,
 		} {
 			_, err = writer.ExecContext(t.Context(), stmt, id)
-			require.NoError(err)
+			require.NoError(t, err)
 		}
 	}
-	require.NoError(writer.Close())
+	require.NoError(t, writer.Close())
 
-	filtered := sync.NewEngine(archive, sync.EngineConfig{
+	filtered := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -1901,21 +1842,18 @@ func TestSyncOmnigentCwdFilterFreezesDisallowedMissingMember(t *testing.T) {
 	retired, err := archive.GetSessionFull(
 		t.Context(), "omnigent:0:conv_0000",
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	assertSourceMissingState(t, retired)
 
 	frozen, err := archive.GetSession(
 		t.Context(), "omnigent:0:conv_0001",
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.NotNil(t, frozen,
 		"a missing member outside the allow-list must stay frozen, not be retired")
 }
 
 func TestReconcileOmnigentMissingContainerPreservesArchive(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -1927,7 +1865,7 @@ func TestReconcileOmnigentMissingContainerPreservesArchive(t *testing.T) {
 		delegate: omnigentDefaultProviderFactory(t),
 		count:    &parseCount,
 	}
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -1935,31 +1873,28 @@ func TestReconcileOmnigentMissingContainerPreservesArchive(t *testing.T) {
 		ProviderFactories: []parser.ProviderFactory{factory},
 	})
 	syncOmnigentArchive(t, engine, archive, 2)
-	require.NoError(os.Remove(dbPath))
+	require.NoError(t, os.Remove(dbPath))
 
 	parseCount.Store(0)
-	require.NoError(engine.SyncPathsContext(t.Context(), []string{dbPath}))
-	assert.Equal(int64(1), parseCount.Load(),
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{dbPath}))
+	assert.Equal(t, int64(1), parseCount.Load(),
 		"the missing container event must reach the persistent provider")
 	for _, id := range []string{"omnigent:0:conv_0000", "omnigent:0:conv_0001"} {
 		session, err := archive.GetSession(t.Context(), id)
-		require.NoError(err)
-		assert.NotNil(session,
+		require.NoError(t, err)
+		assert.NotNil(t, session,
 			"a vanished persistent container cannot prove member deletion")
 	}
 }
 
 func TestSyncOmnigentUnsupportedSchemaPreservesArchive(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
 	dbPath := writeOmnigentSplitSyncDB(t, root, 1)
 	archive := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -1967,15 +1902,15 @@ func TestSyncOmnigentUnsupportedSchemaPreservesArchive(t *testing.T) {
 	})
 	engine.SyncAll(t.Context(), nil)
 	before, err := archive.GetSession(t.Context(), "omnigent:0:conv_0000")
-	require.NoError(err)
-	require.NotNil(before)
+	require.NoError(t, err)
+	require.NotNil(t, before)
 
 	migrateOmnigentSyncDBToLegacyShape(t, dbPath)
 
 	firstUnsupported := engine.SyncAll(t.Context(), nil)
-	assert.Zero(firstUnsupported.Failed)
+	assert.Zero(t, firstUnsupported.Failed)
 	engine.Close()
-	restarted := sync.NewEngine(archive, sync.EngineConfig{
+	restarted := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -1983,27 +1918,24 @@ func TestSyncOmnigentUnsupportedSchemaPreservesArchive(t *testing.T) {
 	})
 	t.Cleanup(restarted.Close)
 	secondUnsupported := restarted.SyncAll(t.Context(), nil)
-	assert.Zero(secondUnsupported.Failed,
+	assert.Zero(t, secondUnsupported.Failed,
 		"a cached unsupported source must remain a clean skip")
 	after, err := archive.GetSession(t.Context(), "omnigent:0:conv_0000")
-	require.NoError(err)
-	require.NotNil(after, "unsupported source must not retire archived sessions")
-	assert.Equal(before.MessageCount, after.MessageCount)
+	require.NoError(t, err)
+	require.NotNil(t, after, "unsupported source must not retire archived sessions")
+	assert.Equal(t, before.MessageCount, after.MessageCount)
 }
 
 func TestReconcileOmnigentUnsupportedSchemaIsNonfatalAndPreservesArchive(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
 	dbPath := writeOmnigentSplitSyncDB(t, root, 1)
 	archive := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},
@@ -2014,16 +1946,16 @@ func TestReconcileOmnigentUnsupportedSchemaIsNonfatalAndPreservesArchive(
 
 	migrateOmnigentSyncDBToLegacyShape(t, dbPath)
 
-	require.NoError(engine.ReconcileWatchRootsAfterLostEvents(
+	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
 		t.Context(), []string{root}, false,
 	))
 	archived, err := archive.GetSessionFull(
 		t.Context(), "omnigent:0:conv_0000",
 	)
-	require.NoError(err)
-	require.NotNil(archived)
-	assert.Nil(archived.DeletedAt)
-	assert.Equal(1, archived.MessageCount)
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	assert.Nil(t, archived.DeletedAt)
+	assert.Equal(t, 1, archived.MessageCount)
 }
 
 // omnigentBinaryIDSyncDDL mirrors the current pinned Omnigent generation used
@@ -2064,6 +1996,7 @@ CREATE INDEX ix_conversation_items_conversation_id_position
 // form of the conversation id, the form the archived session ID is keyed on.
 func writeOmnigentBinaryIDSyncDB(t *testing.T, root string) (string, string) {
 	t.Helper()
+
 	path := filepath.Join(root, "chat.db")
 	database, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
@@ -2117,7 +2050,7 @@ func TestSyncOmnigentBinaryIDGenerationLandsUnderHexSessionID(t *testing.T) {
 	root := t.TempDir()
 	_, convHex := writeOmnigentBinaryIDSyncDB(t, root)
 	archive := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {root},
 		},

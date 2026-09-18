@@ -32,9 +32,6 @@ func (f *fetchRecorder) fetch() (pricing.Catalog, error) {
 }
 
 func TestEnsureSeedsFallbackAndFetchedModel(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := testDB(t)
 	fetcher := &fetchRecorder{rows: []pricing.ModelPricing{{
 		ModelPattern:  "new-model",
@@ -45,22 +42,20 @@ func TestEnsureSeedsFallbackAndFetchedModel(t *testing.T) {
 	refreshed, err := Ensure(
 		database, false, fetcher.fetch, pricingTestNow(),
 	)
-	require.NoError(err)
-	assert.True(refreshed)
-	assert.Equal(1, fetcher.calls)
+	require.NoError(t, err)
+	assert.True(t, refreshed)
+	assert.Equal(t, 1, fetcher.calls)
 
 	fallback, err := database.GetModelPricing("gpt-5.5")
-	require.NoError(err)
-	require.NotNil(fallback)
+	require.NoError(t, err)
+	require.NotNil(t, fallback)
 	fetched, err := database.GetModelPricing("new-model")
-	require.NoError(err)
-	require.NotNil(fetched)
-	assert.Equal(money.MustParseDollars("8"), fetched.OutputPerMTok)
+	require.NoError(t, err)
+	require.NotNil(t, fetched)
+	assert.Equal(t, money.MustParseDollars("8"), fetched.OutputPerMTok)
 }
 
 func TestSeedFallbackReseedsBandsWhenStorageVersionIsMissing(t *testing.T) {
-	require := require.New(t)
-
 	database := testDB(t)
 	fallback := pricing.FallbackPricing()
 	var gpt pricing.ModelPricing
@@ -70,23 +65,23 @@ func TestSeedFallbackReseedsBandsWhenStorageVersionIsMissing(t *testing.T) {
 			break
 		}
 	}
-	require.NotEmpty(gpt.Bands)
-	require.NoError(database.UpsertModelPricing([]db.ModelPricing{{
+	require.NotEmpty(t, gpt.Bands)
+	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:         gpt.ModelPattern,
 		InputPerMTok:         gpt.InputPerMTok,
 		OutputPerMTok:        gpt.OutputPerMTok,
 		CacheCreationPerMTok: gpt.CacheCreationPerMTok,
 		CacheReadPerMTok:     gpt.CacheReadPerMTok,
 	}}))
-	require.NoError(database.SetPricingMeta(
+	require.NoError(t, database.SetPricingMeta(
 		fallbackVersionMetaKey,
 		pricing.FallbackVersion,
 	))
 
-	require.NoError(SeedFallback(database))
+	require.NoError(t, SeedFallback(database))
 	got, err := database.GetModelPricing("gpt-5.5")
-	require.NoError(err)
-	require.NotNil(got)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 
 	assert.NotEmpty(t, got.Bands)
 }
@@ -108,9 +103,6 @@ func TestRefreshIfStaleFreshAttemptSkipsFetch(t *testing.T) {
 }
 
 func TestRefreshIfStaleStaleTriggersFetch(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := testDB(t)
 	now := pricingTestNow()
 	seedPricingAttempt(t, database, now, 2*time.Hour)
@@ -131,15 +123,15 @@ func TestRefreshIfStaleStaleTriggersFetch(t *testing.T) {
 		database, fetcher.fetch, time.Hour, now,
 	)
 
-	require.NoError(err)
-	assert.True(refreshed)
+	require.NoError(t, err)
+	assert.True(t, refreshed)
 	price, err := database.GetModelPricing("new-model")
-	require.NoError(err)
-	require.NotNil(price)
-	assert.Equal(money.MustParseDollars("10"), price.OutputPerMTok)
-	require.Len(price.Bands, 1)
-	assert.Equal(200_000, price.Bands[0].AboveInputTokens)
-	assert.Equal(money.MustParseDollars("15"), price.Bands[0].OutputPerMTok)
+	require.NoError(t, err)
+	require.NotNil(t, price)
+	assert.Equal(t, money.MustParseDollars("10"), price.OutputPerMTok)
+	require.Len(t, price.Bands, 1)
+	assert.Equal(t, 200_000, price.Bands[0].AboveInputTokens)
+	assert.Equal(t, money.MustParseDollars("15"), price.Bands[0].OutputPerMTok)
 	assertPricingAttemptMeta(t, database, now.Format(time.RFC3339))
 }
 
@@ -157,8 +149,6 @@ func TestRefreshIfStaleNeverAttemptedTriggersFetch(t *testing.T) {
 }
 
 func TestRefreshIfStaleFetchFailureRecordsAttempt(t *testing.T) {
-	assert := assert.New(t)
-
 	database := testDB(t)
 	now := pricingTestNow()
 	wantErr := errors.New("network down")
@@ -168,8 +158,8 @@ func TestRefreshIfStaleFetchFailureRecordsAttempt(t *testing.T) {
 		database, fetcher.fetch, time.Hour, now,
 	)
 
-	assert.ErrorIs(err, wantErr)
-	assert.False(refreshed)
+	require.ErrorIs(t, err, wantErr)
+	assert.False(t, refreshed)
 	assertPricingAttemptMeta(t, database, now.Format(time.RFC3339))
 
 	second := &fetchRecorder{}
@@ -177,13 +167,10 @@ func TestRefreshIfStaleFetchFailureRecordsAttempt(t *testing.T) {
 		database, second.fetch, time.Hour, now.Add(time.Minute),
 	)
 	require.NoError(t, err)
-	assert.Zero(second.calls)
+	assert.Zero(t, second.calls)
 }
 
 func TestRefreshIfStaleStoresDegradedCatalog(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := testDB(t)
 	wantErr := errors.New("openrouter down")
 	fetcher := &fetchRecorder{
@@ -199,19 +186,16 @@ func TestRefreshIfStaleStoresDegradedCatalog(t *testing.T) {
 		database, fetcher.fetch, time.Hour, pricingTestNow(),
 	)
 
-	assert.ErrorIs(err, wantErr,
+	require.ErrorIs(t, err, wantErr,
 		"the degradation is reported alongside the refresh")
-	assert.True(refreshed)
+	assert.True(t, refreshed)
 	stored, priceErr := database.GetModelPricing("degraded-model")
-	require.NoError(priceErr)
-	require.NotNil(stored, "LiteLLM rows stored despite the error")
-	assert.Equal(money.MustParseDollars("1"), stored.InputPerMTok)
+	require.NoError(t, priceErr)
+	require.NotNil(t, stored, "LiteLLM rows stored despite the error")
+	assert.Equal(t, money.MustParseDollars("1"), stored.InputPerMTok)
 }
 
 func TestRefreshIfStaleStoresGenAIDocumentWhenLiteLLMFails(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := testDB(t)
 	raw := []byte(`[
   {
@@ -225,30 +209,27 @@ func TestRefreshIfStaleStoresGenAIDocumentWhenLiteLLMFails(t *testing.T) {
   }
 ]`)
 	prices, err := pricing.ParseGenAIPrices(raw)
-	require.NoError(err)
+	require.NoError(t, err)
 	document, err := pricing.NewGenAIDocument(prices, "upstream-main")
-	require.NoError(err)
+	require.NoError(t, err)
 	wantErr := errors.New("LiteLLM unavailable")
 
 	refreshed, err := RefreshIfStale(database, func() (pricing.Catalog, error) {
 		return pricing.Catalog{GenAI: &document}, wantErr
 	}, time.Hour, pricingTestNow())
 
-	assert.ErrorIs(err, wantErr)
-	assert.True(refreshed)
+	require.ErrorIs(t, err, wantErr)
+	assert.True(t, refreshed)
 	stored, readErr := database.GetGenAIPricing(t.Context())
-	require.NoError(readErr)
-	require.NotNil(stored)
-	assert.Equal(document.Version, stored.Version)
-	assert.Equal("upstream-main", stored.SourceRef)
-	assert.Equal(db.GenAIPricingSourceFetched, stored.Source)
-	assert.Equal(raw, stored.Data)
+	require.NoError(t, readErr)
+	require.NotNil(t, stored)
+	assert.Equal(t, document.Version, stored.Version)
+	assert.Equal(t, "upstream-main", stored.SourceRef)
+	assert.Equal(t, db.GenAIPricingSourceFetched, stored.Source)
+	assert.Equal(t, raw, stored.Data)
 }
 
 func TestEnsureFetchFailurePreservesFallback(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := testDB(t)
 	wantErr := errors.New("network down")
 	fetcher := &fetchRecorder{err: wantErr}
@@ -257,17 +238,14 @@ func TestEnsureFetchFailurePreservesFallback(t *testing.T) {
 		database, false, fetcher.fetch, pricingTestNow(),
 	)
 
-	assert.ErrorIs(err, wantErr)
-	assert.False(refreshed)
+	require.ErrorIs(t, err, wantErr)
+	assert.False(t, refreshed)
 	fallback, priceErr := database.GetModelPricing("gpt-5.5")
-	require.NoError(priceErr)
-	require.NotNil(fallback)
+	require.NoError(t, priceErr)
+	require.NotNil(t, fallback)
 }
 
 func TestEnsureSkipsFetchWithinCooldown(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := testDB(t)
 	now := pricingTestNow()
 	seedPricingAttempt(t, database, now, 10*time.Minute)
@@ -279,43 +257,38 @@ func TestEnsureSkipsFetchWithinCooldown(t *testing.T) {
 
 	refreshed, err := Ensure(database, false, fetcher.fetch, now)
 
-	require.NoError(err)
-	assert.False(refreshed)
-	assert.Zero(fetcher.calls)
+	require.NoError(t, err)
+	assert.False(t, refreshed)
+	assert.Zero(t, fetcher.calls)
 	fallback, err := database.GetModelPricing("gpt-5.5")
-	require.NoError(err)
-	require.NotNil(fallback)
+	require.NoError(t, err)
+	require.NotNil(t, fallback)
 	networkOnly, err := database.GetModelPricing("network-only-model")
-	require.NoError(err)
-	assert.Nil(networkOnly)
+	require.NoError(t, err)
+	assert.Nil(t, networkOnly)
 }
 
 func TestEnsureOfflineSeedsFallbackWithoutFetch(t *testing.T) {
-	require := require.New(t)
-
 	database := testDB(t)
 	fetch := func() (pricing.Catalog, error) {
-		t.Fatal("offline ensure must not fetch")
+		require.FailNow(t, "offline ensure must not fetch")
 		return pricing.Catalog{}, nil
 	}
 
 	refreshed, err := Ensure(database, true, fetch, pricingTestNow())
 
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.False(t, refreshed)
 	fallback, err := database.GetModelPricing("gpt-5.5")
-	require.NoError(err)
-	require.NotNil(fallback)
+	require.NoError(t, err)
+	require.NotNil(t, fallback)
 }
 
 func TestStoreCatalogRetiresShadowedOpenRouterRows(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := testDB(t)
 	// A stale row from an earlier LiteLLM catalog that the live catalog
 	// no longer lists.
-	require.NoError(database.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern: "acme/Stale-Model",
 		InputPerMTok: money.MustParseDollars("1"),
 	}}))
@@ -329,19 +302,19 @@ func TestStoreCatalogRetiresShadowedOpenRouterRows(t *testing.T) {
 			InputPerMTok: money.MustParseDollars("8"),
 		},
 	}
-	require.NoError(storeCatalog(database, pricing.Catalog{
+	require.NoError(t, storeCatalog(database, pricing.Catalog{
 		OpenRouter: openrouter,
 	}))
 	meta, err := database.GetPricingMeta(pricing.OpenRouterModelsMetaKey)
-	require.NoError(err)
-	assert.Equal(`["minimax/minimax-m3"]`, meta,
+	require.NoError(t, err)
+	assert.Equal(t, `["minimax/minimax-m3"]`, meta,
 		"stored row from another source shadows OpenRouter's spelling")
 	shadowed, err := database.GetModelPricing("acme/stale-model")
-	require.NoError(err)
-	assert.Nil(shadowed)
+	require.NoError(t, err)
+	assert.Nil(t, shadowed)
 
 	// LiteLLM now lists the model under its own spelling.
-	require.NoError(storeCatalog(database, pricing.Catalog{
+	require.NoError(t, storeCatalog(database, pricing.Catalog{
 		LiteLLM: []pricing.ModelPricing{{
 			ModelPattern: "minimax/MiniMax-M3",
 			InputPerMTok: money.MustParseDollars("2"),
@@ -350,24 +323,21 @@ func TestStoreCatalogRetiresShadowedOpenRouterRows(t *testing.T) {
 	}))
 
 	stale, err := database.GetModelPricing("minimax/minimax-m3")
-	require.NoError(err)
-	assert.Nil(stale, "shadowed OpenRouter row retired")
+	require.NoError(t, err)
+	assert.Nil(t, stale, "shadowed OpenRouter row retired")
 	current, err := database.GetModelPricing("minimax/MiniMax-M3")
-	require.NoError(err)
-	require.NotNil(current)
-	assert.Equal(money.MustParseDollars("2"), current.InputPerMTok)
+	require.NoError(t, err)
+	require.NotNil(t, current)
+	assert.Equal(t, money.MustParseDollars("2"), current.InputPerMTok)
 	meta, err = database.GetPricingMeta(pricing.OpenRouterModelsMetaKey)
-	require.NoError(err)
-	assert.Equal(`[]`, meta)
+	require.NoError(t, err)
+	assert.Equal(t, `[]`, meta)
 }
 
 func TestStoreFallbackReconcilesOpenRouterOwnership(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := testDB(t)
 	fallback := pricing.FallbackPricing()
-	require.NotEmpty(fallback)
+	require.NotEmpty(t, fallback)
 	exact := fallback[0].ModelPattern
 	var spelled string
 	for _, p := range fallback {
@@ -376,8 +346,8 @@ func TestStoreFallbackReconcilesOpenRouterOwnership(t *testing.T) {
 			break
 		}
 	}
-	require.NotEmpty(spelled, "need a fallback pattern with lowercase")
-	require.NoError(storeCatalog(database, pricing.Catalog{
+	require.NotEmpty(t, spelled, "need a fallback pattern with lowercase")
+	require.NoError(t, storeCatalog(database, pricing.Catalog{
 		OpenRouter: []pricing.ModelPricing{
 			{ModelPattern: exact, InputPerMTok: money.MustParseDollars("99")},
 			{ModelPattern: spelled, InputPerMTok: money.MustParseDollars("98")},
@@ -385,19 +355,19 @@ func TestStoreFallbackReconcilesOpenRouterOwnership(t *testing.T) {
 		},
 	}))
 
-	require.NoError(SeedFallback(database))
+	require.NoError(t, SeedFallback(database))
 
 	shadowed, err := database.GetModelPricing(spelled)
-	require.NoError(err)
-	assert.Nil(shadowed, "OpenRouter spelling of a seeded model retired")
+	require.NoError(t, err)
+	assert.Nil(t, shadowed, "OpenRouter spelling of a seeded model retired")
 	seeded, err := database.GetModelPricing(exact)
-	require.NoError(err)
-	require.NotNil(seeded)
-	assert.Equal(fallback[0].InputPerMTok, seeded.InputPerMTok,
+	require.NoError(t, err)
+	require.NotNil(t, seeded)
+	assert.Equal(t, fallback[0].InputPerMTok, seeded.InputPerMTok,
 		"embedded rate wins on the exact pattern")
 	meta, err := database.GetPricingMeta(pricing.OpenRouterModelsMetaKey)
-	require.NoError(err)
-	assert.Equal(`["acme/only-openrouter"]`, meta,
+	require.NoError(t, err)
+	assert.Equal(t, `["acme/only-openrouter"]`, meta,
 		"ownership of seeded and retired patterns transferred")
 }
 
@@ -422,7 +392,7 @@ func TestEnsureCurrentCancellationAllowsImmediateRetry(t *testing.T) {
 		return pricing.Catalog{}, ctx.Err()
 	}, now)
 
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assertPricingAttemptMeta(t, database, previous)
 	retryCalls := 0
 	err = ensureCurrent(t.Context(), database, func(
@@ -458,9 +428,6 @@ func TestRefreshCurrentFetchesDespiteRecentAttempt(t *testing.T) {
 
 func TestRefreshCurrentSkipsWhileEnsureCurrentInFlight(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		database := testDB(t)
 		now := pricingTestNow()
 		ensureFetchStarted := make(chan struct{})
@@ -486,7 +453,7 @@ func TestRefreshCurrentSkipsWhileEnsureCurrentInFlight(t *testing.T) {
 		select {
 		case <-ensureFetchStarted:
 		default:
-			require.FailNow("ensureCurrent did not start its fetch")
+			require.FailNow(t, "ensureCurrent did not start its fetch")
 		}
 
 		var refreshFetchCalls atomic.Int32
@@ -509,13 +476,13 @@ func TestRefreshCurrentSkipsWhileEnsureCurrentInFlight(t *testing.T) {
 		select {
 		case refreshErr = <-refreshDone:
 		default:
-			require.FailNow("refreshCurrent did not finish while ensureCurrent was in flight")
+			require.FailNow(t, "refreshCurrent did not finish while ensureCurrent was in flight")
 		}
-		require.NoError(refreshErr)
-		assert.Zero(refreshFetchCalls.Load())
+		require.NoError(t, refreshErr)
+		assert.Zero(t, refreshFetchCalls.Load())
 		scheduledPrice, err := database.GetModelPricing("scheduled-model")
-		require.NoError(err)
-		assert.Nil(scheduledPrice)
+		require.NoError(t, err)
+		assert.Nil(t, scheduledPrice)
 
 		releaseEnsureFetch <- struct{}{}
 		synctest.Wait()
@@ -523,12 +490,12 @@ func TestRefreshCurrentSkipsWhileEnsureCurrentInFlight(t *testing.T) {
 		select {
 		case ensureErr = <-ensureDone:
 		default:
-			require.FailNow("ensureCurrent did not finish after its fetch was released")
+			require.FailNow(t, "ensureCurrent did not finish after its fetch was released")
 		}
-		require.NoError(ensureErr)
+		require.NoError(t, ensureErr)
 		ensuredPrice, err := database.GetModelPricing("ensure-model")
-		require.NoError(err)
-		require.NotNil(ensuredPrice)
+		require.NoError(t, err)
+		require.NotNil(t, ensuredPrice)
 	})
 }
 

@@ -195,11 +195,7 @@ func piebaldChatSelect(where string) string {
 	` + where
 }
 
-type piebaldChatScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanPiebaldChat(scanner piebaldChatScanner) (piebaldChatRow, error) {
+func scanPiebaldChat(scanner gooseRowScanner) (piebaldChatRow, error) {
 	var c piebaldChatRow
 	err := scanner.Scan(
 		&c.id, &c.title, &c.createdAt, &c.updatedAt,

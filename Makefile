@@ -509,10 +509,10 @@ lint-golangci-ci: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 
 .PHONY: lint-config-check lint-sql
 lint-sql:
-	go run go.kenn.io/kit/cmd/kennlint@v0.25.1-0.20260918025836-45765c649d05 sql internal/db/schema.sql
+	go run go.kenn.io/kit/cmd/kennlint@v0.25.1-0.20260918125623-3403aa33e0b6 sql internal/db/schema.sql
 
 lint-config-check:
-	go run go.kenn.io/kit/cmd/kennlint@v0.25.1-0.20260918025836-45765c649d05 config -check
+	go run go.kenn.io/kit/cmd/kennlint@v0.25.1-0.20260918125623-3403aa33e0b6 config -check
 
 # Build a custom golangci-lint binary with the kit and NilAway module plugins.
 # Strip every repo-local Git env var (GIT_DIR, GIT_INDEX_FILE,

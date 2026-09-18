@@ -60,12 +60,9 @@ func (t *recordingRawUploadTransport) CommitManifest(
 }
 
 func TestWorkerDrainSkipsPermanentlyRejectedGeneration(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	for _, name := range []string{"first.jsonl", "second.jsonl"} {
-		require.NoError(os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
 	}
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
@@ -74,9 +71,9 @@ func TestWorkerDrainSkipsPermanentlyRejectedGeneration(t *testing.T) {
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(store.Close()) })
-	require.NoError(store.SetDevice(t.Context(), "device-a"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
 	provider := newAuditProvider(root)
 	capturer := rawcapture.New(store)
 	transport := &recordingRawUploadTransport{commitErrs: []error{
@@ -91,12 +88,12 @@ func TestWorkerDrainSkipsPermanentlyRejectedGeneration(t *testing.T) {
 
 	err = worker.HandleBatch(t.Context(), syncpkg.WatchBatch{FullSync: true})
 
-	require.NoError(err)
-	assert.Equal(2, transport.commits,
+	require.NoError(t, err)
+	assert.Equal(t, 2, transport.commits,
 		"a rejected source must not prevent another source from uploading")
 	status, err := store.ClientStatus(t.Context())
-	require.NoError(err)
-	assert.Equal(1, status.PermanentFailures)
+	require.NoError(t, err)
+	assert.Equal(t, 1, status.PermanentFailures)
 }
 
 func (p *auditProvider) SourcesForChangedPath(
@@ -178,14 +175,12 @@ func (p *collidingRootProvider) PlanRawCapture(
 }
 
 func TestWorkerCapturesCollidingSourceKeysFromSeparateRoots(t *testing.T) {
-	require := require.New(t)
-
 	firstRoot := t.TempDir()
 	secondRoot := t.TempDir()
 	firstPath := filepath.Join(firstRoot, "state.db")
 	secondPath := filepath.Join(secondRoot, "state.db")
-	require.NoError(os.WriteFile(firstPath, []byte("first"), 0o600))
-	require.NoError(os.WriteFile(secondPath, []byte("second"), 0o600))
+	require.NoError(t, os.WriteFile(firstPath, []byte("first"), 0o600))
+	require.NoError(t, os.WriteFile(secondPath, []byte("second"), 0o600))
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
 		t.Context(), filepath.Join(base, "checkpoint.db"),
@@ -193,8 +188,8 @@ func TestWorkerCapturesCollidingSourceKeysFromSeparateRoots(t *testing.T) {
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(store.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	provider := newCollidingRootProvider(firstRoot, secondRoot)
 	capturer := rawcapture.New(store)
 	worker := NewWorker(
@@ -206,24 +201,22 @@ func TestWorkerCapturesCollidingSourceKeysFromSeparateRoots(t *testing.T) {
 		Paths: []string{firstPath, secondPath},
 	})
 
-	require.NoError(err)
+	require.NoError(t, err)
 	for _, rootPath := range []string{firstRoot, secondRoot} {
 		root, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentForge, rootPath)
-		require.NoError(err)
+		require.NoError(t, err)
 		_, ok, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 			Provider: parser.AgentForge, ConfiguredRootID: root.ID, SourceKey: "state.db",
 		})
-		require.NoError(err)
+		require.NoError(t, err)
 		assert.True(t, ok, rootPath)
 	}
 }
 
 func TestWorkerFullSyncAuditsBeyondBoundedLimit(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	for _, name := range []string{"first.jsonl", "second.jsonl", "third.jsonl"} {
-		require.NoError(os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
 	}
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
@@ -232,8 +225,8 @@ func TestWorkerFullSyncAuditsBeyondBoundedLimit(t *testing.T) {
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(store.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	provider := newAuditProvider(root)
 	capturer := rawcapture.New(store)
 	worker := NewWorker(
@@ -242,17 +235,17 @@ func TestWorkerFullSyncAuditsBeyondBoundedLimit(t *testing.T) {
 	)
 
 	err = worker.HandleBatch(t.Context(), syncpkg.WatchBatch{FullSync: true})
-	require.NoError(err)
+	require.NoError(t, err)
 	configured, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentClaude, root,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	for _, name := range []string{"first.jsonl", "second.jsonl", "third.jsonl"} {
 		baseState, ok, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 			Provider: parser.AgentClaude, ConfiguredRootID: configured.ID, SourceKey: name,
 		})
-		require.NoError(err)
-		require.True(ok, name)
+		require.NoError(t, err)
+		require.True(t, ok, name)
 		assert.Equal(t, rawsync.ManifestSnapshot, baseState.Kind)
 	}
 }
@@ -264,11 +257,9 @@ func TestWorkerPromotesUncertainWatchBatchesToAudit(t *testing.T) {
 	}
 	for name, batch := range tests {
 		t.Run(name, func(t *testing.T) {
-			require := require.New(t)
-
 			root := t.TempDir()
 			path := filepath.Join(root, "session.jsonl")
-			require.NoError(os.WriteFile(path, []byte("session\n"), 0o600))
+			require.NoError(t, os.WriteFile(path, []byte("session\n"), 0o600))
 			base := t.TempDir()
 			store, err := rawcheckpoint.OpenWithOptions(
 				t.Context(), filepath.Join(base, "checkpoint.db"),
@@ -276,8 +267,8 @@ func TestWorkerPromotesUncertainWatchBatchesToAudit(t *testing.T) {
 					SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 				},
 			)
-			require.NoError(err)
-			t.Cleanup(func() { require.NoError(store.Close()) })
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
 			provider := newAuditProvider(root)
 			capturer := rawcapture.New(store)
 			worker := NewWorker(
@@ -285,29 +276,26 @@ func TestWorkerPromotesUncertainWatchBatchesToAudit(t *testing.T) {
 				NewAuditor(store, capturer, 16), nil,
 			)
 
-			require.NoError(worker.HandleBatch(t.Context(), batch))
+			require.NoError(t, worker.HandleBatch(t.Context(), batch))
 
 			configured, err := store.ResolveConfiguredRoot(
 				t.Context(), parser.AgentClaude, root,
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 			_, ok, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 				Provider: parser.AgentClaude, ConfiguredRootID: configured.ID,
 				SourceKey: "session.jsonl",
 			})
-			require.NoError(err)
+			require.NoError(t, err)
 			assert.True(t, ok, "the audit must capture sources absent from batch.Paths")
 		})
 	}
 }
 
 func TestWorkerFullSyncReportsOutboxBackpressure(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	for _, name := range []string{"first.jsonl", "second.jsonl"} {
-		require.NoError(os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
 	}
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
@@ -316,9 +304,9 @@ func TestWorkerFullSyncReportsOutboxBackpressure(t *testing.T) {
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 2000,
 		},
 	)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(store.Close()) })
-	require.NoError(store.SetDevice(t.Context(), "device-a"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
 	provider := newAuditProvider(root)
 	capturer := rawcapture.New(store)
 	transport := &recordingRawUploadTransport{}
@@ -329,27 +317,24 @@ func TestWorkerFullSyncReportsOutboxBackpressure(t *testing.T) {
 
 	err = worker.HandleBatch(t.Context(), syncpkg.WatchBatch{FullSync: true})
 
-	require.ErrorIs(err, ErrFullSyncIncomplete)
-	assert.Equal(1, transport.commits, "queued work must drain before the retry")
-	require.NoError(worker.HandleBatch(t.Context(), syncpkg.WatchBatch{FullSync: true}))
-	assert.Equal(2, transport.commits, "the retry must capture and drain deferred work")
+	require.ErrorIs(t, err, ErrFullSyncIncomplete)
+	assert.Equal(t, 1, transport.commits, "queued work must drain before the retry")
+	require.NoError(t, worker.HandleBatch(t.Context(), syncpkg.WatchBatch{FullSync: true}))
+	assert.Equal(t, 2, transport.commits, "the retry must capture and drain deferred work")
 	configured, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, root)
-	require.NoError(err)
+	require.NoError(t, err)
 	for _, name := range []string{"first.jsonl", "second.jsonl"} {
 		_, ok, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 			Provider: parser.AgentClaude, ConfiguredRootID: configured.ID, SourceKey: name,
 		})
-		require.NoError(err)
-		assert.True(ok, name)
+		require.NoError(t, err)
+		assert.True(t, ok, name)
 	}
 }
 
 func TestWorkerFullSyncRetriesChangedSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
-	require.NoError(os.WriteFile(filepath.Join(root, "session.jsonl"), []byte("session\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "session.jsonl"), []byte("session\n"), 0o600))
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
 		t.Context(), filepath.Join(base, "checkpoint.db"),
@@ -357,8 +342,8 @@ func TestWorkerFullSyncRetriesChangedSource(t *testing.T) {
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(store.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	provider := newAuditProvider(root)
 	provider.planErrorAt = 2 // Fail capture after discovery resolves the source identity.
 	provider.planError = rawcapture.ErrSourceChanged
@@ -370,29 +355,27 @@ func TestWorkerFullSyncRetriesChangedSource(t *testing.T) {
 
 	err = worker.HandleBatch(t.Context(), syncpkg.WatchBatch{FullSync: true})
 
-	require.ErrorIs(err, ErrFullSyncIncomplete)
+	require.ErrorIs(t, err, ErrFullSyncIncomplete)
 	configured, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, root)
-	require.NoError(err)
+	require.NoError(t, err)
 	identity := rawcheckpoint.SourceIdentity{
 		Provider: parser.AgentClaude, ConfiguredRootID: configured.ID, SourceKey: "session.jsonl",
 	}
 	_, ok, err := store.CaptureBase(t.Context(), identity)
-	require.NoError(err)
-	assert.False(ok, "the changed source must remain uncaptured")
+	require.NoError(t, err)
+	assert.False(t, ok, "the changed source must remain uncaptured")
 
-	require.NoError(worker.HandleBatch(t.Context(), syncpkg.WatchBatch{FullSync: true}))
+	require.NoError(t, worker.HandleBatch(t.Context(), syncpkg.WatchBatch{FullSync: true}))
 	capture, ok, err := store.CaptureBase(t.Context(), identity)
-	require.NoError(err)
-	require.True(ok, "the retry must capture the source")
-	assert.Equal(rawsync.ManifestSnapshot, capture.Kind)
+	require.NoError(t, err)
+	require.True(t, ok, "the retry must capture the source")
+	assert.Equal(t, rawsync.ManifestSnapshot, capture.Kind)
 }
 
 func TestWorkerFullSyncReportsIncompleteDiscovery(t *testing.T) {
-	require := require.New(t)
-
 	healthyRoot := t.TempDir()
 	healthyPath := filepath.Join(healthyRoot, "session.jsonl")
-	require.NoError(os.WriteFile(healthyPath, []byte("healthy"), 0o600))
+	require.NoError(t, os.WriteFile(healthyPath, []byte("healthy"), 0o600))
 	unavailableRoot := filepath.Join(t.TempDir(), "unavailable")
 	provider := newPartialAuditProvider(healthyRoot, unavailableRoot)
 	provider.unavailableRoot = unavailableRoot
@@ -403,8 +386,8 @@ func TestWorkerFullSyncReportsIncompleteDiscovery(t *testing.T) {
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(store.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	capturer := rawcapture.New(store)
 	worker := NewWorker(
 		[]parser.Provider{provider}, capturer,
@@ -413,28 +396,25 @@ func TestWorkerFullSyncReportsIncompleteDiscovery(t *testing.T) {
 
 	err = worker.HandleBatch(t.Context(), syncpkg.WatchBatch{FullSync: true})
 
-	require.ErrorIs(err, ErrFullSyncIncomplete)
+	require.ErrorIs(t, err, ErrFullSyncIncomplete)
 	configured, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentClaude, healthyRoot,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, ok, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 		Provider: parser.AgentClaude, ConfiguredRootID: configured.ID,
 		SourceKey: "session.jsonl",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.True(t, ok, "healthy sources must still be captured")
 }
 
 func TestWorkerAuditsMissingFallbackAndContinuesBatch(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	deletedPath := filepath.Join(root, "deleted.jsonl")
 	changedPath := filepath.Join(root, "changed.jsonl")
-	require.NoError(os.WriteFile(deletedPath, []byte("old\n"), 0o600))
-	require.NoError(os.WriteFile(changedPath, []byte("one\n"), 0o600))
+	require.NoError(t, os.WriteFile(deletedPath, []byte("old\n"), 0o600))
+	require.NoError(t, os.WriteFile(changedPath, []byte("one\n"), 0o600))
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
 		t.Context(), filepath.Join(base, "checkpoint.db"),
@@ -442,8 +422,8 @@ func TestWorkerAuditsMissingFallbackAndContinuesBatch(t *testing.T) {
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(store.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	provider := newAuditProvider(root)
 	provider.missingPathFallback = true
 	capturer := rawcapture.New(store)
@@ -451,43 +431,40 @@ func TestWorkerAuditsMissingFallbackAndContinuesBatch(t *testing.T) {
 		[]parser.Provider{provider}, capturer,
 		NewAuditor(store, capturer, 16), nil,
 	)
-	require.NoError(worker.AuditAll(t.Context()))
-	require.NoError(os.Remove(deletedPath))
-	require.NoError(os.WriteFile(changedPath, []byte("two\n"), 0o600))
+	require.NoError(t, worker.AuditAll(t.Context()))
+	require.NoError(t, os.Remove(deletedPath))
+	require.NoError(t, os.WriteFile(changedPath, []byte("two\n"), 0o600))
 
 	err = worker.HandleBatch(t.Context(), syncpkg.WatchBatch{
 		Paths: []string{deletedPath, changedPath},
 	})
 
-	require.NoError(err)
+	require.NoError(t, err)
 	configured, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentClaude, root,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	deleted, ok, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 		Provider: parser.AgentClaude, ConfiguredRootID: configured.ID,
 		SourceKey: "deleted.jsonl",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(rawsync.ManifestTombstone, deleted.Kind)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, rawsync.ManifestTombstone, deleted.Kind)
 	changed, ok, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 		Provider: parser.AgentClaude, ConfiguredRootID: configured.ID,
 		SourceKey: "changed.jsonl",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(rawsync.ManifestSnapshot, changed.Kind)
-	assert.Equal(int64(4), changed.Entries[0].Length)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, rawsync.ManifestSnapshot, changed.Kind)
+	assert.Equal(t, int64(4), changed.Entries[0].Length)
 }
 
 func TestWorkerCapturesChangedPathAndAuditsDeletionWithoutParsing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(root, "session.jsonl")
-	require.NoError(os.WriteFile(path, []byte("one\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("one\n"), 0o600))
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
 		t.Context(), filepath.Join(base, "checkpoint.db"),
@@ -495,8 +472,8 @@ func TestWorkerCapturesChangedPathAndAuditsDeletionWithoutParsing(t *testing.T) 
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(store.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	provider := newAuditProvider(root)
 	capturer := rawcapture.New(store)
 	worker := NewWorker(
@@ -505,40 +482,38 @@ func TestWorkerCapturesChangedPathAndAuditsDeletionWithoutParsing(t *testing.T) 
 	)
 
 	err = worker.HandleBatch(t.Context(), syncpkg.WatchBatch{Paths: []string{path}})
-	require.NoError(err)
+	require.NoError(t, err)
 	configured, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, root)
-	require.NoError(err)
+	require.NoError(t, err)
 	identity := rawcheckpoint.SourceIdentity{
 		Provider: parser.AgentClaude, ConfiguredRootID: configured.ID,
 		SourceKey: "session.jsonl",
 	}
 	first, ok, err := store.CaptureBase(t.Context(), identity)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(rawsync.ManifestSnapshot, first.Kind)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, rawsync.ManifestSnapshot, first.Kind)
 
-	require.NoError(os.WriteFile(path, []byte("two\n"), 0o600))
-	require.NoError(worker.HandleBatch(
+	require.NoError(t, os.WriteFile(path, []byte("two\n"), 0o600))
+	require.NoError(t, worker.HandleBatch(
 		t.Context(), syncpkg.WatchBatch{Paths: []string{path}},
 	))
 	second, ok, err := store.CaptureBase(t.Context(), identity)
-	require.NoError(err)
-	require.True(ok)
-	assert.NotEqual(first.CaptureID, second.CaptureID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.NotEqual(t, first.CaptureID, second.CaptureID)
 
-	require.NoError(os.Remove(path))
-	require.NoError(worker.HandleBatch(
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, worker.HandleBatch(
 		t.Context(), syncpkg.WatchBatch{Paths: []string{path}},
 	))
 	deleted, ok, err := store.CaptureBase(t.Context(), identity)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(rawsync.ManifestTombstone, deleted.Kind)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, rawsync.ManifestTombstone, deleted.Kind)
 }
 
 func TestWorkerAuditSkipsMissingProviderRootAndContinues(t *testing.T) {
-	require := require.New(t)
-
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
 		t.Context(), filepath.Join(base, "checkpoint.db"),
@@ -546,11 +521,11 @@ func TestWorkerAuditSkipsMissingProviderRootAndContinues(t *testing.T) {
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(store.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	healthyRoot := t.TempDir()
 	healthyPath := filepath.Join(healthyRoot, "session.jsonl")
-	require.NoError(os.WriteFile(healthyPath, []byte("healthy\n"), 0o600))
+	require.NoError(t, os.WriteFile(healthyPath, []byte("healthy\n"), 0o600))
 	missing := newAuditProvider(filepath.Join(t.TempDir(), "missing"))
 	healthy := newAuditProvider(healthyRoot)
 	capturer := rawcapture.New(store)
@@ -561,15 +536,15 @@ func TestWorkerAuditSkipsMissingProviderRootAndContinues(t *testing.T) {
 
 	err = worker.AuditAll(t.Context())
 
-	require.NoError(err)
+	require.NoError(t, err)
 	configured, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentClaude, healthyRoot,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, ok, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 		Provider: parser.AgentClaude, ConfiguredRootID: configured.ID,
 		SourceKey: "session.jsonl",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.True(t, ok)
 }

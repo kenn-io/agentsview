@@ -468,6 +468,7 @@ func readUsageRollupInstalls(
 	if err != nil {
 		return nil, nil, err
 	}
+	defer rows.Close()
 	installs := make(map[string]usageRollupInstall)
 	sources := make(map[string]usageSourceVersion)
 	baked := make(map[string][2]string)
@@ -489,7 +490,7 @@ func readUsageRollupInstalls(
 		baked[item.SessionID] = [2]string{agent, startedAt}
 		pricing[item.SessionID] = installedPricing
 	}
-	if err := rows.Close(); err != nil {
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, nil, err
 	}
 	sessions := make(map[string]usageQuerySession, len(snapshot.Sessions))

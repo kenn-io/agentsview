@@ -18,9 +18,6 @@ import (
 func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	filePath := "/provider/session.jsonl"
@@ -74,56 +71,54 @@ func TestRewriteManifestForImportClearsLocalStateAndPrefixesRelationships(
 
 	write := rewriteManifestForImport(m, messages)
 	importedID := contractOrigin + "~session"
-	assert.Equal(importedID, write.Session.ID)
-	assert.Equal(contractOrigin, write.Session.Machine)
-	assert.Equal(m.SessionName, write.Session.SessionName)
-	assert.Nil(write.Session.FilePath)
-	assert.Nil(write.Session.FileSize)
-	assert.Nil(write.Session.FileMtime)
-	assert.Nil(write.Session.FileInode)
-	assert.Nil(write.Session.FileDevice)
-	assert.Nil(write.Session.FileHash)
-	assert.Zero(write.Session.NextOrdinal)
-	assert.Nil(write.Session.LastEntryUUID)
-	assert.Zero(write.Session.SecretLeakCount)
-	assert.Empty(write.Session.SecretsRulesVersion)
-	assert.Equal(contractOrigin+"~source", write.Session.SourceSessionID)
-	require.NotNil(write.Session.ParentSessionID)
-	assert.Equal(contractOrigin+"~parent", *write.Session.ParentSessionID)
-	assert.True(write.Session.HasToolCalls)
-	assert.True(write.Session.HasContextData)
-	assert.Equal(
+	assert.Equal(t, importedID, write.Session.ID)
+	assert.Equal(t, contractOrigin, write.Session.Machine)
+	assert.Equal(t, m.SessionName, write.Session.SessionName)
+	assert.Nil(t, write.Session.FilePath)
+	assert.Nil(t, write.Session.FileSize)
+	assert.Nil(t, write.Session.FileMtime)
+	assert.Nil(t, write.Session.FileInode)
+	assert.Nil(t, write.Session.FileDevice)
+	assert.Nil(t, write.Session.FileHash)
+	assert.Zero(t, write.Session.NextOrdinal)
+	assert.Nil(t, write.Session.LastEntryUUID)
+	assert.Zero(t, write.Session.SecretLeakCount)
+	assert.Empty(t, write.Session.SecretsRulesVersion)
+	assert.Equal(t, contractOrigin+"~source", write.Session.SourceSessionID)
+	require.NotNil(t, write.Session.ParentSessionID)
+	assert.Equal(t, contractOrigin+"~parent", *write.Session.ParentSessionID)
+	assert.True(t, write.Session.HasToolCalls)
+	assert.True(t, write.Session.HasContextData)
+	assert.Equal(t,
 		m.SessionQualitySignals.dbQualitySignals(),
 		write.Session.StoredQualitySignals(),
 	)
-	assert.True(write.ReplaceMessages)
-	assert.Equal(m.DataVersion, write.DataVersion)
-	assert.Empty(write.Findings)
+	assert.True(t, write.ReplaceMessages)
+	assert.Equal(t, m.DataVersion, write.DataVersion)
+	assert.Empty(t, write.Findings)
 
-	require.Len(write.Messages, 1)
-	assert.Zero(write.Messages[0].ID)
-	assert.Equal(importedID, write.Messages[0].SessionID)
-	require.Len(write.Messages[0].ToolCalls, 1)
+	require.Len(t, write.Messages, 1)
+	assert.Zero(t, write.Messages[0].ID)
+	assert.Equal(t, importedID, write.Messages[0].SessionID)
+	require.Len(t, write.Messages[0].ToolCalls, 1)
 	call := write.Messages[0].ToolCalls[0]
-	assert.Zero(call.MessageID)
-	assert.Equal(importedID, call.SessionID)
-	assert.Equal(contractOrigin+"~child", call.SubagentSessionID)
-	require.Len(call.ResultEvents, 1)
-	assert.Equal(
+	assert.Zero(t, call.MessageID)
+	assert.Equal(t, importedID, call.SessionID)
+	assert.Equal(t, contractOrigin+"~child", call.SubagentSessionID)
+	require.Len(t, call.ResultEvents, 1)
+	assert.Equal(t,
 		contractOrigin+"~existing",
 		call.ResultEvents[0].SubagentSessionID,
 	)
 
-	require.Len(write.UsageEvents, 1)
-	assert.Equal(importedID, write.UsageEvents[0].SessionID)
-	assert.Equal(m.UsageEvents[0].Cost, write.UsageEvents[0].Cost)
-	assert.Empty(write.Signals.SecretsRulesVersion)
-	assert.Zero(write.Signals.SecretLeakCount)
+	require.Len(t, write.UsageEvents, 1)
+	assert.Equal(t, importedID, write.UsageEvents[0].SessionID)
+	assert.Equal(t, m.UsageEvents[0].Cost, write.UsageEvents[0].Cost)
+	assert.Empty(t, write.Signals.SecretsRulesVersion)
+	assert.Zero(t, write.Signals.SecretLeakCount)
 }
 
 func TestDowngradeImportedAssetReferencesKeepsInlineImages(t *testing.T) {
-	assert := assert.New(t)
-
 	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"byte_size":3,"image_ref":"asset://abc.png","media_type":"image/png","sha256":"abc","text":"![Image: image/png, 3 bytes](asset://abc.png)","type":"agentsview_image","version":1}]`
 	messages := []db.Message{{ToolCalls: []db.ToolCall{{
 		ResultContent:       content,
@@ -137,17 +132,14 @@ func TestDowngradeImportedAssetReferencesKeepsInlineImages(t *testing.T) {
 	downgradeImportedAssetReferences(messages)
 
 	call := messages[0].ToolCalls[0]
-	assert.Contains(call.ResultContent, "data:image/png;base64,AAEC")
-	assert.NotContains(call.ResultContent, "image_ref")
-	assert.NotContains(call.ResultContent, "asset://")
-	assert.Contains(call.ResultEvents[0].Content, "data:image/png;base64,AAEC")
-	assert.NotContains(call.ResultEvents[0].Content, "image_ref")
+	assert.Contains(t, call.ResultContent, "data:image/png;base64,AAEC")
+	assert.NotContains(t, call.ResultContent, "image_ref")
+	assert.NotContains(t, call.ResultContent, "asset://")
+	assert.Contains(t, call.ResultEvents[0].Content, "data:image/png;base64,AAEC")
+	assert.NotContains(t, call.ResultEvents[0].Content, "image_ref")
 }
 
 func TestLoadImportedSessionCompleteClosure(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	database := testExportDB(t)
@@ -163,17 +155,14 @@ func TestLoadImportedSessionCompleteClosure(t *testing.T) {
 		contractOrigin+"~session", manifestHash,
 		productionArtifactLimits(),
 	)
-	require.NoError(err)
-	assert.Equal(importClosureComplete, outcome)
-	assert.Equal(contractOrigin+"~session", write.Session.ID)
-	require.Len(write.Messages, 1)
-	assert.Equal("hello", write.Messages[0].Content)
+	require.NoError(t, err)
+	assert.Equal(t, importClosureComplete, outcome)
+	assert.Equal(t, contractOrigin+"~session", write.Session.ID)
+	require.Len(t, write.Messages, 1)
+	assert.Equal(t, "hello", write.Messages[0].Content)
 }
 
 func TestLoadImportedSessionDefersOversizedFutureSegment(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	database := testExportDB(t)
@@ -199,12 +188,12 @@ func TestLoadImportedSessionDefersOversizedFutureSegment(t *testing.T) {
 		contractOrigin+"~session", manifestHash,
 		productionArtifactLimits(),
 	)
-	assert.Equal(importClosureDeferred, outcome)
-	require.ErrorIs(err, errFutureArtifactVersion)
+	assert.Equal(t, importClosureDeferred, outcome)
+	require.ErrorIs(t, err, errFutureArtifactVersion)
 	var future *futureArtifactVersionError
-	require.ErrorAs(err, &future)
-	assert.Equal(Kind(KindSegments), future.Kind)
-	assert.Equal(messageSegmentFormatVersion+1, future.Version)
+	require.ErrorAs(t, err, &future)
+	assert.Equal(t, Kind(KindSegments), future.Kind)
+	assert.Equal(t, messageSegmentFormatVersion+1, future.Version)
 }
 
 func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
@@ -224,6 +213,8 @@ func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
 		{
 			name: "missing segment",
 			prepare: func(t *testing.T, store ArtifactStore) string {
+				t.Helper()
+
 				m := importTestManifest("session")
 				m.Segments = []string{strings.Repeat("b", 64)}
 				return createImportTestManifest(t, store, m, false)
@@ -232,6 +223,8 @@ func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
 		{
 			name: "future manifest",
 			prepare: func(t *testing.T, store ArtifactStore) string {
+				t.Helper()
+
 				body := []byte(`{"origin":"contract-a1b2c3","v":5}`)
 				return createHashedImportArtifact(
 					t, store, KindManifests, ".json", body,
@@ -242,6 +235,8 @@ func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
 		{
 			name: "future segment",
 			prepare: func(t *testing.T, store ArtifactStore) string {
+				t.Helper()
+
 				segment := []byte(fmt.Sprintf(
 					"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":%d}\n",
 					messageSegmentFormatVersion+1,
@@ -258,8 +253,7 @@ func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
+			t.Parallel()
 
 			database := testExportDB(t)
 			store := newTestArtifactStore(t)
@@ -270,15 +264,15 @@ func TestLoadImportedSessionDefersMissingAndFutureDependencies(t *testing.T) {
 				contractOrigin+"~session", manifestHash,
 				productionArtifactLimits(),
 			)
-			assert.Equal(importClosureDeferred, outcome)
+			assert.Equal(t, importClosureDeferred, outcome)
 			if tc.futureKind == "" {
-				require.NoError(err)
+				require.NoError(t, err)
 				return
 			}
-			require.ErrorIs(err, errFutureArtifactVersion)
+			require.ErrorIs(t, err, errFutureArtifactVersion)
 			var future *futureArtifactVersionError
-			require.ErrorAs(err, &future)
-			assert.Equal(tc.futureKind, future.Kind)
+			require.ErrorAs(t, err, &future)
+			assert.Equal(t, tc.futureKind, future.Kind)
 		})
 	}
 }
@@ -295,6 +289,7 @@ func TestLoadImportedSessionQuarantinesInvalidStatDependency(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			database := testExportDB(t)
 			base := newTestArtifactStore(t)
 			m := importTestManifest("session")
@@ -340,6 +335,8 @@ func TestLoadImportedSessionQuarantinesPersistenceInvariantViolations(
 		{
 			name: "duplicate message ordinals",
 			prepare: func(t *testing.T, store ArtifactStore) (manifest, string) {
+				t.Helper()
+
 				m := importTestManifest("session")
 				hash := createImportTestClosure(t, store, &m, []db.Message{
 					{Ordinal: 0, Role: "user", Content: "one"},
@@ -351,6 +348,8 @@ func TestLoadImportedSessionQuarantinesPersistenceInvariantViolations(
 		{
 			name: "manifest message count mismatch",
 			prepare: func(t *testing.T, store ArtifactStore) (manifest, string) {
+				t.Helper()
+
 				m := importTestManifest("session")
 				segment, err := encodeSegment([]db.Message{{
 					Ordinal: 0, Role: "user", Content: "one",
@@ -369,6 +368,8 @@ func TestLoadImportedSessionQuarantinesPersistenceInvariantViolations(
 		{
 			name: "manifest user message count mismatch",
 			prepare: func(t *testing.T, store ArtifactStore) (manifest, string) {
+				t.Helper()
+
 				m := importTestManifest("session")
 				createImportTestClosure(t, store, &m, []db.Message{{
 					Ordinal: 0, Role: "user", Content: "one",
@@ -381,6 +382,8 @@ func TestLoadImportedSessionQuarantinesPersistenceInvariantViolations(
 		{
 			name: "duplicate nonempty usage key",
 			prepare: func(t *testing.T, store ArtifactStore) (manifest, string) {
+				t.Helper()
+
 				m := importTestManifest("session")
 				m.UsageEvents = []artifactUsageEvent{
 					{Source: "provider", DedupKey: "same"},
@@ -395,6 +398,7 @@ func TestLoadImportedSessionQuarantinesPersistenceInvariantViolations(
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			database := testExportDB(t)
 			store := newTestArtifactStore(t)
 			_, manifestHash := tc.prepare(t, store)
@@ -425,6 +429,8 @@ func TestLoadImportedSessionQuarantinesInvalidCompleteDependency(t *testing.T) {
 		{
 			name: "wrong manifest origin",
 			prepare: func(t *testing.T, store ArtifactStore) (string, Ref) {
+				t.Helper()
+
 				m := importTestManifest("session")
 				m.Origin = "another-a1b2c3"
 				body, err := canonicalJSON(m)
@@ -440,6 +446,8 @@ func TestLoadImportedSessionQuarantinesInvalidCompleteDependency(t *testing.T) {
 		{
 			name: "native ID contains separator",
 			prepare: func(t *testing.T, store ArtifactStore) (string, Ref) {
+				t.Helper()
+
 				m := importTestManifest("bad~session")
 				m.Session.ID = "bad~session"
 				body, err := canonicalJSON(m)
@@ -455,6 +463,8 @@ func TestLoadImportedSessionQuarantinesInvalidCompleteDependency(t *testing.T) {
 		{
 			name: "invalid segment",
 			prepare: func(t *testing.T, store ArtifactStore) (string, Ref) {
+				t.Helper()
+
 				segment := []byte("{not-json}\n")
 				segmentHash := createHashedImportArtifact(
 					t, store, KindSegments, ".ndjson", segment,
@@ -470,6 +480,7 @@ func TestLoadImportedSessionQuarantinesInvalidCompleteDependency(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			database := testExportDB(t)
 			store := newTestArtifactStore(t)
 			manifestHash, invalidRef := tc.prepare(t, store)
@@ -488,9 +499,6 @@ func TestLoadImportedSessionQuarantinesInvalidCompleteDependency(t *testing.T) {
 }
 
 func TestLoadImportedSessionAcceptsNoncanonicalManifestAndSegment(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	database := testExportDB(t)
@@ -507,9 +515,9 @@ func TestLoadImportedSessionAcceptsNoncanonicalManifestAndSegment(t *testing.T) 
 	m.Session.UserMessageCount = 1
 	m.Segments = []string{segmentHash}
 	canonical, err := canonicalJSON(m)
-	require.NoError(err)
+	require.NoError(t, err)
 	var indented bytes.Buffer
-	require.NoError(jsonIndent(&indented, canonical))
+	require.NoError(t, jsonIndent(&indented, canonical))
 	manifestHash := createHashedImportArtifact(
 		t, store, KindManifests, ".json", indented.Bytes(),
 	)
@@ -519,10 +527,10 @@ func TestLoadImportedSessionAcceptsNoncanonicalManifestAndSegment(t *testing.T) 
 		contractOrigin+"~session", manifestHash,
 		productionArtifactLimits(),
 	)
-	require.NoError(err)
-	assert.Equal(importClosureComplete, outcome)
-	require.Len(write.Messages, 1)
-	assert.Equal("hello", write.Messages[0].Content)
+	require.NoError(t, err)
+	assert.Equal(t, importClosureComplete, outcome)
+	require.Len(t, write.Messages, 1)
+	assert.Equal(t, "hello", write.Messages[0].Content)
 }
 
 func TestLoadImportedSessionEnforcesAggregateLimits(t *testing.T) {
@@ -597,6 +605,7 @@ func TestLoadImportedSessionAggregateBoundaries(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			for _, count := range []int{2, 3} {
 				database := testExportDB(t)
 				store := newTestArtifactStore(t)
@@ -622,8 +631,7 @@ func TestLoadImportedSessionAggregateBoundaries(t *testing.T) {
 	}
 
 	t.Run("decoded bytes", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
+		t.Parallel()
 
 		database := testExportDB(t)
 		store := newTestArtifactStore(t)
@@ -633,7 +641,7 @@ func TestLoadImportedSessionAggregateBoundaries(t *testing.T) {
 		}}
 		manifestHash := createImportTestClosure(t, store, &m, messages)
 		segmentBody, err := encodeSegment(messages)
-		require.NoError(err)
+		require.NoError(t, err)
 
 		for _, delta := range []int64{0, -1} {
 			limits := productionArtifactLimits()
@@ -642,11 +650,11 @@ func TestLoadImportedSessionAggregateBoundaries(t *testing.T) {
 				t.Context(), database, store, contractOrigin,
 				contractOrigin+"~session", manifestHash, limits,
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 			if delta == 0 {
-				assert.Equal(importClosureComplete, outcome)
+				assert.Equal(t, importClosureComplete, outcome)
 			} else {
-				assert.Equal(importClosureInvalid, outcome)
+				assert.Equal(t, importClosureInvalid, outcome)
 			}
 		}
 	})

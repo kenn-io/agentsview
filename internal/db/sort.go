@@ -285,7 +285,7 @@ func CursorPredicateValues(cur SessionCursor, rs []ResolvedSort) ([]any, error) 
 		}
 		v, err := typedCursorValue(keys[i].Value, r.Sort.kind)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalidCursor, err)
+			return nil, fmt.Errorf("%w: %w", ErrInvalidCursor, err)
 		}
 		vals[i] = v
 	}

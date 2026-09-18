@@ -1291,8 +1291,6 @@ func TestCreateGist(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			t.Parallel()
 			ts := stubServer(t, http.MethodPost, "tok", tt.respStatus, tt.respBody)
 			defer ts.Close()
@@ -1319,9 +1317,9 @@ func TestCreateGist(t *testing.T) {
 			}
 			require.NoError(t, err)
 
-			assert.Equal(tt.wantID, got.ID)
-			assert.Equal(tt.wantURL, got.HTMLURL)
-			assert.Equal(tt.wantLogin, got.Owner.Login)
+			assert.Equal(t, tt.wantID, got.ID)
+			assert.Equal(t, tt.wantURL, got.HTMLURL)
+			assert.Equal(t, tt.wantLogin, got.Owner.Login)
 		})
 	}
 }

@@ -15,9 +15,6 @@ import (
 )
 
 func TestJSONLSourceSetDiscoverRecursiveStableSources(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	writeSourceFile(t, filepath.Join(root, "b.jsonl"), "{}\n")
 	writeSourceFile(t, filepath.Join(root, "a.jsonl"), "{}\n")
@@ -42,20 +39,20 @@ func TestJSONLSourceSetDiscoverRecursiveStableSources(t *testing.T) {
 	roots[0] = filepath.Join(root, "mutated")
 
 	discovered, err := sources.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 3)
+	require.NoError(t, err)
+	require.Len(t, discovered, 3)
 
-	assert.Equal([]string{
+	assert.Equal(t, []string{
 		"a.jsonl",
 		"b.jsonl",
 		"nested/c.jsonl",
 	}, sourceKeys(discovered))
-	assert.Equal([]string{"", "", "nested"}, sourceProjects(discovered))
+	assert.Equal(t, []string{"", "", "nested"}, sourceProjects(discovered))
 	for _, source := range discovered {
-		assert.Equal(AgentCodex, source.Provider)
-		assert.Equal(source.DisplayPath, source.FingerprintKey)
-		assert.NotEmpty(source.DisplayPath)
-		assert.IsType(JSONLSource{}, source.Opaque)
+		assert.Equal(t, AgentCodex, source.Provider)
+		assert.Equal(t, source.DisplayPath, source.FingerprintKey)
+		assert.NotEmpty(t, source.DisplayPath)
+		assert.IsType(t, JSONLSource{}, source.Opaque)
 	}
 }
 
@@ -72,11 +69,8 @@ func TestJSONLSourceSetStreamingDiscoveryPropagatesTraversalErrors(t *testing.T)
 	})
 
 	t.Run("followed source stat", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		root := t.TempDir()
-		require.NoError(os.Symlink(
+		require.NoError(t, os.Symlink(
 			filepath.Join(root, "missing-target"), filepath.Join(root, "a-broken.jsonl"),
 		))
 		writeSourceFile(t, filepath.Join(root, "z-healthy.jsonl"), "{}\n")
@@ -90,25 +84,22 @@ func TestJSONLSourceSetStreamingDiscoveryPropagatesTraversalErrors(t *testing.T)
 			return nil
 		})
 
-		require.Error(err)
-		assert.ErrorIs(err, os.ErrNotExist)
+		require.Error(t, err)
+		require.ErrorIs(t, err, os.ErrNotExist)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(err, &incomplete)
-		assert.Equal([]string{filepath.Join(root, "z-healthy.jsonl")}, yielded)
+		require.ErrorAs(t, err, &incomplete)
+		assert.Equal(t, []string{filepath.Join(root, "z-healthy.jsonl")}, yielded)
 	})
 
 	t.Run("followed directory symlink stat", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		root := t.TempDir()
 		target := filepath.Join(t.TempDir(), "linked-dir")
-		require.NoError(os.MkdirAll(target, 0o755))
+		require.NoError(t, os.MkdirAll(target, 0o755))
 		link := filepath.Join(root, "a-linked")
 		if err := os.Symlink(target, link); err != nil {
 			t.Skipf("symlink not supported: %v", err)
 		}
-		require.NoError(os.RemoveAll(target))
+		require.NoError(t, os.RemoveAll(target))
 		writeSourceFile(t, filepath.Join(root, "z-healthy.jsonl"), "{}\n")
 		// No exported option follows directory symlinks without also
 		// following file symlinks, whose own stat failure would mask
@@ -123,11 +114,11 @@ func TestJSONLSourceSetStreamingDiscoveryPropagatesTraversalErrors(t *testing.T)
 			return nil
 		})
 
-		require.Error(err)
-		assert.ErrorIs(err, os.ErrNotExist)
+		require.Error(t, err)
+		require.ErrorIs(t, err, os.ErrNotExist)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(err, &incomplete)
-		assert.Equal([]string{filepath.Join(root, "z-healthy.jsonl")}, yielded)
+		require.ErrorAs(t, err, &incomplete)
+		assert.Equal(t, []string{filepath.Join(root, "z-healthy.jsonl")}, yielded)
 	})
 
 	t.Run("entry info race continues healthy sibling", func(t *testing.T) {
@@ -156,15 +147,13 @@ func TestJSONLSourceSetStreamingDiscoveryPropagatesTraversalErrors(t *testing.T)
 			return nil
 		})
 
-		assert.ErrorIs(t, err, os.ErrNotExist)
+		require.ErrorIs(t, err, os.ErrNotExist)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(t, err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 		assert.Equal(t, []string{healthy}, yielded)
 	})
 
 	t.Run("nested directory read continues healthy sibling", func(t *testing.T) {
-		assert := assert.New(t)
-
 		root := t.TempDir()
 		nested := filepath.Join(root, "a-nested")
 		require.NoError(t, os.Mkdir(nested, 0o755))
@@ -196,10 +185,10 @@ func TestJSONLSourceSetStreamingDiscoveryPropagatesTraversalErrors(t *testing.T)
 			return nil
 		})
 
-		assert.ErrorIs(err, injected)
+		require.ErrorIs(t, err, injected)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(err, &incomplete)
-		assert.Equal([]string{healthy}, yielded)
+		require.ErrorAs(t, err, &incomplete)
+		assert.Equal(t, []string{healthy}, yielded)
 	})
 
 	t.Run("yield error aborts immediately", func(t *testing.T) {
@@ -215,7 +204,7 @@ func TestJSONLSourceSetStreamingDiscoveryPropagatesTraversalErrors(t *testing.T)
 			return injected
 		})
 
-		assert.ErrorIs(t, err, injected)
+		require.ErrorIs(t, err, injected)
 		assert.Equal(t, 1, calls)
 	})
 }
@@ -254,9 +243,6 @@ func TestJSONLSourceSetShallowDiscoveryAndFilters(t *testing.T) {
 }
 
 func TestJSONLSourceSetWatchChangedPathFindAndFingerprint(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(root, "nested", "session-1.jsonl")
 	content := "{\"role\":\"user\"}\n"
@@ -269,22 +255,22 @@ func TestJSONLSourceSetWatchChangedPathFindAndFingerprint(t *testing.T) {
 	)
 
 	plan, err := sources.WatchPlan(t.Context())
-	require.NoError(err)
-	require.Len(plan.Roots, 1)
-	assert.Equal(root, plan.Roots[0].Path)
-	assert.True(plan.Roots[0].Recursive)
-	assert.Equal([]string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
-	assert.NotEmpty(plan.Roots[0].DebounceKey)
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Equal(t, root, plan.Roots[0].Path)
+	assert.True(t, plan.Roots[0].Recursive)
+	assert.Equal(t, []string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
+	assert.NotEmpty(t, plan.Roots[0].DebounceKey)
 
 	changed, err := sources.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: path, EventKind: "write", WatchRoot: root},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(path, changed[0].Key)
-	assert.Equal(path, changed[0].DisplayPath)
-	assert.Equal(path, changed[0].FingerprintKey)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, path, changed[0].Key)
+	assert.Equal(t, path, changed[0].DisplayPath)
+	assert.Equal(t, path, changed[0].FingerprintKey)
 
 	ignored, err := sources.SourcesForChangedPath(
 		t.Context(),
@@ -294,8 +280,8 @@ func TestJSONLSourceSetWatchChangedPathFindAndFingerprint(t *testing.T) {
 			WatchRoot: root,
 		},
 	)
-	require.NoError(err)
-	assert.Empty(ignored)
+	require.NoError(t, err)
+	assert.Empty(t, ignored)
 
 	outside, err := sources.SourcesForChangedPath(
 		t.Context(),
@@ -305,40 +291,37 @@ func TestJSONLSourceSetWatchChangedPathFindAndFingerprint(t *testing.T) {
 			WatchRoot: root,
 		},
 	)
-	require.NoError(err)
-	assert.Empty(outside)
+	require.NoError(t, err)
+	assert.Empty(t, outside)
 
 	found, ok, err := sources.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: path,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(path, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, path, found.DisplayPath)
 
 	foundByID, ok, err := sources.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "session-1",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(found.DisplayPath, foundByID.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, found.DisplayPath, foundByID.DisplayPath)
 
 	withoutOpaque := found
 	withoutOpaque.Opaque = nil
 	fingerprint, err := sources.Fingerprint(t.Context(), withoutOpaque)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	info, err := os.Stat(path)
-	require.NoError(err)
-	assert.Equal(path, fingerprint.Key)
-	assert.Equal(info.Size(), fingerprint.Size)
-	assert.Equal(info.ModTime().UnixNano(), fingerprint.MTimeNS)
-	assert.Equal(fmt.Sprintf("%x", sha256.Sum256([]byte(content))), fingerprint.Hash)
+	require.NoError(t, err)
+	assert.Equal(t, path, fingerprint.Key)
+	assert.Equal(t, info.Size(), fingerprint.Size)
+	assert.Equal(t, info.ModTime().UnixNano(), fingerprint.MTimeNS)
+	assert.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(content))), fingerprint.Hash)
 }
 
 func TestJSONLSourceSetWatchRootsReturnsBoundedMetadata(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	otherRoot := filepath.Join(t.TempDir(), "sessions")
 	companionCalls := 0
@@ -353,26 +336,23 @@ func TestJSONLSourceSetWatchRootsReturnsBoundedMetadata(t *testing.T) {
 	)
 
 	roots, err := sources.WatchRoots(t.Context())
-	require.NoError(err)
-	require.Len(roots, 2)
-	assert.Equal(WatchRoot{
+	require.NoError(t, err)
+	require.Len(t, roots, 2)
+	assert.Equal(t, WatchRoot{
 		Path:        root,
 		Recursive:   true,
 		DebounceKey: string(AgentCodex) + ":jsonl:" + root,
 	}, roots[0])
-	assert.Equal(WatchRoot{
+	assert.Equal(t, WatchRoot{
 		Path:        otherRoot,
 		Recursive:   true,
 		DebounceKey: string(AgentCodex) + ":jsonl:" + otherRoot,
 	}, roots[1])
-	assert.Zero(companionCalls,
+	assert.Zero(t, companionCalls,
 		"root scheduling must not enumerate transcripts or companions")
 }
 
 func TestJSONLSourceSetChangedPathClassifiesDeletedFiles(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(root, "nested", "deleted.jsonl")
 	sources := NewJSONLSourceSet(AgentCodex, []string{root},
@@ -383,12 +363,12 @@ func TestJSONLSourceSetChangedPathClassifiesDeletedFiles(t *testing.T) {
 		t.Context(),
 		ChangedPathRequest{Path: path, EventKind: "remove", WatchRoot: root},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(path, changed[0].Key)
-	assert.Equal(path, changed[0].DisplayPath)
-	assert.Equal(path, changed[0].FingerprintKey)
-	assert.Equal("nested/deleted.jsonl", changed[0].Opaque.(JSONLSource).RelPath)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, path, changed[0].Key)
+	assert.Equal(t, path, changed[0].DisplayPath)
+	assert.Equal(t, path, changed[0].FingerprintKey)
+	assert.Equal(t, "nested/deleted.jsonl", changed[0].Opaque.(JSONLSource).RelPath)
 
 	shallowPath := filepath.Join(root, "nested", "ignored.jsonl")
 	shallowSources := NewJSONLSourceSet(AgentCodex, []string{root})
@@ -396,8 +376,8 @@ func TestJSONLSourceSetChangedPathClassifiesDeletedFiles(t *testing.T) {
 		t.Context(),
 		ChangedPathRequest{Path: shallowPath, EventKind: "remove", WatchRoot: root},
 	)
-	require.NoError(err)
-	assert.Empty(changed)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
 }
 
 func TestJSONLSourceSetChangedPathRejectsExistingNonRegularPath(t *testing.T) {
@@ -418,9 +398,6 @@ func TestJSONLSourceSetChangedPathRejectsExistingNonRegularPath(t *testing.T) {
 }
 
 func TestJSONLSourceSetChangedPathUsesPathOnlyFilterForDeletedFiles(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sources := NewJSONLSourceSet(AgentCodex, []string{root},
 		WithRecursive(),
@@ -437,8 +414,8 @@ func TestJSONLSourceSetChangedPathUsesPathOnlyFilterForDeletedFiles(t *testing.T
 			WatchRoot: root,
 		},
 	)
-	require.NoError(err)
-	assert.Empty(ignored)
+	require.NoError(t, err)
+	assert.Empty(t, ignored)
 
 	changed, err := sources.SourcesForChangedPath(
 		t.Context(),
@@ -448,15 +425,12 @@ func TestJSONLSourceSetChangedPathUsesPathOnlyFilterForDeletedFiles(t *testing.T
 			WatchRoot: root,
 		},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(filepath.Join(root, "session", "events.jsonl"), changed[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, filepath.Join(root, "session", "events.jsonl"), changed[0].DisplayPath)
 }
 
 func TestJSONLSourceSetDescendPathPrunesSources(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	keepPath := filepath.Join(root, "keep", "session.jsonl")
 	skipPath := filepath.Join(root, "skip", "session.jsonl")
@@ -471,16 +445,16 @@ func TestJSONLSourceSetDescendPathPrunesSources(t *testing.T) {
 	)
 
 	discovered, err := sources.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(keepPath, discovered[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, keepPath, discovered[0].DisplayPath)
 
 	changed, err := sources.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: skipPath, EventKind: "write", WatchRoot: root},
 	)
-	require.NoError(err)
-	assert.Empty(changed)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
 
 	removed, err := sources.SourcesForChangedPath(
 		t.Context(),
@@ -490,14 +464,11 @@ func TestJSONLSourceSetDescendPathPrunesSources(t *testing.T) {
 			WatchRoot: root,
 		},
 	)
-	require.NoError(err)
-	assert.Empty(removed)
+	require.NoError(t, err)
+	assert.Empty(t, removed)
 }
 
 func TestJSONLSourceSetDuplicateKeysKeepFirstConfiguredRoot(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	firstRoot := t.TempDir()
 	secondRoot := t.TempDir()
 	firstPath := filepath.Join(firstRoot, "session.jsonl")
@@ -512,17 +483,17 @@ func TestJSONLSourceSetDuplicateKeysKeepFirstConfiguredRoot(t *testing.T) {
 	)
 
 	discovered, err := sources.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(firstPath, discovered[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, firstPath, discovered[0].DisplayPath)
 
 	found, ok, err := sources.FindSource(
 		t.Context(),
 		FindSourceRequest{StoredFilePath: secondPath},
 	)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(firstPath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, firstPath, found.DisplayPath)
 
 	changed, err := sources.SourcesForChangedPath(
 		t.Context(),
@@ -532,14 +503,11 @@ func TestJSONLSourceSetDuplicateKeysKeepFirstConfiguredRoot(t *testing.T) {
 			WatchRoot: secondRoot,
 		},
 	)
-	require.NoError(err)
-	assert.Empty(changed)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
 }
 
 func TestJSONLSourceSetFindSourceNormalizesRawSessionID(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(root, "session-1.jsonl")
 	writeSourceFile(t, path, "{}\n")
@@ -564,9 +532,9 @@ func TestJSONLSourceSetFindSourceNormalizesRawSessionID(t *testing.T) {
 		t.Context(),
 		FindSourceRequest{RawSessionID: "raw:session-1"},
 	)
-	require.NoError(err)
-	require.True(ok, "normalized raw session ID must resolve its source")
-	assert.Equal(path, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok, "normalized raw session ID must resolve its source")
+	assert.Equal(t, path, found.DisplayPath)
 
 	// Without the normalizer the identical request is gated out: the raw form
 	// fails LookupIDValid and never matches the on-disk session ID. This locks
@@ -579,29 +547,26 @@ func TestJSONLSourceSetFindSourceNormalizesRawSessionID(t *testing.T) {
 		t.Context(),
 		FindSourceRequest{RawSessionID: "raw:session-1"},
 	)
-	require.NoError(err)
-	assert.False(ok, "un-normalized raw session ID must not resolve")
+	require.NoError(t, err)
+	assert.False(t, ok, "un-normalized raw session ID must not resolve")
 }
 
 func TestJSONLSourceSetMissingRootAndInvalidLookupAreNoops(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sources := NewJSONLSourceSet(AgentCodex, []string{
 		filepath.Join(root, "missing"),
 	})
 
 	discovered, err := sources.Discover(t.Context())
-	require.NoError(err)
-	assert.Empty(discovered)
+	require.NoError(t, err)
+	assert.Empty(t, discovered)
 
 	found, ok, err := sources.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "../session",
 	})
-	require.NoError(err)
-	assert.False(ok)
-	assert.Empty(found)
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Empty(t, found)
 }
 
 func writeSourceFile(t *testing.T, path, content string) {

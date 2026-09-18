@@ -113,6 +113,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 				"prepare extra orphan exclusions: %w", err,
 			)
 		}
+		defer stmt.Close()
 		for _, id := range extraExcludedIDs {
 			if id == "" {
 				continue
@@ -339,7 +340,8 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) ([]string, error) {
 
 func copiedSessionIDs(ctx context.Context, queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, table string) ([]string, error) {
+}, table string,
+) ([]string, error) {
 	rows, err := queryer.QueryContext(ctx, "SELECT id FROM "+table+" ORDER BY id")
 	if err != nil {
 		return nil, fmt.Errorf("reading copied session IDs: %w", err)
@@ -485,12 +487,12 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 				sequence = max(artifact_checkpoint_floors.sequence, excluded.sequence)`,
 		},
 	}
-	for _, copy := range artifactCopies {
-		if !oldDBHasTable(ctx, tx, copy.table) {
+	for _, copied := range artifactCopies {
+		if !oldDBHasTable(ctx, tx, copied.table) {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, copy.sql); err != nil {
-			return fmt.Errorf("copying %s: %w", copy.table, err)
+		if _, err := tx.ExecContext(ctx, copied.sql); err != nil {
+			return fmt.Errorf("copying %s: %w", copied.table, err)
 		}
 	}
 	if err := copyArtifactImportState(ctx, tx); err != nil {
@@ -1631,6 +1633,7 @@ func (d *DB) CopySessionMetadataFrom(
 		if err != nil {
 			return fmt.Errorf("listing reparsed session project changes: %w", err)
 		}
+		defer rows.Close()
 		for rows.Next() {
 			var change copiedProjectChange
 			if err := rows.Scan(
@@ -1670,6 +1673,7 @@ func (d *DB) CopySessionMetadataFrom(
 		if err != nil {
 			return fmt.Errorf("listing reparsed session project changes: %w", err)
 		}
+		defer rows.Close()
 		for rows.Next() {
 			var change copiedProjectChange
 			if err := rows.Scan(
@@ -2559,26 +2563,11 @@ func copyPinnedMessagesForIDs(
 
 // oldDBHasColumn checks if a column exists in an old_db table
 // via PRAGMA table_info. Safe to call even if the table is missing.
-func oldDBHasColumn(
-	ctx context.Context, tx *sql.Tx, table, column string,
-) bool {
-	rows, err := tx.QueryContext(ctx,
-		"PRAGMA old_db.table_info("+table+")")
-	if err != nil {
-		return false
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name string
-		var typ, dflt sql.NullString
-		var notNull, pk int
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
-			return false
-		}
-		if name == column {
-			return true
-		}
-	}
-	return false
+func oldDBHasColumn(ctx context.Context, tx *sql.Tx, table, column string) bool {
+	var exists bool
+	err := tx.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM pragma_table_info(?, 'old_db') WHERE name = ?)",
+		table, column,
+	).Scan(&exists)
+	return err == nil && exists
 }

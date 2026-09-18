@@ -327,8 +327,6 @@ func TestPGModelPricingSourceDetectsBandOnlyFallbackMismatch(t *testing.T) {
 
 func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		require := require.New(t)
-
 		block := make(chan struct{})
 		var blockOnce sync.Once
 		releaseBlock := func() { blockOnce.Do(func() { close(block) }) }
@@ -352,21 +350,21 @@ func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
 			results <- result{prices: prices, err: err}
 		}()
 		synctest.Wait()
-		require.Equal(1, state.queryCount(), "pricing queries")
+		require.Equal(t, 1, state.queryCount(), "pricing queries")
 
 		go func() {
 			prices, err := store.loadPricingMap(t.Context())
 			results <- result{prices: prices, err: err}
 		}()
 		synctest.Wait()
-		require.Equal(1, state.queryCount(), "pricing queries")
+		require.Equal(t, 1, state.queryCount(), "pricing queries")
 		releaseBlock()
 
 		first := <-results
 		second := <-results
-		require.NoError(first.err, "first loadPricingMap")
-		require.NoError(second.err, "second loadPricingMap")
-		require.Equal(1, state.queryCount(), "pricing queries")
+		require.NoError(t, first.err, "first loadPricingMap")
+		require.NoError(t, second.err, "second loadPricingMap")
+		require.Equal(t, 1, state.queryCount(), "pricing queries")
 		first.prices[0].Rates.InputPerMTok = money.MustParseDollars("99")
 		secondByPattern := pricingRowsByPattern(second.prices)
 		assert.Equal(t, money.MustParseDollars("1"), secondByPattern["db-model"].InputPerMTok)
@@ -428,9 +426,6 @@ func TestLoadPricingMapUsesDBRowsAsEffectiveTable(t *testing.T) {
 
 func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		block := make(chan struct{})
 		var unblockOnce sync.Once
 		unblock := func() { unblockOnce.Do(func() { close(block) }) }
@@ -455,7 +450,7 @@ func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
 			firstResult <- result{prices: prices, err: err}
 		}()
 		synctest.Wait()
-		require.Equal(1, state.queryCount(), "pricing queries")
+		require.Equal(t, 1, state.queryCount(), "pricing queries")
 
 		secondResult := make(chan result, 1)
 		go func() {
@@ -463,19 +458,19 @@ func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
 			secondResult <- result{prices: prices, err: err}
 		}()
 		synctest.Wait()
-		require.Equal(1, state.queryCount(), "pricing queries")
+		require.Equal(t, 1, state.queryCount(), "pricing queries")
 
 		cancelFirst()
 
 		first := <-firstResult
-		require.ErrorIs(first.err, context.Canceled)
+		require.ErrorIs(t, first.err, context.Canceled)
 
 		unblock()
 		second := <-secondResult
-		require.NoError(second.err, "second loadPricingMap")
+		require.NoError(t, second.err, "second loadPricingMap")
 		secondByPattern := pricingRowsByPattern(second.prices)
-		assert.Equal(money.MustParseDollars("1"), secondByPattern["db-model"].InputPerMTok)
-		assert.Equal(1, state.queryCount(), "pricing queries")
+		assert.Equal(t, money.MustParseDollars("1"), secondByPattern["db-model"].InputPerMTok)
+		assert.Equal(t, 1, state.queryCount(), "pricing queries")
 	})
 }
 
@@ -516,8 +511,6 @@ func TestLoadPricingMapCancelsDBRowsWithCaller(t *testing.T) {
 
 func TestLoadPricingMapStartsFreshLoadAfterAllWaitersCancel(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		require := require.New(t)
-
 		block := make(chan struct{})
 		releaseCanceledQuery := make(chan struct{})
 		defer close(releaseCanceledQuery)
@@ -538,10 +531,10 @@ func TestLoadPricingMapStartsFreshLoadAfterAllWaitersCancel(t *testing.T) {
 			firstResult <- err
 		}()
 		synctest.Wait()
-		require.Equal(1, state.queryCount(), "pricing queries")
+		require.Equal(t, 1, state.queryCount(), "pricing queries")
 
 		cancel()
-		require.ErrorIs(<-firstResult, context.Canceled)
+		require.ErrorIs(t, <-firstResult, context.Canceled)
 		state.unblockNextQuery()
 
 		secondResult := make(chan error, 1)
@@ -551,8 +544,8 @@ func TestLoadPricingMapStartsFreshLoadAfterAllWaitersCancel(t *testing.T) {
 		}()
 
 		synctest.Wait()
-		require.Equal(2, state.queryCount(), "pricing queries")
-		require.NoError(<-secondResult, "second loadPricingMap")
+		require.Equal(t, 2, state.queryCount(), "pricing queries")
+		require.NoError(t, <-secondResult, "second loadPricingMap")
 	})
 }
 
@@ -595,9 +588,6 @@ func TestSetCustomPricingForgetsInFlightPricingLoad(t *testing.T) {
 }
 
 func TestLoadPricingMapReloadsAfterCompletedDBRows(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
 			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
@@ -607,18 +597,18 @@ func TestLoadPricingMapReloadsAfterCompletedDBRows(t *testing.T) {
 	store := &Store{pg: pg}
 
 	first, err := store.loadPricingMap(t.Context())
-	require.NoError(err, "first loadPricingMap")
+	require.NoError(t, err, "first loadPricingMap")
 	state.setRows([][]driver.Value{{
 		"db-model", int64(7000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
 	}})
 	second, err := store.loadPricingMap(t.Context())
-	require.NoError(err, "second loadPricingMap")
+	require.NoError(t, err, "second loadPricingMap")
 
-	require.Equal(2, state.queryCount(), "pricing queries")
+	require.Equal(t, 2, state.queryCount(), "pricing queries")
 	firstByPattern := pricingRowsByPattern(first)
 	secondByPattern := pricingRowsByPattern(second)
-	assert.Equal(money.MustParseDollars("1"), firstByPattern["db-model"].InputPerMTok)
-	assert.Equal(money.MustParseDollars("7"), secondByPattern["db-model"].InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("1"), firstByPattern["db-model"].InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("7"), secondByPattern["db-model"].InputPerMTok)
 }
 
 func pricingRowsByPattern(
@@ -650,8 +640,6 @@ func TestLoadPricingMapDoesNotCacheMissingTableFallback(t *testing.T) {
 }
 
 func TestPGPricingUpsertStatementBatchesRows(t *testing.T) {
-	assert := assert.New(t)
-
 	query, args := pgPricingUpsertStatement([]db.ModelPricing{
 		{
 			ModelPattern:         "model-a",
@@ -670,25 +658,23 @@ func TestPGPricingUpsertStatementBatchesRows(t *testing.T) {
 		},
 	}, "call-time")
 
-	assert.Contains(query,
+	assert.Contains(t, query,
 		"VALUES ($1, $2, $3, $4, $5, $6, $7), "+
 			"($8, $9, $10, $11, $12, $13, $14)")
-	assert.Contains(query,
+	assert.Contains(t, query,
 		"model_pricing.input_microdollars_per_mtok IS DISTINCT FROM")
-	assert.Contains(query, "EXCLUDED.input_microdollars_per_mtok")
-	assert.NotContains(query,
+	assert.Contains(t, query, "EXCLUDED.input_microdollars_per_mtok")
+	assert.NotContains(t, query,
 		"model_pricing.updated_at IS DISTINCT FROM")
-	assert.Contains(query, "RETURNING model_pattern")
+	assert.Contains(t, query, "RETURNING model_pattern")
 	require.Len(t, args, 14)
-	assert.Equal("model-a", args[0])
-	assert.Equal("call-time", args[6])
-	assert.Equal("model-b", args[7])
-	assert.Equal("source-time", args[13])
+	assert.Equal(t, "model-a", args[0])
+	assert.Equal(t, "call-time", args[6])
+	assert.Equal(t, "model-b", args[7])
+	assert.Equal(t, "source-time", args[13])
 }
 
 func TestPGPricingFilterMatchesUpsertSemantics(t *testing.T) {
-	assert := assert.New(t)
-
 	existing := []db.ModelPricing{
 		{
 			ModelPattern:         "_fallback_version",
@@ -752,32 +738,30 @@ func TestPGPricingFilterMatchesUpsertSemantics(t *testing.T) {
 
 	got, changedRows := db.FilterChangedModelPricing(existing, desired)
 
-	assert.Equal(db.PricingChangeSummary{
+	assert.Equal(t, db.PricingChangeSummary{
 		Total:     4,
 		Missing:   1,
 		Changed:   2,
 		Unchanged: 1,
 	}, got)
 	require.Len(t, changedRows, 3)
-	assert.Equal("_fallback_version", changedRows[0].ModelPattern,
+	assert.Equal(t, "_fallback_version", changedRows[0].ModelPattern,
 		"sentinel rows sync by value")
-	assert.Equal("changed-model", changedRows[1].ModelPattern)
-	assert.Equal("missing-model", changedRows[2].ModelPattern)
+	assert.Equal(t, "changed-model", changedRows[1].ModelPattern)
+	assert.Equal(t, "missing-model", changedRows[2].ModelPattern)
 }
 
 func TestPGPricingMetaUpsertStatement(t *testing.T) {
-	assert := assert.New(t)
-
 	query, args := pgPricingMetaUpsertStatement([]db.ModelPricing{
 		{ModelPattern: "_openrouter_models", UpdatedAt: `["a"]`},
 		{ModelPattern: "_fallback_version", UpdatedAt: "v3"},
 	})
 
-	assert.Contains(query, "VALUES ($1, 0, 0, 0, 0, 0, $2), ($3, 0, 0, 0, 0, 0, $4)")
-	assert.Contains(query, "DO UPDATE SET\n\t\tupdated_at = EXCLUDED.updated_at")
-	assert.NotContains(query, "timestamptz",
+	assert.Contains(t, query, "VALUES ($1, 0, 0, 0, 0, 0, $2), ($3, 0, 0, 0, 0, 0, $4)")
+	assert.Contains(t, query, "DO UPDATE SET\n\t\tupdated_at = EXCLUDED.updated_at")
+	assert.NotContains(t, query, "timestamptz",
 		"sentinel values are opaque and must not be cast")
-	assert.Equal([]any{
+	assert.Equal(t, []any{
 		"_openrouter_models", `["a"]`, "_fallback_version", "v3",
 	}, args)
 }
@@ -793,21 +777,18 @@ func TestPGPricingDeleteStatement(t *testing.T) {
 }
 
 func TestSyncModelPricingSkipsWriteWhenRemoteRowsUnchanged(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
-	local, err := db.Open(t.TempDir() + "/local.db")
-	require.NoError(err, "open local db")
+	local, err := db.Open(ctx, t.TempDir()+"/local.db")
+	require.NoError(t, err, "open local db")
 	t.Cleanup(func() { local.Close() })
-	require.NoError(local.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:         "same-model",
 		InputPerMTok:         money.MustParseDollars("1"),
 		OutputPerMTok:        money.MustParseDollars("2"),
 		CacheCreationPerMTok: money.MustParseDollars("3"),
 		CacheReadPerMTok:     money.MustParseDollars("4"),
 	}}), "seed local pricing")
-	require.NoError(local.UpsertGenAIPricing(ctx, db.GenAIPricingDocument{
+	require.NoError(t, local.UpsertGenAIPricing(ctx, db.GenAIPricingDocument{
 		Version: "genai-prices-test", SourceRef: "upstream-ref",
 		Source: db.GenAIPricingSourceFetched, Data: []byte(`{"test":true}`),
 	}), "seed local GenAI pricing")
@@ -824,10 +805,10 @@ func TestSyncModelPricingSkipsWriteWhenRemoteRowsUnchanged(t *testing.T) {
 	pg := newPricingProbeDB(t, state)
 	sync := &Sync{pg: pg, local: local}
 
-	require.NoError(sync.syncModelPricing(ctx))
-	assert.Equal(1, state.queryCount(), "pg pricing reads")
+	require.NoError(t, sync.syncModelPricing(ctx))
+	assert.Equal(t, 1, state.queryCount(), "pg pricing reads")
 	execs := state.execStatements()
-	require.Len(execs, 2, "only the serialization lock, no writes")
-	assert.Contains(execs[0], "ON CONFLICT (key) DO NOTHING")
-	assert.Contains(execs[1], "FOR UPDATE")
+	require.Len(t, execs, 2, "only the serialization lock, no writes")
+	assert.Contains(t, execs[0], "ON CONFLICT (key) DO NOTHING")
+	assert.Contains(t, execs[1], "FOR UPDATE")
 }

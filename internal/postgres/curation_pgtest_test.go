@@ -74,13 +74,13 @@ func TestStoreStarsAndPins(t *testing.T) {
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ok, err := store.StarSession("cur-star-1")
+	ok, err := store.StarSession(t.Context(), "cur-star-1")
 	require.NoError(t, err, "StarSession existing")
 	require.True(t, ok, "StarSession existing")
-	ok, err = store.StarSession("missing")
+	ok, err = store.StarSession(t.Context(), "missing")
 	require.NoError(t, err, "StarSession missing")
 	assert.False(t, ok, "StarSession missing")
-	require.NoError(t, store.BulkStarSessions(
+	require.NoError(t, store.BulkStarSessions(t.Context(),
 		[]string{"cur-star-2", "missing"},
 	), "BulkStarSessions")
 
@@ -94,21 +94,21 @@ func TestStoreStarsAndPins(t *testing.T) {
 	for _, id := range ids {
 		assert.True(t, wantStars[id], "unexpected starred id %q in %v", id, ids)
 	}
-	require.NoError(t, store.UnstarSession("cur-star-1"), "UnstarSession")
+	require.NoError(t, store.UnstarSession(t.Context(), "cur-star-1"), "UnstarSession")
 	ids, err = store.ListStarredSessionIDs(ctx)
 	require.NoError(t, err, "ListStarredSessionIDs after unstar")
 	require.Len(t, ids, 1)
 	assert.Equal(t, "cur-star-2", ids[0])
 
 	note := "keep this"
-	pinID, err := store.PinMessage("cur-pin-1", 1, &note)
+	pinID, err := store.PinMessage(t.Context(), "cur-pin-1", 1, &note)
 	require.NoError(t, err, "PinMessage")
 	require.NotZero(t, pinID, "PinMessage returned 0, want row id")
 	updatedNote := "updated"
-	pinID2, err := store.PinMessage("cur-pin-1", 1, &updatedNote)
+	pinID2, err := store.PinMessage(t.Context(), "cur-pin-1", 1, &updatedNote)
 	require.NoError(t, err, "PinMessage update")
 	assert.Equal(t, pinID, pinID2)
-	missingPin, err := store.PinMessage("cur-pin-1", 99, nil)
+	missingPin, err := store.PinMessage(t.Context(), "cur-pin-1", 99, nil)
 	require.NoError(t, err, "PinMessage missing message")
 	assert.Zero(t, missingPin)
 
@@ -130,7 +130,7 @@ func TestStoreStarsAndPins(t *testing.T) {
 	require.NotNil(t, allPins[0].SessionProject)
 	assert.Equal(t, "proj-curation", *allPins[0].SessionProject)
 
-	require.NoError(t, store.UnpinMessage("cur-pin-1", 1), "UnpinMessage")
+	require.NoError(t, store.UnpinMessage(t.Context(), "cur-pin-1", 1), "UnpinMessage")
 	pins, err = store.ListPinnedMessages(ctx, "cur-pin-1", "")
 	require.NoError(t, err, "ListPinnedMessages after unpin")
 	assert.Empty(t, pins)
@@ -161,8 +161,8 @@ func TestPushPreservesMultiplePGPinsBySourceUUID(t *testing.T) {
 		MessageCount: 3,
 		CreatedAt:    "2026-05-01T00:00:00Z",
 	}
-	require.NoError(t, local.UpsertSession(sess), "UpsertSession first")
-	require.NoError(t, local.InsertMessages([]db.Message{
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "UpsertSession first")
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID:  "pg-pin-rewrite",
 			Ordinal:    0,
@@ -193,15 +193,15 @@ func TestPushPreservesMultiplePGPinsBySourceUUID(t *testing.T) {
 	defer store.Close()
 
 	noteOne := "important one"
-	_, err = store.PinMessage("pg-pin-rewrite", 1, &noteOne)
+	_, err = store.PinMessage(t.Context(), "pg-pin-rewrite", 1, &noteOne)
 	require.NoError(t, err, "PinMessage one")
 	noteTwo := "important two"
-	_, err = store.PinMessage("pg-pin-rewrite", 2, &noteTwo)
+	_, err = store.PinMessage(t.Context(), "pg-pin-rewrite", 2, &noteTwo)
 	require.NoError(t, err, "PinMessage two")
 
 	sess.MessageCount = 4
-	require.NoError(t, local.UpsertSession(sess), "UpsertSession second")
-	require.NoError(t, local.ReplaceSessionMessages(
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "UpsertSession second")
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(),
 		"pg-pin-rewrite",
 		[]db.Message{
 			{
@@ -289,9 +289,9 @@ func TestPushDropsEditedLegacyPinInBothStores(t *testing.T) {
 			MessageCount: 2,
 			CreatedAt:    "2026-05-01T00:00:00Z",
 		}
-		require.NoError(t, local.UpsertSession(sess),
+		require.NoError(t, local.UpsertSession(t.Context(), sess),
 			"UpsertSession %s", sessionID)
-		require.NoError(t, local.InsertMessages([]db.Message{
+		require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 			{
 				SessionID: sessionID, Ordinal: 0,
 				Role: "user", Content: "question",
@@ -316,10 +316,10 @@ func TestPushDropsEditedLegacyPinInBothStores(t *testing.T) {
 		msgs, err := local.GetAllMessages(ctx, sessionID)
 		require.NoError(t, err, "GetAllMessages %s", sessionID)
 		require.Len(t, msgs, 2, "seeded messages %s", sessionID)
-		_, err = local.PinMessage(sessionID, msgs[1].ID, nil)
+		_, err = local.PinMessage(t.Context(), sessionID, msgs[1].ID, nil)
 		require.NoError(t, err, "local PinMessage %s", sessionID)
 		note := "keep " + sessionID
-		_, err = store.PinMessage(sessionID, 1, &note)
+		_, err = store.PinMessage(t.Context(), sessionID, 1, &note)
 		require.NoError(t, err, "pg PinMessage %s", sessionID)
 	}
 	pinBoth("pg-pin-upload-edit")
@@ -345,7 +345,7 @@ func TestPushDropsEditedLegacyPinInBothStores(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err, "explicit re-upload")
-	require.NoError(t, local.ReplaceSessionMessages(
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(),
 		"pg-pin-reparse-edit", edited("pg-pin-reparse-edit"),
 	), "reparse replacement")
 
@@ -478,12 +478,12 @@ func TestPushReconcilesPGPinsByPriorMessageIdentity(t *testing.T) {
 				MessageCount: len(tt.oldMessages),
 				CreatedAt:    "2026-05-01T00:00:00Z",
 			}
-			require.NoError(t, local.UpsertSession(sess), "UpsertSession old")
+			require.NoError(t, local.UpsertSession(t.Context(), sess), "UpsertSession old")
 			oldMessages := append([]db.Message(nil), tt.oldMessages...)
 			for i := range oldMessages {
 				oldMessages[i].SessionID = sessionID
 			}
-			require.NoError(t, local.InsertMessages(oldMessages),
+			require.NoError(t, local.InsertMessages(t.Context(), oldMessages),
 				"InsertMessages old")
 			_, err = ps.Push(ctx, false, nil)
 			require.NoError(t, err, "Push old")
@@ -491,7 +491,7 @@ func TestPushReconcilesPGPinsByPriorMessageIdentity(t *testing.T) {
 			store, err := NewStore(pgURL, "agentsview", true)
 			require.NoError(t, err, "NewStore")
 			defer store.Close()
-			_, err = store.PinMessage(sessionID, 0, nil)
+			_, err = store.PinMessage(t.Context(), sessionID, 0, nil)
 			require.NoError(t, err, "PinMessage")
 
 			newMessages := append([]db.Message(nil), tt.newMessages...)
@@ -499,9 +499,9 @@ func TestPushReconcilesPGPinsByPriorMessageIdentity(t *testing.T) {
 				newMessages[i].SessionID = sessionID
 			}
 			sess.MessageCount = len(newMessages)
-			require.NoError(t, local.UpsertSession(sess), "UpsertSession new")
+			require.NoError(t, local.UpsertSession(t.Context(), sess), "UpsertSession new")
 			require.NoError(t,
-				local.ReplaceSessionMessages(sessionID, newMessages),
+				local.ReplaceSessionMessages(t.Context(), sessionID, newMessages),
 				"ReplaceSessionMessages")
 			_, err = ps.Push(ctx, true, nil)
 			require.NoError(t, err, "Push new")
@@ -645,7 +645,7 @@ func TestPinMessageSerializesWithSessionReplacement(t *testing.T) {
 		lockPinnedMessagesSession(ctx, lockTx, "pg-pin-session-lock"),
 		"lock session pins")
 
-	_, err = store.PinMessage("pg-pin-session-lock", 0, nil)
+	_, err = store.PinMessage(t.Context(), "pg-pin-session-lock", 0, nil)
 	require.Error(t, err,
 		"pin mutation must wait while replacement owns the session lock")
 	assert.ErrorContains(t, err, "locking pg pins for session")
@@ -653,7 +653,7 @@ func TestPinMessageSerializesWithSessionReplacement(t *testing.T) {
 
 	_, err = store.pg.ExecContext(ctx, `SET lock_timeout = 0`)
 	require.NoError(t, err, "clear lock timeout")
-	pinID, err := store.PinMessage("pg-pin-session-lock", 0, nil)
+	pinID, err := store.PinMessage(t.Context(), "pg-pin-session-lock", 0, nil)
 	require.NoError(t, err, "PinMessage after replacement lock")
 	assert.NotZero(t, pinID, "PinMessage after replacement lock")
 }
@@ -1341,7 +1341,7 @@ func TestPinMessageRepinRefreshesSourceUUID(t *testing.T) {
 	defer store.Close()
 
 	originalNote := "first"
-	_, err = store.PinMessage("pg-pin-repin", 1, &originalNote)
+	_, err = store.PinMessage(t.Context(), "pg-pin-repin", 1, &originalNote)
 	require.NoError(t, err, "PinMessage initial")
 	var initialSourceUUID, initialCreatedAt string
 	require.NoError(t, pg.QueryRowContext(ctx, `
@@ -1365,7 +1365,7 @@ func TestPinMessageRepinRefreshesSourceUUID(t *testing.T) {
 	require.NoError(t, err, "update message source_uuid")
 
 	updatedNote := "second"
-	_, err = store.PinMessage("pg-pin-repin", 1, &updatedNote)
+	_, err = store.PinMessage(t.Context(), "pg-pin-repin", 1, &updatedNote)
 	require.NoError(t, err, "PinMessage repin")
 
 	var gotSourceUUID, gotCreatedAt string

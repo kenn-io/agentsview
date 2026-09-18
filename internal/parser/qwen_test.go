@@ -11,19 +11,19 @@ import (
 )
 
 func parseQwenTestSession(
-	t testing.TB,
+	tb testing.TB,
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
-	t.Helper()
+	tb.Helper()
 	return parseQwenSession(path, project, machine)
 }
 
-func discoverQwenTestSessions(t testing.TB, root string) []DiscoveredFile {
-	t.Helper()
+func discoverQwenTestSessions(tb testing.TB, root string) []DiscoveredFile {
+	tb.Helper()
 	provider, ok := NewProvider(AgentQwen, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
+	require.True(tb, ok)
+	sources, err := provider.Discover(tb.Context())
+	require.NoError(tb, err)
 
 	files := make([]DiscoveredFile, 0, len(sources))
 	for _, source := range sources {
@@ -36,15 +36,15 @@ func discoverQwenTestSessions(t testing.TB, root string) []DiscoveredFile {
 	return files
 }
 
-func findQwenTestSourceFile(t testing.TB, root, rawID string) string {
-	t.Helper()
+func findQwenTestSourceFile(tb testing.TB, root, rawID string) string {
+	tb.Helper()
 	provider, ok := NewProvider(AgentQwen, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(tb, ok)
 	source, found, err := provider.FindSource(
-		t.Context(),
+		tb.Context(),
 		FindSourceRequest{RawSessionID: rawID},
 	)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	if !found {
 		return ""
 	}
@@ -52,9 +52,6 @@ func findQwenTestSourceFile(t testing.TB, root, rawID string) string {
 }
 
 func TestParseQwenSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	content := `{"uuid":"u1","parentUuid":null,"sessionId":"adc026b4-c620-43e4-8cc4-295593889d18","timestamp":"2026-05-05T11:08:38.572Z","type":"user","cwd":"/Users/alice/code/sample-project","version":"0.15.6","message":{"role":"user","parts":[{"text":"Calculate .089 * 7.85788"}]}}
@@ -64,43 +61,43 @@ func TestParseQwenSession(t *testing.T) {
 	path := createTestFile(t, "qwen-session.jsonl", content)
 
 	sess, msgs, err := parseQwenTestSession(t, path, "", "local")
-	require.NoError(err)
-	require.NotNil(sess)
-	require.Len(msgs, 2)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, msgs, 2)
 
-	assert.Equal("qwen:adc026b4-c620-43e4-8cc4-295593889d18", sess.ID)
-	assert.Equal(AgentQwen, sess.Agent)
-	assert.Equal("sample_project", sess.Project)
-	assert.Equal("/Users/alice/code/sample-project", sess.Cwd)
-	assert.Equal("Calculate .089 * 7.85788", sess.FirstMessage)
-	assert.Equal(2, sess.MessageCount)
-	assert.Equal(1, sess.UserMessageCount)
-	assert.True(sess.HasTotalOutputTokens)
-	assert.Equal(47, sess.TotalOutputTokens)
-	assert.True(sess.HasPeakContextTokens)
+	assert.Equal(t, "qwen:adc026b4-c620-43e4-8cc4-295593889d18", sess.ID)
+	assert.Equal(t, AgentQwen, sess.Agent)
+	assert.Equal(t, "sample_project", sess.Project)
+	assert.Equal(t, "/Users/alice/code/sample-project", sess.Cwd)
+	assert.Equal(t, "Calculate .089 * 7.85788", sess.FirstMessage)
+	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Equal(t, 47, sess.TotalOutputTokens)
+	assert.True(t, sess.HasPeakContextTokens)
 	// promptTokenCount already includes cachedContentTokenCount in Qwen
 	// usage; context tokens should equal the prompt count (not prompt
 	// + cached, which would double-count the cached portion).
-	assert.Equal(18009, sess.PeakContextTokens)
+	assert.Equal(t, 18009, sess.PeakContextTokens)
 
-	assert.Equal(RoleUser, msgs[0].Role)
-	assert.Equal("Calculate .089 * 7.85788", msgs[0].Content)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "Calculate .089 * 7.85788", msgs[0].Content)
 
-	assert.Equal(RoleAssistant, msgs[1].Role)
-	assert.Equal("0.089 × 7.85788 = **0.69935132**", msgs[1].Content)
-	assert.True(msgs[1].HasThinking)
-	assert.Contains(msgs[1].ThinkingText, "simple multiplication")
-	assert.Equal("cleanunicorn/qwen3-coder-30b-a3b-instruct", msgs[1].Model)
-	assert.True(msgs[1].HasOutputTokens)
-	assert.Equal(47, msgs[1].OutputTokens)
-	assert.True(msgs[1].HasContextTokens)
-	assert.Equal(18009, msgs[1].ContextTokens)
-	require.NotEmpty(msgs[1].TokenUsage)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(t, "0.089 × 7.85788 = **0.69935132**", msgs[1].Content)
+	assert.True(t, msgs[1].HasThinking)
+	assert.Contains(t, msgs[1].ThinkingText, "simple multiplication")
+	assert.Equal(t, "cleanunicorn/qwen3-coder-30b-a3b-instruct", msgs[1].Model)
+	assert.True(t, msgs[1].HasOutputTokens)
+	assert.Equal(t, 47, msgs[1].OutputTokens)
+	assert.True(t, msgs[1].HasContextTokens)
+	assert.Equal(t, 18009, msgs[1].ContextTokens)
+	require.NotEmpty(t, msgs[1].TokenUsage)
 	// Normalized input_tokens is the uncached remainder
 	// (promptTokenCount - cachedContentTokenCount).
-	assert.Equal(int64(17997), gjson.GetBytes(msgs[1].TokenUsage, "input_tokens").Int())
-	assert.Equal(int64(47), gjson.GetBytes(msgs[1].TokenUsage, "output_tokens").Int())
-	assert.Equal(int64(12), gjson.GetBytes(msgs[1].TokenUsage, "cache_read_input_tokens").Int())
+	assert.Equal(t, int64(17997), gjson.GetBytes(msgs[1].TokenUsage, "input_tokens").Int())
+	assert.Equal(t, int64(47), gjson.GetBytes(msgs[1].TokenUsage, "output_tokens").Int())
+	assert.Equal(t, int64(12), gjson.GetBytes(msgs[1].TokenUsage, "cache_read_input_tokens").Int())
 }
 
 // TestParseQwenSession_CoalescesToolCallOnlyAssistants verifies that a
@@ -109,9 +106,6 @@ func TestParseQwenSession(t *testing.T) {
 // entry, so MessageCount reflects user-visible turns rather than every
 // tool-call iteration. Models the Session 9 pattern (`50510b6f`).
 func TestParseQwenSession_CoalescesToolCallOnlyAssistants(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	content := `{"uuid":"u1","sessionId":"sess-coalesce","timestamp":"2026-05-15T10:26:54.209Z","type":"user","cwd":"/work","message":{"role":"user","parts":[{"text":"Find the bug"}]}}
@@ -122,57 +116,57 @@ func TestParseQwenSession_CoalescesToolCallOnlyAssistants(t *testing.T) {
 	path := createTestFile(t, "coalesce.jsonl", content)
 
 	sess, msgs, err := parseQwenTestSession(t, path, "", "local")
-	require.NoError(err)
-	require.Len(msgs, 2, "expected user + single coalesced assistant turn")
-	require.Equal(2, sess.MessageCount)
-	require.Equal(1, sess.UserMessageCount)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2, "expected user + single coalesced assistant turn")
+	require.Equal(t, 2, sess.MessageCount)
+	require.Equal(t, 1, sess.UserMessageCount)
 
-	assert.Equal(RoleUser, msgs[0].Role)
-	assert.Equal("Find the bug", msgs[0].Content)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "Find the bug", msgs[0].Content)
 
 	a := msgs[1]
-	assert.Equal(RoleAssistant, a.Role)
-	assert.Equal("The bug is on line 42.", a.Content)
-	assert.True(a.HasThinking)
-	assert.Contains(a.ThinkingText, "Looking at the code first.")
-	assert.Contains(a.ThinkingText, "Now searching.")
-	assert.Contains(a.ThinkingText, "Putting it together.")
+	assert.Equal(t, RoleAssistant, a.Role)
+	assert.Equal(t, "The bug is on line 42.", a.Content)
+	assert.True(t, a.HasThinking)
+	assert.Contains(t, a.ThinkingText, "Looking at the code first.")
+	assert.Contains(t, a.ThinkingText, "Now searching.")
+	assert.Contains(t, a.ThinkingText, "Putting it together.")
 
 	// Output tokens sum across coalesced entries; context tokens take
 	// the peak promptTokenCount (which already includes cached) so we
 	// avoid double-counting the cached portion.
-	assert.True(a.HasOutputTokens)
-	assert.Equal(45, a.OutputTokens, "10 + 20 + 15")
-	assert.True(a.HasContextTokens)
-	assert.Equal(300, a.ContextTokens, "max(prompt) across coalesced entries")
+	assert.True(t, a.HasOutputTokens)
+	assert.Equal(t, 45, a.OutputTokens, "10 + 20 + 15")
+	assert.True(t, a.HasContextTokens)
+	assert.Equal(t, 300, a.ContextTokens, "max(prompt) across coalesced entries")
 
 	// Normalized input/cache usage sums across iterations so a turn
 	// with multiple tool-call API calls reports the total tokens that
 	// were billed, not just the peak call's contribution:
 	//   input_tokens = (100-0) + (200-50) + (300-80) = 470
 	//   cache_read_input_tokens = 0 + 50 + 80 = 130
-	require.NotEmpty(a.TokenUsage)
-	assert.Equal(int64(470),
+	require.NotEmpty(t, a.TokenUsage)
+	assert.Equal(t, int64(470),
 		gjson.GetBytes(a.TokenUsage, "input_tokens").Int())
-	assert.Equal(int64(45),
+	assert.Equal(t, int64(45),
 		gjson.GetBytes(a.TokenUsage, "output_tokens").Int())
-	assert.Equal(int64(130),
+	assert.Equal(t, int64(130),
 		gjson.GetBytes(a.TokenUsage, "cache_read_input_tokens").Int())
 
 	// Tool calls from each iteration aggregate onto the coalesced turn.
-	require.True(a.HasToolUse)
-	require.Len(a.ToolCalls, 2)
-	assert.Equal("read_file", a.ToolCalls[0].ToolName)
-	assert.Equal("c1", a.ToolCalls[0].ToolUseID)
-	assert.Equal("grep", a.ToolCalls[1].ToolName)
-	assert.Equal("c2", a.ToolCalls[1].ToolUseID)
+	require.True(t, a.HasToolUse)
+	require.Len(t, a.ToolCalls, 2)
+	assert.Equal(t, "read_file", a.ToolCalls[0].ToolName)
+	assert.Equal(t, "c1", a.ToolCalls[0].ToolUseID)
+	assert.Equal(t, "grep", a.ToolCalls[1].ToolName)
+	assert.Equal(t, "c2", a.ToolCalls[1].ToolUseID)
 
 	// Session-level totals stay consistent with summed/maxed message values.
-	assert.Equal(45, sess.TotalOutputTokens)
-	assert.Equal(300, sess.PeakContextTokens)
+	assert.Equal(t, 45, sess.TotalOutputTokens)
+	assert.Equal(t, 300, sess.PeakContextTokens)
 
 	// Timestamp tracks the final (text-bearing) entry in the coalesced run.
-	assert.Equal("2026-05-15T10:26:57Z", a.Timestamp.UTC().Format("2006-01-02T15:04:05Z"))
+	assert.Equal(t, "2026-05-15T10:26:57Z", a.Timestamp.UTC().Format("2006-01-02T15:04:05Z"))
 }
 
 // TestParseQwenSession_TrailingToolCallOnlyAssistants verifies that a
@@ -180,9 +174,6 @@ func TestParseQwenSession_CoalescesToolCallOnlyAssistants(t *testing.T) {
 // before EOF) is emitted as a single coalesced assistant message rather
 // than dropped or counted N times.
 func TestParseQwenSession_TrailingToolCallOnlyAssistants(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	content := `{"uuid":"u1","sessionId":"sess-trail","timestamp":"2026-05-15T10:00:00.000Z","type":"user","cwd":"/work","message":{"role":"user","parts":[{"text":"Run tests"}]}}
@@ -192,33 +183,33 @@ func TestParseQwenSession_TrailingToolCallOnlyAssistants(t *testing.T) {
 	path := createTestFile(t, "trail.jsonl", content)
 
 	sess, msgs, err := parseQwenTestSession(t, path, "", "local")
-	require.NoError(err)
-	require.Len(msgs, 2, "trailing tool-call run should coalesce into one assistant message")
-	require.Equal(2, sess.MessageCount)
-	require.Equal(1, sess.UserMessageCount)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2, "trailing tool-call run should coalesce into one assistant message")
+	require.Equal(t, 2, sess.MessageCount)
+	require.Equal(t, 1, sess.UserMessageCount)
 
 	a := msgs[1]
-	assert.Equal(RoleAssistant, a.Role)
-	assert.Empty(a.Content, "no text-bearing entry means content is empty")
-	assert.True(a.HasThinking)
-	assert.Contains(a.ThinkingText, "Starting test run.")
-	assert.Contains(a.ThinkingText, "Re-running with verbose.")
-	assert.Equal(12, a.OutputTokens, "5 + 7")
-	assert.Equal(80, a.ContextTokens, "max(prompt) across coalesced entries")
+	assert.Equal(t, RoleAssistant, a.Role)
+	assert.Empty(t, a.Content, "no text-bearing entry means content is empty")
+	assert.True(t, a.HasThinking)
+	assert.Contains(t, a.ThinkingText, "Starting test run.")
+	assert.Contains(t, a.ThinkingText, "Re-running with verbose.")
+	assert.Equal(t, 12, a.OutputTokens, "5 + 7")
+	assert.Equal(t, 80, a.ContextTokens, "max(prompt) across coalesced entries")
 	// Summed normalized input/cache usage:
 	//   input_tokens = (50-0) + (80-10) = 120
 	//   cache_read_input_tokens = 0 + 10 = 10
-	require.NotEmpty(a.TokenUsage)
-	assert.Equal(int64(120),
+	require.NotEmpty(t, a.TokenUsage)
+	assert.Equal(t, int64(120),
 		gjson.GetBytes(a.TokenUsage, "input_tokens").Int())
-	assert.Equal(int64(10),
+	assert.Equal(t, int64(10),
 		gjson.GetBytes(a.TokenUsage, "cache_read_input_tokens").Int())
-	require.True(a.HasToolUse)
-	require.Len(a.ToolCalls, 2)
-	assert.Equal("shell", a.ToolCalls[0].ToolName)
-	assert.Equal("c1", a.ToolCalls[0].ToolUseID)
-	assert.Equal("shell", a.ToolCalls[1].ToolName)
-	assert.Equal("c2", a.ToolCalls[1].ToolUseID)
+	require.True(t, a.HasToolUse)
+	require.Len(t, a.ToolCalls, 2)
+	assert.Equal(t, "shell", a.ToolCalls[0].ToolName)
+	assert.Equal(t, "c1", a.ToolCalls[0].ToolUseID)
+	assert.Equal(t, "shell", a.ToolCalls[1].ToolName)
+	assert.Equal(t, "c2", a.ToolCalls[1].ToolUseID)
 }
 
 // TestParseQwenSession_ToolUseRoundTrip verifies that an assistant
@@ -229,9 +220,6 @@ func TestParseQwenSession_TrailingToolCallOnlyAssistants(t *testing.T) {
 // The synthetic tool-result user entry is folded into the assistant
 // turn rather than counted as a user message.
 func TestParseQwenSession_ToolUseRoundTrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	content := `{"uuid":"u1","sessionId":"sess-tools","timestamp":"2026-05-15T10:00:00.000Z","type":"user","cwd":"/work","message":{"role":"user","parts":[{"text":"Read a.go"}]}}
@@ -242,34 +230,34 @@ func TestParseQwenSession_ToolUseRoundTrip(t *testing.T) {
 	path := createTestFile(t, "tools.jsonl", content)
 
 	sess, msgs, err := parseQwenTestSession(t, path, "", "local")
-	require.NoError(err)
-	require.Len(msgs, 2,
+	require.NoError(t, err)
+	require.Len(t, msgs, 2,
 		"tool-result user entry should fold into the assistant turn")
-	assert.Equal(1, sess.UserMessageCount,
+	assert.Equal(t, 1, sess.UserMessageCount,
 		"only the typed user prompt counts as a user message")
 
 	a := msgs[1]
-	assert.Equal(RoleAssistant, a.Role)
-	assert.Equal("That's the file.", a.Content)
-	require.True(a.HasToolUse)
-	require.Len(a.ToolCalls, 1)
-	assert.Equal("read_file", a.ToolCalls[0].ToolName)
-	assert.Equal("c1", a.ToolCalls[0].ToolUseID)
-	require.Len(a.ToolResults, 1)
+	assert.Equal(t, RoleAssistant, a.Role)
+	assert.Equal(t, "That's the file.", a.Content)
+	require.True(t, a.HasToolUse)
+	require.Len(t, a.ToolCalls, 1)
+	assert.Equal(t, "read_file", a.ToolCalls[0].ToolName)
+	assert.Equal(t, "c1", a.ToolCalls[0].ToolUseID)
+	require.Len(t, a.ToolResults, 1)
 	tr := a.ToolResults[0]
-	assert.Equal("c1", tr.ToolUseID)
+	assert.Equal(t, "c1", tr.ToolUseID)
 	// The paired tool result must decode to the underlying output text,
 	// not be left empty by mismatched object-shape handling.
-	assert.Equal("package main\n", DecodeContent(tr.ContentRaw))
-	assert.Equal(len("package main\n"), tr.ContentLength)
+	assert.Equal(t, "package main\n", DecodeContent(tr.ContentRaw))
+	assert.Equal(t, len("package main\n"), tr.ContentLength)
 	// Peak prompt (150) becomes ContextTokens. Normalized input/cache
 	// usage sums across the two iterations so multi-call turns don't
 	// drop the earlier API call's tokens:
 	//   input_tokens = (100-10) + (150-20) = 220
 	//   cache_read_input_tokens = 10 + 20 = 30
-	assert.Equal(150, a.ContextTokens)
-	assert.Equal(int64(220), gjson.GetBytes(a.TokenUsage, "input_tokens").Int())
-	assert.Equal(int64(30), gjson.GetBytes(a.TokenUsage, "cache_read_input_tokens").Int())
+	assert.Equal(t, 150, a.ContextTokens)
+	assert.Equal(t, int64(220), gjson.GetBytes(a.TokenUsage, "input_tokens").Int())
+	assert.Equal(t, int64(30), gjson.GetBytes(a.TokenUsage, "cache_read_input_tokens").Int())
 }
 
 // TestParseQwenSession_TextWithFunctionCallCoalesces verifies that an
@@ -279,9 +267,6 @@ func TestParseQwenSession_ToolUseRoundTrip(t *testing.T) {
 // phantom empty assistant message. Intermediate text from the same turn
 // should also be preserved.
 func TestParseQwenSession_TextWithFunctionCallCoalesces(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	content := `{"uuid":"u1","sessionId":"sess-interleaved","timestamp":"2026-05-15T10:00:00.000Z","type":"user","cwd":"/work","message":{"role":"user","parts":[{"text":"Read a.go"}]}}
@@ -292,24 +277,24 @@ func TestParseQwenSession_TextWithFunctionCallCoalesces(t *testing.T) {
 	path := createTestFile(t, "interleaved.jsonl", content)
 
 	sess, msgs, err := parseQwenTestSession(t, path, "", "local")
-	require.NoError(err)
-	require.Len(msgs, 2,
+	require.NoError(t, err)
+	require.Len(t, msgs, 2,
 		"interleaved text+functionCall must not inflate MessageCount")
-	require.Equal(2, sess.MessageCount)
-	require.Equal(1, sess.UserMessageCount)
+	require.Equal(t, 2, sess.MessageCount)
+	require.Equal(t, 1, sess.UserMessageCount)
 
 	a := msgs[1]
-	require.Equal(RoleAssistant, a.Role)
-	require.True(a.HasToolUse)
-	require.Len(a.ToolCalls, 1)
-	assert.Equal("c1", a.ToolCalls[0].ToolUseID)
-	require.Len(a.ToolResults, 1,
+	require.Equal(t, RoleAssistant, a.Role)
+	require.True(t, a.HasToolUse)
+	require.Len(t, a.ToolCalls, 1)
+	assert.Equal(t, "c1", a.ToolCalls[0].ToolUseID)
+	require.Len(t, a.ToolResults, 1,
 		"tool result must be paired with the same assistant turn")
-	assert.Equal("c1", a.ToolResults[0].ToolUseID)
+	assert.Equal(t, "c1", a.ToolResults[0].ToolUseID)
 	// Both the intermediate "Looking at the file." lead-in and the
 	// closing "Done." text belong to the same logical turn.
-	assert.Contains(a.Content, "Looking at the file.")
-	assert.Contains(a.Content, "Done.")
+	assert.Contains(t, a.Content, "Looking at the file.")
+	assert.Contains(t, a.Content, "Done.")
 }
 
 // TestParseQwenSession_AbortedNoAssistantResponse models the
@@ -317,9 +302,6 @@ func TestParseQwenSession_TextWithFunctionCallCoalesces(t *testing.T) {
 // ended before any assistant entry was written. Should produce exactly
 // one user message and no assistant inflation.
 func TestParseQwenSession_AbortedNoAssistantResponse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	content := `{"uuid":"u1","sessionId":"sess-abort","timestamp":"2026-05-15T10:00:00.000Z","type":"user","cwd":"/work","message":{"role":"user","parts":[{"text":"Hello"}]}}
@@ -329,13 +311,13 @@ func TestParseQwenSession_AbortedNoAssistantResponse(t *testing.T) {
 	path := createTestFile(t, "abort.jsonl", content)
 
 	sess, msgs, err := parseQwenTestSession(t, path, "", "local")
-	require.NoError(err)
-	require.Len(msgs, 1)
-	assert.Equal(1, sess.MessageCount)
-	assert.Equal(1, sess.UserMessageCount)
-	assert.Equal(RoleUser, msgs[0].Role)
-	assert.Equal("Hello", msgs[0].Content)
-	assert.False(sess.HasTotalOutputTokens, "no assistant entries -> no output tokens")
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, 1, sess.MessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "Hello", msgs[0].Content)
+	assert.False(t, sess.HasTotalOutputTokens, "no assistant entries -> no output tokens")
 }
 
 // TestParseQwenSession_ShortClean models the Session 10 pattern
@@ -343,9 +325,6 @@ func TestParseQwenSession_AbortedNoAssistantResponse(t *testing.T) {
 // response. The baseline "clean" short session that should not change
 // shape under the new coalescing logic.
 func TestParseQwenSession_ShortClean(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	content := `{"uuid":"u1","sessionId":"sess-short","timestamp":"2026-05-15T10:25:42.212Z","type":"user","cwd":"/work","message":{"role":"user","parts":[{"text":"."}]}}
@@ -354,53 +333,47 @@ func TestParseQwenSession_ShortClean(t *testing.T) {
 	path := createTestFile(t, "short.jsonl", content)
 
 	sess, msgs, err := parseQwenTestSession(t, path, "", "local")
-	require.NoError(err)
-	require.Len(msgs, 2)
-	assert.Equal(2, sess.MessageCount)
-	assert.Equal(1, sess.UserMessageCount)
-	assert.Equal("Ready when you are.", msgs[1].Content)
-	assert.False(msgs[1].HasThinking)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "Ready when you are.", msgs[1].Content)
+	assert.False(t, msgs[1].HasThinking)
 }
 
 func TestQwenProviderDiscoverSessions(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "-Users-alice--qwen")
 	chatsDir := filepath.Join(projectDir, "chats")
-	require.NoError(os.MkdirAll(chatsDir, 0o755))
-	require.NoError(os.WriteFile(filepath.Join(chatsDir, "a.jsonl"), []byte("{}\n"), 0o644))
-	require.NoError(os.WriteFile(filepath.Join(chatsDir, "b.jsonl"), []byte("{}\n"), 0o644))
-	require.NoError(os.WriteFile(filepath.Join(chatsDir, "notes.txt"), []byte("ignore"), 0o644))
+	require.NoError(t, os.MkdirAll(chatsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(chatsDir, "a.jsonl"), []byte("{}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(chatsDir, "b.jsonl"), []byte("{}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(chatsDir, "notes.txt"), []byte("ignore"), 0o644))
 
 	files := discoverQwenTestSessions(t, root)
-	require.Len(files, 2)
-	assert.Equal(AgentQwen, files[0].Agent)
-	assert.Equal("qwen", files[0].Project)
-	assert.Equal(AgentQwen, files[1].Agent)
-	assert.Equal("qwen", files[1].Project)
+	require.Len(t, files, 2)
+	assert.Equal(t, AgentQwen, files[0].Agent)
+	assert.Equal(t, "qwen", files[0].Project)
+	assert.Equal(t, AgentQwen, files[1].Agent)
+	assert.Equal(t, "qwen", files[1].Project)
 }
 
 func TestQwenProviderFindSourceFile(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "-Users-alice-code-sample-project")
 	chatsDir := filepath.Join(projectDir, "chats")
-	require.NoError(os.MkdirAll(chatsDir, 0o755))
+	require.NoError(t, os.MkdirAll(chatsDir, 0o755))
 
 	sessionID := "adc026b4-c620-43e4-8cc4-295593889d18"
 	want := filepath.Join(chatsDir, sessionID+".jsonl")
-	require.NoError(os.WriteFile(want, []byte("{}\n"), 0o644))
+	require.NoError(t, os.WriteFile(want, []byte("{}\n"), 0o644))
 
-	assert.Equal(want, findQwenTestSourceFile(t, root, sessionID))
-	assert.Empty(findQwenTestSourceFile(t, root, "not-a-session-id"))
-	assert.Empty(findQwenTestSourceFile(t, root, "b0a4eadd-cb99-4165-94d9-64cad5a66d99"))
-	assert.Empty(findQwenTestSourceFile(t, "", sessionID))
+	assert.Equal(t, want, findQwenTestSourceFile(t, root, sessionID))
+	assert.Empty(t, findQwenTestSourceFile(t, root, "not-a-session-id"))
+	assert.Empty(t, findQwenTestSourceFile(t, root, "b0a4eadd-cb99-4165-94d9-64cad5a66d99"))
+	assert.Empty(t, findQwenTestSourceFile(t, "", sessionID))
 }

@@ -81,15 +81,12 @@ func (p *liveActivityTestProvider) Parse(
 }
 
 func TestLiveActivityColdResumeAndOngoingAppend(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	history := filepath.Join(dir, "history.jsonl")
 	rollout := filepath.Join(dir, "rollout.jsonl")
-	require.NoError(os.WriteFile(history, []byte(hintRecord("cold-id", now)), 0o644))
-	require.NoError(os.WriteFile(rollout, []byte("seed\n"), 0o644))
+	require.NoError(t, os.WriteFile(history, []byte(hintRecord("cold-id", now)), 0o644))
+	require.NoError(t, os.WriteFile(rollout, []byte("seed\n"), 0o644))
 	provider := newLiveActivityTestProvider(history)
 
 	var lookupIDs []string
@@ -118,45 +115,42 @@ func TestLiveActivityColdResumeAndOngoingAppend(t *testing.T) {
 	}}, lookup, syncPaths, nil)
 
 	stats, err := poller.PollOnce(t.Context(), now)
-	require.NoError(err)
-	assert.Equal([]string{"codex:cold-id"}, lookupIDs)
-	assert.Equal([][]string{{rollout}}, syncCalls)
-	assert.Equal(1, stats.SessionLookups)
-	assert.Equal(1, stats.SourceStats)
-	assert.Equal(1, stats.SyncPaths)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"codex:cold-id"}, lookupIDs)
+	assert.Equal(t, [][]string{{rollout}}, syncCalls)
+	assert.Equal(t, 1, stats.SessionLookups)
+	assert.Equal(t, 1, stats.SourceStats)
+	assert.Equal(t, 1, stats.SyncPaths)
 
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Second))
-	require.NoError(err)
-	assert.Len(syncCalls, 1)
+	require.NoError(t, err)
+	assert.Len(t, syncCalls, 1)
 
 	appendFile(t, rollout, "still-open growth\n")
 	_, err = poller.PollOnce(t.Context(), now.Add(2*time.Second))
-	require.NoError(err)
-	require.Len(syncCalls, 2)
-	assert.Equal([]string{rollout}, syncCalls[1])
+	require.NoError(t, err)
+	require.Len(t, syncCalls, 2)
+	assert.Equal(t, []string{rollout}, syncCalls[1])
 
 	appendFile(t, rollout, "retry growth\n")
 	failSync = true
 	_, err = poller.PollOnce(t.Context(), now.Add(3*time.Second))
-	require.Error(err)
+	require.Error(t, err)
 	failSync = false
 	_, err = poller.PollOnce(t.Context(), now.Add(4*time.Second))
-	require.NoError(err)
-	assert.Len(syncCalls, 4, "failed observations must retry")
-	assert.Zero(provider.findSourceCalls)
+	require.NoError(t, err)
+	assert.Len(t, syncCalls, 4, "failed observations must retry")
+	assert.Zero(t, provider.findSourceCalls)
 }
 
 func TestLiveActivityBoundsRetriesAndExpiration(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	history := filepath.Join(t.TempDir(), "history.jsonl")
 	var records strings.Builder
 	for i := range liveActivityMaxEntries + 1 {
 		records.WriteString(hintRecord(fmt.Sprintf("id-%05d", i), now))
 	}
-	require.NoError(os.WriteFile(history, []byte(records.String()), 0o644))
+	require.NoError(t, os.WriteFile(history, []byte(records.String()), 0o644))
 	provider := newLiveActivityTestProvider(history)
 	lookups := 0
 	poller := NewLiveActivityPoller([]LiveActivityTarget{{
@@ -171,26 +165,23 @@ func TestLiveActivityBoundsRetriesAndExpiration(t *testing.T) {
 	}, nil)
 
 	stats, err := poller.PollOnce(t.Context(), now)
-	require.NoError(err)
-	assert.LessOrEqual(len(poller.hot)+len(poller.retries), liveActivityMaxEntries)
-	assert.Equal(liveActivityMaxEntries, lookups)
-	assert.Equal(liveActivityMaxEntries, stats.SessionLookups)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(poller.hot)+len(poller.retries), liveActivityMaxEntries)
+	assert.Equal(t, liveActivityMaxEntries, lookups)
+	assert.Equal(t, liveActivityMaxEntries, stats.SessionLookups)
 
 	_, err = poller.PollOnce(t.Context(), now.Add(liveActivityRetryTTL-time.Second))
-	require.NoError(err)
-	assert.Greater(lookups, liveActivityMaxEntries)
+	require.NoError(t, err)
+	assert.Greater(t, lookups, liveActivityMaxEntries)
 	beforeExpiry := lookups
 	_, err = poller.PollOnce(t.Context(), now.Add(liveActivityRetryTTL+time.Second))
-	require.NoError(err)
-	assert.Equal(beforeExpiry, lookups)
-	assert.Empty(poller.retries)
-	assert.Zero(provider.findSourceCalls)
+	require.NoError(t, err)
+	assert.Equal(t, beforeExpiry, lookups)
+	assert.Empty(t, poller.retries)
+	assert.Zero(t, provider.findSourceCalls)
 }
 
 func TestLiveActivityHintBudgetIsGlobalAcrossSources(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	first := filepath.Join(dir, "first.jsonl")
@@ -202,8 +193,8 @@ func TestLiveActivityHintBudgetIsGlobalAcrossSources(t *testing.T) {
 	}
 	secondRecords.WriteString(hintRecord("second-00000", now))
 	secondRecords.WriteString(hintRecord("second-00001", now))
-	require.NoError(os.WriteFile(first, []byte(firstRecords.String()), 0o644))
-	require.NoError(os.WriteFile(second, []byte(secondRecords.String()), 0o644))
+	require.NoError(t, os.WriteFile(first, []byte(firstRecords.String()), 0o644))
+	require.NoError(t, os.WriteFile(second, []byte(secondRecords.String()), 0o644))
 	provider := newLiveActivityTestProvider(first)
 	decoder := &countingActivityHintDecoder{}
 	var lookupIDs []string
@@ -222,28 +213,25 @@ func TestLiveActivityHintBudgetIsGlobalAcrossSources(t *testing.T) {
 	}, nil)
 
 	firstStats, err := poller.PollOnce(t.Context(), now)
-	require.NoError(err)
-	assert.Equal(activityHintMaxIDsPerPoll, decoder.decoded)
-	assert.Len(lookupIDs, activityHintMaxIDsPerPoll-1)
-	assert.Equal(activityHintMaxIDsPerPoll-1, firstStats.SessionLookups)
-	assert.NotContains(lookupIDs, "codex:second-00000")
-	assert.NotContains(lookupIDs, "codex:second-00001")
+	require.NoError(t, err)
+	assert.Equal(t, activityHintMaxIDsPerPoll, decoder.decoded)
+	assert.Len(t, lookupIDs, activityHintMaxIDsPerPoll-1)
+	assert.Equal(t, activityHintMaxIDsPerPoll-1, firstStats.SessionLookups)
+	assert.NotContains(t, lookupIDs, "codex:second-00000")
+	assert.NotContains(t, lookupIDs, "codex:second-00001")
 	secondCursor := poller.cursors[liveActivityCursorKey{path: second}]
-	require.NotNil(secondCursor)
-	assert.False(secondCursor.initialized,
+	require.NotNil(t, secondCursor)
+	assert.False(t, secondCursor.initialized,
 		"a partially read source must remain unread")
 
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Second))
-	require.NoError(err)
-	assert.Contains(lookupIDs, "codex:second-00000")
-	assert.Contains(lookupIDs, "codex:second-00001")
-	assert.True(secondCursor.initialized)
+	require.NoError(t, err)
+	assert.Contains(t, lookupIDs, "codex:second-00000")
+	assert.Contains(t, lookupIDs, "codex:second-00001")
+	assert.True(t, secondCursor.initialized)
 }
 
 func TestLiveActivityHintByteBudgetIsGlobalAcrossSources(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	first := filepath.Join(dir, "first.jsonl")
@@ -253,9 +241,9 @@ func TestLiveActivityHintByteBudgetIsGlobalAcrossSources(t *testing.T) {
 	const secondSecondID = "second-byte-00000000000000000001"
 	secondContent := hintRecord(firstSecondID, now) +
 		hintRecord(secondSecondID, now)
-	require.Greater(len(secondContent), 64)
-	require.NoError(os.WriteFile(first, firstContent, 0o644))
-	require.NoError(os.WriteFile(second, []byte(secondContent), 0o644))
+	require.Greater(t, len(secondContent), 64)
+	require.NoError(t, os.WriteFile(first, firstContent, 0o644))
+	require.NoError(t, os.WriteFile(second, []byte(secondContent), 0o644))
 	provider := newLiveActivityTestProvider(first)
 	var lookupIDs []string
 	poller := NewLiveActivityPoller([]LiveActivityTarget{{
@@ -274,28 +262,25 @@ func TestLiveActivityHintByteBudgetIsGlobalAcrossSources(t *testing.T) {
 
 	stats, err := poller.PollOnce(t.Context(), now)
 
-	require.NoError(err)
-	assert.Equal(activityHintMaxReadBytes, stats.HintBytes)
-	assert.Empty(lookupIDs)
+	require.NoError(t, err)
+	assert.Equal(t, activityHintMaxReadBytes, stats.HintBytes)
+	assert.Empty(t, lookupIDs)
 	secondCursor := poller.cursors[liveActivityCursorKey{path: second}]
-	require.NotNil(secondCursor)
-	assert.False(secondCursor.initialized,
+	require.NotNil(t, secondCursor)
+	assert.False(t, secondCursor.initialized,
 		"a partially read source must remain unread")
 
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Second))
-	require.NoError(err)
-	assert.Contains(lookupIDs, "codex:"+firstSecondID)
-	assert.Contains(lookupIDs, "codex:"+secondSecondID)
-	assert.True(secondCursor.initialized)
+	require.NoError(t, err)
+	assert.Contains(t, lookupIDs, "codex:"+firstSecondID)
+	assert.Contains(t, lookupIDs, "codex:"+secondSecondID)
+	assert.True(t, secondCursor.initialized)
 }
 
 func TestLiveActivityNewHintRestartsExpiredLookupWindow(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	history := filepath.Join(t.TempDir(), "history.jsonl")
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		history, []byte(hintRecord("waiting", now)), 0o644,
 	))
 	provider := newLiveActivityTestProvider(history)
@@ -309,27 +294,24 @@ func TestLiveActivityNewHintRestartsExpiredLookupWindow(t *testing.T) {
 		return nil
 	}, nil)
 	_, err := poller.PollOnce(t.Context(), now)
-	require.NoError(err)
-	require.Contains(poller.retries, "codex:waiting")
-	assert.Equal(now, poller.retries["codex:waiting"].firstSeen)
+	require.NoError(t, err)
+	require.Contains(t, poller.retries, "codex:waiting")
+	assert.Equal(t, now, poller.retries["codex:waiting"].firstSeen)
 
 	later := now.Add(liveActivityRetryTTL + time.Second)
 	appendFile(t, history, hintRecord("waiting", later))
 	_, err = poller.PollOnce(t.Context(), later)
 
-	require.NoError(err)
-	require.Contains(poller.retries, "codex:waiting",
+	require.NoError(t, err)
+	require.Contains(t, poller.retries, "codex:waiting",
 		"a new prompt must receive its own bounded lookup window")
-	assert.Equal(later, poller.retries["codex:waiting"].firstSeen)
+	assert.Equal(t, later, poller.retries["codex:waiting"].firstSeen)
 }
 
 func TestLiveActivityOlderHintDoesNotRegressRetryTimestamp(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	history := filepath.Join(t.TempDir(), "history.jsonl")
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		history, []byte(hintRecord("waiting", now)), 0o644,
 	))
 	provider := newLiveActivityTestProvider(history)
@@ -343,35 +325,32 @@ func TestLiveActivityOlderHintDoesNotRegressRetryTimestamp(t *testing.T) {
 		return nil
 	}, nil)
 	_, err := poller.PollOnce(t.Context(), now)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	replacement := history + ".new"
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		replacement,
 		[]byte(hintRecord("waiting", now.Add(-time.Hour))),
 		0o644,
 	))
-	require.NoError(os.Rename(replacement, history))
+	require.NoError(t, os.Rename(replacement, history))
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute))
 
-	require.NoError(err)
-	require.Contains(poller.retries, "codex:waiting")
-	assert.Equal(now, poller.retries["codex:waiting"].firstSeen)
-	assert.Equal(now, poller.retries["codex:waiting"].lastHint)
+	require.NoError(t, err)
+	require.Contains(t, poller.retries, "codex:waiting")
+	assert.Equal(t, now, poller.retries["codex:waiting"].firstSeen)
+	assert.Equal(t, now, poller.retries["codex:waiting"].lastHint)
 }
 
 func TestLiveActivityRetriesHotSessionAfterLookupFailureAndMove(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	history := filepath.Join(dir, "history.jsonl")
 	first := filepath.Join(dir, "first.jsonl")
 	second := filepath.Join(dir, "second.jsonl")
-	require.NoError(os.WriteFile(history, []byte(hintRecord("move", now)), 0o644))
-	require.NoError(os.WriteFile(first, []byte("first\n"), 0o644))
-	require.NoError(os.WriteFile(second, []byte("second\n"), 0o644))
+	require.NoError(t, os.WriteFile(history, []byte(hintRecord("move", now)), 0o644))
+	require.NoError(t, os.WriteFile(first, []byte("first\n"), 0o644))
+	require.NoError(t, os.WriteFile(second, []byte("second\n"), 0o644))
 	provider := newLiveActivityTestProvider(history)
 	lookupPath := first
 	lookupErr := error(nil)
@@ -388,38 +367,35 @@ func TestLiveActivityRetriesHotSessionAfterLookupFailureAndMove(t *testing.T) {
 		return nil
 	}, nil)
 	_, err := poller.PollOnce(t.Context(), now)
-	require.NoError(err)
-	require.Contains(poller.hot, "codex:move")
+	require.NoError(t, err)
+	require.Contains(t, poller.hot, "codex:move")
 
 	appendFile(t, history, hintRecord("move", now.Add(time.Minute)))
 	lookupErr = errors.New("temporary lookup failure")
-	require.NoError(os.Remove(first))
+	require.NoError(t, os.Remove(first))
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute))
-	require.Error(err)
-	assert.NotContains(poller.hot, "codex:move")
-	require.Contains(poller.retries, "codex:move")
+	require.Error(t, err)
+	assert.NotContains(t, poller.hot, "codex:move")
+	require.Contains(t, poller.retries, "codex:move")
 
 	lookupErr = nil
 	lookupPath = second
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute+time.Second))
-	require.NoError(err)
-	require.Contains(poller.hot, "codex:move")
-	assert.Equal(second, poller.hot["codex:move"].source.Path)
-	assert.NotContains(poller.retries, "codex:move")
+	require.NoError(t, err)
+	require.Contains(t, poller.hot, "codex:move")
+	assert.Equal(t, second, poller.hot["codex:move"].source.Path)
+	assert.NotContains(t, poller.retries, "codex:move")
 }
 
 func TestLiveActivityRetriesCanonicalRefreshWhileOldPathExists(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	history := filepath.Join(dir, "history.jsonl")
 	first := filepath.Join(dir, "first.jsonl")
 	second := filepath.Join(dir, "second.jsonl")
-	require.NoError(os.WriteFile(history, []byte(hintRecord("move", now)), 0o644))
-	require.NoError(os.WriteFile(first, []byte("first\n"), 0o644))
-	require.NoError(os.WriteFile(second, []byte("second\n"), 0o644))
+	require.NoError(t, os.WriteFile(history, []byte(hintRecord("move", now)), 0o644))
+	require.NoError(t, os.WriteFile(first, []byte("first\n"), 0o644))
+	require.NoError(t, os.WriteFile(second, []byte("second\n"), 0o644))
 	provider := newLiveActivityTestProvider(history)
 	lookupPath := first
 	lookupErr := error(nil)
@@ -438,38 +414,35 @@ func TestLiveActivityRetriesCanonicalRefreshWhileOldPathExists(t *testing.T) {
 		return nil
 	}, nil)
 	_, err := poller.PollOnce(t.Context(), now)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	appendFile(t, history, hintRecord("move", now.Add(time.Minute)))
 	lookupErr = errors.New("temporary lookup failure")
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute))
-	require.Error(err)
-	require.Contains(poller.hot, "codex:move")
-	assert.Equal(first, poller.hot["codex:move"].source.Path)
-	require.NotNil(poller.hot["codex:move"].refreshRetry)
+	require.Error(t, err)
+	require.Contains(t, poller.hot, "codex:move")
+	assert.Equal(t, first, poller.hot["codex:move"].source.Path)
+	require.NotNil(t, poller.hot["codex:move"].refreshRetry)
 
 	lookupErr = nil
 	lookupPath = second
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute+time.Second))
-	require.NoError(err)
-	require.Contains(poller.hot, "codex:move")
-	assert.Equal(second, poller.hot["codex:move"].source.Path)
-	assert.Nil(poller.hot["codex:move"].refreshRetry)
-	assert.Equal(3, lookups)
+	require.NoError(t, err)
+	require.Contains(t, poller.hot, "codex:move")
+	assert.Equal(t, second, poller.hot["codex:move"].source.Path)
+	assert.Nil(t, poller.hot["codex:move"].refreshRetry)
+	assert.Equal(t, 3, lookups)
 }
 
 func TestLiveActivityOlderHintDoesNotRegressHotRefreshRetry(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	history := filepath.Join(dir, "history.jsonl")
 	rollout := filepath.Join(dir, "rollout.jsonl")
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		history, []byte(hintRecord("active", now)), 0o644,
 	))
-	require.NoError(os.WriteFile(rollout, []byte("stable\n"), 0o644))
+	require.NoError(t, os.WriteFile(rollout, []byte("stable\n"), 0o644))
 	provider := newLiveActivityTestProvider(history)
 	var lookupErr error
 	poller := NewLiveActivityPoller([]LiveActivityTarget{{
@@ -485,52 +458,49 @@ func TestLiveActivityOlderHintDoesNotRegressHotRefreshRetry(t *testing.T) {
 		return nil
 	}, nil)
 	_, err := poller.PollOnce(t.Context(), now)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	newerHint := now.Add(time.Minute)
 	replacement := history + ".newer"
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		replacement, []byte(hintRecord("active", newerHint)), 0o644,
 	))
-	require.NoError(os.Rename(replacement, history))
+	require.NoError(t, os.Rename(replacement, history))
 	lookupErr = errors.New("temporary lookup failure")
 	_, err = poller.PollOnce(t.Context(), newerHint)
-	require.Error(err)
-	require.Contains(poller.hot, "codex:active")
-	require.NotNil(poller.hot["codex:active"].refreshRetry)
+	require.Error(t, err)
+	require.Contains(t, poller.hot, "codex:active")
+	require.NotNil(t, poller.hot["codex:active"].refreshRetry)
 
 	replacement = history + ".older"
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		replacement,
 		[]byte(hintRecord("active", now.Add(-time.Hour))),
 		0o644,
 	))
-	require.NoError(os.Rename(replacement, history))
+	require.NoError(t, os.Rename(replacement, history))
 	_, err = poller.PollOnce(t.Context(), now.Add(2*time.Minute))
 
-	require.Error(err)
-	require.NotNil(poller.hot["codex:active"].refreshRetry)
-	assert.Equal(
+	require.Error(t, err)
+	require.NotNil(t, poller.hot["codex:active"].refreshRetry)
+	assert.Equal(t,
 		newerHint, poller.hot["codex:active"].refreshRetry.firstSeen,
 	)
-	assert.Equal(
+	assert.Equal(t,
 		newerHint, poller.hot["codex:active"].refreshRetry.lastHint,
 	)
 }
 
 func TestLiveActivityRetriesHintWhoseIndexedPathIsMissing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	history := filepath.Join(dir, "history.jsonl")
 	missing := filepath.Join(dir, "missing.jsonl")
 	canonical := filepath.Join(dir, "canonical.jsonl")
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		history, []byte(hintRecord("move", now)), 0o644,
 	))
-	require.NoError(os.WriteFile(canonical, []byte("active\n"), 0o644))
+	require.NoError(t, os.WriteFile(canonical, []byte("active\n"), 0o644))
 	provider := newLiveActivityTestProvider(history)
 	lookups := 0
 	var synced []string
@@ -539,7 +509,7 @@ func TestLiveActivityRetriesHintWhoseIndexedPathIsMissing(t *testing.T) {
 		Hints:    provider,
 		Sources:  []parser.ActivityHintSource{{Path: history}},
 	}}, func(_ context.Context, id string) (LiveActivitySource, bool, error) {
-		assert.Equal("codex:move", id)
+		assert.Equal(t, "codex:move", id)
 		lookups++
 		if lookups == 1 {
 			return LiveActivitySource{Path: missing}, true, nil
@@ -551,34 +521,31 @@ func TestLiveActivityRetriesHintWhoseIndexedPathIsMissing(t *testing.T) {
 	}, nil)
 
 	_, err := poller.PollOnce(t.Context(), now)
-	require.NoError(err)
-	assert.Equal(1, lookups)
-	assert.NotContains(poller.hot, "codex:move")
-	require.Contains(poller.retries, "codex:move")
+	require.NoError(t, err)
+	assert.Equal(t, 1, lookups)
+	assert.NotContains(t, poller.hot, "codex:move")
+	require.Contains(t, poller.retries, "codex:move")
 
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Second))
-	require.NoError(err)
-	assert.Equal(2, lookups)
-	require.Contains(poller.hot, "codex:move")
-	assert.Equal(canonical, poller.hot["codex:move"].source.Path)
-	assert.NotContains(poller.retries, "codex:move")
-	assert.Equal([]string{canonical}, synced)
+	require.NoError(t, err)
+	assert.Equal(t, 2, lookups)
+	require.Contains(t, poller.hot, "codex:move")
+	assert.Equal(t, canonical, poller.hot["codex:move"].source.Path)
+	assert.NotContains(t, poller.retries, "codex:move")
+	assert.Equal(t, []string{canonical}, synced)
 }
 
 func TestLiveActivityRetriesRepeatedMissingIndexedPaths(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	history := filepath.Join(dir, "history.jsonl")
 	firstMissing := filepath.Join(dir, "first-missing.jsonl")
 	secondMissing := filepath.Join(dir, "second-missing.jsonl")
 	canonical := filepath.Join(dir, "canonical.jsonl")
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		history, []byte(hintRecord("move", now)), 0o644,
 	))
-	require.NoError(os.WriteFile(canonical, []byte("active\n"), 0o644))
+	require.NoError(t, os.WriteFile(canonical, []byte("active\n"), 0o644))
 	provider := newLiveActivityTestProvider(history)
 	lookupPaths := []string{firstMissing, secondMissing, canonical}
 	lookups := 0
@@ -588,8 +555,8 @@ func TestLiveActivityRetriesRepeatedMissingIndexedPaths(t *testing.T) {
 		Hints:    provider,
 		Sources:  []parser.ActivityHintSource{{Path: history}},
 	}}, func(_ context.Context, id string) (LiveActivitySource, bool, error) {
-		assert.Equal("codex:move", id)
-		require.Less(lookups, len(lookupPaths))
+		assert.Equal(t, "codex:move", id)
+		require.Less(t, lookups, len(lookupPaths))
 		path := lookupPaths[lookups]
 		lookups++
 		return LiveActivitySource{Path: path}, true, nil
@@ -599,39 +566,36 @@ func TestLiveActivityRetriesRepeatedMissingIndexedPaths(t *testing.T) {
 	}, nil)
 
 	_, err := poller.PollOnce(t.Context(), now)
-	require.NoError(err)
-	require.Contains(poller.retries, "codex:move")
+	require.NoError(t, err)
+	require.Contains(t, poller.retries, "codex:move")
 
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Second))
-	require.NoError(err)
-	require.Contains(poller.retries, "codex:move",
+	require.NoError(t, err)
+	require.Contains(t, poller.retries, "codex:move",
 		"a second stale indexed path must not consume the retry")
 
 	_, err = poller.PollOnce(t.Context(), now.Add(2*time.Second))
-	require.NoError(err)
-	assert.Equal(3, lookups)
-	require.Contains(poller.hot, "codex:move")
-	assert.Equal(canonical, poller.hot["codex:move"].source.Path)
-	assert.NotContains(poller.retries, "codex:move")
-	assert.Equal([]string{canonical}, synced)
+	require.NoError(t, err)
+	assert.Equal(t, 3, lookups)
+	require.Contains(t, poller.hot, "codex:move")
+	assert.Equal(t, canonical, poller.hot["codex:move"].source.Path)
+	assert.NotContains(t, poller.retries, "codex:move")
+	assert.Equal(t, []string{canonical}, synced)
 }
 
 func TestLiveActivityOlderReplayPreservesRetryAcrossRepeatedMissingPaths(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	history := filepath.Join(dir, "history.jsonl")
 	firstMissing := filepath.Join(dir, "first-missing.jsonl")
 	secondMissing := filepath.Join(dir, "second-missing.jsonl")
 	canonical := filepath.Join(dir, "canonical.jsonl")
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		history, []byte(hintRecord("move", now)), 0o644,
 	))
-	require.NoError(os.WriteFile(canonical, []byte("active\n"), 0o644))
+	require.NoError(t, os.WriteFile(canonical, []byte("active\n"), 0o644))
 	provider := newLiveActivityTestProvider(history)
 	lookupPaths := []string{firstMissing, secondMissing, canonical}
 	lookups := 0
@@ -641,8 +605,8 @@ func TestLiveActivityOlderReplayPreservesRetryAcrossRepeatedMissingPaths(
 		Hints:    provider,
 		Sources:  []parser.ActivityHintSource{{Path: history}},
 	}}, func(_ context.Context, id string) (LiveActivitySource, bool, error) {
-		assert.Equal("codex:move", id)
-		require.Less(lookups, len(lookupPaths))
+		assert.Equal(t, "codex:move", id)
+		require.Less(t, lookups, len(lookupPaths))
 		path := lookupPaths[lookups]
 		lookups++
 		return LiveActivitySource{Path: path}, true, nil
@@ -652,41 +616,38 @@ func TestLiveActivityOlderReplayPreservesRetryAcrossRepeatedMissingPaths(
 	}, nil)
 
 	_, err := poller.PollOnce(t.Context(), now)
-	require.NoError(err)
-	require.Contains(poller.retries, "codex:move")
+	require.NoError(t, err)
+	require.Contains(t, poller.retries, "codex:move")
 
 	replacement := history + ".older"
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		replacement,
 		[]byte(hintRecord("move", now.Add(-time.Hour))),
 		0o644,
 	))
-	require.NoError(os.Rename(replacement, history))
+	require.NoError(t, os.Rename(replacement, history))
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute))
-	require.NoError(err)
-	require.Contains(poller.retries, "codex:move")
-	assert.Equal(now, poller.retries["codex:move"].firstSeen)
-	assert.Equal(now, poller.retries["codex:move"].lastHint)
+	require.NoError(t, err)
+	require.Contains(t, poller.retries, "codex:move")
+	assert.Equal(t, now, poller.retries["codex:move"].firstSeen)
+	assert.Equal(t, now, poller.retries["codex:move"].lastHint)
 
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute+time.Second))
-	require.NoError(err)
-	assert.Equal(3, lookups)
-	require.Contains(poller.hot, "codex:move")
-	assert.Equal(canonical, poller.hot["codex:move"].source.Path)
-	assert.NotContains(poller.retries, "codex:move")
-	assert.Equal([]string{canonical}, synced)
+	require.NoError(t, err)
+	assert.Equal(t, 3, lookups)
+	require.Contains(t, poller.hot, "codex:move")
+	assert.Equal(t, canonical, poller.hot["codex:move"].source.Path)
+	assert.NotContains(t, poller.retries, "codex:move")
+	assert.Equal(t, []string{canonical}, synced)
 }
 
 func TestLiveActivityPreservesRefreshRetryAcrossHotExpiration(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	history := filepath.Join(dir, "history.jsonl")
 	rollout := filepath.Join(dir, "rollout.jsonl")
-	require.NoError(os.WriteFile(history, []byte(hintRecord("old", now)), 0o644))
-	require.NoError(os.WriteFile(rollout, []byte("stable\n"), 0o644))
+	require.NoError(t, os.WriteFile(history, []byte(hintRecord("old", now)), 0o644))
+	require.NoError(t, os.WriteFile(rollout, []byte("stable\n"), 0o644))
 	provider := newLiveActivityTestProvider(history)
 	lookupErr := errors.New("temporary lookup failure")
 	poller := NewLiveActivityPoller([]LiveActivityTarget{{
@@ -707,30 +668,27 @@ func TestLiveActivityPreservesRefreshRetryAcrossHotExpiration(t *testing.T) {
 	}
 
 	_, err := poller.PollOnce(t.Context(), now)
-	require.Error(err)
-	assert.NotContains(poller.hot, "codex:old")
-	require.Contains(poller.retries, "codex:old")
-	assert.Equal(now, poller.retries["codex:old"].firstSeen)
+	require.Error(t, err)
+	assert.NotContains(t, poller.hot, "codex:old")
+	require.Contains(t, poller.retries, "codex:old")
+	assert.Equal(t, now, poller.retries["codex:old"].firstSeen)
 
 	lookupErr = nil
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Second))
-	require.NoError(err)
-	assert.Contains(poller.hot, "codex:old")
-	assert.NotContains(poller.retries, "codex:old")
+	require.NoError(t, err)
+	assert.Contains(t, poller.hot, "codex:old")
+	assert.NotContains(t, poller.retries, "codex:old")
 }
 
 func TestLiveActivityRefreshesCanonicalPathAndDropsMissing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	history := filepath.Join(dir, "history.jsonl")
 	first := filepath.Join(dir, "first.jsonl")
 	second := filepath.Join(dir, "second.jsonl")
-	require.NoError(os.WriteFile(history, []byte(hintRecord("move", now)), 0o644))
-	require.NoError(os.WriteFile(first, []byte("first\n"), 0o644))
-	require.NoError(os.WriteFile(second, []byte("second\n"), 0o644))
+	require.NoError(t, os.WriteFile(history, []byte(hintRecord("move", now)), 0o644))
+	require.NoError(t, os.WriteFile(first, []byte("first\n"), 0o644))
+	require.NoError(t, os.WriteFile(second, []byte("second\n"), 0o644))
 	provider := newLiveActivityTestProvider(history)
 	selected := first
 	var synced []string
@@ -746,44 +704,42 @@ func TestLiveActivityRefreshesCanonicalPathAndDropsMissing(t *testing.T) {
 	}, nil)
 
 	_, err := poller.PollOnce(t.Context(), now)
-	require.NoError(err)
-	require.Equal([]string{first}, synced)
+	require.NoError(t, err)
+	require.Equal(t, []string{first}, synced)
 	selected = second
 	appendFile(t, history, hintRecord("move", now.Add(time.Minute)))
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Minute))
-	require.NoError(err)
-	assert.Equal([]string{first, second}, synced)
+	require.NoError(t, err)
+	assert.Equal(t, []string{first, second}, synced)
 
-	require.NoError(os.Remove(second))
+	require.NoError(t, os.Remove(second))
 	_, err = poller.PollOnce(t.Context(), now.Add(2*time.Minute))
-	require.NoError(err)
-	assert.Empty(poller.hot)
-	assert.Zero(provider.findSourceCalls)
+	require.NoError(t, err)
+	assert.Empty(t, poller.hot)
+	assert.Zero(t, provider.findSourceCalls)
 }
 
 func TestLiveActivityDetectsEqualSizeMtimeSourceReplacement(t *testing.T) {
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	history := filepath.Join(dir, "history.jsonl")
 	rollout := filepath.Join(dir, "rollout.jsonl")
 	replacement := filepath.Join(dir, "replacement.jsonl")
-	require.NoError(os.WriteFile(history, []byte(hintRecord("replace", now)), 0o644))
-	require.NoError(os.WriteFile(rollout, []byte("first\n"), 0o644))
-	require.NoError(os.Chtimes(rollout, now, now))
+	require.NoError(t, os.WriteFile(history, []byte(hintRecord("replace", now)), 0o644))
+	require.NoError(t, os.WriteFile(rollout, []byte("first\n"), 0o644))
+	require.NoError(t, os.Chtimes(rollout, now, now))
 	oldInfo, err := os.Stat(rollout)
-	require.NoError(err)
+	require.NoError(t, err)
 	oldInode, oldDevice := getFileIdentity(rollout, oldInfo)
-	require.NoError(os.WriteFile(replacement, []byte("other\n"), 0o644))
-	require.NoError(os.Chtimes(replacement, now, now))
-	require.NoError(os.Rename(replacement, rollout))
+	require.NoError(t, os.WriteFile(replacement, []byte("other\n"), 0o644))
+	require.NoError(t, os.Chtimes(replacement, now, now))
+	require.NoError(t, os.Rename(replacement, rollout))
 	newInfo, err := os.Stat(rollout)
-	require.NoError(err)
+	require.NoError(t, err)
 	newInode, newDevice := getFileIdentity(rollout, newInfo)
-	require.NotEqual([2]int64{oldInode, oldDevice}, [2]int64{newInode, newDevice})
-	require.Equal(oldInfo.Size(), newInfo.Size())
-	require.Equal(oldInfo.ModTime(), newInfo.ModTime())
+	require.NotEqual(t, [2]int64{oldInode, oldDevice}, [2]int64{newInode, newDevice})
+	require.Equal(t, oldInfo.Size(), newInfo.Size())
+	require.Equal(t, oldInfo.ModTime(), newInfo.ModTime())
 	provider := newLiveActivityTestProvider(history)
 	var synced []string
 	poller := NewLiveActivityPoller([]LiveActivityTarget{{
@@ -807,7 +763,7 @@ func TestLiveActivityDetectsEqualSizeMtimeSourceReplacement(t *testing.T) {
 
 	_, err = poller.PollOnce(t.Context(), now)
 
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Equal(t, []string{rollout}, synced)
 }
 
@@ -825,9 +781,6 @@ func TestLiveActivityArchiveCardinalityDoesNotChangeWork(t *testing.T) {
 }
 
 func TestLiveActivityBoundsCursorMemoryAcrossManySources(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	const (
 		sourceCount            = 320
 		expectedMaxCursors     = 256
@@ -839,7 +792,7 @@ func TestLiveActivityBoundsCursorMemoryAcrossManySources(t *testing.T) {
 	sources := make([]parser.ActivityHintSource, 0, sourceCount)
 	for i := range sourceCount {
 		path := filepath.Join(dir, fmt.Sprintf("history-%03d.jsonl", i))
-		require.NoError(os.WriteFile(path, partial, 0o644))
+		require.NoError(t, os.WriteFile(path, partial, 0o644))
 		sources = append(sources, parser.ActivityHintSource{Path: path})
 	}
 	provider := newLiveActivityTestProvider(sources[0].Path)
@@ -857,17 +810,17 @@ func TestLiveActivityBoundsCursorMemoryAcrossManySources(t *testing.T) {
 		stats, err := poller.PollOnce(
 			t.Context(), now.Add(time.Duration(i)*time.Second),
 		)
-		require.NoError(err)
-		assert.LessOrEqual(stats.HintFiles, expectedMaxCursors)
-		assert.LessOrEqual(stats.HintBytes, activityHintMaxReadBytes)
+		require.NoError(t, err)
+		assert.LessOrEqual(t, stats.HintFiles, expectedMaxCursors)
+		assert.LessOrEqual(t, stats.HintBytes, activityHintMaxReadBytes)
 	}
 
 	retainedBytes := 0
 	for key := range poller.cursors {
 		retainedBytes += len(key.path)
 	}
-	assert.LessOrEqual(len(poller.cursors), expectedMaxCursors)
-	assert.LessOrEqual(retainedBytes, expectedMaxCursorBytes)
+	assert.LessOrEqual(t, len(poller.cursors), expectedMaxCursors)
+	assert.LessOrEqual(t, retainedBytes, expectedMaxCursorBytes)
 }
 
 func TestLiveActivityRunStopsOnCancellation(t *testing.T) {
@@ -875,11 +828,11 @@ func TestLiveActivityRunStopsOnCancellation(t *testing.T) {
 	cancel()
 	poller := NewLiveActivityPoller(nil,
 		func(context.Context, string) (LiveActivitySource, bool, error) {
-			t.Fatal("lookup after cancellation")
+			require.FailNow(t, "lookup after cancellation")
 			return LiveActivitySource{}, false, nil
 		},
 		func(context.Context, []string) error {
-			t.Fatal("sync after cancellation")
+			require.FailNow(t, "sync after cancellation")
 			return nil
 		}, nil)
 	poller.Run(ctx)
@@ -932,18 +885,15 @@ func TestLiveActivityEvictsQuiescentBeforePending(t *testing.T) {
 }
 
 func TestLiveActivityDeduplicatesOverlappingHintSources(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	firstHistory := filepath.Join(dir, "first-history.jsonl")
 	secondHistory := filepath.Join(dir, "second-history.jsonl")
 	rollout := filepath.Join(dir, "rollout.jsonl")
 	record := hintRecord("duplicate", now)
-	require.NoError(os.WriteFile(firstHistory, []byte(record), 0o644))
-	require.NoError(os.WriteFile(secondHistory, []byte(record+record), 0o644))
-	require.NoError(os.WriteFile(rollout, []byte("changed"), 0o644))
+	require.NoError(t, os.WriteFile(firstHistory, []byte(record), 0o644))
+	require.NoError(t, os.WriteFile(secondHistory, []byte(record+record), 0o644))
+	require.NoError(t, os.WriteFile(rollout, []byte("changed"), 0o644))
 	provider := newLiveActivityTestProvider(firstHistory)
 	lookups := 0
 	syncs := 0
@@ -964,21 +914,18 @@ func TestLiveActivityDeduplicatesOverlappingHintSources(t *testing.T) {
 
 	stats, err := poller.PollOnce(t.Context(), now)
 
-	require.NoError(err)
-	assert.Equal(1, lookups)
-	assert.Equal(1, syncs)
-	assert.Equal(2, stats.HintFiles)
-	assert.Equal(1, stats.SessionLookups)
-	assert.Equal(1, stats.SyncPaths)
+	require.NoError(t, err)
+	assert.Equal(t, 1, lookups)
+	assert.Equal(t, 1, syncs)
+	assert.Equal(t, 2, stats.HintFiles)
+	assert.Equal(t, 1, stats.SessionLookups)
+	assert.Equal(t, 1, stats.SyncPaths)
 }
 
 func TestLiveActivityLookupErrorDoesNotDuplicateHotEntry(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	history := filepath.Join(t.TempDir(), "history.jsonl")
-	require.NoError(os.WriteFile(history, []byte(hintRecord("active", now)), 0o644))
+	require.NoError(t, os.WriteFile(history, []byte(hintRecord("active", now)), 0o644))
 	provider := newLiveActivityTestProvider(history)
 	poller := NewLiveActivityPoller([]LiveActivityTarget{{
 		Provider: provider,
@@ -990,9 +937,9 @@ func TestLiveActivityLookupErrorDoesNotDuplicateHotEntry(t *testing.T) {
 		return nil
 	}, nil)
 	rollout := filepath.Join(t.TempDir(), "rollout.jsonl")
-	require.NoError(os.WriteFile(rollout, []byte("stable"), 0o644))
+	require.NoError(t, os.WriteFile(rollout, []byte("stable"), 0o644))
 	info, err := os.Stat(rollout)
-	require.NoError(err)
+	require.NoError(t, err)
 	poller.hot["codex:active"] = &liveActivityHotEntry{
 		source: LiveActivitySource{
 			Path:          rollout,
@@ -1005,24 +952,21 @@ func TestLiveActivityLookupErrorDoesNotDuplicateHotEntry(t *testing.T) {
 
 	_, err = poller.PollOnce(t.Context(), now)
 
-	require.Error(err)
-	assert.Contains(poller.hot, "codex:active")
-	assert.NotContains(poller.retries, "codex:active")
-	assert.Equal(1, len(poller.hot)+len(poller.retries))
+	require.Error(t, err)
+	assert.Contains(t, poller.hot, "codex:active")
+	assert.NotContains(t, poller.retries, "codex:active")
+	assert.Equal(t, 1, len(poller.hot)+len(poller.retries))
 }
 
 func TestLiveActivityGrowthRefreshesHotExpiration(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	history := filepath.Join(dir, "history.jsonl")
 	rollout := filepath.Join(dir, "rollout.jsonl")
-	require.NoError(os.WriteFile(history, []byte(
+	require.NoError(t, os.WriteFile(history, []byte(
 		hintRecord("growing", now.Add(-23*time.Hour)),
 	), 0o644))
-	require.NoError(os.WriteFile(rollout, []byte("growth"), 0o644))
+	require.NoError(t, os.WriteFile(rollout, []byte("growth"), 0o644))
 	provider := newLiveActivityTestProvider(history)
 	poller := NewLiveActivityPoller([]LiveActivityTarget{{
 		Provider: provider,
@@ -1035,33 +979,30 @@ func TestLiveActivityGrowthRefreshesHotExpiration(t *testing.T) {
 	}, nil)
 
 	_, err := poller.PollOnce(t.Context(), now)
-	require.NoError(err)
-	require.Contains(poller.hot, "codex:growing")
-	assert.Equal(now, poller.hot["codex:growing"].lastActivity)
+	require.NoError(t, err)
+	require.Contains(t, poller.hot, "codex:growing")
+	assert.Equal(t, now, poller.hot["codex:growing"].lastActivity)
 
 	_, err = poller.PollOnce(t.Context(), now.Add(2*time.Hour))
-	require.NoError(err)
-	assert.Contains(poller.hot, "codex:growing",
+	require.NoError(t, err)
+	assert.Contains(t, poller.hot, "codex:growing",
 		"observed growth must refresh the 24-hour retention window")
 
 	_, err = poller.PollOnce(t.Context(), now.Add(liveActivityHotTTL+time.Second))
-	require.NoError(err)
-	assert.Empty(poller.hot)
+	require.NoError(t, err)
+	assert.Empty(t, poller.hot)
 }
 
 func TestLiveActivityOlderHintReplayPreservesObservedGrowth(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	history := filepath.Join(dir, "history.jsonl")
 	rollout := filepath.Join(dir, "rollout.jsonl")
 	oldHint := hintRecord("growing", now.Add(-23*time.Hour))
-	require.NoError(os.WriteFile(history, []byte(oldHint), 0o644))
-	require.NoError(os.WriteFile(rollout, []byte("growth"), 0o644))
+	require.NoError(t, os.WriteFile(history, []byte(oldHint), 0o644))
+	require.NoError(t, os.WriteFile(rollout, []byte("growth"), 0o644))
 	info, err := os.Stat(rollout)
-	require.NoError(err)
+	require.NoError(t, err)
 	inode, device := getFileIdentity(rollout, info)
 	provider := newLiveActivityTestProvider(history)
 	lookups := 0
@@ -1088,30 +1029,27 @@ func TestLiveActivityOlderHintReplayPreservesObservedGrowth(t *testing.T) {
 	}, nil)
 
 	_, err = poller.PollOnce(t.Context(), now)
-	require.NoError(err)
-	require.Contains(poller.hot, "codex:growing")
-	assert.Equal(now, poller.hot["codex:growing"].lastActivity)
+	require.NoError(t, err)
+	require.Contains(t, poller.hot, "codex:growing")
+	assert.Equal(t, now, poller.hot["codex:growing"].lastActivity)
 
 	delete(poller.cursors, liveActivityCursorKey{path: history})
 	_, err = poller.PollOnce(t.Context(), now.Add(time.Hour))
 
-	require.NoError(err)
-	require.Contains(poller.hot, "codex:growing")
-	assert.Equal(now, poller.hot["codex:growing"].lastActivity)
-	assert.Equal(2, lookups)
-	assert.Equal(1, syncs)
+	require.NoError(t, err)
+	require.Contains(t, poller.hot, "codex:growing")
+	assert.Equal(t, now, poller.hot["codex:growing"].lastActivity)
+	assert.Equal(t, 2, lookups)
+	assert.Equal(t, 1, syncs)
 }
 
 func TestLiveActivityStopsAfterHintReadCancellation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	var sources []parser.ActivityHintSource
 	for i := range 3 {
 		path := filepath.Join(dir, fmt.Sprintf("history-%d.jsonl", i))
-		require.NoError(os.WriteFile(path, []byte(
+		require.NoError(t, os.WriteFile(path, []byte(
 			hintRecord(fmt.Sprintf("id-%d-a", i), now)+
 				hintRecord(fmt.Sprintf("id-%d-b", i), now),
 		), 0o644))
@@ -1125,34 +1063,31 @@ func TestLiveActivityStopsAfterHintReadCancellation(t *testing.T) {
 		Hints:    decoder,
 		Sources:  sources,
 	}}, func(context.Context, string) (LiveActivitySource, bool, error) {
-		t.Fatal("lookup after hint cancellation")
+		require.FailNow(t, "lookup after hint cancellation")
 		return LiveActivitySource{}, false, nil
 	}, func(context.Context, []string) error {
-		t.Fatal("sync after hint cancellation")
+		require.FailNow(t, "sync after hint cancellation")
 		return nil
 	}, nil)
 
 	stats, err := poller.PollOnce(ctx, now)
 
-	require.ErrorIs(err, context.Canceled)
-	assert.Equal(1, stats.HintFiles)
-	assert.Equal(1, decoder.decoded)
-	assert.Zero(stats.SessionLookups)
-	assert.Zero(stats.SourceStats)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, stats.HintFiles)
+	assert.Equal(t, 1, decoder.decoded)
+	assert.Zero(t, stats.SessionLookups)
+	assert.Zero(t, stats.SourceStats)
 }
 
 func TestLiveActivityStopsAfterLookupCancellation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	history := filepath.Join(dir, "history.jsonl")
 	rollout := filepath.Join(dir, "rollout.jsonl")
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		history, []byte(hintRecord("active", now)), 0o644,
 	))
-	require.NoError(os.WriteFile(rollout, []byte("growth"), 0o644))
+	require.NoError(t, os.WriteFile(rollout, []byte("growth"), 0o644))
 	ctx, cancel := context.WithCancel(t.Context())
 	provider := newLiveActivityTestProvider(history)
 	syncs := 0
@@ -1170,20 +1105,17 @@ func TestLiveActivityStopsAfterLookupCancellation(t *testing.T) {
 
 	stats, err := poller.PollOnce(ctx, now)
 
-	require.ErrorIs(err, context.Canceled)
-	assert.Equal(1, stats.SessionLookups)
-	assert.Zero(stats.SourceStats)
-	assert.Zero(stats.SyncPaths)
-	assert.Zero(syncs)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, stats.SessionLookups)
+	assert.Zero(t, stats.SourceStats)
+	assert.Zero(t, stats.SyncPaths)
+	assert.Zero(t, syncs)
 }
 
 func TestLiveActivityThrottlesErrorsWithoutRecordContent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	now := time.Unix(1_800_000_000, 0).UTC()
 	history := filepath.Join(t.TempDir(), "history.jsonl")
-	require.NoError(os.Mkdir(history, 0o755))
+	require.NoError(t, os.Mkdir(history, 0o755))
 	provider := newLiveActivityTestProvider(history)
 	var logs []string
 	poller := NewLiveActivityPoller([]LiveActivityTarget{{
@@ -1204,14 +1136,14 @@ func TestLiveActivityThrottlesErrorsWithoutRecordContent(t *testing.T) {
 		now.Add(liveActivityLogInterval),
 	} {
 		_, err := poller.PollOnce(t.Context(), at)
-		require.Error(err)
+		require.Error(t, err)
 	}
 
-	require.Len(logs, 2)
+	require.Len(t, logs, 2)
 	for _, logLine := range logs {
-		assert.Contains(logLine, "1")
-		assert.Contains(logLine, fmt.Sprintf("%q", history))
-		assert.NotContains(logLine, "private-prompt-sentinel")
+		assert.Contains(t, logLine, "1")
+		assert.Contains(t, logLine, fmt.Sprintf("%q", history))
+		assert.NotContains(t, logLine, "private-prompt-sentinel")
 	}
 }
 
@@ -1220,6 +1152,7 @@ func runLiveActivityCardinalityCase(
 	unrelated int,
 ) LiveActivityPollStats {
 	t.Helper()
+
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	for i := range unrelated {
@@ -1257,6 +1190,7 @@ func withoutHintBytes(stats LiveActivityPollStats) LiveActivityPollStats {
 
 func appendFile(t *testing.T, path string, content string) {
 	t.Helper()
+
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	require.NoError(t, err)
 	_, err = file.WriteString(content)

@@ -81,6 +81,7 @@ func testPushUnitSource() fakePushUnitSource {
 // it so the push source can reopen the file read-only.
 func buildTestVectorsDB(t *testing.T, cfg config.Config) {
 	t.Helper()
+
 	ctx := t.Context()
 	ix, err := vector.Open(
 		ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false,
@@ -128,30 +129,27 @@ func TestVectorPushSourceMissingFile(t *testing.T) {
 // then picks up a generation built at the same path afterward, as a daemon push
 // that starts before embeddings exist must.
 func TestVectorPushSourceMissingFileThenBuilt(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	cfg := enabledVectorConfig(t)
 	src := newVectorPushSource(cfg)
-	require.NotNil(src)
+	require.NotNil(t, src)
 	closePushSource(t, src)
 
 	_, ok, err := src.BeginExport(ctx, nil)
-	require.NoError(err)
-	require.False(ok, "no vectors.db yet -> nothing to push")
+	require.NoError(t, err)
+	require.False(t, ok, "no vectors.db yet -> nothing to push")
 
 	buildTestVectorsDB(t, cfg)
 
 	export, ok, err := src.BeginExport(ctx, nil)
-	require.NoError(err)
-	require.True(ok, "same adapter must pick up a later build")
+	require.NoError(t, err)
+	require.True(t, ok, "same adapter must pick up a later build")
 	defer export.Close()
-	assert.Equal("fake-model", export.Generation().Model)
+	assert.Equal(t, "fake-model", export.Generation().Model)
 
 	hashes, err := export.SessionDocHashes(ctx, nil)
-	require.NoError(err)
-	assert.Len(hashes, 2)
+	require.NoError(t, err)
+	assert.Len(t, hashes, 2)
 }
 
 // TestVectorPushSourceNotReadyDuringRebuild pins the partial-coverage gate: a
@@ -161,9 +159,6 @@ func TestVectorPushSourceMissingFileThenBuilt(t *testing.T) {
 // PG vectors, so Generation must refuse with ErrVectorSourceNotReady until a
 // build completes.
 func TestVectorPushSourceNotReadyDuringRebuild(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	cfg := enabledVectorConfig(t)
 	buildTestVectorsDB(t, cfg)
@@ -175,7 +170,7 @@ func TestVectorPushSourceNotReadyDuringRebuild(t *testing.T) {
 		ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false,
 		cfg.Vector.Embeddings.MaxInputChars,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	failingEncoder := func(_ context.Context, _ []string) ([][]float32, error) {
 		return nil, errors.New("embeddings endpoint down")
 	}
@@ -183,17 +178,17 @@ func TestVectorPushSourceNotReadyDuringRebuild(t *testing.T) {
 		kitvec.Generation{Model: "fake-model", Dimensions: 4},
 		vector.BuildOptions{FullRebuild: true},
 	)
-	require.Error(err, "rebuild must abort on encoder failure")
-	require.NoError(ix.Close())
+	require.Error(t, err, "rebuild must abort on encoder failure")
+	require.NoError(t, ix.Close())
 
 	src := newVectorPushSource(cfg)
-	require.NotNil(src)
+	require.NotNil(t, src)
 	closePushSource(t, src)
 
 	_, ok, err := src.BeginExport(ctx, []string{"session-1"})
-	require.Error(err)
-	require.ErrorIs(err, postgres.ErrVectorSourceNotReady)
-	assert.False(ok)
+	require.Error(t, err)
+	require.ErrorIs(t, err, postgres.ErrVectorSourceNotReady)
+	assert.False(t, ok)
 }
 
 // TestVectorPushSourceScopedGenerationIgnoresOutOfScopePendingDocs pins the
@@ -201,9 +196,6 @@ func TestVectorPushSourceNotReadyDuringRebuild(t *testing.T) {
 // docs outside its candidate sessions, while a generation-wide push against the
 // same active generation still blocks until the pending docs are embedded.
 func TestVectorPushSourceScopedGenerationIgnoresOutOfScopePendingDocs(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	cfg := enabledVectorConfig(t)
 	buildTestVectorsDB(t, cfg)
@@ -212,7 +204,7 @@ func TestVectorPushSourceScopedGenerationIgnoresOutOfScopePendingDocs(t *testing
 		ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false,
 		cfg.Vector.Embeddings.MaxInputChars,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	failingEncoder := func(_ context.Context, _ []string) ([][]float32, error) {
 		return nil, errors.New("embeddings endpoint down")
 	}
@@ -224,50 +216,47 @@ func TestVectorPushSourceScopedGenerationIgnoresOutOfScopePendingDocs(t *testing
 		kitvec.Generation{Model: "fake-model", Dimensions: 4},
 		vector.BuildOptions{},
 	)
-	require.Error(err, "incremental build must abort on encoder failure")
-	require.NoError(ix.Close())
+	require.Error(t, err, "incremental build must abort on encoder failure")
+	require.NoError(t, ix.Close())
 
 	src := newVectorPushSource(cfg)
-	require.NotNil(src)
+	require.NotNil(t, src)
 	closePushSource(t, src)
 
 	export, ok, err := src.BeginExport(ctx, []string{"session-1"})
-	require.NoError(err)
-	require.True(ok, "out-of-scope pending docs must not block a scoped push")
-	assert.Equal("fake-model", export.Generation().Model)
-	require.NoError(export.Close())
+	require.NoError(t, err)
+	require.True(t, ok, "out-of-scope pending docs must not block a scoped push")
+	assert.Equal(t, "fake-model", export.Generation().Model)
+	require.NoError(t, export.Close())
 
 	_, ok, err = src.BeginExport(ctx, nil)
-	require.Error(err)
-	require.ErrorIs(err, postgres.ErrVectorSourceNotReady)
-	assert.False(ok)
+	require.Error(t, err)
+	require.ErrorIs(t, err, postgres.ErrVectorSourceNotReady)
+	assert.False(t, ok)
 }
 
 func TestVectorPushSourceRoundTrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	cfg := enabledVectorConfig(t)
 	buildTestVectorsDB(t, cfg)
 
 	src := newVectorPushSource(cfg)
-	require.NotNil(src)
+	require.NotNil(t, src)
 	closePushSource(t, src)
 
 	export, ok, err := src.BeginExport(ctx, nil)
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 	defer export.Close()
-	assert.NotEmpty(export.Generation().Fingerprint)
-	assert.Equal("fake-model", export.Generation().Model)
-	assert.Equal(4, export.Generation().Dimension)
+	assert.NotEmpty(t, export.Generation().Fingerprint)
+	assert.Equal(t, "fake-model", export.Generation().Model)
+	assert.Equal(t, 4, export.Generation().Dimension)
 
 	hashes, err := export.SessionDocHashes(ctx, nil)
-	require.NoError(err)
-	require.Len(hashes, 2)
-	assert.Contains(hashes, "session-1")
-	assert.Contains(hashes, "session-2")
+	require.NoError(t, err)
+	require.Len(t, hashes, 2)
+	assert.Contains(t, hashes, "session-1")
+	assert.Contains(t, hashes, "session-2")
 
 	// Cross-check the adapter's mapping against the raw export API: every
 	// VectorPushDoc field must mirror its ExportDoc source exactly.
@@ -275,36 +264,36 @@ func TestVectorPushSourceRoundTrip(t *testing.T) {
 		ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), true,
 		cfg.Vector.Embeddings.MaxInputChars,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer ix.Close()
 	exp, ok, err := ix.ActiveExport(ctx)
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 	want, wantHash, err := ix.ExportSessionDocs(ctx, exp.Ordinal, "session-1")
-	require.NoError(err)
-	require.NotEmpty(want)
-	assert.Equal(wantHash, hashes["session-1"],
+	require.NoError(t, err)
+	require.NotEmpty(t, want)
+	assert.Equal(t, wantHash, hashes["session-1"],
 		"export hash must match the delta-scan aggregate for an unchanged index")
 
 	docs, gotHash, err := export.SessionDocs(ctx, "session-1")
-	require.NoError(err)
-	assert.Equal(wantHash, gotHash)
-	require.Len(docs, len(want))
+	require.NoError(t, err)
+	assert.Equal(t, wantHash, gotHash)
+	require.Len(t, docs, len(want))
 	for i, got := range docs {
 		w := want[i]
-		assert.Equal(w.DocKey, got.DocKey)
-		assert.Equal(w.SessionID, got.SessionID)
-		assert.Equal(w.SourceUUID, got.SourceUUID)
-		assert.Equal(w.Ordinal, got.Ordinal)
-		assert.Equal(w.OrdinalEnd, got.OrdinalEnd)
-		assert.Equal(w.Subordinate, got.Subordinate)
-		assert.Equal(w.OffsetsJSON, got.OffsetsJSON)
-		assert.Equal(w.Content, got.Content)
-		assert.Equal(w.ContentHash, got.ContentHash)
-		require.Len(got.Chunks, len(w.Chunks))
+		assert.Equal(t, w.DocKey, got.DocKey)
+		assert.Equal(t, w.SessionID, got.SessionID)
+		assert.Equal(t, w.SourceUUID, got.SourceUUID)
+		assert.Equal(t, w.Ordinal, got.Ordinal)
+		assert.Equal(t, w.OrdinalEnd, got.OrdinalEnd)
+		assert.Equal(t, w.Subordinate, got.Subordinate)
+		assert.Equal(t, w.OffsetsJSON, got.OffsetsJSON)
+		assert.Equal(t, w.Content, got.Content)
+		assert.Equal(t, w.ContentHash, got.ContentHash)
+		require.Len(t, got.Chunks, len(w.Chunks))
 		for j, gc := range got.Chunks {
-			assert.Equal(w.Chunks[j].ChunkIndex, gc.ChunkIndex)
-			assert.Equal(w.Chunks[j].Embedding, gc.Embedding)
+			assert.Equal(t, w.Chunks[j].ChunkIndex, gc.ChunkIndex)
+			assert.Equal(t, w.Chunks[j].Embedding, gc.Embedding)
 		}
 	}
 }
@@ -314,31 +303,28 @@ func TestVectorPushSourceRoundTrip(t *testing.T) {
 // per-watch-loop sources do not leak SQLite handles), a nil source is a
 // no-op, and a closed adapter transparently reopens on the next call.
 func TestCloseVectorPushSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	closeVectorPushSource(nil) // must not panic
 
 	cfg := enabledVectorConfig(t)
 	buildTestVectorsDB(t, cfg)
 	src := newVectorPushSource(cfg)
-	require.NotNil(src)
+	require.NotNil(t, src)
 
 	ctx := t.Context()
 	export, ok, err := src.BeginExport(ctx, nil)
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 	defer export.Close()
 	adapter := src.(*vectorPushSource)
-	require.NotNil(adapter.ix, "Generation memoizes the open handle")
+	require.NotNil(t, adapter.ix, "Generation memoizes the open handle")
 
 	closeVectorPushSource(src)
-	assert.Nil(adapter.ix, "close releases the memoized handle")
+	assert.Nil(t, adapter.ix, "close releases the memoized handle")
 	closeVectorPushSource(src) // idempotent
 
 	export, ok, err = src.BeginExport(ctx, nil)
-	require.NoError(err)
-	assert.True(ok, "a closed adapter reopens lazily")
-	require.NoError(export.Close())
+	require.NoError(t, err)
+	assert.True(t, ok, "a closed adapter reopens lazily")
+	require.NoError(t, export.Close())
 	closePushSource(t, src)
 }

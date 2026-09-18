@@ -33,16 +33,13 @@ func TestFileStatTupleDigestRejectsUnavailableChangeTime(t *testing.T) {
 }
 
 func TestClaudeProviderComputesMultiFileStatHash(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{
 		Machine: "local",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	hasher, ok := provider.(MultiFileStatHasher)
-	require.True(ok, "claude provider must implement MultiFileStatHasher")
-	assert.Equal(CapabilitySupported,
+	require.True(t, ok, "claude provider must implement MultiFileStatHasher")
+	assert.Equal(t, CapabilitySupported,
 		provider.Capabilities().Source.MultiFileStatHash,
 		"claude must declare MultiFileStatHash so the engine registers the hasher")
 
@@ -51,34 +48,31 @@ func TestClaudeProviderComputesMultiFileStatHash(t *testing.T) {
 
 	first := hasher.ComputeMultiFileStatHash(path)
 	info, err := os.Stat(path)
-	require.NoError(err)
+	require.NoError(t, err)
 	if _, changeTimeOK := codexIndexChangeTime(path, info); !changeTimeOK {
-		assert.Zero(first,
+		assert.Zero(t, first,
 			"unavailable change-time must disable the stat digest")
 		return
 	}
-	require.NotZero(first)
-	assert.Equal(first, hasher.ComputeMultiFileStatHash(path),
+	require.NotZero(t, first)
+	assert.Equal(t, first, hasher.ComputeMultiFileStatHash(path),
 		"digest must be stable while the transcript stat is unchanged")
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = f.WriteString("line two\n")
-	require.NoError(err)
-	require.NoError(f.Close())
-	assert.NotEqual(first, hasher.ComputeMultiFileStatHash(path),
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	assert.NotEqual(t, first, hasher.ComputeMultiFileStatHash(path),
 		"an appended transcript must change the digest")
 }
 
 func TestCodexProviderComputesMultiFileStatHash(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	provider := newCodexTestProvider(t, root)
 	hasher, ok := any(provider).(MultiFileStatHasher)
-	require.True(ok, "codex provider must implement MultiFileStatHasher")
-	assert.Equal(CapabilitySupported,
+	require.True(t, ok, "codex provider must implement MultiFileStatHasher")
+	assert.Equal(t, CapabilitySupported,
 		provider.Capabilities().Source.MultiFileStatHash,
 		"codex must declare MultiFileStatHash so the engine registers the hasher")
 
@@ -87,14 +81,14 @@ func TestCodexProviderComputesMultiFileStatHash(t *testing.T) {
 
 	first := hasher.ComputeMultiFileStatHash(path)
 	info, err := os.Stat(path)
-	require.NoError(err)
+	require.NoError(t, err)
 	if _, changeTimeOK := codexIndexChangeTime(path, info); !changeTimeOK {
-		assert.Zero(first,
+		assert.Zero(t, first,
 			"unavailable change-time must disable the stat digest")
 		return
 	}
-	require.NotZero(first)
-	assert.Equal(first, hasher.ComputeMultiFileStatHash(path),
+	require.NotZero(t, first)
+	assert.Equal(t, first, hasher.ComputeMultiFileStatHash(path),
 		"digest must be stable while transcript and index stats are unchanged")
 
 	// A session_index.jsonl change (e.g. a thread title rename) must break
@@ -104,19 +98,19 @@ func TestCodexProviderComputesMultiFileStatHash(t *testing.T) {
 	writeStatDigestFile(t, indexPath, `{"id":"x","name":"Renamed"}`+"\n")
 	withIndex := hasher.ComputeMultiFileStatHash(path)
 	indexInfo, err := os.Stat(indexPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	if _, changeTimeOK := codexIndexChangeTime(
 		indexPath, indexInfo,
 	); !changeTimeOK {
-		assert.Zero(withIndex,
+		assert.Zero(t, withIndex,
 			"an existing sidecar without change-time must disable the digest")
 		return
 	}
-	assert.NotEqual(first, withIndex,
+	assert.NotEqual(t, first, withIndex,
 		"an appearing session index must change the digest")
 
 	future := time.Now().Add(2 * time.Second)
-	require.NoError(os.Chtimes(indexPath, future, future))
-	assert.NotEqual(withIndex, hasher.ComputeMultiFileStatHash(path),
+	require.NoError(t, os.Chtimes(indexPath, future, future))
+	assert.NotEqual(t, withIndex, hasher.ComputeMultiFileStatHash(path),
 		"an index mtime change must change the digest")
 }

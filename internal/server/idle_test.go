@@ -97,9 +97,6 @@ func assertBeginWorkRejected(t *testing.T, tracker *IdleTracker) {
 }
 
 func TestIdleTrackerExternalRequestResetsIdle(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	timeout := 40 * time.Millisecond
 	f := newIdleTrackerFixture(t, timeout)
 	entered := make(chan struct{})
@@ -125,7 +122,7 @@ func TestIdleTrackerExternalRequestResetsIdle(t *testing.T) {
 	select {
 	case <-entered:
 	case <-time.After(time.Second):
-		require.FailNow("wrapped request did not enter handler")
+		require.FailNow(t, "wrapped request did not enter handler")
 	}
 
 	f.run(t)
@@ -143,19 +140,19 @@ func TestIdleTrackerExternalRequestResetsIdle(t *testing.T) {
 	select {
 	case rec = <-requestDone:
 	case <-time.After(time.Second):
-		require.FailNow("wrapped request did not complete after release")
+		require.FailNow(t, "wrapped request did not complete after release")
 	}
-	assert.Equal(http.StatusNoContent, rec.Code)
+	assert.Equal(t, http.StatusNoContent, rec.Code)
 
 	f.tracker.mu.Lock()
 	lastExternalAfterRelease := f.tracker.lastExternal
 	f.tracker.mu.Unlock()
-	assert.True(lastExternalAfterRelease.After(lastExternalBeforeRelease),
+	assert.True(t, lastExternalAfterRelease.After(lastExternalBeforeRelease),
 		"request completion did not advance external activity timestamp")
 
 	firedAt := f.requireFiredWithin(t, time.Second,
 		"idle did not fire after external activity became idle")
-	assert.GreaterOrEqual(firedAt.Sub(releasedAt), timeout)
+	assert.GreaterOrEqual(t, firedAt.Sub(releasedAt), timeout)
 }
 
 func TestIdleTrackerInternalWorkBlocksWithoutResettingIdle(t *testing.T) {

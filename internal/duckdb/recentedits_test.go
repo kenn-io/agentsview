@@ -29,7 +29,7 @@ func seedDuckEdit(
 		MessageCount: 1,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, local.UpsertSession(s), "seedDuckEdit upsertSession %s", sessionID)
+	require.NoError(t, local.UpsertSession(t.Context(), s), "seedDuckEdit upsertSession %s", sessionID)
 	msg := db.Message{
 		SessionID:     sessionID,
 		Ordinal:       ordinal,
@@ -48,7 +48,7 @@ func seedDuckEdit(
 			},
 		},
 	}
-	require.NoError(t, local.InsertMessages([]db.Message{msg}),
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{msg}),
 		"seedDuckEdit insertMessages %s/%d", sessionID, ordinal)
 }
 
@@ -61,7 +61,7 @@ func seedDuckEditTrashed(
 ) {
 	t.Helper()
 	seedDuckEdit(t, local, project, sessionID, ordinal, callIndex, filePath, ts)
-	require.NoError(t, local.SoftDeleteSession(sessionID),
+	require.NoError(t, local.SoftDeleteSession(t.Context(), sessionID),
 		"seedDuckEditTrashed mark deleted %s", sessionID)
 }
 
@@ -82,9 +82,6 @@ func newDuckRecentEditsStore(
 }
 
 func TestDuckRecentEditsGroupingAndOrdering(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	store := newDuckRecentEditsStore(t, func(local *db.DB) {
 		// projA: edits config.go twice (newer ts), projB: edits config.go once.
@@ -94,16 +91,16 @@ func TestDuckRecentEditsGroupingAndOrdering(t *testing.T) {
 	})
 
 	res, err := store.RecentEdits(ctx, db.RecentEditsParams{})
-	require.NoError(err)
-	require.Len(res.Files, 2, "same relative path in two projects = 2 rows")
+	require.NoError(t, err)
+	require.Len(t, res.Files, 2, "same relative path in two projects = 2 rows")
 	// Most recent group first: projA (12:00) before projB (11:00).
-	assert.Equal("projA", res.Files[0].Project)
-	assert.Equal("config.go", res.Files[0].FilePath)
-	assert.Equal(2, res.Files[0].EditCount)
-	assert.Equal("projB", res.Files[1].Project)
-	assert.Equal("config.go", res.Files[1].FilePath)
-	assert.Equal(1, res.Files[1].EditCount)
-	assert.False(res.HasMore)
+	assert.Equal(t, "projA", res.Files[0].Project)
+	assert.Equal(t, "config.go", res.Files[0].FilePath)
+	assert.Equal(t, 2, res.Files[0].EditCount)
+	assert.Equal(t, "projB", res.Files[1].Project)
+	assert.Equal(t, "config.go", res.Files[1].FilePath)
+	assert.Equal(t, 1, res.Files[1].EditCount)
+	assert.False(t, res.HasMore)
 }
 
 func TestDuckRecentEditsExcludesTrash(t *testing.T) {
@@ -120,9 +117,6 @@ func TestDuckRecentEditsExcludesTrash(t *testing.T) {
 }
 
 func TestDuckRecentEditsProjectFilter(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	store := newDuckRecentEditsStore(t, func(local *db.DB) {
 		seedDuckEdit(t, local, "alpha", "sAlpha", 1, 0, "a.go", "2026-06-24T10:00:00Z")
@@ -130,16 +124,13 @@ func TestDuckRecentEditsProjectFilter(t *testing.T) {
 	})
 
 	res, err := store.RecentEdits(ctx, db.RecentEditsParams{Project: "alpha"})
-	require.NoError(err)
-	require.Len(res.Files, 1, "project filter should narrow to alpha only")
-	assert.Equal("alpha", res.Files[0].Project)
-	assert.Equal("a.go", res.Files[0].FilePath)
+	require.NoError(t, err)
+	require.Len(t, res.Files, 1, "project filter should narrow to alpha only")
+	assert.Equal(t, "alpha", res.Files[0].Project)
+	assert.Equal(t, "a.go", res.Files[0].FilePath)
 }
 
 func TestDuckRecentEditsSearchFilter(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	store := newDuckRecentEditsStore(t, func(local *db.DB) {
 		seedDuckEdit(t, local, "proj", "s1", 1, 0, "internal/db/Recent.go", "2026-06-24T10:00:00Z")
@@ -151,32 +142,29 @@ func TestDuckRecentEditsSearchFilter(t *testing.T) {
 
 	// Case-insensitive substring over the full path (ILIKE), across projects.
 	res, err := store.RecentEdits(ctx, db.RecentEditsParams{Search: "recent"})
-	require.NoError(err)
-	require.Len(res.Files, 2, "matches Recent.go in both projects case-insensitively")
+	require.NoError(t, err)
+	require.Len(t, res.Files, 2, "matches Recent.go in both projects case-insensitively")
 
 	// Matches a directory segment, not just the basename.
 	res, err = store.RecentEdits(ctx, db.RecentEditsParams{Search: "server/"})
-	require.NoError(err)
-	require.Len(res.Files, 1)
-	assert.Equal("internal/server/handler.go", res.Files[0].FilePath)
+	require.NoError(t, err)
+	require.Len(t, res.Files, 1)
+	assert.Equal(t, "internal/server/handler.go", res.Files[0].FilePath)
 
 	// Underscores are literal, not wildcards (db.EscapeLikePattern + ESCAPE).
 	res, err = store.RecentEdits(ctx, db.RecentEditsParams{Search: "a_b"})
-	require.NoError(err)
-	require.Len(res.Files, 1, "escaped underscore matches literally, not as a wildcard")
-	assert.Equal("x/a_b.go", res.Files[0].FilePath)
+	require.NoError(t, err)
+	require.Len(t, res.Files, 1, "escaped underscore matches literally, not as a wildcard")
+	assert.Equal(t, "x/a_b.go", res.Files[0].FilePath)
 
 	// Project and search compose.
 	res, err = store.RecentEdits(ctx, db.RecentEditsParams{Project: "proj", Search: "recent"})
-	require.NoError(err)
-	require.Len(res.Files, 1, "project and search both apply")
-	assert.Equal("proj", res.Files[0].Project)
+	require.NoError(t, err)
+	require.Len(t, res.Files, 1, "project and search both apply")
+	assert.Equal(t, "proj", res.Files[0].Project)
 }
 
 func TestDuckRecentEditsTruncationAndHasMore(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	store := newDuckRecentEditsStore(t, func(local *db.DB) {
 		// Three distinct files in same project.
@@ -189,28 +177,25 @@ func TestDuckRecentEditsTruncationAndHasMore(t *testing.T) {
 
 	// Limit=2: HasMore should be true, only 2 files returned.
 	res, err := store.RecentEdits(ctx, db.RecentEditsParams{Limit: 2})
-	require.NoError(err)
-	assert.Len(res.Files, 2, "only Limit files should be returned")
-	assert.True(res.HasMore, "HasMore should be true when more files exist")
+	require.NoError(t, err)
+	assert.Len(t, res.Files, 2, "only Limit files should be returned")
+	assert.True(t, res.HasMore, "HasMore should be true when more files exist")
 
 	// MaxEditsPerFile=1 with a file that has 2 edits => EditsTruncated.
 	res2, err := store.RecentEdits(ctx, db.RecentEditsParams{MaxEditsPerFile: 1})
-	require.NoError(err)
+	require.NoError(t, err)
 	var found bool
 	for _, f := range res2.Files {
 		if f.FilePath == "a.go" {
-			assert.True(f.EditsTruncated, "a.go has 2 edits, MaxEditsPerFile=1 => truncated")
-			assert.Len(f.Edits, 1, "only 1 edit inlined")
+			assert.True(t, f.EditsTruncated, "a.go has 2 edits, MaxEditsPerFile=1 => truncated")
+			assert.Len(t, f.Edits, 1, "only 1 edit inlined")
 			found = true
 		}
 	}
-	assert.True(found, "a.go should appear in result")
+	assert.True(t, found, "a.go should appear in result")
 }
 
 func TestDuckRecentEditsNullTimestampsSortLast(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	store := newDuckRecentEditsStore(t, func(local *db.DB) {
 		// File with a real timestamp.
@@ -220,17 +205,14 @@ func TestDuckRecentEditsNullTimestampsSortLast(t *testing.T) {
 	})
 
 	res, err := store.RecentEdits(ctx, db.RecentEditsParams{})
-	require.NoError(err)
-	require.Len(res.Files, 2, "both files should appear")
+	require.NoError(t, err)
+	require.Len(t, res.Files, 2, "both files should appear")
 	// real.go (has timestamp) should sort before null.go (NULL timestamp).
-	assert.Equal("real.go", res.Files[0].FilePath, "timestamped file first")
-	assert.Equal("null.go", res.Files[1].FilePath, "null-timestamp file last")
+	assert.Equal(t, "real.go", res.Files[0].FilePath, "timestamped file first")
+	assert.Equal(t, "null.go", res.Files[1].FilePath, "null-timestamp file last")
 }
 
 func TestDuckRecentEditsTieByCallIndex(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	store := newDuckRecentEditsStore(t, func(local *db.DB) {
 		s := db.Session{
@@ -241,7 +223,7 @@ func TestDuckRecentEditsTieByCallIndex(t *testing.T) {
 			MessageCount: 1,
 			CreatedAt:    "2026-01-01T00:00:00Z",
 		}
-		require.NoError(local.UpsertSession(s))
+		require.NoError(t, local.UpsertSession(ctx, s))
 		// Same session, same ordinal, two Edit calls: callIndex 0 and 1.
 		// Higher call_index (1) should rank first (rn=1).
 		msg := db.Message{
@@ -263,14 +245,14 @@ func TestDuckRecentEditsTieByCallIndex(t *testing.T) {
 				},
 			},
 		}
-		require.NoError(local.InsertMessages([]db.Message{msg}))
+		require.NoError(t, local.InsertMessages(ctx, []db.Message{msg}))
 	})
 
 	res, err := store.RecentEdits(ctx, db.RecentEditsParams{MaxEditsPerFile: 5})
-	require.NoError(err)
-	require.Len(res.Files, 1)
-	require.Len(res.Files[0].Edits, 2, "both edits inlined")
+	require.NoError(t, err)
+	require.Len(t, res.Files, 1)
+	require.Len(t, res.Files[0].Edits, 2, "both edits inlined")
 	// rn=1 is the first in the Edits slice; it must be the higher call_index.
-	assert.Equal(1, res.Files[0].Edits[0].CallIndex, "higher call_index ranks first")
-	assert.Equal(0, res.Files[0].Edits[1].CallIndex)
+	assert.Equal(t, 1, res.Files[0].Edits[0].CallIndex, "higher call_index ranks first")
+	assert.Equal(t, 0, res.Files[0].Edits[1].CallIndex)
 }

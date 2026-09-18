@@ -13,8 +13,10 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-var ErrWorktreeMappingDuplicate = errors.New("worktree mapping already exists")
-var ErrWorktreeMappingInvalid = errors.New("invalid worktree mapping")
+var (
+	ErrWorktreeMappingDuplicate = errors.New("worktree mapping already exists")
+	ErrWorktreeMappingInvalid   = errors.New("invalid worktree mapping")
+)
 
 const (
 	WorktreeMappingLayoutExplicit         = "explicit"
@@ -1080,6 +1082,7 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 			"querying sessions for worktree mapping path apply: %w", err,
 		)
 	}
+	defer rows.Close()
 
 	var sessions []worktreeMappingSessionRow
 	machines := map[string]bool{}
@@ -1176,7 +1179,7 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 }
 
 func isSQLiteUniqueConstraint(err error) bool {
-	var sqliteErr sqlite3.Error
-	return errors.As(err, &sqliteErr) &&
+	sqliteErr, hasSqliteErr := errors.AsType[sqlite3.Error](err)
+	return hasSqliteErr &&
 		sqliteErr.ExtendedCode == sqlite3.ErrConstraintUnique
 }

@@ -16,9 +16,6 @@ import (
 // the parameterized Pi provider: it discovers the same JSONL layout but stamps
 // the omp agent type and omp: session ID prefix.
 func TestOMPProviderParsesWithOMPIdentity(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "encoded-cwd", "session-omp.jsonl")
 	writeSourceFile(t, sourcePath, piProviderFixture("session-omp"))
@@ -27,21 +24,21 @@ func TestOMPProviderParsesWithOMPIdentity(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(AgentOMP, discovered[0].Provider)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, AgentOMP, discovered[0].Provider)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: discovered[0],
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 	sess := outcome.Results[0].Result.Session
-	assert.Equal("omp:session-omp", sess.ID)
-	assert.Equal(AgentOMP, sess.Agent)
+	assert.Equal(t, "omp:session-omp", sess.ID)
+	assert.Equal(t, AgentOMP, sess.Agent)
 }
 
 // --- Reasonix --------------------------------------------------------------
@@ -61,9 +58,6 @@ func writeReasonixSession(t *testing.T, dir, sessionID string) string {
 }
 
 func TestReasonixProviderDiscoverAndParse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	transcript := writeReasonixSession(
 		t, filepath.Join(root, "projects", "proj", "sessions"), "session-123",
@@ -73,83 +67,78 @@ func TestReasonixProviderDiscoverAndParse(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(AgentReasonix, discovered[0].Provider)
-	assert.Equal(transcript, discovered[0].DisplayPath)
-	assert.Equal("proj", discovered[0].ProjectHint)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, AgentReasonix, discovered[0].Provider)
+	assert.Equal(t, transcript, discovered[0].DisplayPath)
+	assert.Equal(t, "proj", discovered[0].ProjectHint)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      discovered[0],
 		Fingerprint: SourceFingerprint{Hash: "deadbeef"},
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 	sess := outcome.Results[0].Result.Session
-	assert.Equal("reasonix:session-123", sess.ID)
-	assert.Equal(AgentReasonix, sess.Agent)
-	assert.Equal("Bug fix", sess.SessionName)
-	assert.Equal("deadbeef", sess.File.Hash)
+	assert.Equal(t, "reasonix:session-123", sess.ID)
+	assert.Equal(t, AgentReasonix, sess.Agent)
+	assert.Equal(t, "Bug fix", sess.SessionName)
+	assert.Equal(t, "deadbeef", sess.File.Hash)
 }
 
 // TestReasonixProviderFingerprintFoldsSidecar verifies the composite
 // fingerprint sums the transcript and its .jsonl.meta sidecar sizes and takes
 // the later mtime, mirroring the legacy reasonixEffectiveInfo.
 func TestReasonixProviderFingerprintFoldsSidecar(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	transcript := writeReasonixSession(
 		t, filepath.Join(root, "sessions"), "session-fp",
 	)
 
 	provider, ok := NewProvider(AgentReasonix, ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 
 	transcriptInfo, err := os.Stat(transcript)
-	require.NoError(err)
+	require.NoError(t, err)
 	metaInfo, err := os.Stat(transcript + ".meta")
-	require.NoError(err)
+	require.NoError(t, err)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 
 	fp, err := provider.Fingerprint(t.Context(), discovered[0])
-	require.NoError(err)
-	assert.Equal(transcriptInfo.Size()+metaInfo.Size(), fp.Size,
+	require.NoError(t, err)
+	assert.Equal(t, transcriptInfo.Size()+metaInfo.Size(), fp.Size,
 		"composite size must include the sidecar")
-	assert.NotEmpty(fp.Hash)
+	assert.NotEmpty(t, fp.Hash)
 }
 
 func TestReasonixProviderFingerprintHashChangesForSidecarOnlyChange(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	transcript := writeReasonixSession(
 		t, filepath.Join(root, "sessions"), "session-fp-hash",
 	)
 
 	provider, ok := NewProvider(AgentReasonix, ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 
 	before, err := provider.Fingerprint(t.Context(), discovered[0])
-	require.NoError(err)
+	require.NoError(t, err)
 
 	writeSourceFile(t, transcript+".meta", `{"id":"session-fp-hash","model":"gpt-4.1",`+
 		`"topic_title":"Updated","workspace_root":"/home/u/other",`+
 		`"created_at":"2026-02-01T10:00:00Z","updated_at":"2026-02-01T10:10:00Z"}`)
 
 	after, err := provider.Fingerprint(t.Context(), discovered[0])
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.NotEqual(t, before.Hash, after.Hash,
 		"metadata-only changes must affect the composite fingerprint hash")
 }
@@ -157,32 +146,29 @@ func TestReasonixProviderFingerprintHashChangesForSidecarOnlyChange(t *testing.T
 // TestReasonixProviderChangedPathSidecar verifies a .jsonl.meta sidecar event
 // classifies against its sibling transcript.
 func TestReasonixProviderChangedPathSidecar(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	transcript := writeReasonixSession(
 		t, filepath.Join(root, "projects", "proj", "sessions"), "session-cp",
 	)
 
 	provider, ok := NewProvider(AgentReasonix, ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 
 	sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path:      transcript + ".meta",
 		EventKind: "write",
 	})
-	require.NoError(err)
-	require.Len(sources, 1)
-	assert.Equal(transcript, sources[0].DisplayPath)
-	assert.Equal("proj", sources[0].ProjectHint)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, transcript, sources[0].DisplayPath)
+	assert.Equal(t, "proj", sources[0].ProjectHint)
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "session-cp",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(transcript, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, transcript, found.DisplayPath)
 }
 
 func TestReasonixProviderChangedPathLayouts(t *testing.T) {
@@ -227,53 +213,47 @@ func TestReasonixProviderChangedPathLayouts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			transcript := writeReasonixSession(t, tt.dir, tt.sessionID)
 			sources, err := provider.SourcesForChangedPath(
 				t.Context(),
 				ChangedPathRequest{Path: transcript, EventKind: "write"},
 			)
-			require.NoError(err)
-			require.Len(sources, 1)
-			assert.Equal(transcript, sources[0].DisplayPath)
-			assert.Equal(tt.wantProject, sources[0].ProjectHint)
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			assert.Equal(t, transcript, sources[0].DisplayPath)
+			assert.Equal(t, tt.wantProject, sources[0].ProjectHint)
 		})
 	}
 }
 
 func TestReasonixProviderChangedPathDeletedSidecarAndTranscript(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	transcript := writeReasonixSession(
 		t, filepath.Join(root, "projects", "proj", "sessions"), "session-delete",
 	)
 	meta := transcript + ".meta"
 	provider, ok := NewProvider(AgentReasonix, ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 
-	require.NoError(os.Remove(meta))
+	require.NoError(t, os.Remove(meta))
 	sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path:      meta,
 		EventKind: "remove",
 	})
-	require.NoError(err)
-	require.Len(sources, 1)
-	assert.Equal(transcript, sources[0].DisplayPath,
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, transcript, sources[0].DisplayPath,
 		"deleted sidecar events must reparse the live transcript")
 
-	require.NoError(os.Remove(transcript))
+	require.NoError(t, os.Remove(transcript))
 	sources, err = provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path:      transcript,
 		EventKind: "remove",
 	})
-	require.NoError(err)
-	require.Len(sources, 1,
+	require.NoError(t, err)
+	require.Len(t, sources, 1,
 		"deleted transcripts remain candidates for the engine's remove filter")
-	assert.Equal(transcript, sources[0].DisplayPath)
+	assert.Equal(t, transcript, sources[0].DisplayPath)
 }
 
 // --- Aider -----------------------------------------------------------------
@@ -296,46 +276,43 @@ func writeAiderProviderHistory(t *testing.T, repo string) string {
 // updates the requested session rather than whichever run currently sits at the
 // stale positional index.
 func TestAiderProviderFindSourceRejectsStalePositionalPath(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 	repo := filepath.Join(dir, "myrepo")
-	require.NoError(os.MkdirAll(repo, 0o755))
+	require.NoError(t, os.MkdirAll(repo, 0o755))
 	path := filepath.Join(repo, AiderHistoryFileName())
 
 	runA := "# aider chat started at 2026-06-09 14:01:00\n#### alpha\nansA\n"
 	runB := "# aider chat started at 2026-06-09 15:30:00\n#### bravo\nansB\n"
 	runC := "# aider chat started at 2026-06-09 16:45:00\n#### charlie\nansC\n"
-	require.NoError(os.WriteFile(path, []byte(runA+runB+runC), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(runA+runB+runC), 0o644))
 
 	// runB is stored under the positional path "<path>#1".
 	rawB, ok := AiderRawIDAt(path, 1)
-	require.True(ok)
+	require.True(t, ok)
 	storedPath := AiderVirtualPath(path, 1)
 
 	provider, ok := NewProvider(AgentAider, ProviderConfig{
 		Roots:   []string{dir},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	// Without a freshness requirement the stored positional path is honored.
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: storedPath,
 		RawSessionID:   rawB,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(storedPath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, storedPath, found.DisplayPath)
 
 	// Insert a new run at the front: runB shifts from index 1 to index 2, so the
 	// stored "<path>#1" now points at runA.
 	runX := "# aider chat started at 2026-06-09 13:00:00\n#### xray\nansX\n"
-	require.NoError(os.WriteFile(path, []byte(runX+runA+runB+runC), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(runX+runA+runB+runC), 0o644))
 	shifted, ok := AiderVirtualPathForRawID(path, rawB)
-	require.True(ok)
-	require.Equal(AiderVirtualPath(path, 2), shifted, "runB is now at index 2")
+	require.True(t, ok)
+	require.Equal(t, AiderVirtualPath(path, 2), shifted, "runB is now at index 2")
 
 	// A fresh lookup must reject the stale index and re-resolve runB by raw ID.
 	fresh, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
@@ -343,17 +320,14 @@ func TestAiderProviderFindSourceRejectsStalePositionalPath(t *testing.T) {
 		RawSessionID:       rawB,
 		RequireFreshSource: true,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(AiderVirtualPath(path, 2), fresh.DisplayPath,
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, AiderVirtualPath(path, 2), fresh.DisplayPath,
 		"stale positional path must re-resolve to runB's current index")
-	assert.NotEqual(storedPath, fresh.DisplayPath)
+	assert.NotEqual(t, storedPath, fresh.DisplayPath)
 }
 
 func TestAiderProviderDiscoverAndFanOut(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	historyPath := writeAiderProviderHistory(t, filepath.Join(root, "myrepo"))
 
@@ -361,66 +335,63 @@ func TestAiderProviderDiscoverAndFanOut(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(AgentAider, discovered[0].Provider)
-	assert.Equal(historyPath, discovered[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, AgentAider, discovered[0].Provider)
+	assert.Equal(t, historyPath, discovered[0].DisplayPath)
 
 	fp, err := provider.Fingerprint(t.Context(), discovered[0])
-	require.NoError(err)
+	require.NoError(t, err)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      discovered[0],
 		Fingerprint: fp,
 	})
-	require.NoError(err)
-	assert.True(outcome.ForceReplace, "aider fan-out force-replaces")
-	require.Len(outcome.Results, 2, "two content runs produce two sessions")
+	require.NoError(t, err)
+	assert.True(t, outcome.ForceReplace, "aider fan-out force-replaces")
+	require.Len(t, outcome.Results, 2, "two content runs produce two sessions")
 	for i, r := range outcome.Results {
 		hp, idx, ok := ParseAiderVirtualPath(r.Result.Session.File.Path)
-		require.True(ok)
-		assert.Equal(historyPath, hp)
-		assert.Equal(i, idx)
-		assert.True(strings.HasPrefix(r.Result.Session.ID, "aider:"))
+		require.True(t, ok)
+		assert.Equal(t, historyPath, hp)
+		assert.Equal(t, i, idx)
+		assert.True(t, strings.HasPrefix(r.Result.Session.ID, "aider:"))
 	}
 }
 
 // TestAiderProviderFindSourceByRawID resolves a per-run session ID back to its
 // virtual run source, then parses just that run.
 func TestAiderProviderFindSourceByRawID(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	writeAiderProviderHistory(t, filepath.Join(root, "myrepo"))
 
 	provider, ok := NewProvider(AgentAider, ProviderConfig{Roots: []string{root}})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
-	require.NoError(err)
-	require.Len(outcome.Results, 2)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 2)
 
 	rawID := strings.TrimPrefix(outcome.Results[1].Result.Session.ID, "aider:")
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: rawID,
 	})
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 	_, idx, ok := ParseAiderVirtualPath(found.DisplayPath)
-	require.True(ok)
-	assert.Equal(1, idx, "the second run resolves to run index 1")
+	require.True(t, ok)
+	assert.Equal(t, 1, idx, "the second run resolves to run index 1")
 
 	single, err := provider.Parse(t.Context(), ParseRequest{Source: found})
-	require.NoError(err)
-	require.Len(single.Results, 1)
-	assert.Equal(outcome.Results[1].Result.Session.ID,
+	require.NoError(t, err)
+	require.Len(t, single.Results, 1)
+	assert.Equal(t, outcome.Results[1].Result.Session.ID,
 		single.Results[0].Result.Session.ID)
 }
 

@@ -125,7 +125,7 @@ func (s claudeSourceSet) sourcesForToolResultPath(
 	rel, err := filepath.Rel(root, changedPath)
 	if err != nil || rel == ".." ||
 		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return nil, nil
+		return nil, nil //nolint:nilerr // A path outside the provider root is not a source candidate.
 	}
 	parts := strings.Split(rel, string(filepath.Separator))
 	toolResultsAt := slices.Index(parts, "tool-results")

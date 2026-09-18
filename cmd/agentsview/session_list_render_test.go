@@ -53,6 +53,7 @@ func TestHumanizeSessionAge(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, humanizeSessionAge(tc.sess, renderNow))
 		})
 	}
@@ -76,6 +77,7 @@ func TestHumanizeAgeRelative(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, ok := humanizeAgeRelative(tc.t, renderNow)
 			assert.Equal(t, tc.wantOK, ok)
 			assert.Equal(t, tc.wantStr, got)
@@ -109,14 +111,13 @@ func TestIsSessionRecentlyActive(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, isSessionRecentlyActive(tc.sess, renderNow))
 		})
 	}
 }
 
 func TestSessionActivityTimeCreatedAtFallback(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 	// A session with only created_at (no ended_at/started_at) can be
 	// returned by --resume because the backend active_since filter falls
@@ -124,9 +125,9 @@ func TestSessionActivityTimeCreatedAtFallback(t *testing.T) {
 	created := renderNow.Add(-2 * time.Minute)
 	s := db.Session{CreatedAt: created.Format(time.RFC3339)}
 	got := sessionActivityTime(s)
-	assert.False(got.IsZero(), "created_at must be the final fallback")
-	assert.WithinDuration(created, got, time.Second)
-	assert.True(isSessionRecentlyActive(s, renderNow),
+	assert.False(t, got.IsZero(), "created_at must be the final fallback")
+	assert.WithinDuration(t, created, got, time.Second)
+	assert.True(t, isSessionRecentlyActive(s, renderNow),
 		"a recently-created session must render as active for --resume")
 
 	// ended_at still takes precedence over created_at.
@@ -135,7 +136,7 @@ func TestSessionActivityTimeCreatedAtFallback(t *testing.T) {
 		EndedAt:   new(ended.Format(time.RFC3339)),
 		CreatedAt: renderNow.Add(-time.Hour).Format(time.RFC3339),
 	}
-	assert.WithinDuration(ended, sessionActivityTime(s2), time.Second)
+	assert.WithinDuration(t, ended, sessionActivityTime(s2), time.Second)
 }
 
 func TestCollapseHome(t *testing.T) {
@@ -152,6 +153,7 @@ func TestCollapseHome(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, collapseHome(tc.cwd, tc.home))
 		})
 	}
@@ -171,24 +173,23 @@ func TestTruncName(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, truncName(tc.in, tc.max))
 		})
 	}
 }
 
 func TestSessionDisplayName(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
-	assert.Equal("display", sessionDisplayName(db.Session{
+	assert.Equal(t, "display", sessionDisplayName(db.Session{
 		DisplayName: new("display"), FirstMessage: new("first"),
 	}))
-	assert.Equal("first", sessionDisplayName(db.Session{
+	assert.Equal(t, "first", sessionDisplayName(db.Session{
 		FirstMessage: new("first"),
 	}))
-	assert.Empty(sessionDisplayName(db.Session{}))
+	assert.Empty(t, sessionDisplayName(db.Session{}))
 	// An empty display name falls through to the first message.
-	assert.Equal("first", sessionDisplayName(db.Session{
+	assert.Equal(t, "first", sessionDisplayName(db.Session{
 		DisplayName: new(""), FirstMessage: new("first"),
 	}))
 }
@@ -237,8 +238,6 @@ func listFixture(home string) *service.SessionList {
 }
 
 func TestPrintSessionListHuman(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 	const home = "/home/u"
 	var out bytes.Buffer
@@ -249,32 +248,32 @@ func TestPrintSessionListHuman(t *testing.T) {
 	// Header carries the enriched columns, with ID restored as the first
 	// data column so every row has a copyable handle.
 	for _, col := range []string{"ID", "AGE", "AGENT", "PROJECT", "BRANCH", "MSGS", "NAME", "CWD"} {
-		assert.Contains(s, col)
+		assert.Contains(t, s, col)
 	}
 
 	// Every row carries its full, untruncated session ID.
 	for _, id := range []string{"s_live", "s_codex", "s_old"} {
-		assert.Contains(s, id)
+		assert.Contains(t, s, id)
 	}
 
 	// The live session (1m ago) is flagged in-flight; the codex session
 	// (~78m ago) and old session (~3h ago) are not.
-	assert.Contains(s, activeMarker)
-	assert.Equal(1, strings.Count(s, activeMarker), "only the live row is in-flight")
-	assert.Contains(s, "1m") // 23:18 - 23:17
+	assert.Contains(t, s, activeMarker)
+	assert.Equal(t, 1, strings.Count(s, activeMarker), "only the live row is in-flight")
+	assert.Contains(t, s, "1m") // 23:18 - 23:17
 
 	// Missing codex cwd/branch render as an em dash, not blank.
-	assert.Contains(s, emDash)
+	assert.Contains(t, s, emDash)
 
 	// Home-prefixed cwd collapses to ~; the newline in a name is collapsed.
-	assert.Contains(s, "~/vault")
-	assert.Contains(s, "build monitoring dashboards for the homelab")
+	assert.Contains(t, s, "~/vault")
+	assert.Contains(t, s, "build monitoring dashboards for the homelab")
 
 	// Message counts are present.
-	assert.Contains(s, "87")
+	assert.Contains(t, s, "87")
 
 	// Footer hint only appears when there is a next page.
-	assert.NotContains(s, "--cursor")
+	assert.NotContains(t, s, "--cursor")
 }
 
 func TestPrintSessionListHumanNextCursor(t *testing.T) {
@@ -295,8 +294,6 @@ func TestPrintSessionListHumanEmpty(t *testing.T) {
 }
 
 func TestPrintSessionListHumanSanitizesUntrustedFields(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 	list := &service.SessionList{
 		Sessions: []db.Session{{
@@ -309,8 +306,8 @@ func TestPrintSessionListHumanSanitizesUntrustedFields(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, printSessionListHuman(&out, list, renderNow, "/home/u"))
 	s := out.String()
-	assert.NotContains(s, "\x1b")
-	assert.NotContains(s, "\x07")
-	assert.Contains(s, "main")
-	assert.Contains(s, "/srv/app")
+	assert.NotContains(t, s, "\x1b")
+	assert.NotContains(t, s, "\x07")
+	assert.Contains(t, s, "main")
+	assert.Contains(t, s, "/srv/app")
 }

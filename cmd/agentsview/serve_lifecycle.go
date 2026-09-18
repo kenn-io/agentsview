@@ -313,7 +313,7 @@ func runServeStop(cfg config.Config) {
 	}
 }
 
-func stopDaemonRuntimeForUpgradeImpl(
+func stopDaemonRuntimeForUpgradeImpl(ctx context.Context,
 	cfg config.Config, rt *DaemonRuntime,
 ) error {
 	if rt == nil {
@@ -340,7 +340,7 @@ func stopDaemonRuntimeForUpgradeImpl(
 		}
 		// A wider bind may also overlap an unrelated listener on the same port.
 		if !reusesEndpoint {
-			if _, err := prepareServeRuntimeConfig(cfg, serveRuntimeOptions{}); err != nil {
+			if _, err := prepareServeRuntimeConfig(ctx, cfg, serveRuntimeOptions{}); err != nil {
 				return err
 			}
 		}
@@ -352,7 +352,7 @@ func stopDaemonRuntimeForUpgradeImpl(
 	return nil
 }
 
-func stopWritableDaemonsForUpdate(
+func stopWritableDaemonsForUpdate(ctx context.Context,
 	cfg config.Config,
 ) (updateDaemonStopResult, error) {
 	records, _ := localWritableDaemonRecordsWithFallback(
@@ -377,7 +377,7 @@ func stopWritableDaemonsForUpdate(
 			result.RequireAuthKnown = rt.RequireAuthKnown
 			result.NoSync = rt.NoSync
 		}
-		if err := stopDaemonRuntimeForUpgrade(cfg, rt); err != nil {
+		if err := stopDaemonRuntimeForUpgrade(ctx, cfg, rt); err != nil {
 			return result, err
 		}
 		result.Stopped = true
@@ -469,7 +469,7 @@ func stopOrphanedCaddyChildWithWriter(
 	}
 	pid, err := strconv.Atoi(raw)
 	if err != nil || pid <= 0 {
-		return nil
+		return nil //nolint:nilerr // Invalid optional PID metadata cannot identify a process to stop.
 	}
 	if !daemon.ProcessAlive(pid) {
 		return nil

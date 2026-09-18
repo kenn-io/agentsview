@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,156 +122,142 @@ func testDB(t *testing.T) *db.DB {
 }
 
 func TestImportClaudeAI(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	stats, err := ImportClaudeAI(
 		ctx, d, strings.NewReader(testConversationsJSON), nil, "workstation",
 	)
-	require.NoError(err)
-	assert.Equal(1, stats.Imported)
-	assert.Equal(0, stats.Updated)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Imported)
+	assert.Equal(t, 0, stats.Updated)
 
 	s, err := d.GetSession(ctx, "claude-ai:import-test-001")
-	require.NoError(err)
-	require.NotNil(s)
-	assert.Equal("claude.ai", s.Project)
-	assert.Equal("claude-ai", s.Agent)
-	assert.Equal("workstation", s.Machine)
-	require.NotNil(s.DisplayName)
-	assert.Equal("First Chat", *s.DisplayName)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	assert.Equal(t, "claude.ai", s.Project)
+	assert.Equal(t, "claude-ai", s.Agent)
+	assert.Equal(t, "workstation", s.Machine)
+	require.NotNil(t, s.DisplayName)
+	assert.Equal(t, "First Chat", *s.DisplayName)
 
 	msgs, err := d.GetAllMessages(ctx, "claude-ai:import-test-001")
-	require.NoError(err)
-	assert.Len(msgs, 2)
+	require.NoError(t, err)
+	assert.Len(t, msgs, 2)
 }
 
 func TestImportClaudeAIIncludesAttachmentContent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	stats, err := ImportClaudeAI(
 		ctx, d, strings.NewReader(testConversationsWithAttachmentJSON), nil,
 	)
-	require.NoError(err)
-	assert.Equal(1, stats.Imported)
-	assert.Equal(0, stats.Updated)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Imported)
+	assert.Equal(t, 0, stats.Updated)
 
 	msgs, err := d.GetAllMessages(
 		ctx, "claude-ai:import-test-002",
 	)
-	require.NoError(err)
-	require.Len(msgs, 2)
-	assert.Equal("Can you show me the config?", msgs[0].Content)
-	assert.Equal(
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "Can you show me the config?", msgs[0].Content)
+	assert.Equal(t,
 		"Sure, here it is.\n\n[Attachment: agent.yaml]\nmodel: claude-3.7\nmode: debug",
 		msgs[1].Content,
 	)
 }
 
 func TestImportClaudeAIReimportRefreshesAttachmentContent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	stats, err := ImportClaudeAI(
 		ctx, d, strings.NewReader(testConversationsWithoutAttachmentJSON), nil,
 	)
-	require.NoError(err)
-	assert.Equal(1, stats.Imported)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Imported)
 
 	msgs, err := d.GetAllMessages(
 		ctx, "claude-ai:import-test-002",
 	)
-	require.NoError(err)
-	require.Len(msgs, 2)
-	assert.Equal("Sure, here it is.", msgs[1].Content)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "Sure, here it is.", msgs[1].Content)
 
 	stats, err = ImportClaudeAI(
 		ctx, d, strings.NewReader(testConversationsWithAttachmentJSON), nil,
 	)
-	require.NoError(err)
-	assert.Equal(0, stats.Imported)
-	assert.Equal(1, stats.Updated)
-	assert.Equal(0, stats.Skipped)
+	require.NoError(t, err)
+	assert.Equal(t, 0, stats.Imported)
+	assert.Equal(t, 1, stats.Updated)
+	assert.Equal(t, 0, stats.Skipped)
 
 	msgs, err = d.GetAllMessages(
 		ctx, "claude-ai:import-test-002",
 	)
-	require.NoError(err)
-	require.Len(msgs, 2)
-	assert.Equal(
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t,
 		"Sure, here it is.\n\n[Attachment: agent.yaml]\nmodel: claude-3.7\nmode: debug",
 		msgs[1].Content,
 	)
 }
 
 func TestImportClaudeAI_ReimportSkipsUnchanged(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	_, err := ImportClaudeAI(
 		ctx, d, strings.NewReader(testConversationsJSON), nil,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// Re-importing the same file skips conversations whose
 	// message count has not changed.
 	stats, err := ImportClaudeAI(
 		ctx, d, strings.NewReader(testConversationsJSON), nil,
 	)
-	require.NoError(err)
-	assert.Equal(0, stats.Imported)
-	assert.Equal(0, stats.Updated)
-	assert.Equal(1, stats.Skipped)
+	require.NoError(t, err)
+	assert.Equal(t, 0, stats.Imported)
+	assert.Equal(t, 0, stats.Updated)
+	assert.Equal(t, 1, stats.Skipped)
 
 	// Messages are still intact.
 	msgs, err := d.GetAllMessages(
 		ctx, "claude-ai:import-test-001",
 	)
-	require.NoError(err)
-	assert.Len(msgs, 2)
+	require.NoError(t, err)
+	assert.Len(t, msgs, 2)
 }
 
 func TestImportClaudeAI_PreservesDisplayNameOnReimport(
 	t *testing.T,
 ) {
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	_, err := ImportClaudeAI(
 		ctx, d, strings.NewReader(testConversationsJSON), nil,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	newName := "My Custom Name"
-	err = d.RenameSession(
+	err = d.RenameSession(ctx,
 		"claude-ai:import-test-001", &newName,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	_, err = ImportClaudeAI(
 		ctx, d, strings.NewReader(testConversationsJSON), nil,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	s, err := d.GetSession(ctx, "claude-ai:import-test-001")
-	require.NoError(err)
-	require.NotNil(s)
-	require.NotNil(s.DisplayName)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	require.NotNil(t, s.DisplayName)
 	assert.Equal(t, "My Custom Name", *s.DisplayName)
 }
 
@@ -289,14 +276,11 @@ const testChatGPTConv = `[{
 }]`
 
 func TestImportChatGPT(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	dir := t.TempDir()
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "conversations-000.json"),
 		[]byte(testChatGPTConv), 0o644,
 	))
@@ -305,21 +289,18 @@ func TestImportChatGPT(t *testing.T) {
 	stats, err := ImportChatGPT(
 		ctx, d, dir, assetsDir, nil, "workstation",
 	)
-	require.NoError(err)
-	assert.Equal(1, stats.Imported)
-	assert.Equal(0, stats.Skipped)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Imported)
+	assert.Equal(t, 0, stats.Skipped)
 
 	s, err := d.GetSession(ctx, "chatgpt:cg-1")
-	require.NoError(err)
-	require.NotNil(s)
-	assert.Equal("chatgpt.com", s.Project)
-	assert.Equal("workstation", s.Machine)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	assert.Equal(t, "chatgpt.com", s.Project)
+	assert.Equal(t, "workstation", s.Machine)
 }
 
 func TestImportChatGPTSanitizesParserRows(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -345,35 +326,32 @@ func TestImportChatGPTSanitizesParserRows(t *testing.T) {
 }]`
 
 	dir := t.TempDir()
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "conversations-000.json"),
 		[]byte(conv), 0o644,
 	))
 	assetsDir := filepath.Join(t.TempDir(), "assets")
 
 	stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
-	require.NoError(err)
-	assert.Equal(1, stats.Imported)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Imported)
 
 	s, err := d.GetSession(ctx, "chatgpt:cg-sanitize")
-	require.NoError(err)
-	require.NotNil(s)
-	assert.Nil(s.StartedAt)
-	assert.Nil(s.EndedAt)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	assert.Nil(t, s.StartedAt)
+	assert.Nil(t, s.EndedAt)
 
 	msgs, err := d.GetAllMessages(ctx, "chatgpt:cg-sanitize")
-	require.NoError(err)
-	require.Len(msgs, 2)
-	assert.Equal("Hello[31m", msgs[0].Content)
-	assert.Empty(msgs[0].Timestamp)
-	assert.Empty(msgs[1].Timestamp)
-	assert.Len(msgs[1].Model, db.MaxModelLen)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "Hello[31m", msgs[0].Content)
+	assert.Empty(t, msgs[0].Timestamp)
+	assert.Empty(t, msgs[1].Timestamp)
+	assert.Len(t, msgs[1].Model, db.MaxModelLen)
 }
 
 func TestUpsertConversationPreservesSessionIdentity(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
@@ -404,113 +382,108 @@ func TestUpsertConversationPreservesSessionIdentity(t *testing.T) {
 				},
 			},
 		},
-		newLazyFTS(d, nil),
+		newLazyFTS(ctx, d, nil),
 	)
-	require.NoError(err)
-	assert.Equal(importNew, status)
+	require.NoError(t, err)
+	assert.Equal(t, importNew, status)
 
 	s, err := d.GetSession(ctx, "import-identity-001")
-	require.NoError(err)
-	require.NotNil(s)
-	assert.Equal("claude", s.Agent)
-	assert.Equal(" Claude Code ", s.AgentLabel)
-	assert.Equal(" claude-sdk ", s.Entrypoint)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	assert.Equal(t, "claude", s.Agent)
+	assert.Equal(t, " Claude Code ", s.AgentLabel)
+	assert.Equal(t, " claude-sdk ", s.Entrypoint)
 }
 
 func TestImportAdvancesLocalModifiedAt(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	_, err := ImportClaudeAI(
 		ctx, d, strings.NewReader(testConversationsJSON), nil,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// local_modified_at must be non-NULL after import so incremental PG push
 	// picks up session_name changes without relying on file_mtime.
 	// In practice this is set by replaceSecretFindingsTx which is called
 	// inside ReplaceSessionMessages on every message-replacing import.
 	full, err := d.GetSessionFull(ctx, "claude-ai:import-test-001")
-	require.NoError(err)
-	require.NotNil(full)
-	require.NotNil(full.LocalModifiedAt,
+	require.NoError(t, err)
+	require.NotNil(t, full)
+	require.NotNil(t, full.LocalModifiedAt,
 		"local_modified_at must be set after import so PG push picks up session_name changes")
 }
 
 func TestImportSkipPathBumpsLocalModifiedAt(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	// First import — establishes session_name and local_modified_at.
 	_, err := ImportClaudeAI(ctx, d, strings.NewReader(testConversationsJSON), nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	full1, err := d.GetSessionFull(ctx, "claude-ai:import-test-001")
-	require.NoError(err)
-	require.NotNil(full1.LocalModifiedAt)
+	require.NoError(t, err)
+	require.NotNil(t, full1.LocalModifiedAt)
 	t1 := *full1.LocalModifiedAt
 
-	// Ensure wall-clock advances so a bumped timestamp is detectably later.
-	time.Sleep(2 * time.Millisecond)
+	// Backdate the fixture so the skip-path bump is detectably later without
+	// depending on wall-clock scheduling.
+	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx,
+			"UPDATE sessions SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 second') "+
+				"WHERE id = 'claude-ai:import-test-001'")
+		return err
+	}))
 
 	// Re-import with same messages but a different name. Message count and
 	// ended_at are unchanged, so upsertConversation takes the skip path and
 	// returns importSkipped without calling ReplaceSessionMessages.
 	renamed := strings.ReplaceAll(testConversationsJSON, `"First Chat"`, `"Renamed Chat"`)
 	_, err = ImportClaudeAI(ctx, d, strings.NewReader(renamed), nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	full2, err := d.GetSessionFull(ctx, "claude-ai:import-test-001")
-	require.NoError(err)
-	require.NotNil(full2.LocalModifiedAt)
+	require.NoError(t, err)
+	require.NotNil(t, full2.LocalModifiedAt)
 	t2 := *full2.LocalModifiedAt
 
 	// local_modified_at must be bumped on the skip path so incremental PG
 	// push picks up the session_name change.
-	assert.Greater(t2, t1,
+	assert.Greater(t, t2, t1,
 		"local_modified_at must advance on skip-path reimport (t1=%s t2=%s)", t1, t2)
 
 	// Confirm session_name was also updated.
 	s, err := d.GetSession(ctx, "claude-ai:import-test-001")
-	require.NoError(err)
-	require.NotNil(s.DisplayName)
-	assert.Equal("Renamed Chat", *s.DisplayName)
+	require.NoError(t, err)
+	require.NotNil(t, s.DisplayName)
+	assert.Equal(t, "Renamed Chat", *s.DisplayName)
 }
 
 func TestImportSetsDisplayName(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	stats, err := ImportClaudeAI(
 		ctx, d, strings.NewReader(testConversationsJSON), nil,
 	)
-	require.NoError(err)
-	assert.Equal(1, stats.Imported)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Imported)
 
 	s, err := d.GetSession(ctx, "claude-ai:import-test-001")
-	require.NoError(err)
-	require.NotNil(s)
-	require.NotNil(s.DisplayName)
-	assert.Equal("First Chat", *s.DisplayName)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	require.NotNil(t, s.DisplayName)
+	assert.Equal(t, "First Chat", *s.DisplayName)
 }
 
 func TestImportChatGPT_UpdatesSessionNameOnReimport(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	dir := t.TempDir()
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "conversations-000.json"),
 		[]byte(testChatGPTConv), 0o644,
 	))
@@ -518,89 +491,84 @@ func TestImportChatGPT_UpdatesSessionNameOnReimport(t *testing.T) {
 
 	// First import.
 	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// testChatGPTConv has title "Test" and id "cg-1".
 	s, err := d.GetSession(ctx, "chatgpt:cg-1")
-	require.NoError(err)
-	require.NotNil(s)
-	require.NotNil(s.DisplayName)
-	assert.Equal("Test", *s.DisplayName)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	require.NotNil(t, s.DisplayName)
+	assert.Equal(t, "Test", *s.DisplayName)
 
 	// Re-import with updated title.
 	updated := strings.ReplaceAll(testChatGPTConv, `"title":"Test"`, `"title":"Renamed GPT Session"`)
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "conversations-000.json"),
 		[]byte(updated), 0o644,
 	))
 	_, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// session_name must be updated even though messages are skipped.
 	s, err = d.GetSession(ctx, "chatgpt:cg-1")
-	require.NoError(err)
-	require.NotNil(s.DisplayName)
-	assert.Equal("Renamed GPT Session", *s.DisplayName,
+	require.NoError(t, err)
+	require.NotNil(t, s.DisplayName)
+	assert.Equal(t, "Renamed GPT Session", *s.DisplayName,
 		"session_name should be refreshed on ChatGPT re-import")
 }
 
 func TestImportChatGPTSanitizesSessionNameOnReimport(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	dir := t.TempDir()
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "conversations-000.json"),
 		[]byte(testChatGPTConv), 0o644,
 	))
 	assetsDir := filepath.Join(t.TempDir(), "assets")
 
 	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	dirty := strings.ReplaceAll(
 		testChatGPTConv,
 		`"title":"Test"`,
 		`"title":"Renamed\u0000\u001b[31m"`,
 	)
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "conversations-000.json"),
 		[]byte(dirty), 0o644,
 	))
 
 	_, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	s, err := d.GetSession(ctx, "chatgpt:cg-1")
-	require.NoError(err)
-	require.NotNil(s)
-	require.NotNil(s.DisplayName)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	require.NotNil(t, s.DisplayName)
 	assert.Equal(t, "Renamed[31m", *s.DisplayName)
 }
 
 func TestImportChatGPT_ReimportPreservesExistingFields(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	dir := t.TempDir()
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "conversations-000.json"),
 		[]byte(testChatGPTConv), 0o644,
 	))
 	assetsDir := filepath.Join(t.TempDir(), "assets")
 
 	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// Capture original fields.
 	orig, err := d.GetSession(ctx, "chatgpt:cg-1")
-	require.NoError(err)
-	require.NotNil(orig)
+	require.NoError(t, err)
+	require.NotNil(t, orig)
 	origFirstMsg := orig.FirstMessage
 	origStarted := orig.StartedAt
 	origEnded := orig.EndedAt
@@ -608,49 +576,46 @@ func TestImportChatGPT_ReimportPreservesExistingFields(t *testing.T) {
 
 	// Re-import with only the title changed.
 	renamed := strings.ReplaceAll(testChatGPTConv, `"title":"Test"`, `"title":"New Title"`)
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "conversations-000.json"),
 		[]byte(renamed), 0o644,
 	))
 	_, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	after, err := d.GetSession(ctx, "chatgpt:cg-1")
-	require.NoError(err)
-	require.NotNil(after)
+	require.NoError(t, err)
+	require.NotNil(t, after)
 
 	// session_name updated.
-	require.NotNil(after.DisplayName)
-	assert.Equal("New Title", *after.DisplayName)
+	require.NotNil(t, after.DisplayName)
+	assert.Equal(t, "New Title", *after.DisplayName)
 
 	// All other fields preserved.
-	assert.Equal(origFirstMsg, after.FirstMessage, "first_message must not change")
-	assert.Equal(origStarted, after.StartedAt, "started_at must not change")
-	assert.Equal(origEnded, after.EndedAt, "ended_at must not change")
-	assert.Equal(origMsgCount, after.MessageCount, "message_count must not change")
+	assert.Equal(t, origFirstMsg, after.FirstMessage, "first_message must not change")
+	assert.Equal(t, origStarted, after.StartedAt, "started_at must not change")
+	assert.Equal(t, origEnded, after.EndedAt, "ended_at must not change")
+	assert.Equal(t, origMsgCount, after.MessageCount, "message_count must not change")
 }
 
 func TestImportChatGPT_SkipsExisting(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 
 	dir := t.TempDir()
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, "conversations-000.json"),
 		[]byte(testChatGPTConv), 0o644,
 	))
 	assetsDir := filepath.Join(t.TempDir(), "assets")
 
 	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	stats, err := ImportChatGPT(
 		ctx, d, dir, assetsDir, nil,
 	)
-	require.NoError(err)
-	assert.Equal(0, stats.Imported)
-	assert.Equal(1, stats.Skipped)
+	require.NoError(t, err)
+	assert.Equal(t, 0, stats.Imported)
+	assert.Equal(t, 1, stats.Skipped)
 }

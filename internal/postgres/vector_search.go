@@ -86,7 +86,7 @@ func (v *vectorSearcher) SemanticSearch(
 ) ([]db.VectorHit, error) {
 	vec, err := v.encode(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", db.ErrSemanticTransient, err)
+		return nil, fmt.Errorf("%w: %w", db.ErrSemanticTransient, err)
 	}
 	if len(vec) != v.dimension {
 		return nil, fmt.Errorf(
@@ -164,6 +164,7 @@ SELECT doc_key, chunk_index, 1 - (%s) AS score
 	if err != nil {
 		return nil, fmt.Errorf("chunk knn query: %w", err)
 	}
+	defer rows.Close()
 	defer func() { _ = rows.Close() }()
 
 	var hits []chunkHit
@@ -324,6 +325,7 @@ SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content
 	if err != nil {
 		return nil, fmt.Errorf("looking up search hit documents: %w", err)
 	}
+	defer rows.Close()
 	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
@@ -368,6 +370,7 @@ SELECT doc_key, ordinal, ordinal_end, subordinate
 	if err != nil {
 		return nil, fmt.Errorf("resolve message units: %w", err)
 	}
+	defer stmt.Close()
 	defer func() { _ = stmt.Close() }()
 
 	for i, ref := range refs {

@@ -1,8 +1,9 @@
 package parser
 
-import "context"
-
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 // Icodemate uses OpenCode's storage format and is exposed as a distinct
 // agent with the icodemate: ID prefix. Discovery and parsing run through

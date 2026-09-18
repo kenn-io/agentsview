@@ -8,9 +8,6 @@ import (
 )
 
 func TestGenAIPricingPreservesUpstreamJSON(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := testDB(t)
 	want := GenAIPricingDocument{
 		Version:   "genai-prices-test",
@@ -21,17 +18,17 @@ func TestGenAIPricingPreservesUpstreamJSON(t *testing.T) {
 ]`),
 	}
 
-	require.NoError(database.UpsertGenAIPricing(t.Context(), want))
+	require.NoError(t, database.UpsertGenAIPricing(t.Context(), want))
 	got, err := database.GetGenAIPricing(t.Context())
-	require.NoError(err)
-	require.NotNil(got)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 
-	assert.Equal(want.Version, got.Version)
-	assert.Equal(want.SourceRef, got.SourceRef)
-	assert.Equal(want.Source, got.Source)
-	assert.Equal(want.Data, got.Data,
+	assert.Equal(t, want.Version, got.Version)
+	assert.Equal(t, want.SourceRef, got.SourceRef)
+	assert.Equal(t, want.Source, got.Source)
+	assert.Equal(t, want.Data, got.Data,
 		"unknown fields and upstream formatting must survive storage")
-	assert.NotEmpty(got.UpdatedAt)
+	assert.NotEmpty(t, got.UpdatedAt)
 }
 
 func TestInsertMissingGenAIPricingRefreshesEmbeddedDocument(t *testing.T) {
@@ -69,32 +66,26 @@ func TestInsertMissingGenAIPricingRefreshesEmbeddedDocument(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			database := testDB(t)
-			require.NoError(database.InsertMissingGenAIPricing(
+			require.NoError(t, database.InsertMissingGenAIPricing(
 				t.Context(), initial,
 			))
-			require.NoError(database.InsertMissingGenAIPricing(
+			require.NoError(t, database.InsertMissingGenAIPricing(
 				t.Context(), tt.next,
 			))
 
 			got, err := database.GetGenAIPricing(t.Context())
-			require.NoError(err)
-			require.NotNil(got)
-			assert.Equal(tt.next.Version, got.Version)
-			assert.Equal(tt.next.SourceRef, got.SourceRef)
-			assert.Equal(tt.next.Source, got.Source)
-			assert.Equal(tt.next.Data, got.Data)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Equal(t, tt.next.Version, got.Version)
+			assert.Equal(t, tt.next.SourceRef, got.SourceRef)
+			assert.Equal(t, tt.next.Source, got.Source)
+			assert.Equal(t, tt.next.Data, got.Data)
 		})
 	}
 }
 
 func TestInsertMissingGenAIPricingPreservesFetchedDocument(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := testDB(t)
 	fetched := GenAIPricingDocument{
 		Version:   "fetched-version",
@@ -102,10 +93,10 @@ func TestInsertMissingGenAIPricingPreservesFetchedDocument(t *testing.T) {
 		Source:    GenAIPricingSourceFetched,
 		Data:      []byte(`[{"id":"fetched"}]`),
 	}
-	require.NoError(database.UpsertGenAIPricing(
+	require.NoError(t, database.UpsertGenAIPricing(
 		t.Context(), fetched,
 	))
-	require.NoError(database.InsertMissingGenAIPricing(
+	require.NoError(t, database.InsertMissingGenAIPricing(
 		t.Context(), GenAIPricingDocument{
 			Version:   "embedded-version",
 			SourceRef: "embedded-ref",
@@ -115,10 +106,10 @@ func TestInsertMissingGenAIPricingPreservesFetchedDocument(t *testing.T) {
 	))
 
 	got, err := database.GetGenAIPricing(t.Context())
-	require.NoError(err)
-	require.NotNil(got)
-	assert.Equal(fetched.Version, got.Version)
-	assert.Equal(fetched.SourceRef, got.SourceRef)
-	assert.Equal(fetched.Source, got.Source)
-	assert.Equal(fetched.Data, got.Data)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, fetched.Version, got.Version)
+	assert.Equal(t, fetched.SourceRef, got.SourceRef)
+	assert.Equal(t, fetched.Source, got.Source)
+	assert.Equal(t, fetched.Data, got.Data)
 }

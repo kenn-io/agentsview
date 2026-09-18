@@ -430,7 +430,7 @@ func (s antigravityCLISourceSet) FindSource(
 		if path == "" {
 			continue
 		}
-		project := ""
+		var project string
 		id := strings.TrimPrefix(req.RawSessionID, antigravityImplicitTag)
 		if projects[root] == nil {
 			projects[root] = buildAntigravityCLIProjectMap(root)

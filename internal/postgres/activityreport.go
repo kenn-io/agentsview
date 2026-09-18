@@ -198,19 +198,18 @@ func (s *Store) GetSessionUsageRows(
 	rowContributes := make([]bool, len(rowsAcc))
 	rawOutputTokensBySession := make(map[string]int)
 	for i, o := range rowsAcc {
-		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok :=
-			pgDailyUsageRowTokens(
-				pgDailyUsageScanRow{
-					messageOrdinal:           o.scan.messageOrdinal,
-					usageSource:              o.scan.usageSource,
-					tokenJSON:                o.scan.tokenJSON,
-					inputTokens:              o.scan.inputTokens,
-					outputTokens:             o.scan.outputTokens,
-					cacheCreationInputTokens: o.scan.cacheCreationInputTokens,
-					cacheReadInputTokens:     o.scan.cacheReadInputTokens,
-					reasoningTokens:          o.scan.reasoningTokens,
-				},
-			)
+		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok := pgDailyUsageRowTokens(
+			pgDailyUsageScanRow{
+				messageOrdinal:           o.scan.messageOrdinal,
+				usageSource:              o.scan.usageSource,
+				tokenJSON:                o.scan.tokenJSON,
+				inputTokens:              o.scan.inputTokens,
+				outputTokens:             o.scan.outputTokens,
+				cacheCreationInputTokens: o.scan.cacheCreationInputTokens,
+				cacheReadInputTokens:     o.scan.cacheReadInputTokens,
+				reasoningTokens:          o.scan.reasoningTokens,
+			},
+		)
 		snapshotRows[i] = activity.UsageRow{
 			SessionID:           o.scan.sessionID,
 			Timestamp:           o.tsText,
@@ -235,40 +234,36 @@ func (s *Store) GetSessionUsageRows(
 			pgUsageRowWebSearchRequests(o.scan.usageSource, o.scan.tokenJSON))
 		rawOutputTokensBySession[o.scan.sessionID] += outputTok
 	}
-	canonicalTokenCoverageBySession, err :=
-		activity.CanonicalSessionTokenCoverageContext(ctx, snapshotRows)
+	canonicalTokenCoverageBySession, err := activity.CanonicalSessionTokenCoverageContext(ctx, snapshotRows)
 	if err != nil {
 		return nil, err
 	}
-	snapshotMask, snapshotAttribution, snapshotWebSearchRequests :=
-		activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
+	snapshotMask, snapshotAttribution, snapshotWebSearchRequests := activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
 	seen := make(map[pgUsageDedupToken]struct{})
 	deduplicatedOutputTokens := make(map[string]int)
 	discardedContributingSessions := make(map[string]struct{})
 	out := make([]activity.UsageRow, 0, len(rowsAcc))
 	for i, o := range rowsAcc {
 		if !snapshotMask[i] {
-			deduplicatedOutputTokens[o.scan.sessionID] +=
-				snapshotRows[i].OutputTokens
+			deduplicatedOutputTokens[o.scan.sessionID] += snapshotRows[i].OutputTokens
 			if rowContributes[i] {
 				discardedContributingSessions[o.scan.sessionID] = struct{}{}
 			}
 			continue
 		}
 		r := o.scan
-		inputTok, outputTok, cacheCrTok, cacheRdTok, _ :=
-			pgDailyUsageRowTokens(
-				pgDailyUsageScanRow{
-					messageOrdinal:           r.messageOrdinal,
-					usageSource:              r.usageSource,
-					tokenJSON:                r.tokenJSON,
-					inputTokens:              r.inputTokens,
-					outputTokens:             r.outputTokens,
-					cacheCreationInputTokens: r.cacheCreationInputTokens,
-					cacheReadInputTokens:     r.cacheReadInputTokens,
-					reasoningTokens:          r.reasoningTokens,
-				},
-			)
+		inputTok, outputTok, cacheCrTok, cacheRdTok, _ := pgDailyUsageRowTokens(
+			pgDailyUsageScanRow{
+				messageOrdinal:           r.messageOrdinal,
+				usageSource:              r.usageSource,
+				tokenJSON:                r.tokenJSON,
+				inputTokens:              r.inputTokens,
+				outputTokens:             r.outputTokens,
+				cacheCreationInputTokens: r.cacheCreationInputTokens,
+				cacheReadInputTokens:     r.cacheReadInputTokens,
+				reasoningTokens:          r.reasoningTokens,
+			},
+		)
 		attributionSessionID := snapshotAttribution[i]
 		if attributionSessionID != r.sessionID {
 			deduplicatedOutputTokens[r.sessionID] += outputTok
@@ -297,9 +292,8 @@ func (s *Store) GetSessionUsageRows(
 			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
-		cost, priced, contributes, priceErr :=
-			pgSessionRowCostWithWebSearchRequests(
-				costRow, snapshotWebSearchRequests[i], rateResolver)
+		cost, priced, contributes, priceErr := pgSessionRowCostWithWebSearchRequests(
+			costRow, snapshotWebSearchRequests[i], rateResolver)
 		if priceErr != nil {
 			return nil, priceErr
 		}
@@ -637,6 +631,7 @@ func (s *Store) activityReportCandidateSource(
 		if err != nil {
 			return fmt.Errorf("querying pg activity report terminal candidates: %w", err)
 		}
+		defer terminalRows.Close()
 		var terminal []activity.IntervalCandidate
 		for terminalRows.Next() {
 			candidate, scanErr := scanCandidate(terminalRows)
@@ -890,10 +885,9 @@ func (s *Store) activityReportUsage(
 			o.scan.usageSource, o.scan.tokenJSON)
 		baseRows[i] = row
 	}
-	mask, attribution, webSearchRequests :=
-		activity.UsageSurvivorSelectionForSessions(
-			q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
-		)
+	mask, attribution, webSearchRequests := activity.UsageSurvivorSelectionForSessions(
+		q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
+	)
 	out = make([]activity.UsageRow, 0, len(rowsAcc))
 	for i, o := range rowsAcc {
 		if !mask[i] {
@@ -908,9 +902,8 @@ func (s *Store) activityReportUsage(
 			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
-		cost, priced, contributes, priceErr :=
-			pgActivityReportRowStatusWithWebSearchRequests(
-				costRow, webSearchRequests[i], rateResolver)
+		cost, priced, contributes, priceErr := pgActivityReportRowStatusWithWebSearchRequests(
+			costRow, webSearchRequests[i], rateResolver)
 		if priceErr != nil {
 			return nil, nil, priceErr
 		}

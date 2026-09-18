@@ -33,9 +33,6 @@ import (
 // in this file; every HTTP hop, validation layer, and custody boundary is
 // production code.
 func TestRawClientEndToEnd(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 	ctx := t.Context()
 
@@ -46,21 +43,21 @@ func TestRawClientEndToEnd(t *testing.T) {
 	// Server-side enrollment has no HTTP route by design; the issued
 	// credential is exactly what a laptop would be provisioned with.
 	enrollment, err := auth.EnrollDevice(ctx, "tenant-e2e", "laptop-e2e")
-	require.NoError(err)
-	assert.Equal("tenant-e2e", enrollment.Identity.TenantID)
-	assert.NotEmpty(enrollment.Identity.DeviceID)
-	assert.NotEmpty(enrollment.Credential)
+	require.NoError(t, err)
+	assert.Equal(t, "tenant-e2e", enrollment.Identity.TenantID)
+	assert.NotEmpty(t, enrollment.Identity.DeviceID)
+	assert.NotEmpty(t, enrollment.Credential)
 
 	// The laptop's checkpoint store records its device identity once.
 	checkpointPath := t.TempDir() + "/rawcheckpoint.db"
 	checkpoint, err := rawcheckpoint.Open(ctx, checkpointPath)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(checkpoint.Close()) })
-	require.NoError(checkpoint.SetDevice(ctx, enrollment.Identity.DeviceID))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, checkpoint.Close()) })
+	require.NoError(t, checkpoint.SetDevice(ctx, enrollment.Identity.DeviceID))
 	storedDevice, ok, err := checkpoint.Device(ctx)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(enrollment.Identity.DeviceID, storedDevice)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, enrollment.Identity.DeviceID, storedDevice)
 
 	// A small ChunkBytes forces every object through multiple PATCHes.
 	client, err := NewClient(Config{
@@ -71,7 +68,7 @@ func TestRawClientEndToEnd(t *testing.T) {
 		ChunkBytes:  8,
 		TokenMargin: time.Minute,
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	// Step 2: build a two-object generation from fixture bytes with real
 	// SHA-256 digests. Both bodies exceed two chunks at 8 bytes each.
@@ -79,8 +76,8 @@ func TestRawClientEndToEnd(t *testing.T) {
 	secondBody := []byte("second source object body")
 	first := e2EObjectFor(t, firstBody)
 	second := e2EObjectFor(t, secondBody)
-	require.Greater(first.Length, int64(16))
-	require.Greater(second.Length, int64(16))
+	require.Greater(t, first.Length, int64(16))
+	require.Greater(t, second.Length, int64(16))
 
 	const (
 		rootID    = "root-e2e"
@@ -115,68 +112,68 @@ func TestRawClientEndToEnd(t *testing.T) {
 	// resumable data plane.
 	objects := []rawsync.ObjectRef{first, second}
 	missing, err := client.MissingObjects(ctx, parser.AgentClaude, objects)
-	require.NoError(err)
-	require.Len(missing, 2)
-	assert.Equal(objects, missing, "both objects missing in request order")
+	require.NoError(t, err)
+	require.Len(t, missing, 2)
+	assert.Equal(t, objects, missing, "both objects missing in request order")
 
 	bodies := map[string][]byte{first.SHA256: firstBody, second.SHA256: secondBody}
 	for _, object := range missing {
-		require.NoError(client.UploadObject(
+		require.NoError(t, client.UploadObject(
 			ctx, parser.AgentClaude, object, bytes.NewReader(bodies[object.SHA256]),
 		))
 	}
 	// Multi-chunk transfers actually happened: every session needed more
 	// than one PATCH at the 8-byte chunk size.
 	for uploadID, appends := range uploads.appendCounts() {
-		assert.GreaterOrEqual(appends, 2, "upload %s used multiple chunks", uploadID)
+		assert.GreaterOrEqual(t, appends, 2, "upload %s used multiple chunks", uploadID)
 	}
 
 	// After custody the server holds both objects; renegotiation is empty.
 	missing, err = client.MissingObjects(ctx, parser.AgentClaude, objects)
-	require.NoError(err)
-	assert.Empty(missing)
+	require.NoError(t, err)
+	assert.Empty(t, missing)
 
 	// Step 4: commit the first generation with an empty expected parent
 	// receipt, then advance the laptop's checkpoint from the durable result.
 	firstCommit, err := client.CommitManifest(ctx, manifestFor(
 		"capture-e2e-1", capturedAt, "",
 	))
-	require.NoError(err)
-	assert.NotEmpty(firstCommit.ManifestID)
-	assert.NotEmpty(firstCommit.Receipt)
-	assert.Equal(int64(1), firstCommit.Generation)
-	assert.True(firstCommit.Created)
-	require.NoError(checkpoint.AdvanceHead(
+	require.NoError(t, err)
+	assert.NotEmpty(t, firstCommit.ManifestID)
+	assert.NotEmpty(t, firstCommit.Receipt)
+	assert.Equal(t, int64(1), firstCommit.Generation)
+	assert.True(t, firstCommit.Created)
+	require.NoError(t, checkpoint.AdvanceHead(
 		ctx, enrollment.Identity.DeviceID, parser.AgentClaude,
 		rootID, sourceKey, "", firstCommit,
 	))
 	head, ok, err := checkpoint.SourceHead(ctx, parser.AgentClaude, rootID, sourceKey)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(firstCommit.Receipt, head.Receipt)
-	assert.Equal(firstCommit.ManifestID, head.ManifestID)
-	assert.Equal(int64(1), head.Generation)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, firstCommit.Receipt, head.Receipt)
+	assert.Equal(t, firstCommit.ManifestID, head.ManifestID)
+	assert.Equal(t, int64(1), head.Generation)
 
 	// The same capture_id replays idempotently: same receipt and
 	// generation, never a second generation.
 	replayed, err := client.CommitManifest(ctx, manifestFor(
 		"capture-e2e-1", capturedAt, "",
 	))
-	require.NoError(err)
-	assert.Equal(firstCommit.Receipt, replayed.Receipt)
-	assert.Equal(firstCommit.Generation, replayed.Generation)
-	assert.False(replayed.Created)
+	require.NoError(t, err)
+	assert.Equal(t, firstCommit.Receipt, replayed.Receipt)
+	assert.Equal(t, firstCommit.Generation, replayed.Generation)
+	assert.False(t, replayed.Created)
 
 	// Step 5: a second generation chained onto the first receipt advances
 	// the server head to generation 2.
 	secondCommit, err := client.CommitManifest(ctx, manifestFor(
 		"capture-e2e-2", capturedAt.Add(time.Minute), firstCommit.Receipt,
 	))
-	require.NoError(err)
-	assert.NotEqual(firstCommit.Receipt, secondCommit.Receipt)
-	assert.Equal(int64(2), secondCommit.Generation)
-	assert.True(secondCommit.Created)
-	require.NoError(checkpoint.AdvanceHead(
+	require.NoError(t, err)
+	assert.NotEqual(t, firstCommit.Receipt, secondCommit.Receipt)
+	assert.Equal(t, int64(2), secondCommit.Generation)
+	assert.True(t, secondCommit.Created)
+	require.NoError(t, checkpoint.AdvanceHead(
 		ctx, enrollment.Identity.DeviceID, parser.AgentClaude,
 		rootID, sourceKey, firstCommit.Receipt, secondCommit,
 	))
@@ -186,23 +183,23 @@ func TestRawClientEndToEnd(t *testing.T) {
 	_, err = client.CommitManifest(ctx, manifestFor(
 		"capture-e2e-3", capturedAt.Add(2*time.Minute), firstCommit.Receipt,
 	))
-	require.Error(err)
+	require.Error(t, err)
 	var apiErr APIError
-	require.True(AsAPIError(err, &apiErr))
-	assert.Equal(http.StatusConflict, apiErr.Status)
-	assert.Equal(CodeHeadConflict, apiErr.Code)
-	assert.Equal(secondCommit.ManifestID, apiErr.CurrentManifestID)
-	assert.Equal(secondCommit.Receipt, apiErr.CurrentReceipt)
-	assert.Equal(int64(2), apiErr.CurrentGeneration)
+	require.True(t, AsAPIError(err, &apiErr))
+	assert.Equal(t, http.StatusConflict, apiErr.Status)
+	assert.Equal(t, CodeHeadConflict, apiErr.Code)
+	assert.Equal(t, secondCommit.ManifestID, apiErr.CurrentManifestID)
+	assert.Equal(t, secondCommit.Receipt, apiErr.CurrentReceipt)
+	assert.Equal(t, int64(2), apiErr.CurrentGeneration)
 
 	// Step 7: the checkpoint reflects only the last acknowledged head —
 	// generation 2 — and the rejected stale commit advanced nothing.
 	head, ok, err = checkpoint.SourceHead(ctx, parser.AgentClaude, rootID, sourceKey)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(secondCommit.Receipt, head.Receipt)
-	assert.Equal(secondCommit.ManifestID, head.ManifestID)
-	assert.Equal(int64(2), head.Generation)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, secondCommit.Receipt, head.Receipt)
+	assert.Equal(t, secondCommit.ManifestID, head.ManifestID)
+	assert.Equal(t, int64(2), head.Generation)
 }
 
 // e2EObjectFor builds a validated ObjectRef carrying body's real digest.
@@ -222,6 +219,7 @@ func newE2ERawSyncServer(
 	uploads *e2EUploadSessionStore,
 ) (*httptest.Server, *rawsync.DeviceAuthService) {
 	t.Helper()
+
 	repository, err := artifact.OpenRepository(t.Context(), t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, repository.Close()) })

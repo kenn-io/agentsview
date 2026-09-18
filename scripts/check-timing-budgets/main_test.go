@@ -33,6 +33,7 @@ func writeTimingFixtures(t *testing.T, root string, files map[string]string) {
 
 func assertTimingScan(t *testing.T, root string, files map[string]string, wantCode int, wantOutput string) {
 	t.Helper()
+
 	var stderr bytes.Buffer
 	assert.Equal(t, wantCode, run([]string{root}, &stderr))
 	assert.Equal(t, wantOutput, stderr.String())
@@ -48,21 +49,18 @@ func assertTimingScan(t *testing.T, root string, files map[string]string, wantCo
 
 func TestRunTimingBudgetFixtures(t *testing.T) {
 	t.Run("repository-relative subdirectory keeps allowances", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		root := t.TempDir()
-		require.NoError(os.WriteFile(filepath.Join(root, "go.mod"), []byte("module fixture\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module fixture\n"), 0o644))
 		files := map[string]string{
 			"internal/sync/engine_test.go": fixtureSource(fixtureImports, "TestStartupMaintenanceWaitsForForegroundSyncAndSerializesLaterSyncs", "assert.Never(t, nil, 100*time.Millisecond, time.Millisecond)"),
 		}
 		writeTimingFixtures(t, root, files)
 		var stderr bytes.Buffer
-		assert.Equal(0, run([]string{filepath.Join(root, "internal", "sync")}, &stderr))
-		assert.Empty(stderr.String())
+		assert.Equal(t, 0, run([]string{filepath.Join(root, "internal", "sync")}, &stderr))
+		assert.Empty(t, stderr.String())
 		after, err := os.ReadFile(filepath.Join(root, "internal", "sync", "engine_test.go"))
-		require.NoError(err)
-		assert.Equal([]byte(files["internal/sync/engine_test.go"]), after)
+		require.NoError(t, err)
+		assert.Equal(t, []byte(files["internal/sync/engine_test.go"]), after)
 	})
 
 	for _, assertion := range []string{"assert.Eventually", "require.Eventually", "assert.Never", "require.Never"} {
@@ -276,18 +274,16 @@ func TestRunTimingBudgetErrors(t *testing.T) {
 		})
 	}
 	t.Run("invalid syntax returns 2", func(t *testing.T) {
-		assert := assert.New(t)
-
 		root := t.TempDir()
 		files := map[string]string{"broken_test.go": "package fixture\nfunc (\n"}
 		writeTimingFixtures(t, root, files)
 		var stderr bytes.Buffer
-		assert.Equal(2, run([]string{root}, &stderr))
-		assert.Contains(stderr.String(), "check-timing-budgets: broken_test.go:2:")
+		assert.Equal(t, 2, run([]string{root}, &stderr))
+		assert.Contains(t, stderr.String(), "check-timing-budgets: broken_test.go:2:")
 		t.Log(strings.TrimSpace(stderr.String()))
 		after, err := os.ReadFile(filepath.Join(root, "broken_test.go"))
 		require.NoError(t, err)
-		assert.Equal([]byte(files["broken_test.go"]), after)
+		assert.Equal(t, []byte(files["broken_test.go"]), after)
 	})
 	t.Run("missing root returns 2", func(t *testing.T) {
 		var stderr bytes.Buffer

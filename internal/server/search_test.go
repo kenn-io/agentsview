@@ -48,7 +48,7 @@ type searchSpy struct {
 	filter db.SearchFilter
 }
 
-func (s *searchSpy) HasFTS() bool { return true }
+func (s *searchSpy) HasFTS(ctx context.Context) bool { return true }
 
 func (s *searchSpy) Search(
 	_ context.Context, f db.SearchFilter,

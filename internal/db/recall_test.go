@@ -126,7 +126,7 @@ func TestRecallEntriesSchemaIndexesSourceEpisode(t *testing.T) {
 	d := testDB(t)
 
 	var count int
-	err := d.getReader().QueryRow(
+	err := d.getReader().QueryRow(t.Context(),
 		`SELECT count(*) FROM sqlite_master
 		 WHERE type='index' AND name='idx_recall_entries_source_episode'`,
 	).Scan(&count)
@@ -136,12 +136,10 @@ func TestRecallEntriesSchemaIndexesSourceEpisode(t *testing.T) {
 }
 
 func TestInsertRecallEntryDefaultsReviewStateToUnreviewedAuto(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID:              "implicit-review",
 		Type:            "fact",
 		Scope:           "project",
@@ -150,11 +148,11 @@ func TestInsertRecallEntryDefaultsReviewStateToUnreviewedAuto(t *testing.T) {
 		Body:            "An omitted review state must not confer trust.",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	got, err := d.GetRecallEntry(t.Context(), "implicit-review")
-	require.NoError(err)
-	require.NotNil(got)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 	assert.Equal(t, "unreviewed_auto", got.ReviewState)
 }
 
@@ -162,7 +160,7 @@ func TestRecallSchemaDefaultsReviewStateToUnreviewedAuto(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 
-	_, err := d.getWriter().Exec(`
+	_, err := d.getWriter().Exec(t.Context(), `
 		INSERT INTO recall_entries (
 			id, type, scope, title, body, source_session_id
 		) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -173,7 +171,7 @@ func TestRecallSchemaDefaultsReviewStateToUnreviewedAuto(t *testing.T) {
 	require.NoError(t, err)
 
 	var reviewState string
-	err = d.getReader().QueryRow(
+	err = d.getReader().QueryRow(t.Context(),
 		`SELECT review_state FROM recall_entries WHERE id = ?`,
 		"schema-default-review",
 	).Scan(&reviewState)
@@ -182,14 +180,11 @@ func TestRecallSchemaDefaultsReviewStateToUnreviewedAuto(t *testing.T) {
 }
 
 func TestInsertRecallEntryRejectsEvidenceFromDifferentSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "source-session", "agentsview")
 	insertSession(t, d, "evidence-session", "agentsview")
 
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID:              "cross-session-evidence",
 		Type:            "fact",
 		Scope:           "project",
@@ -204,31 +199,28 @@ func TestInsertRecallEntryRejectsEvidenceFromDifferentSession(t *testing.T) {
 		}},
 	})
 
-	require.Error(err)
-	assert.Contains(err.Error(), "evidence-session")
-	assert.Contains(err.Error(), "source-session")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "evidence-session")
+	assert.Contains(t, err.Error(), "source-session")
 	var entryCount int
-	require.NoError(d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		`SELECT count(*) FROM recall_entries WHERE id = ?`,
 		"cross-session-evidence",
 	).Scan(&entryCount))
-	assert.Zero(entryCount)
+	assert.Zero(t, entryCount)
 	var evidenceCount int
-	require.NoError(d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		`SELECT count(*) FROM recall_evidence WHERE entry_id = ?`,
 		"cross-session-evidence",
 	).Scan(&evidenceCount))
-	assert.Zero(evidenceCount)
+	assert.Zero(t, evidenceCount)
 }
 
 func TestInsertRecallEntryRejectsEvidenceForDifferentEntry(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "source-a", "agentsview")
 	insertSession(t, d, "source-b", "agentsview")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID:              "entry-b",
 		Type:            "fact",
 		Scope:           "project",
@@ -242,19 +234,19 @@ func TestInsertRecallEntryRejectsEvidenceForDifferentEntry(t *testing.T) {
 			MessageEndOrdinal:   2,
 		}},
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	var baselineEntryCount int
-	require.NoError(d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		`SELECT count(*) FROM recall_entries`,
 	).Scan(&baselineEntryCount))
 	var baselineEvidenceCount int
-	require.NoError(d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		`SELECT count(*) FROM recall_evidence WHERE entry_id = ?`, "entry-b",
 	).Scan(&baselineEvidenceCount))
-	require.Equal(1, baselineEvidenceCount)
+	require.Equal(t, 1, baselineEvidenceCount)
 
-	_, err = d.InsertRecallEntry(RecallEntry{
+	_, err = d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID:              "entry-a",
 		Type:            "fact",
 		Scope:           "project",
@@ -270,31 +262,29 @@ func TestInsertRecallEntryRejectsEvidenceForDifferentEntry(t *testing.T) {
 		}},
 	})
 
-	require.Error(err)
-	assert.Contains(err.Error(), "entry-a")
-	assert.Contains(err.Error(), "entry-b")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "entry-a")
+	assert.Contains(t, err.Error(), "entry-b")
 	got, getErr := d.GetRecallEntry(t.Context(), "entry-a")
-	require.NoError(getErr)
-	assert.Nil(got)
+	require.NoError(t, getErr)
+	assert.Nil(t, got)
 	var entryCount int
-	require.NoError(d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		`SELECT count(*) FROM recall_entries`,
 	).Scan(&entryCount))
-	assert.Equal(baselineEntryCount, entryCount)
+	assert.Equal(t, baselineEntryCount, entryCount)
 	var evidenceCount int
-	require.NoError(d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		`SELECT count(*) FROM recall_evidence WHERE entry_id = ?`, "entry-b",
 	).Scan(&evidenceCount))
-	assert.Equal(baselineEvidenceCount, evidenceCount)
+	assert.Equal(t, baselineEvidenceCount, evidenceCount)
 }
 
 func TestInsertRecallEntryAcceptsEvidenceWithMatchingEntryID(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "source-a", "agentsview")
 
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID:              "entry-a",
 		Type:            "fact",
 		Scope:           "project",
@@ -309,58 +299,56 @@ func TestInsertRecallEntryAcceptsEvidenceWithMatchingEntryID(t *testing.T) {
 			MessageEndOrdinal:   2,
 		}},
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	got, err := d.GetRecallEntry(t.Context(), "entry-a")
-	require.NoError(err)
-	require.NotNil(got)
-	require.Len(got.Evidence, 1)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Len(t, got.Evidence, 1)
 	assert.Equal(t, "entry-a", got.Evidence[0].EntryID)
 }
 
 func TestOpenRepairsMissingRecallEntrySourceEpisodeIndex(t *testing.T) {
-	require := require.New(t)
-
 	path := filepath.Join(t.TempDir(), "test.db")
-	d, err := Open(path)
-	require.NoError(err, "initial open")
+	d, err := Open(t.Context(), path)
+	require.NoError(t, err, "initial open")
 	d.Close()
 
 	conn, err := sql.Open("sqlite3", path)
-	require.NoError(err, "raw open")
+	require.NoError(t, err, "raw open")
 	_, err = conn.ExecContext(t.Context(), `DROP INDEX IF EXISTS idx_recall_entries_source_episode`)
-	require.NoError(err, "drop source episode index")
+	require.NoError(t, err, "drop source episode index")
 	var count int
 	err = conn.QueryRowContext(t.Context(),
 		`SELECT count(*) FROM sqlite_master
 		 WHERE type='index' AND name='idx_recall_entries_source_episode'`,
 	).Scan(&count)
-	require.NoError(err, "verify source episode index removed")
-	require.Equal(0, count)
+	require.NoError(t, err, "verify source episode index removed")
+	require.Equal(t, 0, count)
 	conn.Close()
 
-	reopened, err := Open(path)
-	require.NoError(err, "reopen after dropping index")
+	reopened, err := Open(t.Context(), path)
+	require.NoError(t, err, "reopen after dropping index")
 	defer reopened.Close()
 
-	err = reopened.getReader().QueryRow(
+	err = reopened.getReader().QueryRow(t.Context(),
 		`SELECT count(*) FROM sqlite_master
 		 WHERE type='index' AND name='idx_recall_entries_source_episode'`,
 	).Scan(&count)
-	require.NoError(err, "verify source episode index restored")
+	require.NoError(t, err, "verify source episode index restored")
 	assert.Equal(t, 1, count)
 }
 
 func TestOpenCreatesSearchableRecallFTSWhenRuntimeSupportsFTS4(t *testing.T) {
 	d := testDB(t)
-	if !d.HasFTS() && !sqliteRuntimeSupportsFTS4(t, d) {
+	if !d.HasFTS(t.Context()) && !sqliteRuntimeSupportsFTS4(t, d) {
 		t.Skip("no FTS4 or FTS5 support")
 	}
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "m1",
 		Type:            "fact",
 		Scope:           "project",
@@ -388,14 +376,14 @@ func TestOpenCreatesSearchableRecallEvidenceFTSWhenRuntimeSupportsFTS4(
 	t *testing.T,
 ) {
 	d := testDB(t)
-	if !d.HasFTS() && !sqliteRuntimeSupportsFTS4(t, d) {
+	if !d.HasFTS(t.Context()) && !sqliteRuntimeSupportsFTS4(t, d) {
 		t.Skip("no FTS4 or FTS5 support")
 	}
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "m1",
 		Type:            "fact",
 		Scope:           "project",
@@ -430,7 +418,7 @@ func TestOpenCreatesSearchableRecallEvidenceFTSWhenRuntimeSupportsFTS4(
 
 func sqliteRuntimeSupportsFTS4(t *testing.T, d *DB) bool {
 	t.Helper()
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(t.Context(),
 		`CREATE VIRTUAL TABLE temp.recall_fts4_probe USING fts4(value)`,
 	)
 	if err != nil {
@@ -439,7 +427,7 @@ func sqliteRuntimeSupportsFTS4(t *testing.T, d *DB) bool {
 		}
 		require.NoError(t, err, "probe fts4 support")
 	}
-	_, err = d.getWriter().Exec(`DROP TABLE temp.recall_fts4_probe`)
+	_, err = d.getWriter().Exec(t.Context(), `DROP TABLE temp.recall_fts4_probe`)
 	require.NoError(t, err, "drop fts4 probe table")
 	return true
 }
@@ -447,7 +435,7 @@ func sqliteRuntimeSupportsFTS4(t *testing.T, d *DB) bool {
 func requireRecallFTS(t *testing.T, d *DB) {
 	t.Helper()
 	var count int
-	err := d.getReader().QueryRow(
+	err := d.getReader().QueryRow(t.Context(),
 		`SELECT count(*) FROM sqlite_master
 		 WHERE type = 'table' AND name = 'recall_entries_fts'`,
 	).Scan(&count)
@@ -455,7 +443,7 @@ func requireRecallFTS(t *testing.T, d *DB) {
 	if count == 0 {
 		t.Skip("no recall FTS support")
 	}
-	_, err = d.getReader().Exec(`SELECT 1 FROM recall_entries_fts LIMIT 1`)
+	_, err = d.getReader().Exec(t.Context(), `SELECT 1 FROM recall_entries_fts LIMIT 1`)
 	if err != nil {
 		t.Skipf("no recall FTS support: %v", err)
 	}
@@ -464,7 +452,7 @@ func requireRecallFTS(t *testing.T, d *DB) {
 func requireRecallFTS4(t *testing.T, d *DB) {
 	t.Helper()
 	var ddl string
-	err := d.getReader().QueryRow(
+	err := d.getReader().QueryRow(t.Context(),
 		`SELECT lower(sql) FROM sqlite_master
 		 WHERE type = 'table' AND name = 'recall_entries_fts'`,
 	).Scan(&ddl)
@@ -477,7 +465,7 @@ func requireRecallFTS4(t *testing.T, d *DB) {
 func requireRecallFTS5(t *testing.T, d *DB) {
 	t.Helper()
 	var ddl string
-	err := d.getReader().QueryRow(
+	err := d.getReader().QueryRow(t.Context(),
 		`SELECT lower(sql) FROM sqlite_master
 		 WHERE type = 'table' AND name = 'recall_entries_fts'`,
 	).Scan(&ddl)
@@ -488,9 +476,6 @@ func requireRecallFTS5(t *testing.T, d *DB) {
 }
 
 func TestRecallEntriesInsertGetAndQuery(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
@@ -502,7 +487,7 @@ func TestRecallEntriesInsertGetAndQuery(t *testing.T) {
 		s.Agent = "codex"
 	})
 
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "m1",
 		Type:            "procedure",
 		Scope:           "project",
@@ -526,9 +511,9 @@ func TestRecallEntriesInsertGetAndQuery(t *testing.T) {
 			},
 		},
 	})
-	require.NoError(err, "InsertRecallEntry")
+	require.NoError(t, err, "InsertRecallEntry")
 
-	_, err = d.InsertRecallEntry(RecallEntry{
+	_, err = d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "m2",
 		Type:            "fact",
 		Scope:           "project",
@@ -539,18 +524,18 @@ func TestRecallEntriesInsertGetAndQuery(t *testing.T) {
 		Agent:           "codex",
 		SourceSessionID: "s2",
 	})
-	require.NoError(err, "InsertRecallEntry other")
+	require.NoError(t, err, "InsertRecallEntry other")
 
 	got, err := d.GetRecallEntry(ctx, "m1")
-	require.NoError(err, "GetRecallEntry")
-	require.NotNil(got, "recall")
-	assert.Equal("Check cwd before file reads", got.Title)
-	assert.True(got.Transferable)
-	assert.True(got.ProvenanceOK)
-	require.Len(got.Evidence, 1)
-	assert.Equal("s1", got.Evidence[0].SessionID)
-	assert.Equal(3, got.Evidence[0].MessageStartOrdinal)
-	assert.Equal("toolu_1", got.Evidence[0].ToolUseID)
+	require.NoError(t, err, "GetRecallEntry")
+	require.NotNil(t, got, "recall")
+	assert.Equal(t, "Check cwd before file reads", got.Title)
+	assert.True(t, got.Transferable)
+	assert.True(t, got.ProvenanceOK)
+	require.Len(t, got.Evidence, 1)
+	assert.Equal(t, "s1", got.Evidence[0].SessionID)
+	assert.Equal(t, 3, got.Evidence[0].MessageStartOrdinal)
+	assert.Equal(t, "toolu_1", got.Evidence[0].ToolUseID)
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:    "cwd reads",
@@ -558,14 +543,14 @@ func TestRecallEntriesInsertGetAndQuery(t *testing.T) {
 		Agent:   "codex",
 		Limit:   10,
 	})
-	require.NoError(err, "QueryRecallEntries")
-	require.Len(page.RecallEntries, 1)
-	assert.Equal("m1", page.RecallEntries[0].ID)
-	assert.Greater(page.RecallEntries[0].Score, 0.0)
-	assert.Equal(2, page.RecallEntries[0].ScoreBreakdown.KeywordOverlap)
-	assert.Greater(page.RecallEntries[0].ScoreBreakdown.KeywordIDFScore, 0.0)
-	assert.Equal(page.RecallEntries[0].Score, page.RecallEntries[0].ScoreBreakdown.Total)
-	assert.Equal([]string{"keyword", "evidence"}, page.RecallEntries[0].MatchReasons)
+	require.NoError(t, err, "QueryRecallEntries")
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "m1", page.RecallEntries[0].ID)
+	assert.Greater(t, page.RecallEntries[0].Score, 0.0)
+	assert.Equal(t, 2, page.RecallEntries[0].ScoreBreakdown.KeywordOverlap)
+	assert.Greater(t, page.RecallEntries[0].ScoreBreakdown.KeywordIDFScore, 0.0)
+	assert.InDelta(t, page.RecallEntries[0].Score, page.RecallEntries[0].ScoreBreakdown.Total, 0)
+	assert.Equal(t, []string{"keyword", "evidence"}, page.RecallEntries[0].MatchReasons)
 
 	page, err = d.QueryRecallEntries(ctx, RecallQuery{
 		Text:    "wal_checkpoint",
@@ -573,19 +558,16 @@ func TestRecallEntriesInsertGetAndQuery(t *testing.T) {
 		Agent:   "codex",
 		Limit:   10,
 	})
-	require.NoError(err, "QueryRecallEntries evidence")
-	require.Len(page.RecallEntries, 1)
-	assert.Equal("m1", page.RecallEntries[0].ID)
-	assert.Equal(1, page.RecallEntries[0].ScoreBreakdown.EvidenceKeywordOverlap)
-	assert.Greater(page.RecallEntries[0].ScoreBreakdown.EvidenceIDFScore, 0.0)
-	assert.Greater(page.RecallEntries[0].ScoreBreakdown.IdentifierBoost, 0.0)
-	assert.Equal([]string{"evidence", "identifier"}, page.RecallEntries[0].MatchReasons)
+	require.NoError(t, err, "QueryRecallEntries evidence")
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "m1", page.RecallEntries[0].ID)
+	assert.Equal(t, 1, page.RecallEntries[0].ScoreBreakdown.EvidenceKeywordOverlap)
+	assert.Greater(t, page.RecallEntries[0].ScoreBreakdown.EvidenceIDFScore, 0.0)
+	assert.Greater(t, page.RecallEntries[0].ScoreBreakdown.IdentifierBoost, 0.0)
+	assert.Equal(t, []string{"evidence", "identifier"}, page.RecallEntries[0].MatchReasons)
 }
 
 func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
@@ -692,8 +674,8 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 			ProvenanceOK:    true,
 		},
 	} {
-		_, err := d.InsertRecallEntry(recall)
-		require.NoError(err, "InsertRecallEntry %s", recall.ID)
+		_, err := d.InsertRecallEntry(ctx, recall)
+		require.NoError(t, err, "InsertRecallEntry %s", recall.ID)
 	}
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
@@ -704,9 +686,9 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 		Limit:       10,
 	})
 
-	require.NoError(err, "QueryRecallEntries")
-	require.Len(page.RecallEntries, 1)
-	assert.Equal("trusted", page.RecallEntries[0].ID)
+	require.NoError(t, err, "QueryRecallEntries")
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "trusted", page.RecallEntries[0].ID)
 
 	page, err = d.QueryRecallEntries(ctx, RecallQuery{
 		Text:        "wrong cwd files",
@@ -715,10 +697,10 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 		Limit:       10,
 	})
 
-	require.EqualError(err,
+	require.EqualError(t, err,
 		`invalid recall query: trusted_only requires status "accepted"`)
-	require.ErrorIs(err, ErrInvalidRecallQuery)
-	assert.Empty(page.RecallEntries,
+	require.ErrorIs(t, err, ErrInvalidRecallQuery)
+	assert.Empty(t, page.RecallEntries,
 		"trusted-only must never return a non-accepted entry")
 }
 
@@ -726,7 +708,7 @@ func TestRecallQueriesTrustedOnlyRejectArchivedStatus(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "trusted-status-session", "agentsview")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "trusted-status-control",
 		Type:            "procedure",
 		Scope:           "project",
@@ -781,16 +763,14 @@ func TestRecallQueriesTrustedOnlyRejectArchivedStatus(t *testing.T) {
 
 	for _, query := range queries {
 		t.Run(query.name, func(t *testing.T) {
-			require := require.New(t)
-
 			_, err := query.run(RecallQuery{
 				Text:        "cwd",
 				Status:      " " + corerecall.StatusArchived + " ",
 				TrustedOnly: true,
 			})
-			require.EqualError(err,
+			require.EqualError(t, err,
 				`invalid recall query: trusted_only requires status "accepted"`)
-			require.ErrorIs(err, ErrInvalidRecallQuery)
+			require.ErrorIs(t, err, ErrInvalidRecallQuery)
 
 			for _, status := range []string{
 				"",
@@ -802,7 +782,7 @@ func TestRecallQueriesTrustedOnlyRejectArchivedStatus(t *testing.T) {
 					Status:      status,
 					TrustedOnly: true,
 				})
-				require.NoError(err, "status %q remains valid", status)
+				require.NoError(t, err, "status %q remains valid", status)
 				assert.Equal(t, []string{"trusted-status-control"}, ids,
 					"status %q must retain the trusted entry", status)
 			}
@@ -815,7 +795,7 @@ func TestListRecallEntriesClampsOversizedLimit(t *testing.T) {
 	ctx := t.Context()
 	insertSession(t, d, "limit-session", "agentsview")
 	for i := range DefaultRecallEntryLimit + 1 {
-		_, err := d.InsertRecallEntry(RecallEntry{
+		_, err := d.InsertRecallEntry(ctx, RecallEntry{
 			ID:              fmt.Sprintf("limit-entry-%03d", i),
 			Type:            "fact",
 			Scope:           "project",
@@ -837,13 +817,10 @@ func TestListRecallEntriesClampsOversizedLimit(t *testing.T) {
 }
 
 func TestInsertRecallEntryRejectsUnknownReviewState(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID:              "unknown-review",
 		Type:            "fact",
 		Scope:           "project",
@@ -854,20 +831,17 @@ func TestInsertRecallEntryRejectsUnknownReviewState(t *testing.T) {
 		SourceSessionID: "s1",
 	})
 
-	require.Error(err)
-	assert.Contains(err.Error(), "review state")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "review state")
 	got, getErr := d.GetRecallEntry(t.Context(), "unknown-review")
-	require.NoError(getErr)
-	assert.Nil(got)
+	require.NoError(t, getErr)
+	assert.Nil(t, got)
 }
 
 func TestSupersedeRecallEntryRejectsUnknownReviewState(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID:              "original",
 		Type:            "fact",
 		Scope:           "project",
@@ -876,7 +850,7 @@ func TestSupersedeRecallEntryRejectsUnknownReviewState(t *testing.T) {
 		Body:            "This row remains active after a rejected supersede.",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	_, err = d.SupersedeRecallEntry(t.Context(), "original", RecallEntry{
 		ID:              "replacement",
@@ -889,20 +863,18 @@ func TestSupersedeRecallEntryRejectsUnknownReviewState(t *testing.T) {
 		SourceSessionID: "s1",
 	})
 
-	require.Error(err)
-	assert.Contains(err.Error(), "review state")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "review state")
 	original, getErr := d.GetRecallEntry(t.Context(), "original")
-	require.NoError(getErr)
-	require.NotNil(original)
-	assert.Equal("accepted", original.Status)
+	require.NoError(t, getErr)
+	require.NotNil(t, original)
+	assert.Equal(t, "accepted", original.Status)
 	replacement, getErr := d.GetRecallEntry(t.Context(), "replacement")
-	require.NoError(getErr)
-	assert.Nil(replacement)
+	require.NoError(t, getErr)
+	assert.Nil(t, replacement)
 }
 
 func TestQueryRecallEntriesFiltersByExtractorMethod(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
@@ -912,7 +884,7 @@ func TestQueryRecallEntriesFiltersByExtractorMethod(t *testing.T) {
 		s.Agent = "test-agent"
 	})
 
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "raw",
 		Type:            "procedure",
 		Scope:           "project",
@@ -924,8 +896,8 @@ func TestQueryRecallEntriesFiltersByExtractorMethod(t *testing.T) {
 		SourceSessionID: "s1",
 		ExtractorMethod: "session-transcript-import",
 	})
-	require.NoError(err, "InsertRecallEntry raw")
-	_, err = d.InsertRecallEntry(RecallEntry{
+	require.NoError(t, err, "InsertRecallEntry raw")
+	_, err = d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "extracted",
 		Type:            "procedure",
 		Scope:           "project",
@@ -937,7 +909,7 @@ func TestQueryRecallEntriesFiltersByExtractorMethod(t *testing.T) {
 		SourceSessionID: "s2",
 		ExtractorMethod: "recall-probe-single-call",
 	})
-	require.NoError(err, "InsertRecallEntry extracted")
+	require.NoError(t, err, "InsertRecallEntry extracted")
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:            "wrong cwd files",
@@ -947,14 +919,12 @@ func TestQueryRecallEntriesFiltersByExtractorMethod(t *testing.T) {
 		Limit:           10,
 	})
 
-	require.NoError(err, "QueryRecallEntries")
-	require.Len(page.RecallEntries, 1)
+	require.NoError(t, err, "QueryRecallEntries")
+	require.Len(t, page.RecallEntries, 1)
 	assert.Equal(t, "raw", page.RecallEntries[0].ID)
 }
 
 func TestQueryRecallEntriesTrimsExactMatchFilters(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
@@ -962,7 +932,7 @@ func TestQueryRecallEntriesTrimsExactMatchFilters(t *testing.T) {
 		s.Cwd = "/repo/agentsview"
 		s.GitBranch = "main"
 	})
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "m1",
 		Type:            "procedure",
 		Scope:           "project",
@@ -977,7 +947,7 @@ func TestQueryRecallEntriesTrimsExactMatchFilters(t *testing.T) {
 		SourceRunID:     "run1",
 		ExtractorMethod: "single",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:            "cwd reads",
@@ -994,15 +964,12 @@ func TestQueryRecallEntriesTrimsExactMatchFilters(t *testing.T) {
 		Limit:           10,
 	})
 
-	require.NoError(err)
-	require.Len(page.RecallEntries, 1)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
 	assert.Equal(t, "m1", page.RecallEntries[0].ID)
 }
 
 func TestQueryRecallEntriesTieBreaksByStableSourceEpisode(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
@@ -1034,8 +1001,8 @@ func TestQueryRecallEntriesTieBreaksByStableSourceEpisode(t *testing.T) {
 			SourceRunID:     "run-b",
 		},
 	} {
-		_, err := d.InsertRecallEntry(m)
-		require.NoError(err)
+		_, err := d.InsertRecallEntry(ctx, m)
+		require.NoError(t, err)
 	}
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
@@ -1044,15 +1011,13 @@ func TestQueryRecallEntriesTieBreaksByStableSourceEpisode(t *testing.T) {
 		Agent:   "test-agent",
 		Limit:   2,
 	})
-	require.NoError(err)
-	require.Len(page.RecallEntries, 2)
-	assert.Equal("traj:chunk:0001", page.RecallEntries[0].SourceEpisodeID)
-	assert.Equal("traj:chunk:0002", page.RecallEntries[1].SourceEpisodeID)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 2)
+	assert.Equal(t, "traj:chunk:0001", page.RecallEntries[0].SourceEpisodeID)
+	assert.Equal(t, "traj:chunk:0002", page.RecallEntries[1].SourceEpisodeID)
 }
 
 func TestQueryRecallEntriesCandidatePreselectionTieBreaksByStableSourceEpisode(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
@@ -1061,7 +1026,7 @@ func TestQueryRecallEntriesCandidatePreselectionTieBreaksByStableSourceEpisode(t
 
 	for i := 0; i <= MaxRecallEntryLimit; i++ {
 		id := fmt.Sprintf("m-%04d", MaxRecallEntryLimit-i)
-		_, err := d.InsertRecallEntry(RecallEntry{
+		_, err := d.InsertRecallEntry(ctx, RecallEntry{
 			ID:              id,
 			Title:           "Raw chunk",
 			Body:            "Shared candidate token.",
@@ -1070,13 +1035,13 @@ func TestQueryRecallEntriesCandidatePreselectionTieBreaksByStableSourceEpisode(t
 			SourceSessionID: "s1",
 			SourceEpisodeID: fmt.Sprintf("traj:chunk:%04d", i),
 		})
-		require.NoError(err)
-		_, err = d.getWriter().Exec(
+		require.NoError(t, err)
+		_, err = d.getWriter().Exec(ctx,
 			"UPDATE recall_entries SET updated_at = ? WHERE id = ?",
 			fmt.Sprintf("2026-01-01T00:00:%04dZ", i),
 			id,
 		)
-		require.NoError(err)
+		require.NoError(t, err)
 	}
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
@@ -1085,15 +1050,12 @@ func TestQueryRecallEntriesCandidatePreselectionTieBreaksByStableSourceEpisode(t
 		Agent:   "test-agent",
 		Limit:   1,
 	})
-	require.NoError(err)
-	require.Len(page.RecallEntries, 1)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
 	assert.Equal(t, "traj:chunk:0000", page.RecallEntries[0].SourceEpisodeID)
 }
 
 func TestQueryRecallEntriesWithoutTextUsesUpdatedListOrder(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
@@ -1120,17 +1082,17 @@ func TestQueryRecallEntriesWithoutTextUsesUpdatedListOrder(t *testing.T) {
 			SourceEpisodeID: "z-source",
 		},
 	} {
-		_, err := d.InsertRecallEntry(recall)
-		require.NoError(err)
+		_, err := d.InsertRecallEntry(ctx, recall)
+		require.NoError(t, err)
 	}
-	_, err := d.getWriter().Exec(`
+	_, err := d.getWriter().Exec(ctx, `
 		UPDATE recall_entries SET updated_at = CASE id
 			WHEN 'older-source-first' THEN '2024-01-01T00:00:00Z'
 			WHEN 'newer-source-second' THEN '2024-02-01T00:00:00Z'
 			ELSE updated_at
 		END
 		WHERE id IN ('older-source-first', 'newer-source-second')`)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Project: "agentsview",
@@ -1138,17 +1100,17 @@ func TestQueryRecallEntriesWithoutTextUsesUpdatedListOrder(t *testing.T) {
 		Limit:   2,
 	})
 
-	require.NoError(err)
-	require.Len(page.RecallEntries, 2)
-	assert.Equal("newer-source-second", page.RecallEntries[0].ID)
-	assert.Equal("older-source-first", page.RecallEntries[1].ID)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 2)
+	assert.Equal(t, "newer-source-second", page.RecallEntries[0].ID)
+	assert.Equal(t, "older-source-first", page.RecallEntries[1].ID)
 }
 
 func TestQueryRecallEntriesPromptInjectionOnlyReturnsNoResults(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "unrelated",
 		Type:            "fact",
 		Scope:           "project",
@@ -1196,7 +1158,7 @@ func TestQueryRecallEntriesAcceptsLegitimateCommandQueries(t *testing.T) {
 			SourceSessionID: "s1",
 		},
 	} {
-		_, err := d.InsertRecallEntry(entry)
+		_, err := d.InsertRecallEntry(ctx, entry)
 		require.NoError(t, err)
 	}
 
@@ -1223,8 +1185,6 @@ func TestQueryRecallEntriesAcceptsLegitimateCommandQueries(t *testing.T) {
 }
 
 func TestQueryRecallEntriesFiltersBySourceRunID(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
@@ -1234,7 +1194,7 @@ func TestQueryRecallEntriesFiltersBySourceRunID(t *testing.T) {
 		s.Agent = "test-agent"
 	})
 
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "run-a",
 		Type:            "procedure",
 		Scope:           "project",
@@ -1246,8 +1206,8 @@ func TestQueryRecallEntriesFiltersBySourceRunID(t *testing.T) {
 		SourceSessionID: "s1",
 		SourceRunID:     "smoke-a",
 	})
-	require.NoError(err, "InsertRecallEntry run a")
-	_, err = d.InsertRecallEntry(RecallEntry{
+	require.NoError(t, err, "InsertRecallEntry run a")
+	_, err = d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "run-b",
 		Type:            "procedure",
 		Scope:           "project",
@@ -1259,7 +1219,7 @@ func TestQueryRecallEntriesFiltersBySourceRunID(t *testing.T) {
 		SourceSessionID: "s2",
 		SourceRunID:     "smoke-b",
 	})
-	require.NoError(err, "InsertRecallEntry run b")
+	require.NoError(t, err, "InsertRecallEntry run b")
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:        "wrong cwd files",
@@ -1269,14 +1229,12 @@ func TestQueryRecallEntriesFiltersBySourceRunID(t *testing.T) {
 		Limit:       10,
 	})
 
-	require.NoError(err, "QueryRecallEntries")
-	require.Len(page.RecallEntries, 1)
+	require.NoError(t, err, "QueryRecallEntries")
+	require.Len(t, page.RecallEntries, 1)
 	assert.Equal(t, "run-a", page.RecallEntries[0].ID)
 }
 
 func TestQueryRecallEntriesFiltersBySourceSessionID(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
@@ -1286,7 +1244,7 @@ func TestQueryRecallEntriesFiltersBySourceSessionID(t *testing.T) {
 		s.Agent = "codex"
 	})
 
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "session-a",
 		Type:            "procedure",
 		Scope:           "project",
@@ -1297,8 +1255,8 @@ func TestQueryRecallEntriesFiltersBySourceSessionID(t *testing.T) {
 		Agent:           "codex",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err, "InsertRecallEntry session a")
-	_, err = d.InsertRecallEntry(RecallEntry{
+	require.NoError(t, err, "InsertRecallEntry session a")
+	_, err = d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "session-b",
 		Type:            "procedure",
 		Scope:           "project",
@@ -1309,7 +1267,7 @@ func TestQueryRecallEntriesFiltersBySourceSessionID(t *testing.T) {
 		Agent:           "codex",
 		SourceSessionID: "s2",
 	})
-	require.NoError(err, "InsertRecallEntry session b")
+	require.NoError(t, err, "InsertRecallEntry session b")
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:            "wrong cwd files",
@@ -1319,21 +1277,19 @@ func TestQueryRecallEntriesFiltersBySourceSessionID(t *testing.T) {
 		Limit:           10,
 	})
 
-	require.NoError(err, "QueryRecallEntries")
-	require.Len(page.RecallEntries, 1)
+	require.NoError(t, err, "QueryRecallEntries")
+	require.Len(t, page.RecallEntries, 1)
 	assert.Equal(t, "session-a", page.RecallEntries[0].ID)
 }
 
 func TestQueryRecallEntriesFiltersBySourceEpisodeID(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
 
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "episode-a",
 		Type:            "procedure",
 		Scope:           "project",
@@ -1345,8 +1301,8 @@ func TestQueryRecallEntriesFiltersBySourceEpisodeID(t *testing.T) {
 		SourceSessionID: "s1",
 		SourceEpisodeID: "s1:chunk:0001",
 	})
-	require.NoError(err, "InsertRecallEntry episode a")
-	_, err = d.InsertRecallEntry(RecallEntry{
+	require.NoError(t, err, "InsertRecallEntry episode a")
+	_, err = d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "episode-b",
 		Type:            "procedure",
 		Scope:           "project",
@@ -1358,7 +1314,7 @@ func TestQueryRecallEntriesFiltersBySourceEpisodeID(t *testing.T) {
 		SourceSessionID: "s1",
 		SourceEpisodeID: "s1:chunk:0002",
 	})
-	require.NoError(err, "InsertRecallEntry episode b")
+	require.NoError(t, err, "InsertRecallEntry episode b")
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:            "wrong cwd files",
@@ -1368,15 +1324,12 @@ func TestQueryRecallEntriesFiltersBySourceEpisodeID(t *testing.T) {
 		Limit:           10,
 	})
 
-	require.NoError(err, "QueryRecallEntries")
-	require.Len(page.RecallEntries, 1)
+	require.NoError(t, err, "QueryRecallEntries")
+	require.Len(t, page.RecallEntries, 1)
 	assert.Equal(t, "episode-a", page.RecallEntries[0].ID)
 }
 
 func TestSupersedeRecallEntryArchivesOldAndLinksReplacement(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
@@ -1385,7 +1338,7 @@ func TestSupersedeRecallEntryArchivesOldAndLinksReplacement(t *testing.T) {
 	insertSession(t, d, "s2", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "old",
 		Type:            "fact",
 		Scope:           "project",
@@ -1396,7 +1349,7 @@ func TestSupersedeRecallEntryArchivesOldAndLinksReplacement(t *testing.T) {
 		Agent:           "codex",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	_, err = d.SupersedeRecallEntry(ctx, "old", RecallEntry{
 		ID:              "new",
@@ -1409,27 +1362,27 @@ func TestSupersedeRecallEntryArchivesOldAndLinksReplacement(t *testing.T) {
 		Agent:           "codex",
 		SourceSessionID: "s2",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	oldRecallEntry, err := d.GetRecallEntry(ctx, "old")
-	require.NoError(err)
-	require.NotNil(oldRecallEntry)
-	assert.Equal("archived", oldRecallEntry.Status)
-	assert.Equal("new", oldRecallEntry.SupersededByEntryID)
-	assert.Empty(oldRecallEntry.SupersedesEntryID)
+	require.NoError(t, err)
+	require.NotNil(t, oldRecallEntry)
+	assert.Equal(t, "archived", oldRecallEntry.Status)
+	assert.Equal(t, "new", oldRecallEntry.SupersededByEntryID)
+	assert.Empty(t, oldRecallEntry.SupersedesEntryID)
 	newRecallEntry, err := d.GetRecallEntry(ctx, "new")
-	require.NoError(err)
-	require.NotNil(newRecallEntry)
-	assert.Equal("accepted", newRecallEntry.Status)
-	assert.Equal("old", newRecallEntry.SupersedesEntryID)
-	assert.Empty(newRecallEntry.SupersededByEntryID)
+	require.NoError(t, err)
+	require.NotNil(t, newRecallEntry)
+	assert.Equal(t, "accepted", newRecallEntry.Status)
+	assert.Equal(t, "old", newRecallEntry.SupersedesEntryID)
+	assert.Empty(t, newRecallEntry.SupersededByEntryID)
 	replacements, err := d.ListRecallEntries(ctx, RecallQuery{
 		SupersedesEntryID: "old",
 		Limit:             10,
 	})
-	require.NoError(err)
-	require.Len(replacements, 1)
-	assert.Equal("new", replacements[0].ID)
+	require.NoError(t, err)
+	require.Len(t, replacements, 1)
+	assert.Equal(t, "new", replacements[0].ID)
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:    "retry flaky command",
@@ -1437,37 +1390,34 @@ func TestSupersedeRecallEntryArchivesOldAndLinksReplacement(t *testing.T) {
 		Agent:   "codex",
 		Limit:   10,
 	})
-	require.NoError(err)
-	require.Len(page.RecallEntries, 1)
-	assert.Equal("new", page.RecallEntries[0].ID)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "new", page.RecallEntries[0].ID)
 
 	archived, err := d.ListRecallEntries(ctx, RecallQuery{
 		Status: "archived",
 		Limit:  10,
 	})
-	require.NoError(err)
-	require.Len(archived, 1)
-	assert.Equal("old", archived[0].ID)
+	require.NoError(t, err)
+	require.Len(t, archived, 1)
+	assert.Equal(t, "old", archived[0].ID)
 	archivedByReplacement, err := d.ListRecallEntries(ctx, RecallQuery{
 		Status:              "archived",
 		SupersededByEntryID: "new",
 		Limit:               10,
 	})
-	require.NoError(err)
-	require.Len(archivedByReplacement, 1)
-	assert.Equal("old", archivedByReplacement[0].ID)
+	require.NoError(t, err)
+	require.Len(t, archivedByReplacement, 1)
+	assert.Equal(t, "old", archivedByReplacement[0].ID)
 }
 
 func TestSupersedeRecallEntryRejectsAlreadySupersededTarget(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	for _, id := range []string{"s1", "s2", "s3"} {
 		insertSession(t, d, id, "agentsview")
 	}
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "old",
 		Type:            "fact",
 		Scope:           "project",
@@ -1477,7 +1427,7 @@ func TestSupersedeRecallEntryRejectsAlreadySupersededTarget(t *testing.T) {
 		Project:         "agentsview",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = d.SupersedeRecallEntry(ctx, "old", RecallEntry{
 		ID:              "first-replacement",
 		Type:            "fact",
@@ -1488,7 +1438,7 @@ func TestSupersedeRecallEntryRejectsAlreadySupersededTarget(t *testing.T) {
 		Project:         "agentsview",
 		SourceSessionID: "s2",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	_, err = d.SupersedeRecallEntry(ctx, "old", RecallEntry{
 		ID:              "second-replacement",
@@ -1501,26 +1451,23 @@ func TestSupersedeRecallEntryRejectsAlreadySupersededTarget(t *testing.T) {
 		SourceSessionID: "s3",
 	})
 
-	require.ErrorContains(err, "superseded entry old is not active")
+	require.ErrorContains(t, err, "superseded entry old is not active")
 	second, getErr := d.GetRecallEntry(ctx, "second-replacement")
-	require.NoError(getErr)
-	assert.Nil(second)
+	require.NoError(t, getErr)
+	assert.Nil(t, second)
 	old, getErr := d.GetRecallEntry(ctx, "old")
-	require.NoError(getErr)
-	require.NotNil(old)
-	assert.Equal("archived", old.Status)
-	assert.Equal("first-replacement", old.SupersededByEntryID)
+	require.NoError(t, getErr)
+	require.NotNil(t, old)
+	assert.Equal(t, "archived", old.Status)
+	assert.Equal(t, "first-replacement", old.SupersededByEntryID)
 }
 
 func TestSupersedeRecallEntryRejectsNonAcceptedReplacement(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview")
 	insertSession(t, d, "s2", "agentsview")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "old",
 		Type:            "fact",
 		Scope:           "project",
@@ -1530,7 +1477,7 @@ func TestSupersedeRecallEntryRejectsNonAcceptedReplacement(t *testing.T) {
 		Project:         "agentsview",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	_, err = d.SupersedeRecallEntry(ctx, "old", RecallEntry{
 		ID:              "new",
@@ -1543,23 +1490,21 @@ func TestSupersedeRecallEntryRejectsNonAcceptedReplacement(t *testing.T) {
 		SourceSessionID: "s2",
 	})
 
-	require.Error(err)
-	assert.Contains(err.Error(), "replacement entry status must be")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "replacement entry status must be")
 	oldRecallEntry, err := d.GetRecallEntry(ctx, "old")
-	require.NoError(err)
-	require.NotNil(oldRecallEntry)
-	assert.Equal("accepted", oldRecallEntry.Status)
+	require.NoError(t, err)
+	require.NotNil(t, oldRecallEntry)
+	assert.Equal(t, "accepted", oldRecallEntry.Status)
 }
 
 func TestQueryRecallEntriesRanksBeyondRequestedResultLimit(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "target",
 		Type:            "fact",
 		Scope:           "project",
@@ -1570,9 +1515,9 @@ func TestQueryRecallEntriesRanksBeyondRequestedResultLimit(t *testing.T) {
 		Agent:           "test-agent",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	for i := range 12 {
-		_, err := d.InsertRecallEntry(RecallEntry{
+		_, err := d.InsertRecallEntry(ctx, RecallEntry{
 			ID:              "filler-" + string(rune('a'+i)),
 			Type:            "fact",
 			Scope:           "project",
@@ -1583,7 +1528,7 @@ func TestQueryRecallEntriesRanksBeyondRequestedResultLimit(t *testing.T) {
 			Agent:           "test-agent",
 			SourceSessionID: "s1",
 		})
-		require.NoError(err)
+		require.NoError(t, err)
 	}
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
@@ -1593,20 +1538,17 @@ func TestQueryRecallEntriesRanksBeyondRequestedResultLimit(t *testing.T) {
 		Limit:   1,
 	})
 
-	require.NoError(err)
-	require.Len(page.RecallEntries, 1)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
 	assert.Equal(t, "target", page.RecallEntries[0].ID)
 }
 
 func TestQueryRecallEntriesIncludesMetadataOnlyWinnerWithTextCandidate(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "project-a")
 	insertSession(t, d, "s2", "project-b")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "metadata-target",
 		Type:            "fact",
 		Scope:           "project",
@@ -1616,8 +1558,8 @@ func TestQueryRecallEntriesIncludesMetadataOnlyWinnerWithTextCandidate(t *testin
 		Project:         "quasarproject",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
-	_, err = d.InsertRecallEntry(RecallEntry{
+	require.NoError(t, err)
+	_, err = d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "text-candidate",
 		Type:            "fact",
 		Scope:           "project",
@@ -1627,8 +1569,8 @@ func TestQueryRecallEntriesIncludesMetadataOnlyWinnerWithTextCandidate(t *testin
 		Project:         "other-project",
 		SourceSessionID: "s2",
 	})
-	require.NoError(err)
-	_, err = d.InsertRecallEntry(RecallEntry{
+	require.NoError(t, err)
+	_, err = d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "second-text-candidate",
 		Type:            "fact",
 		Scope:           "project",
@@ -1638,28 +1580,25 @@ func TestQueryRecallEntriesIncludesMetadataOnlyWinnerWithTextCandidate(t *testin
 		Project:         "other-project",
 		SourceSessionID: "s2",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:  "quasarproject",
 		Limit: 1,
 	})
 
-	require.NoError(err)
-	require.Len(page.RecallEntries, 1)
-	assert.Equal("metadata-target", page.RecallEntries[0].ID)
-	assert.Greater(page.RecallEntries[0].ScoreBreakdown.EntityBoost, 0.0)
-	assert.Zero(page.RecallEntries[0].ScoreBreakdown.KeywordOverlap)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "metadata-target", page.RecallEntries[0].ID)
+	assert.Greater(t, page.RecallEntries[0].ScoreBreakdown.EntityBoost, 0.0)
+	assert.Zero(t, page.RecallEntries[0].ScoreBreakdown.KeywordOverlap)
 }
 
 func TestQueryRecallEntriesIncludesTemporalOnlyCandidateWithTextCandidate(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "project-a")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "temporal-target",
 		Type:            "fact",
 		Scope:           "project",
@@ -1668,8 +1607,8 @@ func TestQueryRecallEntriesIncludesTemporalOnlyCandidateWithTextCandidate(t *tes
 		Body:            "Run focused checks before submitting changes.",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
-	_, err = d.InsertRecallEntry(RecallEntry{
+	require.NoError(t, err)
+	_, err = d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "text-candidate",
 		Type:            "fact",
 		Scope:           "project",
@@ -1678,7 +1617,7 @@ func TestQueryRecallEntriesIncludesTemporalOnlyCandidateWithTextCandidate(t *tes
 		Body:            "This note mentions the month without a year.",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = d.getWriter().ExecContext(ctx, `
 		UPDATE recall_entries SET updated_at = CASE id
 			WHEN 'temporal-target' THEN '2024-02-15T00:00:00Z'
@@ -1686,34 +1625,32 @@ func TestQueryRecallEntriesIncludesTemporalOnlyCandidateWithTextCandidate(t *tes
 			ELSE updated_at
 		END
 		WHERE id IN ('temporal-target', 'text-candidate')`)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:  "february 2024",
 		Limit: 2,
 	})
 
-	require.NoError(err)
-	require.Len(page.RecallEntries, 2)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 2)
 	byID := make(map[string]RecallResult, len(page.RecallEntries))
 	for _, entry := range page.RecallEntries {
 		byID[entry.ID] = entry
 	}
 	target, ok := byID["temporal-target"]
-	require.True(ok)
-	assert.Greater(target.ScoreBreakdown.TemporalBoost, 0.0)
-	assert.Zero(target.ScoreBreakdown.KeywordOverlap)
+	require.True(t, ok)
+	assert.Greater(t, target.ScoreBreakdown.TemporalBoost, 0.0)
+	assert.Zero(t, target.ScoreBreakdown.KeywordOverlap)
 }
 
 func TestQueryRecallEntriesFindsTextMatchBeyondRecentCandidateCap(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "target",
 		Type:            "fact",
 		Scope:           "project",
@@ -1724,9 +1661,9 @@ func TestQueryRecallEntriesFindsTextMatchBeyondRecentCandidateCap(t *testing.T) 
 		Agent:           "test-agent",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	for i := range MaxRecallEntryLimit + 20 {
-		_, err := d.InsertRecallEntry(RecallEntry{
+		_, err := d.InsertRecallEntry(ctx, RecallEntry{
 			ID:              "filler-cap-" + testID(i),
 			Type:            "fact",
 			Scope:           "project",
@@ -1737,7 +1674,7 @@ func TestQueryRecallEntriesFindsTextMatchBeyondRecentCandidateCap(t *testing.T) 
 			Agent:           "test-agent",
 			SourceSessionID: "s1",
 		})
-		require.NoError(err)
+		require.NoError(t, err)
 	}
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
@@ -1747,23 +1684,20 @@ func TestQueryRecallEntriesFindsTextMatchBeyondRecentCandidateCap(t *testing.T) 
 		Limit:   1,
 	})
 
-	require.NoError(err)
-	require.Len(page.RecallEntries, 1)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
 	assert.Equal(t, "target", page.RecallEntries[0].ID)
 }
 
 func TestQueryRecallEntriesIncludesEvidenceOnlyCandidateWhenOtherTermsMatchDirectText(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "target",
 		Type:            "fact",
 		Scope:           "project",
@@ -1782,8 +1716,8 @@ func TestQueryRecallEntriesIncludesEvidenceOnlyCandidateWhenOtherTermsMatchDirec
 			},
 		},
 	})
-	require.NoError(err)
-	_, err = d.InsertRecallEntry(RecallEntry{
+	require.NoError(t, err)
+	_, err = d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "direct-filler",
 		Type:            "fact",
 		Scope:           "project",
@@ -1794,7 +1728,7 @@ func TestQueryRecallEntriesIncludesEvidenceOnlyCandidateWhenOtherTermsMatchDirec
 		Agent:           "test-agent",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:    "portal heliotrope overflow",
@@ -1803,25 +1737,22 @@ func TestQueryRecallEntriesIncludesEvidenceOnlyCandidateWhenOtherTermsMatchDirec
 		Limit:   1,
 	})
 
-	require.NoError(err)
-	require.Len(page.RecallEntries, 1)
-	assert.Equal("target", page.RecallEntries[0].ID)
-	assert.Equal(2, page.RecallEntries[0].ScoreBreakdown.EvidenceKeywordOverlap)
-	assert.Greater(page.RecallEntries[0].ScoreBreakdown.EvidenceIDFScore, 0.0)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "target", page.RecallEntries[0].ID)
+	assert.Equal(t, 2, page.RecallEntries[0].ScoreBreakdown.EvidenceKeywordOverlap)
+	assert.Greater(t, page.RecallEntries[0].ScoreBreakdown.EvidenceIDFScore, 0.0)
 }
 
 func TestQueryRecallEntriesFindsEvidenceMatchBeyondRecentEvidenceCandidateCap(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "target",
 		Type:            "fact",
 		Scope:           "project",
@@ -1840,13 +1771,13 @@ func TestQueryRecallEntriesFindsEvidenceMatchBeyondRecentEvidenceCandidateCap(
 			},
 		},
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = d.getWriter().ExecContext(ctx,
 		"UPDATE recall_entries SET updated_at = '2024-01-01T00:00:00Z' WHERE id = 'target'")
-	require.NoError(err)
+	require.NoError(t, err)
 	for i := range MaxRecallEntryLimit + 20 {
 		id := "evidence-filler-" + testID(i)
-		_, err := d.InsertRecallEntry(RecallEntry{
+		_, err := d.InsertRecallEntry(ctx, RecallEntry{
 			ID:              id,
 			Type:            "fact",
 			Scope:           "project",
@@ -1865,11 +1796,11 @@ func TestQueryRecallEntriesFindsEvidenceMatchBeyondRecentEvidenceCandidateCap(
 				},
 			},
 		})
-		require.NoError(err)
+		require.NoError(t, err)
 		_, err = d.getWriter().ExecContext(ctx,
 			"UPDATE recall_entries SET updated_at = '2024-02-01T00:00:00Z' WHERE id = ?",
 			id)
-		require.NoError(err)
+		require.NoError(t, err)
 	}
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
@@ -1879,16 +1810,13 @@ func TestQueryRecallEntriesFindsEvidenceMatchBeyondRecentEvidenceCandidateCap(
 		Limit:   1,
 	})
 
-	require.NoError(err)
-	require.Len(page.RecallEntries, 1)
-	assert.Equal("target", page.RecallEntries[0].ID)
-	assert.Equal(3, page.RecallEntries[0].ScoreBreakdown.EvidenceKeywordOverlap)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "target", page.RecallEntries[0].ID)
+	assert.Equal(t, 3, page.RecallEntries[0].ScoreBreakdown.EvidenceKeywordOverlap)
 }
 
 func TestQueryRecallEntriesVectorUsesSemanticRankingAndFilters(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview")
@@ -1904,8 +1832,8 @@ func TestQueryRecallEntriesVectorUsesSemanticRankingAndFilters(t *testing.T) {
 			Project: "other", SourceSessionID: "s1",
 		},
 	} {
-		_, err := d.InsertRecallEntry(entry)
-		require.NoError(err)
+		_, err := d.InsertRecallEntry(ctx, entry)
+		require.NoError(t, err)
 	}
 	searcher := &fakeRecallVectorSearcher{hits: []RecallVectorHit{
 		{EntryID: "other-project", Score: 0.99},
@@ -1918,20 +1846,20 @@ func TestQueryRecallEntriesVectorUsesSemanticRankingAndFilters(t *testing.T) {
 		Project: "agentsview", Limit: 5,
 	})
 
-	require.NoError(err)
-	assert.Equal("database pool", searcher.query)
-	assert.GreaterOrEqual(searcher.limit, 5)
-	require.Len(page.RecallEntries, 1)
-	assert.Equal("semantic", page.RecallEntries[0].ID)
-	assert.InDelta(0.75, page.RecallEntries[0].Score, 0.0001)
-	assert.Equal([]string{"semantic"}, page.RecallEntries[0].MatchReasons)
+	require.NoError(t, err)
+	assert.Equal(t, "database pool", searcher.query)
+	assert.GreaterOrEqual(t, searcher.limit, 5)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "semantic", page.RecallEntries[0].ID)
+	assert.InDelta(t, 0.75, page.RecallEntries[0].Score, 0.0001)
+	assert.Equal(t, []string{"semantic"}, page.RecallEntries[0].MatchReasons)
 }
 
 func TestQueryRecallEntriesVectorRejectsCorpusMutationAfterSearch(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID: "semantic", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "Connection reuse", Body: "Keep idle resources available.",
 		SourceSessionID: "s1",
@@ -1956,29 +1884,26 @@ func TestQueryRecallEntriesVectorRejectsCorpusMutationAfterSearch(t *testing.T) 
 }
 
 func TestQueryRecallEntriesVectorExpandsPastFilteredCandidates(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview")
 	hits := make([]RecallVectorHit, 0, SemanticOverfetchMin+1)
 	for i := range SemanticOverfetchMin {
 		id := fmt.Sprintf("excluded-%03d", i)
-		_, err := d.InsertRecallEntry(RecallEntry{
+		_, err := d.InsertRecallEntry(ctx, RecallEntry{
 			ID: id, Type: "fact", Scope: "project", Status: "accepted",
 			Title: "Other project", Body: "Higher semantic score.",
 			Project: "other", SourceSessionID: "s1",
 		})
-		require.NoError(err)
+		require.NoError(t, err)
 		hits = append(hits, RecallVectorHit{EntryID: id, Score: float32(1 - float64(i)/1000)})
 	}
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID: "matching-project", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "Matching project", Body: "Lower-ranked but eligible.",
 		Project: "agentsview", SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	hits = append(hits, RecallVectorHit{EntryID: "matching-project", Score: 0.5})
 	searcher := &boundedRecallVectorSearcher{hits: hits, maxCandidates: 4096}
 	d.SetRecallVectorSearcher(searcher)
@@ -1988,28 +1913,25 @@ func TestQueryRecallEntriesVectorExpandsPastFilteredCandidates(t *testing.T) {
 		Project: "agentsview", Limit: 1,
 	})
 
-	require.NoError(err)
-	require.Len(page.RecallEntries, 1)
-	assert.Equal("matching-project", page.RecallEntries[0].ID)
-	assert.Equal([]int{SemanticOverfetchMin, SemanticOverfetchMin * 2}, searcher.limits)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "matching-project", page.RecallEntries[0].ID)
+	assert.Equal(t, []int{SemanticOverfetchMin, SemanticOverfetchMin * 2}, searcher.limits)
 }
 
 func TestQueryRecallEntriesVectorStopsAtExhaustionBelowCandidateCeiling(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview")
 	hits := make([]RecallVectorHit, 0, SemanticOverfetchMin+1)
 	for i := range SemanticOverfetchMin + 1 {
 		id := fmt.Sprintf("excluded-%03d", i)
-		_, err := d.InsertRecallEntry(RecallEntry{
+		_, err := d.InsertRecallEntry(ctx, RecallEntry{
 			ID: id, Type: "fact", Scope: "project", Status: "accepted",
 			Title: "Other project", Body: "Excluded before the candidate ceiling.",
 			Project: "other", SourceSessionID: "s1",
 		})
-		require.NoError(err)
+		require.NoError(t, err)
 		hits = append(hits, RecallVectorHit{EntryID: id, Score: float32(1 - float64(i)/1000)})
 	}
 	searcher := &boundedRecallVectorSearcher{hits: hits, maxCandidates: 4096}
@@ -2020,15 +1942,12 @@ func TestQueryRecallEntriesVectorStopsAtExhaustionBelowCandidateCeiling(t *testi
 		Project: "agentsview", Limit: 1,
 	})
 
-	require.NoError(err)
-	assert.Empty(page.RecallEntries)
-	assert.Equal([]int{SemanticOverfetchMin, SemanticOverfetchMin * 2}, searcher.limits)
+	require.NoError(t, err)
+	assert.Empty(t, page.RecallEntries)
+	assert.Equal(t, []int{SemanticOverfetchMin, SemanticOverfetchMin * 2}, searcher.limits)
 }
 
 func TestQueryRecallEntriesVectorStopsAtSearcherCandidateCeiling(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview")
@@ -2044,8 +1963,8 @@ func TestQueryRecallEntriesVectorStopsAtSearcherCandidateCeiling(t *testing.T) {
 			Project: "agentsview", SourceSessionID: "s1",
 		},
 	} {
-		_, err := d.InsertRecallEntry(entry)
-		require.NoError(err)
+		_, err := d.InsertRecallEntry(ctx, entry)
+		require.NoError(t, err)
 	}
 	searcher := &boundedRecallVectorSearcher{
 		hits: []RecallVectorHit{
@@ -2062,19 +1981,16 @@ func TestQueryRecallEntriesVectorStopsAtSearcherCandidateCeiling(t *testing.T) {
 		Project: "agentsview", Limit: 3,
 	})
 
-	require.NoError(err)
-	require.Len(page.RecallEntries, 1)
-	assert.Equal("matching", page.RecallEntries[0].ID)
-	assert.Equal([]int{200, 400, 800, 1600, 3200, 4096}, searcher.limits)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "matching", page.RecallEntries[0].ID)
+	assert.Equal(t, []int{200, 400, 800, 1600, 3200, 4096}, searcher.limits)
 	for _, limit := range searcher.limits {
-		assert.LessOrEqual(limit, 4096)
+		assert.LessOrEqual(t, limit, 4096)
 	}
 }
 
 func TestQueryRecallEntriesHybridReturnsPartialPageAtCandidateCeiling(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview")
@@ -2090,8 +2006,8 @@ func TestQueryRecallEntriesHybridReturnsPartialPageAtCandidateCeiling(t *testing
 			Project: "agentsview", SourceSessionID: "s1",
 		},
 	} {
-		_, err := d.InsertRecallEntry(entry)
-		require.NoError(err)
+		_, err := d.InsertRecallEntry(ctx, entry)
+		require.NoError(t, err)
 	}
 	searcher := &boundedRecallVectorSearcher{
 		hits: []RecallVectorHit{
@@ -2108,12 +2024,12 @@ func TestQueryRecallEntriesHybridReturnsPartialPageAtCandidateCeiling(t *testing
 		Project: "agentsview", Limit: 3,
 	})
 
-	require.NoError(err)
-	require.Len(page.RecallEntries, 1)
-	assert.Equal("matching", page.RecallEntries[0].ID)
-	assert.Equal([]int{2000, 4000, 4096}, searcher.limits)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "matching", page.RecallEntries[0].ID)
+	assert.Equal(t, []int{2000, 4000, 4096}, searcher.limits)
 	for _, limit := range searcher.limits {
-		assert.LessOrEqual(limit, 4096)
+		assert.LessOrEqual(t, limit, 4096)
 	}
 }
 
@@ -2121,7 +2037,7 @@ func TestQueryRecallEntriesVectorPreservesSearcherErrorAtCandidateCeiling(t *tes
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID: "excluded", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "Other project status", Body: "Filtered status result.",
 		Project: "other", SourceSessionID: "s1",
@@ -2142,7 +2058,7 @@ func TestQueryRecallEntriesVectorPreservesSearcherErrorAtCandidateCeiling(t *tes
 		Project: "agentsview", Limit: 3,
 	})
 
-	assert.ErrorIs(t, err, wantErr)
+	require.ErrorIs(t, err, wantErr)
 	assert.Equal(t, []int{200, 400, 800, 1600, 3200, 4096}, searcher.limits)
 }
 
@@ -2150,7 +2066,7 @@ func TestQueryRecallEntriesVectorPreservesSnapshotErrorAtCandidateCeiling(t *tes
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID: "excluded", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "Other project status", Body: "Filtered status result.",
 		Project: "other", SourceSessionID: "s1",
@@ -2171,14 +2087,11 @@ func TestQueryRecallEntriesVectorPreservesSnapshotErrorAtCandidateCeiling(t *tes
 		Project: "agentsview", Limit: 3,
 	})
 
-	assert.ErrorIs(t, err, wantErr)
+	require.ErrorIs(t, err, wantErr)
 	assert.Equal(t, []int{200, 400, 800, 1600, 3200, 4096}, searcher.limits)
 }
 
 func TestQueryRecallEntriesHybridUsesReciprocalRankFusion(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview")
@@ -2199,8 +2112,8 @@ func TestQueryRecallEntriesHybridUsesReciprocalRankFusion(t *testing.T) {
 			SourceSessionID: "s1",
 		},
 	} {
-		_, err := d.InsertRecallEntry(entry)
-		require.NoError(err)
+		_, err := d.InsertRecallEntry(ctx, entry)
+		require.NoError(t, err)
 	}
 	d.SetRecallVectorSearcher(&fakeRecallVectorSearcher{hits: []RecallVectorHit{
 		{EntryID: "both", Score: 0.8},
@@ -2211,18 +2124,18 @@ func TestQueryRecallEntriesHybridUsesReciprocalRankFusion(t *testing.T) {
 		Text: "database pool", Mode: RecallQueryModeHybrid, Limit: 3,
 	})
 
-	require.NoError(err)
-	require.Len(page.RecallEntries, 3)
-	assert.Equal("both", page.RecallEntries[0].ID)
-	assert.ElementsMatch([]string{"both", "lexical-only", "vector-only"},
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 3)
+	assert.Equal(t, "both", page.RecallEntries[0].ID)
+	assert.ElementsMatch(t, []string{"both", "lexical-only", "vector-only"},
 		[]string{
 			page.RecallEntries[0].ID,
 			page.RecallEntries[1].ID,
 			page.RecallEntries[2].ID,
 		},
 	)
-	assert.Contains(page.RecallEntries[0].MatchReasons, "semantic")
-	assert.Greater(page.RecallEntries[0].Score, page.RecallEntries[1].Score)
+	assert.Contains(t, page.RecallEntries[0].MatchReasons, "semantic")
+	assert.Greater(t, page.RecallEntries[0].Score, page.RecallEntries[1].Score)
 }
 
 func TestQueryRecallEntriesVectorRequiresSemanticIndex(t *testing.T) {
@@ -2232,7 +2145,7 @@ func TestQueryRecallEntriesVectorRequiresSemanticIndex(t *testing.T) {
 		Text: "database pool", Mode: RecallQueryModeVector,
 	})
 
-	assert.ErrorIs(t, err, ErrSemanticUnavailable)
+	require.ErrorIs(t, err, ErrSemanticUnavailable)
 	assert.Contains(t, err.Error(), "embeddings build --store recall")
 }
 
@@ -2262,9 +2175,6 @@ func TestValidateRecallQueryRejectsNonServedStatusForSemanticModes(t *testing.T)
 }
 
 func TestQueryRecallEntriesDiversifiesSourceEpisodesBeforeRepeatingChunks(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
@@ -2308,8 +2218,8 @@ func TestQueryRecallEntriesDiversifiesSourceEpisodesBeforeRepeatingChunks(t *tes
 			SourceEpisodeID: "other-trajectory:chunk:0001",
 		},
 	} {
-		_, err := d.InsertRecallEntry(m)
-		require.NoError(err)
+		_, err := d.InsertRecallEntry(ctx, m)
+		require.NoError(t, err)
 	}
 
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{
@@ -2319,16 +2229,13 @@ func TestQueryRecallEntriesDiversifiesSourceEpisodesBeforeRepeatingChunks(t *tes
 		Limit:   2,
 	})
 
-	require.NoError(err)
-	require.Len(page.RecallEntries, 2)
-	assert.Equal("same-a", page.RecallEntries[0].ID)
-	assert.Equal("z-other", page.RecallEntries[1].ID)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 2)
+	assert.Equal(t, "same-a", page.RecallEntries[0].ID)
+	assert.Equal(t, "z-other", page.RecallEntries[1].ID)
 }
 
 func TestListRecallEntryTextCandidatesOrdersByLexicalRank(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	requireRecallFTS(t, d)
 	requireRecallFTS5(t, d)
@@ -2336,7 +2243,7 @@ func TestListRecallEntryTextCandidatesOrdersByLexicalRank(t *testing.T) {
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "rich",
 		Type:            "fact",
 		Scope:           "project",
@@ -2347,8 +2254,8 @@ func TestListRecallEntryTextCandidatesOrdersByLexicalRank(t *testing.T) {
 		Agent:           "test-agent",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
-	_, err = d.InsertRecallEntry(RecallEntry{
+	require.NoError(t, err)
+	_, err = d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "partial",
 		Type:            "fact",
 		Scope:           "project",
@@ -2359,7 +2266,7 @@ func TestListRecallEntryTextCandidatesOrdersByLexicalRank(t *testing.T) {
 		Agent:           "test-agent",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = d.getWriter().ExecContext(ctx, `
 		UPDATE recall_entries SET updated_at = CASE id
 			WHEN 'rich' THEN '2024-01-01T00:00:00Z'
@@ -2367,7 +2274,7 @@ func TestListRecallEntryTextCandidatesOrdersByLexicalRank(t *testing.T) {
 			ELSE updated_at
 		END
 		WHERE id IN ('rich', 'partial')`)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	candidates, err := d.ListRecallEntryTextCandidates(ctx, RecallQuery{
 		Text:    "heliotrope parser overflow",
@@ -2376,15 +2283,13 @@ func TestListRecallEntryTextCandidatesOrdersByLexicalRank(t *testing.T) {
 		Limit:   2,
 	})
 
-	require.NoError(err)
-	require.Len(candidates, 2)
-	assert.Equal("rich", candidates[0].ID)
-	assert.Equal("partial", candidates[1].ID)
+	require.NoError(t, err)
+	require.Len(t, candidates, 2)
+	assert.Equal(t, "rich", candidates[0].ID)
+	assert.Equal(t, "partial", candidates[1].ID)
 }
 
 func TestListRecallEntryTextCandidatesFallsBackToLikeForFTS4SubstringMatch(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	requireRecallFTS(t, d)
 	requireRecallFTS4(t, d)
@@ -2392,7 +2297,7 @@ func TestListRecallEntryTextCandidatesFallsBackToLikeForFTS4SubstringMatch(t *te
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "substring-recall",
 		Type:            "fact",
 		Scope:           "project",
@@ -2403,7 +2308,7 @@ func TestListRecallEntryTextCandidatesFallsBackToLikeForFTS4SubstringMatch(t *te
 		Agent:           "test-agent",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	candidates, err := d.ListRecallEntryTextCandidates(ctx, RecallQuery{
 		Text:    "cdefg",
@@ -2412,14 +2317,12 @@ func TestListRecallEntryTextCandidatesFallsBackToLikeForFTS4SubstringMatch(t *te
 		Limit:   10,
 	})
 
-	require.NoError(err)
-	require.NotEmpty(candidates)
+	require.NoError(t, err)
+	require.NotEmpty(t, candidates)
 	assert.Equal(t, "substring-recall", candidates[0].ID)
 }
 
 func TestListRecallEntryTextCandidatesUsesFTS4RowIDMatchForDirectText(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	requireRecallFTS(t, d)
 	requireRecallFTS4(t, d)
@@ -2427,7 +2330,7 @@ func TestListRecallEntryTextCandidatesUsesFTS4RowIDMatchForDirectText(t *testing
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "fts4-direct-recall",
 		Type:            "fact",
 		Scope:           "project",
@@ -2438,14 +2341,14 @@ func TestListRecallEntryTextCandidatesUsesFTS4RowIDMatchForDirectText(t *testing
 		Agent:           "test-agent",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = d.getWriter().ExecContext(ctx, `
 		UPDATE recall_entries_fts
 		SET body = 'The decisive clue was heliotrope parser overflow.'
 		WHERE rowid = (SELECT rowid FROM recall_entries WHERE id = ?)`,
 		"fts4-direct-recall",
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	candidates, err := d.ListRecallEntryTextCandidates(ctx, RecallQuery{
 		Text:    "heliotrope parser overflow",
@@ -2454,8 +2357,8 @@ func TestListRecallEntryTextCandidatesUsesFTS4RowIDMatchForDirectText(t *testing
 		Limit:   10,
 	})
 
-	require.NoError(err)
-	require.NotEmpty(candidates)
+	require.NoError(t, err)
+	require.NotEmpty(t, candidates)
 	assert.Equal(t, "fts4-direct-recall", candidates[0].ID)
 }
 
@@ -2467,8 +2370,6 @@ func TestRecallEvidenceFTSKindDetectsFTS4(t *testing.T) {
 }
 
 func TestRecallQueryTermsRetainsShortCriticalUITerms(t *testing.T) {
-	assert := assert.New(t)
-
 	got := recallQueryTerms(
 		`I am working with our internal ops portal. On the Incidents list page, ` +
 			`when I open the "Filters" dropdown, which filter option labels ` +
@@ -2476,44 +2377,39 @@ func TestRecallQueryTermsRetainsShortCriticalUITerms(t *testing.T) {
 			`more short phrases.`,
 	)
 
-	assert.Contains(got, "incident")
-	assert.Contains(got, "filters")
-	assert.Contains(got, "portal")
-	assert.NotContains(got, "should")
-	assert.NotContains(got, "short")
-	assert.NotContains(got, "more")
-	assert.LessOrEqual(len(got), MaxRecallSearchTerms)
+	assert.Contains(t, got, "incident")
+	assert.Contains(t, got, "filters")
+	assert.Contains(t, got, "portal")
+	assert.NotContains(t, got, "should")
+	assert.NotContains(t, got, "short")
+	assert.NotContains(t, got, "more")
+	assert.LessOrEqual(t, len(got), MaxRecallSearchTerms)
 }
 
 func TestRecallQueryTermsDropsQuestionBoilerplate(t *testing.T) {
-	assert := assert.New(t)
-
 	got := recallQueryTerms(
 		`My teammate asked me to rebalance workload between several services by ` +
 			`reassigning jobs with a specific tag. Which two modules does our ` +
 			`workflow typically use to accomplish this task?`,
 	)
 
-	assert.Contains(got, "reassigning")
-	assert.Contains(got, "workload")
-	assert.Contains(got, "jobs")
-	assert.Contains(got, "modules")
-	assert.Contains(got, "workflow")
-	assert.NotContains(got, "accomplish")
-	assert.NotContains(got, "typically")
-	assert.NotContains(got, "specific")
-	assert.NotContains(got, "asked")
-	assert.NotContains(got, "several")
-	assert.LessOrEqual(len(got), MaxRecallSearchTerms)
+	assert.Contains(t, got, "reassigning")
+	assert.Contains(t, got, "workload")
+	assert.Contains(t, got, "jobs")
+	assert.Contains(t, got, "modules")
+	assert.Contains(t, got, "workflow")
+	assert.NotContains(t, got, "accomplish")
+	assert.NotContains(t, got, "typically")
+	assert.NotContains(t, got, "specific")
+	assert.NotContains(t, got, "asked")
+	assert.NotContains(t, got, "several")
+	assert.LessOrEqual(t, len(got), MaxRecallSearchTerms)
 }
 
 func TestQueryRecallEntriesPreselectsTermsScoredByRanker(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "test-agent")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID:              "zzzz-working-target",
 		Type:            "fact",
 		Scope:           "project",
@@ -2523,9 +2419,9 @@ func TestQueryRecallEntriesPreselectsTermsScoredByRanker(t *testing.T) {
 		Project:         "test-agent",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	for i := range MaxRecallEntryLimit {
-		_, err = d.InsertRecallEntry(RecallEntry{
+		_, err = d.InsertRecallEntry(t.Context(), RecallEntry{
 			ID:              fmt.Sprintf("filler-%03d", i),
 			Type:            "fact",
 			Scope:           "project",
@@ -2535,7 +2431,7 @@ func TestQueryRecallEntriesPreselectsTermsScoredByRanker(t *testing.T) {
 			Project:         "test-agent",
 			SourceSessionID: "s1",
 		})
-		require.NoError(err)
+		require.NoError(t, err)
 	}
 
 	page, err := d.QueryRecallEntries(t.Context(), RecallQuery{
@@ -2544,22 +2440,20 @@ func TestQueryRecallEntriesPreselectsTermsScoredByRanker(t *testing.T) {
 		Limit:   1,
 	})
 
-	require.NoError(err)
-	require.Len(page.RecallEntries, 1)
-	assert.Equal("zzzz-working-target", page.RecallEntries[0].ID)
-	assert.Contains(page.RecallEntries[0].MatchedTerms, "working")
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "zzzz-working-target", page.RecallEntries[0].ID)
+	assert.Contains(t, page.RecallEntries[0].MatchedTerms, "working")
 }
 
 func TestListRecallEntryTextCandidatesRetainsShortCriticalUITermMatch(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	requireRecallFTS(t, d)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "incident-filter-labels",
 		Type:            "fact",
 		Scope:           "project",
@@ -2570,7 +2464,7 @@ func TestListRecallEntryTextCandidatesRetainsShortCriticalUITermMatch(t *testing
 		Agent:           "test-agent",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	candidates, err := d.ListRecallEntryTextCandidates(ctx, RecallQuery{
 		Text: `I am working with our internal ops portal. On the Incidents list page, ` +
@@ -2581,8 +2475,8 @@ func TestListRecallEntryTextCandidatesRetainsShortCriticalUITermMatch(t *testing
 		Limit:   10,
 	})
 
-	require.NoError(err)
-	require.NotEmpty(candidates)
+	require.NoError(t, err)
+	require.NotEmpty(t, candidates)
 	assert.Equal(t, "incident-filter-labels", candidates[0].ID)
 }
 
@@ -2596,8 +2490,6 @@ func TestGetRecallEntryMissingReturnsNil(t *testing.T) {
 }
 
 func TestToCoreRecallEntriesPreservesHostMetadata(t *testing.T) {
-	assert := assert.New(t)
-
 	got := toCoreRecallEntries([]RecallEntry{
 		{
 			ID:          "m1",
@@ -2610,9 +2502,9 @@ func TestToCoreRecallEntriesPreservesHostMetadata(t *testing.T) {
 	})
 
 	require.Len(t, got, 1)
-	assert.Equal("unreviewed_auto", got[0].ReviewState)
-	assert.Equal("2024-01-01T00:00:00Z", got[0].CreatedAt)
-	assert.Equal("2024-02-01T00:00:00Z", got[0].UpdatedAt)
+	assert.Equal(t, "unreviewed_auto", got[0].ReviewState)
+	assert.Equal(t, "2024-01-01T00:00:00Z", got[0].CreatedAt)
+	assert.Equal(t, "2024-02-01T00:00:00Z", got[0].UpdatedAt)
 }
 
 func testID(n int) string {
@@ -2629,15 +2521,12 @@ func testID(n int) string {
 }
 
 func TestCopyRecallEntriesFrom(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 
 	// Source DB: session s1 (will survive in dest) and s2 (will not).
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	require.NoError(err, "open src")
+	srcDB, err := Open(t.Context(), srcPath)
+	require.NoError(t, err, "open src")
 	insertSession(t, srcDB, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
@@ -2645,7 +2534,7 @@ func TestCopyRecallEntriesFrom(t *testing.T) {
 		s.Agent = "codex"
 	})
 
-	_, err = srcDB.InsertRecallEntry(RecallEntry{
+	_, err = srcDB.InsertRecallEntry(t.Context(), RecallEntry{
 		ID: "m1", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "kept", Body: "heliotrope parser overflow",
 		Project: "agentsview", Agent: "codex", SourceSessionID: "s1",
@@ -2654,66 +2543,66 @@ func TestCopyRecallEntriesFrom(t *testing.T) {
 			Snippet: "the decisive clue",
 		}},
 	})
-	require.NoError(err, "insert m1")
-	_, err = srcDB.InsertRecallEntry(RecallEntry{
+	require.NoError(t, err, "insert m1")
+	_, err = srcDB.InsertRecallEntry(t.Context(), RecallEntry{
 		ID: "m2", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "dropped", Body: "session is gone",
 		Project: "agentsview", Agent: "codex", SourceSessionID: "s2",
 	})
-	require.NoError(err, "insert m2")
-	_, err = srcDB.InsertRecallEntry(RecallEntry{
+	require.NoError(t, err, "insert m2")
+	_, err = srcDB.InsertRecallEntry(t.Context(), RecallEntry{
 		ID: "m3", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "retracted", Body: "removed before the resync",
 		Project: "agentsview", Agent: "codex", SourceSessionID: "s1",
 	})
-	require.NoError(err, "insert m3")
-	_, err = srcDB.getWriter().Exec("DELETE FROM recall_entries WHERE id = 'm3'")
-	require.NoError(err, "delete m3")
+	require.NoError(t, err, "insert m3")
+	_, err = srcDB.getWriter().Exec(t.Context(), "DELETE FROM recall_entries WHERE id = 'm3'")
+	require.NoError(t, err, "delete m3")
 
 	// Pin known timestamps to verify they survive the copy.
-	_, err = srcDB.getWriter().Exec(
+	_, err = srcDB.getWriter().Exec(t.Context(),
 		`UPDATE recall_entries SET created_at = ?, updated_at = ? WHERE id = 'm1'`,
 		"2024-01-02T03:04:05.678Z", "2024-02-03T04:05:06.789Z",
 	)
-	require.NoError(err, "stamp m1")
+	require.NoError(t, err, "stamp m1")
 	sourceRevision, err := srcDB.RecallCorpusRevision(t.Context())
-	require.NoError(err)
+	require.NoError(t, err)
 	srcDB.Close()
 
 	// Destination DB has only s1 (s2 was not preserved by the resync).
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
-	require.NoError(err, "open dst")
+	dstDB, err := Open(t.Context(), dstPath)
+	require.NoError(t, err, "open dst")
 	defer dstDB.Close()
 	insertSession(t, dstDB, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
 
-	require.NoError(dstDB.CopyRecallEntriesFrom(srcPath), "CopyRecallEntriesFrom")
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath), "CopyRecallEntriesFrom")
 
 	ctx := t.Context()
 	destinationRevision, err := dstDB.RecallCorpusRevision(ctx)
-	require.NoError(err)
+	require.NoError(t, err)
 	sourceRevisionNumber, ok := parseRecallCorpusRevision(sourceRevision)
-	require.True(ok)
+	require.True(t, ok)
 	destinationRevisionNumber, ok := parseRecallCorpusRevision(destinationRevision)
-	require.True(ok)
-	assert.Greater(destinationRevisionNumber, sourceRevisionNumber,
+	require.True(t, ok)
+	assert.Greater(t, destinationRevisionNumber, sourceRevisionNumber,
 		"an archive swap must advance the monotonic Recall revision")
 
 	// m1 copied with evidence and original timestamps preserved.
 	m1, err := dstDB.GetRecallEntry(ctx, "m1")
-	require.NoError(err, "get m1")
-	require.NotNil(m1, "m1 should be copied")
-	assert.Equal("2024-01-02T03:04:05.678Z", m1.CreatedAt, "created_at")
-	assert.Equal("2024-02-03T04:05:06.789Z", m1.UpdatedAt, "updated_at")
-	require.Len(m1.Evidence, 1, "evidence copied")
-	assert.Equal("the decisive clue", m1.Evidence[0].Snippet)
+	require.NoError(t, err, "get m1")
+	require.NotNil(t, m1, "m1 should be copied")
+	assert.Equal(t, "2024-01-02T03:04:05.678Z", m1.CreatedAt, "created_at")
+	assert.Equal(t, "2024-02-03T04:05:06.789Z", m1.UpdatedAt, "updated_at")
+	require.Len(t, m1.Evidence, 1, "evidence copied")
+	assert.Equal(t, "the decisive clue", m1.Evidence[0].Snippet)
 
 	// m2 skipped because its source session did not survive (FK guard).
 	m2, err := dstDB.GetRecallEntry(ctx, "m2")
-	require.NoError(err, "get m2")
-	assert.Nil(m2, "m2 skipped: source session not preserved")
+	require.NoError(t, err, "get m2")
+	assert.Nil(t, m2, "m2 skipped: source session not preserved")
 	var embeddingChanges []EmbeddableUnit
 	_, err = dstDB.ScanRecallEmbeddingUnits(
 		ctx, "2000-01-01T00:00:00Z",
@@ -2722,41 +2611,38 @@ func TestCopyRecallEntriesFrom(t *testing.T) {
 			return nil
 		},
 	)
-	require.NoError(err, "scan copied embedding changes")
-	require.Len(embeddingChanges, 3)
+	require.NoError(t, err, "scan copied embedding changes")
+	require.Len(t, embeddingChanges, 3)
 	changesByID := make(map[string]EmbeddableUnit, len(embeddingChanges))
 	for _, unit := range embeddingChanges {
 		changesByID[unit.SessionID] = unit
 	}
-	assert.True(changesByID["m2"].Deleted,
+	assert.True(t, changesByID["m2"].Deleted,
 		"an entry skipped during resync must remove its persistent mirror row")
-	assert.True(changesByID["m3"].Deleted,
+	assert.True(t, changesByID["m3"].Deleted,
 		"a pre-resync hard deletion must survive the archive swap")
-	assert.False(changesByID["m1"].Deleted)
+	assert.False(t, changesByID["m1"].Deleted)
 
 	// Copied recall is searchable via FTS in the destination.
 	cands, err := dstDB.ListRecallEntryTextCandidates(
 		ctx, RecallQuery{Text: "heliotrope"},
 	)
-	require.NoError(err, "search copied recall")
-	require.Len(cands, 1, "fts finds copied recall")
-	assert.Equal("m1", cands[0].ID)
+	require.NoError(t, err, "search copied recall")
+	require.Len(t, cands, 1, "fts finds copied recall")
+	assert.Equal(t, "m1", cands[0].ID)
 }
 
 func TestCopyRecallEntriesFromAdvancesQueryRevisionWhenAllEntriesSkipped(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 	ctx := t.Context()
 
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	require.NoError(err)
+	srcDB, err := Open(ctx, srcPath)
+	require.NoError(t, err)
 	insertSession(t, srcDB, "removed-session", "agentsview")
-	_, err = srcDB.InsertRecallEntry(RecallEntry{
+	_, err = srcDB.InsertRecallEntry(ctx, RecallEntry{
 		ID:              "removed-entry",
 		Type:            "fact",
 		Scope:           "project",
@@ -2765,28 +2651,28 @@ func TestCopyRecallEntriesFromAdvancesQueryRevisionWhenAllEntriesSkipped(
 		Body:            "The source session did not survive.",
 		SourceSessionID: "removed-session",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	sourceRevision, err := srcDB.RecallQueryRevision(ctx)
-	require.NoError(err)
-	require.NoError(srcDB.Close())
+	require.NoError(t, err)
+	require.NoError(t, srcDB.Close())
 
-	dstDB, err := Open(filepath.Join(dir, "new.db"))
-	require.NoError(err)
+	dstDB, err := Open(ctx, filepath.Join(dir, "new.db"))
+	require.NoError(t, err)
 	defer dstDB.Close()
 
-	require.NoError(dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
 
 	entries, err := dstDB.ListRecallEntries(ctx, RecallQuery{})
-	require.NoError(err)
-	assert.Empty(entries)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
 
 	destinationRevision, err := dstDB.RecallQueryRevision(ctx)
-	require.NoError(err)
+	require.NoError(t, err)
 	sourceRevisionNumber, ok := parseTestRecallQueryRevision(sourceRevision)
-	require.True(ok)
+	require.True(t, ok)
 	destinationRevisionNumber, ok := parseTestRecallQueryRevision(destinationRevision)
-	require.True(ok)
-	assert.Greater(destinationRevisionNumber, sourceRevisionNumber,
+	require.True(t, ok)
+	assert.Greater(t, destinationRevisionNumber, sourceRevisionNumber,
 		"replacing an archive must invalidate existing ranked cursors")
 }
 
@@ -2802,37 +2688,34 @@ func parseTestRecallQueryRevision(revision string) (int64, bool) {
 func TestCopyRecallEntriesFromPreservesPendingArchivedEmbeddingChange(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 	ctx := t.Context()
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	require.NoError(err)
+	srcDB, err := Open(ctx, srcPath)
+	require.NoError(t, err)
 	insertSession(t, srcDB, "s1", "agentsview")
-	_, err = srcDB.InsertRecallEntry(RecallEntry{
+	_, err = srcDB.InsertRecallEntry(ctx, RecallEntry{
 		ID: "archived-after-build", Type: "fact", Scope: "project",
 		Status: "accepted", Title: "Served entry", Body: "Indexed content",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	vectorWatermark, err := srcDB.ScanRecallEmbeddingUnits(
 		ctx, "", func(EmbeddableUnit) error { return nil },
 	)
-	require.NoError(err)
-	_, err = srcDB.getWriter().Exec(`
+	require.NoError(t, err)
+	_, err = srcDB.getWriter().Exec(ctx, `
 		UPDATE recall_entries SET status = 'archived'
 		WHERE id = 'archived-after-build'`)
-	require.NoError(err)
-	require.NoError(srcDB.Close())
+	require.NoError(t, err)
+	require.NoError(t, srcDB.Close())
 
-	dstDB, err := Open(filepath.Join(dir, "new.db"))
-	require.NoError(err)
+	dstDB, err := Open(ctx, filepath.Join(dir, "new.db"))
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = dstDB.Close() })
 	insertSession(t, dstDB, "s1", "agentsview")
-	require.NoError(dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
 
 	var changes []EmbeddableUnit
 	nextWatermark, err := dstDB.ScanRecallEmbeddingUnits(
@@ -2843,72 +2726,67 @@ func TestCopyRecallEntriesFromPreservesPendingArchivedEmbeddingChange(
 		},
 	)
 
-	require.NoError(err)
-	require.Len(changes, 1)
-	assert.Equal("archived-after-build", changes[0].SessionID)
-	assert.True(changes[0].Deleted,
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	assert.Equal(t, "archived-after-build", changes[0].SessionID)
+	assert.True(t, changes[0].Deleted,
 		"the first post-resync incremental build must remove the archived vector")
-	assert.NotEqual(vectorWatermark, nextWatermark)
+	assert.NotEqual(t, vectorWatermark, nextWatermark)
 }
 
 func TestCopyRecallEntriesFromReconcilesShiftedEvidence(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "old-evidence.db")
-	srcDB, err := Open(srcPath)
-	require.NoError(err)
+	srcDB, err := Open(t.Context(), srcPath)
+	require.NoError(t, err)
 	seedRecallEvidenceWindow(t, srcDB, "s1", 10, "stable", "")
 	original := insertVerifiedRecallSelection(
 		t, srcDB, "m1", "s1", 10, 11, []string{"tool-a"},
 	)
 	shifted := shiftedRecallMessages(t, srcDB, "s1", 1)
-	require.NoError(srcDB.Close())
+	require.NoError(t, srcDB.Close())
 
 	dstPath := filepath.Join(dir, "new-evidence.db")
-	dstDB, err := Open(dstPath)
-	require.NoError(err)
+	dstDB, err := Open(t.Context(), dstPath)
+	require.NoError(t, err)
 	defer dstDB.Close()
 	insertSession(t, dstDB, "s1", "agentsview")
 	insertMessages(t, dstDB, shifted...)
 
-	require.NoError(dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
 
 	got := requireRecallEntry(t, dstDB, "m1")
-	assert.True(got.ProvenanceOK)
-	require.Len(got.Evidence, 1)
-	assert.Equal(11, got.Evidence[0].MessageStartOrdinal)
-	assert.Equal(12, got.Evidence[0].MessageEndOrdinal)
-	assert.Equal(original.ContentDigest, got.Evidence[0].ContentDigest)
+	assert.True(t, got.ProvenanceOK)
+	require.Len(t, got.Evidence, 1)
+	assert.Equal(t, 11, got.Evidence[0].MessageStartOrdinal)
+	assert.Equal(t, 12, got.Evidence[0].MessageEndOrdinal)
+	assert.Equal(t, original.ContentDigest, got.Evidence[0].ContentDigest)
 }
 
 func TestCopyRecallEntriesFromRevokesIDEEnvelopeSplitEvidence(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "old-ide-evidence.db")
-	srcDB, err := Open(srcPath)
-	require.NoError(err)
+	srcDB, err := Open(t.Context(), srcPath)
+	require.NoError(t, err)
 	seedRecallEvidenceWindow(t, srcDB, "s1", 10, "stable", "")
 	oldMessages, err := srcDB.GetAllMessages(t.Context(), "s1")
-	require.NoError(err)
+	require.NoError(t, err)
 	const envelope = "<ide_opened_file>The user opened a.go.</ide_opened_file>"
 	oldMessages[0].Content = envelope + "  \nRun the formatter."
 	oldMessages[0].ContentLength = len(oldMessages[0].Content)
-	require.NoError(srcDB.ReplaceSessionMessages("s1", oldMessages))
+	require.NoError(t, srcDB.ReplaceSessionMessages(t.Context(), "s1", oldMessages))
 	insertVerifiedRecallSelection(
 		t, srcDB, "m1", "s1", 10, 11, []string{"tool-a"},
 	)
 	oldMessages, err = srcDB.GetAllMessages(t.Context(), "s1")
-	require.NoError(err)
-	_, err = srcDB.getWriter().Exec("PRAGMA user_version = 79")
-	require.NoError(err)
-	require.NoError(srcDB.Close())
+	require.NoError(t, err)
+	_, err = srcDB.getWriter().Exec(t.Context(), "PRAGMA user_version = 79")
+	require.NoError(t, err)
+	require.NoError(t, srcDB.Close())
 
 	dstPath := filepath.Join(dir, "new-ide-evidence.db")
-	dstDB, err := Open(dstPath)
-	require.NoError(err)
+	dstDB, err := Open(t.Context(), dstPath)
+	require.NoError(t, err)
 	defer dstDB.Close()
 	insertSession(t, dstDB, "s1", "agentsview")
 	for i := range oldMessages {
@@ -2923,22 +2801,20 @@ func TestCopyRecallEntriesFromRevokesIDEEnvelopeSplitEvidence(t *testing.T) {
 	hidden.IsSystem = true
 	insertMessages(t, dstDB, append([]Message{hidden}, oldMessages...)...)
 
-	require.NoError(dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
 
 	got := requireRecallEntry(t, dstDB, "m1")
 	assert.False(t, got.ProvenanceOK,
 		"evidence spanning rewritten content must revoke fail-closed")
-	require.Len(got.Evidence, 1,
+	require.Len(t, got.Evidence, 1,
 		"revocation retains the historical evidence row")
 }
 
 func TestCopyRecallEntriesFromRevokesChangedEvidence(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "old-changed-evidence.db")
-	srcDB, err := Open(srcPath)
-	require.NoError(err)
+	srcDB, err := Open(t.Context(), srcPath)
+	require.NoError(t, err)
 	seedRecallEvidenceWindow(t, srcDB, "s1", 10, "stable", "")
 	insertVerifiedRecallSelection(
 		t, srcDB, "m1", "s1", 10, 11, []string{"tool-a"},
@@ -2946,46 +2822,43 @@ func TestCopyRecallEntriesFromRevokesChangedEvidence(t *testing.T) {
 	shifted := shiftedRecallMessages(t, srcDB, "s1", 1)
 	shifted[1].Content = "The cited content changed during resync."
 	shifted[1].ContentLength = len(shifted[1].Content)
-	require.NoError(srcDB.Close())
+	require.NoError(t, srcDB.Close())
 
 	dstPath := filepath.Join(dir, "new-changed-evidence.db")
-	dstDB, err := Open(dstPath)
-	require.NoError(err)
+	dstDB, err := Open(t.Context(), dstPath)
+	require.NoError(t, err)
 	defer dstDB.Close()
 	insertSession(t, dstDB, "s1", "agentsview")
 	insertMessages(t, dstDB, shifted...)
 
-	require.NoError(dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
 
 	got := requireRecallEntry(t, dstDB, "m1")
 	assert.False(t, got.ProvenanceOK)
-	require.Len(got.Evidence, 1)
+	require.Len(t, got.Evidence, 1)
 }
 
 func TestCopyRecallEntriesFromRevokesDroppedEvidenceSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "old-dropped-evidence.db")
-	srcDB, err := Open(srcPath)
-	require.NoError(err)
+	srcDB, err := Open(t.Context(), srcPath)
+	require.NoError(t, err)
 	insertSession(t, srcDB, "entry-session", "agentsview")
 	seedRecallEvidenceWindow(t, srcDB, "evidence-session", 10, "stable", "")
 	window, err := srcDB.BuildRecallEvidenceWindow(
 		t.Context(), "evidence-session", 10, 11,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	metadata, err := window.BindSelection(RecallEvidenceSelection{
 		MessageStartOrdinal: 10,
 		MessageEndOrdinal:   11,
 		ToolUseIDs:          []string{"tool-a"},
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	// Bypass the insertion invariant to model corrupt, pre-invariant data that
 	// reconciliation must still revoke safely during a full resync.
 	for _, entryID := range []string{"z-entry", "a-entry"} {
-		_, err = srcDB.getWriter().Exec(`
+		_, err = srcDB.getWriter().Exec(t.Context(), `
 			INSERT INTO recall_entries (
 				id, type, scope, status, review_state, title, body,
 				source_session_id, transferable, provenance_ok
@@ -2995,8 +2868,8 @@ func TestCopyRecallEntriesFromRevokesDroppedEvidenceSession(t *testing.T) {
 			"Every evidence selection must survive full resync.",
 			"entry-session", true, true,
 		)
-		require.NoError(err)
-		_, err = srcDB.getWriter().Exec(`
+		require.NoError(t, err)
+		_, err = srcDB.getWriter().Exec(t.Context(), `
 			INSERT INTO recall_evidence (
 				entry_id, session_id, message_start_ordinal,
 				message_end_ordinal, message_start_source_uuid,
@@ -3006,25 +2879,25 @@ func TestCopyRecallEntriesFromRevokesDroppedEvidenceSession(t *testing.T) {
 			metadata.MessageStartSourceUUID, metadata.MessageEndSourceUUID,
 			metadata.ContentDigest, "tool-a",
 		)
-		require.NoError(err)
+		require.NoError(t, err)
 	}
-	require.NoError(srcDB.Close())
+	require.NoError(t, srcDB.Close())
 
 	dstPath := filepath.Join(dir, "new-dropped-evidence.db")
-	dstDB, err := Open(dstPath)
-	require.NoError(err)
+	dstDB, err := Open(t.Context(), dstPath)
+	require.NoError(t, err)
 	defer dstDB.Close()
 	insertSession(t, dstDB, "entry-session", "agentsview")
 	logs := captureRecallEvidenceLog(t)
 
-	require.NoError(dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
 
 	for _, entryID := range []string{"a-entry", "z-entry"} {
 		got := requireRecallEntry(t, dstDB, entryID)
-		assert.False(got.ProvenanceOK)
-		assert.Empty(got.Evidence)
+		assert.False(t, got.ProvenanceOK)
+		assert.Empty(t, got.Evidence)
 	}
-	assert.Equal(
+	assert.Equal(t,
 		"recall: revoked provenance entry=a-entry session=entry-session "+
 			"reason=evidence_dropped_during_resync\n"+
 			"recall: revoked provenance entry=z-entry session=entry-session "+
@@ -3034,15 +2907,12 @@ func TestCopyRecallEntriesFromRevokesDroppedEvidenceSession(t *testing.T) {
 }
 
 func TestCopyRecallEntriesFromRevokesEvidenceWithoutFingerprint(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "old-unfingerprinted-evidence.db")
-	srcDB, err := Open(srcPath)
-	require.NoError(err)
+	srcDB, err := Open(t.Context(), srcPath)
+	require.NoError(t, err)
 	seedRecallEvidenceWindow(t, srcDB, "s1", 10, "stable", "")
-	_, err = srcDB.InsertRecallEntry(RecallEntry{
+	_, err = srcDB.InsertRecallEntry(t.Context(), RecallEntry{
 		ID:              "m1",
 		Type:            "fact",
 		Scope:           "project",
@@ -3059,26 +2929,26 @@ func TestCopyRecallEntriesFromRevokesEvidenceWithoutFingerprint(t *testing.T) {
 			ToolUseID:           "tool-a",
 		}},
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	messages, err := srcDB.GetAllMessages(t.Context(), "s1")
-	require.NoError(err)
-	require.NoError(srcDB.Close())
+	require.NoError(t, err)
+	require.NoError(t, srcDB.Close())
 
 	dstPath := filepath.Join(dir, "new-unfingerprinted-evidence.db")
-	dstDB, err := Open(dstPath)
-	require.NoError(err)
+	dstDB, err := Open(t.Context(), dstPath)
+	require.NoError(t, err)
 	defer dstDB.Close()
 	insertSession(t, dstDB, "s1", "agentsview")
 	insertMessages(t, dstDB, messages...)
 
-	require.NoError(dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
 
 	got := requireRecallEntry(t, dstDB, "m1")
-	assert.False(got.ProvenanceOK)
-	require.Len(got.Evidence, 1)
-	assert.Empty(got.Evidence[0].MessageStartSourceUUID)
-	assert.Empty(got.Evidence[0].MessageEndSourceUUID)
-	assert.Empty(got.Evidence[0].ContentDigest)
+	assert.False(t, got.ProvenanceOK)
+	require.Len(t, got.Evidence, 1)
+	assert.Empty(t, got.Evidence[0].MessageStartSourceUUID)
+	assert.Empty(t, got.Evidence[0].MessageEndSourceUUID)
+	assert.Empty(t, got.Evidence[0].ContentDigest)
 }
 
 // TestVacuumPreservesRecallEntriesFTSSearchable guards the assumption that VACUUM
@@ -3088,65 +2958,58 @@ func TestCopyRecallEntriesFromRevokesEvidenceWithoutFingerprint(t *testing.T) {
 // keeps working with no FTS rebuild; if a SQLite bump ever renumbers them, the
 // post-vacuum assertion below fails and Vacuum must rebuild recall_entries_fts.
 func TestNormalizeRecallQueryTrimsExactFilters(t *testing.T) {
-	assert := assert.New(t)
-
 	q := NormalizeRecallQuery(RecallQuery{
 		Project:           "  agentsview  ",
 		Status:            "  archived  ",
 		SourceEpisodeID:   "  ep-1  ",
 		SupersedesEntryID: "  mem-old  ",
 	})
-	assert.Equal("agentsview", q.Project)
-	assert.Equal("archived", q.Status)
-	assert.Equal("ep-1", q.SourceEpisodeID)
-	assert.Equal("mem-old", q.SupersedesEntryID)
+	assert.Equal(t, "agentsview", q.Project)
+	assert.Equal(t, "archived", q.Status)
+	assert.Equal(t, "ep-1", q.SourceEpisodeID)
+	assert.Equal(t, "mem-old", q.SupersedesEntryID)
 }
 
 func TestQueryRecallEntriesHonorsStatusFilter(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
 
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(ctx, RecallEntry{
 		ID: "acc", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "kept", Body: "heliotrope alpha",
 		Project: "agentsview", Agent: "codex", SourceSessionID: "s1",
 	})
-	require.NoError(err, "insert accepted")
-	_, err = d.InsertRecallEntry(RecallEntry{
+	require.NoError(t, err, "insert accepted")
+	_, err = d.InsertRecallEntry(ctx, RecallEntry{
 		ID: "arc", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "old", Body: "heliotrope beta",
 		Project: "agentsview", Agent: "codex", SourceSessionID: "s1",
 	})
-	require.NoError(err, "insert to-be-archived")
-	_, err = d.getWriter().Exec(
+	require.NoError(t, err, "insert to-be-archived")
+	_, err = d.getWriter().Exec(ctx,
 		`UPDATE recall_entries SET status = 'archived' WHERE id = 'arc'`,
 	)
-	require.NoError(err, "archive arc")
+	require.NoError(t, err, "archive arc")
 
 	// A text query with no status filter returns only accepted entries.
 	page, err := d.QueryRecallEntries(ctx, RecallQuery{Text: "heliotrope"})
-	require.NoError(err, "default query")
-	require.Len(page.RecallEntries, 1, "default query excludes archived")
-	assert.Equal("acc", page.RecallEntries[0].ID)
+	require.NoError(t, err, "default query")
+	require.Len(t, page.RecallEntries, 1, "default query excludes archived")
+	assert.Equal(t, "acc", page.RecallEntries[0].ID)
 
 	// The same text query with status=archived returns the archived recall.
 	page, err = d.QueryRecallEntries(
 		ctx, RecallQuery{Text: "heliotrope", Status: "archived"},
 	)
-	require.NoError(err, "archived query")
-	require.Len(page.RecallEntries, 1, "archived status returns archived recall")
-	assert.Equal("arc", page.RecallEntries[0].ID)
+	require.NoError(t, err, "archived query")
+	require.Len(t, page.RecallEntries, 1, "archived status returns archived recall")
+	assert.Equal(t, "arc", page.RecallEntries[0].ID)
 }
 
 func TestListRecallEvidenceHydratesMoreThanSQLiteBindLimit(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 
@@ -3156,7 +3019,7 @@ func TestListRecallEvidenceHydratesMoreThanSQLiteBindLimit(t *testing.T) {
 		entryIDs[i] = fmt.Sprintf("entry-%05d", i)
 	}
 	for _, entryID := range []string{entryIDs[0], entryIDs[len(entryIDs)-1]} {
-		_, err := d.InsertRecallEntry(RecallEntry{
+		_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 			ID:              entryID,
 			Type:            "fact",
 			Scope:           "project",
@@ -3171,21 +3034,19 @@ func TestListRecallEvidenceHydratesMoreThanSQLiteBindLimit(t *testing.T) {
 				Snippet:             entryID,
 			}},
 		})
-		require.NoError(err)
+		require.NoError(t, err)
 	}
 
 	evidence, err := d.listRecallEvidence(t.Context(), entryIDs)
-	require.NoError(err)
-	require.Len(evidence, 2)
+	require.NoError(t, err)
+	require.Len(t, evidence, 2)
 	for _, entryID := range []string{entryIDs[0], entryIDs[len(entryIDs)-1]} {
-		require.Len(evidence[entryID], 1)
+		require.Len(t, evidence[entryID], 1)
 		assert.Equal(t, entryID, evidence[entryID][0].Snippet)
 	}
 }
 
 func TestVacuumPreservesRecallEntriesFTSSearchable(t *testing.T) {
-	require := require.New(t)
-
 	d := testDB(t)
 	ctx := t.Context()
 	if d.recallFTSKind(ctx) != "fts5" {
@@ -3202,30 +3063,30 @@ func TestVacuumPreservesRecallEntriesFTSSearchable(t *testing.T) {
 		"alpha aardvark", "beta barnacle", "gamma heliotrope overflow",
 	}
 	for i, body := range bodies {
-		_, err := d.InsertRecallEntry(RecallEntry{
+		_, err := d.InsertRecallEntry(ctx, RecallEntry{
 			ID: fmt.Sprintf("m%d", i+1), Type: "fact", Scope: "project",
 			Status: "accepted", Title: "t", Body: body,
 			Project: "agentsview", Agent: "codex", SourceSessionID: "s1",
 		})
-		require.NoError(err, "insert recall")
+		require.NoError(t, err, "insert recall")
 	}
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(ctx,
 		`DELETE FROM recall_entries WHERE id IN ('m1', 'm2')`,
 	)
-	require.NoError(err, "delete earlier entries")
+	require.NoError(t, err, "delete earlier entries")
 
 	q := RecallQuery{Text: "heliotrope"}
 	terms := recallQueryTerms(q.Text)
 
 	pre, err := d.listRecallFTS5Candidates(ctx, q, terms)
-	require.NoError(err, "fts5 search before vacuum")
-	require.Len(pre, 1, "fts join finds survivor before vacuum")
+	require.NoError(t, err, "fts5 search before vacuum")
+	require.Len(t, pre, 1, "fts join finds survivor before vacuum")
 
-	require.NoError(d.Vacuum(), "vacuum")
+	require.NoError(t, d.Vacuum(ctx), "vacuum")
 
 	post, err := d.listRecallFTS5Candidates(ctx, q, terms)
-	require.NoError(err, "fts5 search after vacuum")
-	require.Len(post, 1, "fts join still finds survivor after vacuum")
+	require.NoError(t, err, "fts5 search after vacuum")
+	require.Len(t, post, 1, "fts join still finds survivor after vacuum")
 	assert.Equal(t, "m3", post[0].ID)
 }
 

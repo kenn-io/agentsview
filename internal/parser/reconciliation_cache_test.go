@@ -8,21 +8,18 @@ import (
 )
 
 func TestReconciliationCacheAddIntIncrementsEachKeyIndependently(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx, cleanup, err := WithReconciliationCache(t.Context())
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(cleanup()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
 
 	first, err := reconciliationCacheAddInt(ctx, "first")
-	require.NoError(err)
+	require.NoError(t, err)
 	second, err := reconciliationCacheAddInt(ctx, "first")
-	require.NoError(err)
+	require.NoError(t, err)
 	other, err := reconciliationCacheAddInt(ctx, "other")
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.Equal(0, first)
-	assert.Equal(1, second)
-	assert.Equal(0, other)
+	assert.Equal(t, 0, first)
+	assert.Equal(t, 1, second)
+	assert.Equal(t, 0, other)
 }

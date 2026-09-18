@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -120,8 +121,6 @@ func seedEmbeddableArchiveWithAutomated(t *testing.T, dataDir string) {
 // be absent from the map (not present as ""), so configs written before these
 // keys existed keep their fingerprints; non-empty affixes cut a new generation.
 func TestVectorGenerationParams(t *testing.T) {
-	assert := assert.New(t)
-
 	c := config.VectorEmbeddingsConfig{
 		Model:         "test-model",
 		Dimension:     3,
@@ -130,9 +129,9 @@ func TestVectorGenerationParams(t *testing.T) {
 
 	gen := vectorGeneration(c)
 
-	assert.Equal("test-model", gen.Model)
-	assert.Equal(3, gen.Dimensions)
-	assert.Equal(map[string]string{
+	assert.Equal(t, "test-model", gen.Model)
+	assert.Equal(t, 3, gen.Dimensions)
+	assert.Equal(t, map[string]string{
 		"max_input_chars":     "4000",
 		"doc_unit_scheme":     "run_v1",
 		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
@@ -141,32 +140,32 @@ func TestVectorGenerationParams(t *testing.T) {
 
 	c.InputSuffix = "<|endoftext|>"
 	gen = vectorGeneration(c)
-	assert.Equal(map[string]string{
+	assert.Equal(t, map[string]string{
 		"max_input_chars":     "4000",
 		"doc_unit_scheme":     "run_v1",
 		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
 		"input_suffix":        "<|endoftext|>",
 	}, gen.Params)
-	assert.NotEqual(baselineFingerprint, gen.Fingerprint(),
+	assert.NotEqual(t, baselineFingerprint, gen.Fingerprint(),
 		"adding an input suffix cuts a new generation")
 
 	suffixFingerprint := gen.Fingerprint()
 	c.QueryPrefix = "task: search result | query: "
 	gen = vectorGeneration(c)
-	assert.Equal(map[string]string{
+	assert.Equal(t, map[string]string{
 		"max_input_chars":     "4000",
 		"doc_unit_scheme":     "run_v1",
 		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
 		"input_suffix":        "<|endoftext|>",
 		"query_prefix":        "task: search result | query: ",
 	}, gen.Params)
-	assert.NotEqual(suffixFingerprint, gen.Fingerprint(),
+	assert.NotEqual(t, suffixFingerprint, gen.Fingerprint(),
 		"adding a query prefix cuts a new generation")
 
 	queryFingerprint := gen.Fingerprint()
 	c.DocumentPrefix = "title: none | text: "
 	gen = vectorGeneration(c)
-	assert.Equal(map[string]string{
+	assert.Equal(t, map[string]string{
 		"max_input_chars":     "4000",
 		"doc_unit_scheme":     "run_v1",
 		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
@@ -174,7 +173,7 @@ func TestVectorGenerationParams(t *testing.T) {
 		"query_prefix":        "task: search result | query: ",
 		"document_prefix":     "title: none | text: ",
 	}, gen.Params)
-	assert.NotEqual(queryFingerprint, gen.Fingerprint(),
+	assert.NotEqual(t, queryFingerprint, gen.Fingerprint(),
 		"adding a document prefix cuts a new generation")
 
 	// request_dimensions follows the same only-when-set rule, and enabling it
@@ -184,7 +183,7 @@ func TestVectorGenerationParams(t *testing.T) {
 	nativeFingerprint := gen.Fingerprint()
 	c.RequestDimensions = true
 	gen = vectorGeneration(c)
-	assert.Equal(map[string]string{
+	assert.Equal(t, map[string]string{
 		"max_input_chars":     "4000",
 		"doc_unit_scheme":     "run_v1",
 		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
@@ -193,20 +192,17 @@ func TestVectorGenerationParams(t *testing.T) {
 		"document_prefix":     "title: none | text: ",
 		"request_dimensions":  "true",
 	}, gen.Params)
-	assert.NotEqual(nativeFingerprint, gen.Fingerprint(),
+	assert.NotEqual(t, nativeFingerprint, gen.Fingerprint(),
 		"enabling request_dimensions cuts a new generation")
 }
 
 func TestNewVectorEncoderWiresOllamaCPUFallback(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	var nativeCalls, cpuCalls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/v1/embeddings":
-			assert.NoError(json.MarshalWrite(w, map[string]any{
+			assert.NoError(t, json.MarshalWrite(w, map[string]any{
 				"data": []map[string]any{{
 					"index": 0, "embedding": []float32{0, 0, 0},
 				}},
@@ -216,23 +212,24 @@ func TestNewVectorEncoderWiresOllamaCPUFallback(t *testing.T) {
 			var request struct {
 				Options map[string]any `json:"options"`
 			}
-			assert.NoError(json.UnmarshalRead(r.Body, &request))
+			assert.NoError(t, json.UnmarshalRead(r.Body, &request))
 			if request.Options == nil {
-				assert.NoError(json.MarshalWrite(w, map[string]any{
+				assert.NoError(t, json.MarshalWrite(w, map[string]any{
 					"model":      "test-model",
 					"embeddings": [][]float32{{0, 0, 0}},
 				}))
 				return
 			}
 			cpuCalls.Add(1)
-			assert.NoError(json.MarshalWrite(w, map[string]any{
+			assert.NoError(t, json.MarshalWrite(w, map[string]any{
 				"model":      "test-model",
 				"embeddings": [][]float32{{1, 2, 3}},
 			}))
 		case "/api/ps":
-			assert.NoError(json.MarshalWrite(w, map[string]any{"models": []any{}}))
+			assert.NoError(t, json.MarshalWrite(w, map[string]any{"models": []any{}}))
 		default:
-			assert.FailNow("unexpected request path", r.URL.Path)
+			assert.Fail(t, "unexpected request path", r.URL.Path)
+			return
 		}
 	}))
 	defer srv.Close()
@@ -249,13 +246,13 @@ func TestNewVectorEncoderWiresOllamaCPUFallback(t *testing.T) {
 			},
 		},
 	}, "local", "", false)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	out, err := enc(t.Context(), []string{"alpha"})
-	require.NoError(err)
-	assert.Equal([][]float32{{1, 2, 3}}, out)
-	assert.Equal(int32(3), nativeCalls.Load())
-	assert.Equal(int32(1), cpuCalls.Load())
+	require.NoError(t, err)
+	assert.Equal(t, [][]float32{{1, 2, 3}}, out)
+	assert.Equal(t, int32(3), nativeCalls.Load())
+	assert.Equal(t, int32(1), cpuCalls.Load())
 }
 
 func TestVectorDocumentEncoderSetWiresBuildTokenBudget(t *testing.T) {
@@ -343,45 +340,42 @@ func TestEmbeddingsDisabledReturnsError(t *testing.T) {
 // renders it as a table with the documented columns and a
 // fingerprint truncated to 12 characters.
 func TestEmbeddingsListRendersTable(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := testDataDir(t)
 	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1")
 
 	cfg, err := config.LoadMinimal()
-	require.NoError(err)
+	require.NoError(t, err)
 
 	ctx := t.Context()
 	ix, err := vector.Open(ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false,
 		cfg.Vector.Embeddings.MaxInputChars)
-	require.NoError(err)
+	require.NoError(t, err)
 	fp, err := ix.EnsureGeneration(ctx, vectorGeneration(cfg.Vector.Embeddings), sqlitevec.StateActive)
-	require.NoError(err)
-	require.NoError(ix.Close())
+	require.NoError(t, err)
+	require.NoError(t, ix.Close())
 
 	cmd := newEmbeddingsListCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetArgs(nil)
-	require.NoError(cmd.Execute())
+	require.NoError(t, cmd.Execute())
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	require.Len(lines, 2, "expected a header line and one generation row, got: %q", out.String())
-	assert.Contains(lines[0], "STORE")
-	assert.Contains(lines[0], "ID")
-	assert.Contains(lines[0], "STATE")
-	assert.Contains(lines[0], "MODEL")
-	assert.Contains(lines[0], "DIM")
-	assert.Contains(lines[0], "EMBEDDED")
-	assert.Contains(lines[0], "MISSING")
-	assert.Contains(lines[0], "FINGERPRINT")
+	require.Len(t, lines, 2, "expected a header line and one generation row, got: %q", out.String())
+	assert.Contains(t, lines[0], "STORE")
+	assert.Contains(t, lines[0], "ID")
+	assert.Contains(t, lines[0], "STATE")
+	assert.Contains(t, lines[0], "MODEL")
+	assert.Contains(t, lines[0], "DIM")
+	assert.Contains(t, lines[0], "EMBEDDED")
+	assert.Contains(t, lines[0], "MISSING")
+	assert.Contains(t, lines[0], "FINGERPRINT")
 
-	assert.Contains(lines[1], "messages")
-	assert.Contains(lines[1], "active")
-	assert.Contains(lines[1], "test-model")
-	assert.Contains(lines[1], truncateFingerprint(fp))
-	assert.NotContains(lines[1], fp, "fingerprint column must be truncated to 12 chars")
+	assert.Contains(t, lines[1], "messages")
+	assert.Contains(t, lines[1], "active")
+	assert.Contains(t, lines[1], "test-model")
+	assert.Contains(t, lines[1], truncateFingerprint(fp))
+	assert.NotContains(t, lines[1], fp, "fingerprint column must be truncated to 12 chars")
 }
 
 // TestEmbeddingsUnknownStoreFails asserts an unrecognized --store value
@@ -400,61 +394,55 @@ func TestEmbeddingsUnknownStoreFails(t *testing.T) {
 // TestEmbeddingsListShowsStoreColumn asserts `embeddings list --store
 // messages` renders the STORE column stamped with the resolved store name.
 func TestEmbeddingsListShowsStoreColumn(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := testDataDir(t)
 	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1")
 
 	cfg, err := config.LoadMinimal()
-	require.NoError(err)
+	require.NoError(t, err)
 	ctx := t.Context()
 	ix, err := vector.Open(ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false,
 		cfg.Vector.Embeddings.MaxInputChars)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = ix.EnsureGeneration(ctx, vectorGeneration(cfg.Vector.Embeddings), sqlitevec.StateActive)
-	require.NoError(err)
-	require.NoError(ix.Close())
+	require.NoError(t, err)
+	require.NoError(t, ix.Close())
 
 	var buf bytes.Buffer
-	require.NoError(runEmbeddingsList(t.Context(), &buf, false, "messages"))
-	assert.Contains(buf.String(), "STORE")
-	assert.Contains(buf.String(), "messages")
+	require.NoError(t, runEmbeddingsList(t.Context(), &buf, false, "messages"))
+	assert.Contains(t, buf.String(), "STORE")
+	assert.Contains(t, buf.String(), "messages")
 }
 
 // TestEmbeddingsListJSONFormat asserts `embeddings list --format json`
 // wraps the generation list in the same {"generations": [...]} shape the
 // Task 14 HTTP endpoint uses.
 func TestEmbeddingsListJSONFormat(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := testDataDir(t)
 	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1")
 
 	cfg, err := config.LoadMinimal()
-	require.NoError(err)
+	require.NoError(t, err)
 	ctx := t.Context()
 	ix, err := vector.Open(ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false,
 		cfg.Vector.Embeddings.MaxInputChars)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = ix.EnsureGeneration(ctx, vectorGeneration(cfg.Vector.Embeddings), sqlitevec.StateActive)
-	require.NoError(err)
-	require.NoError(ix.Close())
+	require.NoError(t, err)
+	require.NoError(t, ix.Close())
 
 	cmd := newEmbeddingsListCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetArgs([]string{"--format", "json"})
-	require.NoError(cmd.Execute())
+	require.NoError(t, cmd.Execute())
 
 	var body struct {
 		Generations []vector.GenerationInfo `json:"generations"`
 	}
-	require.NoError(json.Unmarshal(out.Bytes(), &body))
-	require.Len(body.Generations, 1)
-	assert.Equal("active", body.Generations[0].State)
-	assert.Equal("messages", body.Generations[0].Store)
+	require.NoError(t, json.Unmarshal(out.Bytes(), &body))
+	require.Len(t, body.Generations, 1)
+	assert.Equal(t, "active", body.Generations[0].State)
+	assert.Equal(t, "messages", body.Generations[0].Store)
 }
 
 // TestEmbeddingsListEmptyIndexReturnsNoRows asserts `embeddings list`
@@ -484,20 +472,18 @@ func TestDirectListGenerationsReturnsEmptyForUnbuiltSelectedStore(t *testing.T) 
 		{name: "recall only", built: vector.RecallIndexSpec(), list: vector.MessageIndexSpec()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require := require.New(t)
-
 			dataDir := t.TempDir()
 			cfg := vectorTestConfig(dataDir)
 			ix, err := vector.OpenSpec(
 				t.Context(), cfg.Vector.ResolvedDBPath(dataDir), tc.built,
 				false, cfg.Vector.Embeddings.MaxInputChars,
 			)
-			require.NoError(err)
-			require.NoError(ix.Close())
+			require.NoError(t, err)
+			require.NoError(t, ix.Close())
 
 			generations, err := directListGenerations(t.Context(), cfg, tc.list)
 
-			require.NoError(err)
+			require.NoError(t, err)
 			assert.Empty(t, generations)
 		})
 	}
@@ -526,49 +512,46 @@ func TestEmbeddingsBuildDirectEndToEnd(t *testing.T) {
 }
 
 func TestImportedOnlyRecallEmbeddingsBuildAndVectorQueryEndToEnd(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := testDataDir(t)
 	stub := newEmbeddingsStubServer(t, 3)
 	defer stub.Close()
 	writeEmbeddingsTestConfig(t, dataDir, stub.URL+"/v1")
 
 	archivePath := filepath.Join(dataDir, "sessions.db")
-	database, err := db.Open(archivePath)
-	require.NoError(err)
+	database, err := db.Open(t.Context(), archivePath)
+	require.NoError(t, err)
 	dbtest.SeedSession(t, database, "s1", "agentsview")
-	_, err = database.InsertRecallEntry(db.RecallEntry{
+	_, err = database.InsertRecallEntry(t.Context(), db.RecallEntry{
 		ID: "recall-entry", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "Database pool", Body: "Reuse idle connections.",
 		Project: "agentsview", SourceSessionID: "s1",
 		SourceRunID: "import-run", ExtractorMethod: "import-v1",
 	})
-	require.NoError(err)
-	require.NoError(database.Close())
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
 
 	cmd := newEmbeddingsBuildCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetArgs([]string{"--store", "recall"})
-	require.NoError(cmd.Execute())
-	assert.Contains(out.String(), "Embedded 1 documents (1 chunks)")
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, out.String(), "Embedded 1 documents (1 chunks)")
 
-	database, err = db.Open(archivePath)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
+	database, err = db.Open(cmd.Context(), archivePath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	cfg, err := config.LoadMinimal()
-	require.NoError(err)
+	require.NoError(t, err)
 	closeVector := installDirectVectorSearcher(cfg, database)
-	require.NotNil(closeVector)
-	t.Cleanup(func() { require.NoError(closeVector()) })
+	require.NotNil(t, closeVector)
+	t.Cleanup(func() { require.NoError(t, closeVector()) })
 
 	page, err := database.QueryRecallEntries(t.Context(), db.RecallQuery{
 		Text: "connection reuse", Mode: db.RecallQueryModeVector, Limit: 5,
 	})
-	require.NoError(err)
-	require.Len(page.RecallEntries, 1)
-	assert.Equal("recall-entry", page.RecallEntries[0].ID)
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "recall-entry", page.RecallEntries[0].ID)
 }
 
 // TestRoleAwarePrefixesReachBuildAndSearch exercises the user-visible role
@@ -576,9 +559,6 @@ func TestImportedOnlyRecallEmbeddingsBuildAndVectorQueryEndToEnd(t *testing.T) {
 // The embeddings server observes document-prefixed build inputs and a
 // query-prefixed search input, with the shared suffix applied last.
 func TestRoleAwarePrefixesReachBuildAndSearch(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := t.TempDir()
 	seedEmbeddableArchive(t, dataDir)
 
@@ -588,7 +568,7 @@ func TestRoleAwarePrefixesReachBuildAndSearch(t *testing.T) {
 		var req struct {
 			Input []string `json:"input"`
 		}
-		assert.NoError(json.UnmarshalRead(r.Body, &req))
+		assert.NoError(t, json.UnmarshalRead(r.Body, &req))
 		mu.Lock()
 		captured = append(captured, req.Input...)
 		mu.Unlock()
@@ -600,7 +580,7 @@ func TestRoleAwarePrefixesReachBuildAndSearch(t *testing.T) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		assert.NoError(json.MarshalWrite(w, map[string]any{"data": data}))
+		assert.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
 	}))
 	defer stub.Close()
 
@@ -613,13 +593,13 @@ func TestRoleAwarePrefixesReachBuildAndSearch(t *testing.T) {
 	cfg.Vector.Embeddings.InputSuffix = "<eos>"
 
 	var buildOut bytes.Buffer
-	require.NoError(runEmbeddingsBuildDirect(
+	require.NoError(t, runEmbeddingsBuildDirect(
 		t.Context(), &buildOut, cfg, vector.BuildRequest{}))
 
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	closeVector := installDirectVectorSearcher(cfg, database)
-	require.NotNil(closeVector)
-	t.Cleanup(func() { require.NoError(closeVector()) })
+	require.NotNil(t, closeVector)
+	t.Cleanup(func() { require.NoError(t, closeVector()) })
 
 	result, err := database.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern:        "find greeting",
@@ -627,43 +607,40 @@ func TestRoleAwarePrefixesReachBuildAndSearch(t *testing.T) {
 		Limit:          5,
 		IncludeOneShot: true,
 	})
-	require.NoError(err)
-	require.NotEmpty(result.Matches,
+	require.NoError(t, err)
+	require.NotEmpty(t, result.Matches,
 		"semantic search should return the indexed session")
 
 	mu.Lock()
 	got := append([]string(nil), captured...)
 	mu.Unlock()
-	require.Len(got, 3, "two indexed units and one search query should be encoded")
-	assert.Contains(got, "document: hello there<eos>")
-	assert.Contains(got, "document: hi back\n\nand a follow-up thought<eos>")
-	assert.Contains(got, "query: find greeting<eos>")
+	require.Len(t, got, 3, "two indexed units and one search query should be encoded")
+	assert.Contains(t, got, "document: hello there<eos>")
+	assert.Contains(t, got, "document: hi back\n\nand a follow-up thought<eos>")
+	assert.Contains(t, got, "query: find greeting<eos>")
 }
 
 func TestRunDirectBuildPrintsFailedAttemptResult(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 	ix, err := vector.Open(ctx, path, false, 8192)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer ix.Close()
 	gen := kitvec.Generation{Model: "fake-model", Dimensions: 4}
 	src := testPushUnitSource()
 	_, err = ix.Build(ctx, src, fakePushEncoder(), gen, vector.BuildOptions{})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	raw, err := sql.Open(vectorTestDriverName, path)
-	require.NoError(err)
+	require.NoError(t, err)
 	var ordinal int64
-	require.NoError(raw.QueryRowContext(ctx,
+	require.NoError(t, raw.QueryRowContext(ctx,
 		`SELECT ordinal FROM message_vectors_generations WHERE gen_key = ?`,
 		gen.Fingerprint()).Scan(&ordinal))
 	_, err = raw.ExecContext(ctx, `UPDATE message_vectors_v`+strconv.FormatInt(ordinal, 10)+` SET embedding = ?`,
 		make([]byte, 4*4))
-	require.NoError(err)
-	require.NoError(raw.Close())
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
 
 	failingEncoder := func(context.Context, []string) ([][]float32, error) {
 		return nil, &vector.HTTPStatusError{
@@ -680,16 +657,16 @@ func TestRunDirectBuildPrintsFailedAttemptResult(t *testing.T) {
 
 	var out bytes.Buffer
 	err = runDirectBuild(ctx, &out, m, vector.BuildRequest{RepairInvalid: true})
-	require.ErrorContains(err, "3 permanently rejected")
+	require.ErrorContains(t, err, "3 permanently rejected")
 	status := m.Status()
-	require.NotNil(status.LastResult)
-	assert.True(status.LastResult.Repair.ScanComplete)
-	assert.Equal(3, status.LastResult.Repair.Failed)
-	assert.Equal(3, status.LastResult.Repair.Remaining)
-	assert.True(status.LastResult.Repair.RemainingKnown)
-	assert.Contains(out.String(), "Repair targets: 3 documents (3 chunks invalidated).")
-	assert.Contains(out.String(), "Repair incomplete: 3 failed, 3 remaining.")
-	assert.Contains(out.String(), "Embedded 0 documents (0 chunks), skipped 0, stale 0")
+	require.NotNil(t, status.LastResult)
+	assert.True(t, status.LastResult.Repair.ScanComplete)
+	assert.Equal(t, 3, status.LastResult.Repair.Failed)
+	assert.Equal(t, 3, status.LastResult.Repair.Remaining)
+	assert.True(t, status.LastResult.Repair.RemainingKnown)
+	assert.Contains(t, out.String(), "Repair targets: 3 documents (3 chunks invalidated).")
+	assert.Contains(t, out.String(), "Repair incomplete: 3 failed, 3 remaining.")
+	assert.Contains(t, out.String(), "Embedded 0 documents (0 chunks), skipped 0, stale 0")
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, _ *http.Request) {
@@ -697,7 +674,7 @@ func TestRunDirectBuildPrintsFailedAttemptResult(t *testing.T) {
 	})
 	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		assert.NoError(json.MarshalWrite(w, status))
+		assert.NoError(t, json.MarshalWrite(w, status))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -705,18 +682,15 @@ func TestRunDirectBuildPrintsFailedAttemptResult(t *testing.T) {
 	var daemonOut bytes.Buffer
 	err = buildViaDaemon(ctx, &daemonOut, embeddingsDaemonClient{baseURL: srv.URL},
 		vector.BuildRequest{RepairInvalid: true})
-	require.ErrorContains(err, "3 permanently rejected")
-	assert.Contains(daemonOut.String(), "Repair incomplete: 3 failed, 3 remaining.")
+	require.ErrorContains(t, err, "3 permanently rejected")
+	assert.Contains(t, daemonOut.String(), "Repair incomplete: 3 failed, 3 remaining.")
 }
 
 func TestRunDirectBuildPrintsCommittedTargetsAfterScanFailure(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 	ix, err := vector.Open(ctx, path, false, 8192)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer ix.Close()
 	gen := kitvec.Generation{Model: "fake-model", Dimensions: 4}
 	const documentCount = 129
@@ -729,17 +703,17 @@ func TestRunDirectBuildPrintsCommittedTargetsAfterScanFailure(t *testing.T) {
 		})
 	}
 	_, err = ix.Build(ctx, src, fakePushEncoder(), gen, vector.BuildOptions{})
-	require.NoError(err)
+	require.NoError(t, err)
 
 	raw, err := sql.Open(vectorTestDriverName, path)
-	require.NoError(err)
+	require.NoError(t, err)
 	var ordinal int64
-	require.NoError(raw.QueryRowContext(ctx,
+	require.NoError(t, raw.QueryRowContext(ctx,
 		`SELECT ordinal FROM message_vectors_generations WHERE gen_key = ?`,
 		gen.Fingerprint()).Scan(&ordinal))
 	_, err = raw.ExecContext(ctx, `UPDATE message_vectors_v`+strconv.FormatInt(ordinal, 10)+` SET embedding = ?`,
 		make([]byte, 4*4))
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = raw.ExecContext(ctx, `
 CREATE TRIGGER fail_second_repair_batch
 BEFORE INSERT ON message_vectors_repair_queue
@@ -747,31 +721,30 @@ WHEN NEW.doc_key = 'u:session-1:doc-128'
 BEGIN
     SELECT RAISE(ABORT, 'injected later repair batch failure');
 END`)
-	require.NoError(err)
-	require.NoError(raw.Close())
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
 
 	m := vector.NewManager(ix, src, vector.EncoderSet{
 		Default: "default",
 		ByName: map[string]vector.ManagedEncoder{
 			"default": {Encode: func(context.Context, []string) ([][]float32, error) {
-				t.Fatal("scan failure must stop before refill")
-				return nil, nil
+				return nil, errors.New("scan failure must stop before refill")
 			}},
 		},
 	}, gen)
 	var out bytes.Buffer
 	err = runDirectBuild(ctx, &out, m, vector.BuildRequest{RepairInvalid: true})
-	require.ErrorContains(err, "injected later repair batch failure")
+	require.ErrorContains(t, err, "injected later repair batch failure")
 	status := m.Status()
-	require.NotNil(status.LastResult)
-	assert.True(status.LastResult.Repair.Scanned)
-	assert.False(status.LastResult.Repair.ScanComplete)
-	assert.Equal(128, status.LastResult.Repair.Documents)
-	assert.Equal(128, status.LastResult.Repair.Remaining)
-	assert.True(status.LastResult.Repair.RemainingKnown)
-	assert.Contains(out.String(), "Repair targets: 128 documents (128 chunks invalidated).")
-	assert.Contains(out.String(), "Repair scan incomplete.")
-	assert.Contains(out.String(), "Repair incomplete: 0 failed, 128 remaining.")
+	require.NotNil(t, status.LastResult)
+	assert.True(t, status.LastResult.Repair.Scanned)
+	assert.False(t, status.LastResult.Repair.ScanComplete)
+	assert.Equal(t, 128, status.LastResult.Repair.Documents)
+	assert.Equal(t, 128, status.LastResult.Repair.Remaining)
+	assert.True(t, status.LastResult.Repair.RemainingKnown)
+	assert.Contains(t, out.String(), "Repair targets: 128 documents (128 chunks invalidated).")
+	assert.Contains(t, out.String(), "Repair scan incomplete.")
+	assert.Contains(t, out.String(), "Repair incomplete: 0 failed, 128 remaining.")
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, _ *http.Request) {
@@ -779,7 +752,7 @@ END`)
 	})
 	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		assert.NoError(json.MarshalWrite(w, status))
+		assert.NoError(t, json.MarshalWrite(w, status))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -787,27 +760,33 @@ END`)
 	var daemonOut bytes.Buffer
 	err = buildViaDaemon(ctx, &daemonOut, embeddingsDaemonClient{baseURL: srv.URL},
 		vector.BuildRequest{RepairInvalid: true})
-	require.ErrorContains(err, "injected later repair batch failure")
-	assert.Contains(daemonOut.String(), "Repair scan incomplete.")
-	assert.Contains(daemonOut.String(), "Repair incomplete: 0 failed, 128 remaining.")
+	require.ErrorContains(t, err, "injected later repair batch failure")
+	assert.Contains(t, daemonOut.String(), "Repair scan incomplete.")
+	assert.Contains(t, daemonOut.String(), "Repair incomplete: 0 failed, 128 remaining.")
 }
 
 // TestEmbeddingsBuildDirectPrintsProgress shrinks the direct path's
-// progress ticker and slows the embeddings stub down so the build is still
-// running when the ticker fires, asserting at least one progress line in
+// progress ticker and releases the embeddings stub after observing progress,
+// asserting at least one progress line in
 // the documented format is printed before the final summary.
 func TestEmbeddingsBuildDirectPrintsProgress(t *testing.T) {
 	orig := directBuildProgressInterval
 	directBuildProgressInterval = 5 * time.Millisecond
 	t.Cleanup(func() { directBuildProgressInterval = orig })
 
+	progress := make(chan struct{})
+	var observed sync.Once
 	dataDir := testDataDir(t)
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Input []string `json:"input"`
 		}
 		assert.NoError(t, json.UnmarshalRead(r.Body, &req))
-		time.Sleep(150 * time.Millisecond)
+		select {
+		case <-progress:
+		case <-r.Context().Done():
+			return
+		}
 
 		data := make([]map[string]any, len(req.Input))
 		for i := range req.Input {
@@ -822,14 +801,18 @@ func TestEmbeddingsBuildDirectPrintsProgress(t *testing.T) {
 
 	cmd := newEmbeddingsBuildCommand()
 	var out bytes.Buffer
-	cmd.SetOut(&out)
+	cmd.SetOut(observedOutput{Writer: &out, observe: func(p []byte) {
+		if bytes.Contains(p, []byte("progress: scanning archive")) {
+			observed.Do(func() { close(progress) })
+		}
+	}})
 	cmd.SetArgs(nil)
-	require.NoError(t, cmd.Execute())
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, cmd.ExecuteContext(ctx))
 
 	// The scan-phase line is the deterministic progress signal here: the
-	// build reports "scanning" until the stub's first (deliberately slow)
-	// encode call reports chunk counters, and the poll ticker fires many
-	// times inside that window. A chunk-counter line may or may not appear
+	// build reports "scanning" until the stub's first encode call is released by observing that line. A chunk-counter line may or may not appear
 	// depending on how quickly the build finishes after that first report.
 	assert.Contains(t, out.String(),
 		"progress: scanning archive for changed documents...",
@@ -905,9 +888,6 @@ func TestBuildProgressPrinterDeduplicates(t *testing.T) {
 // lock in the test) holds vectors.write.lock, fails immediately with the
 // write-lock-held error rather than racing the first build.
 func TestEmbeddingsBuildDirectConcurrentFlockFails(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := testDataDir(t)
 	stub := newEmbeddingsStubServer(t, 3)
 	defer stub.Close()
@@ -915,7 +895,7 @@ func TestEmbeddingsBuildDirectConcurrentFlockFails(t *testing.T) {
 	seedEmbeddableArchive(t, dataDir)
 
 	held, err := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer held.Close()
 
 	cmd := newEmbeddingsBuildCommand()
@@ -924,9 +904,9 @@ func TestEmbeddingsBuildDirectConcurrentFlockFails(t *testing.T) {
 	cmd.SetArgs(nil)
 
 	err = cmd.Execute()
-	require.Error(err)
-	assert.Contains(err.Error(), "held by another process")
-	assert.Contains(err.Error(), vectorsWriteLockFile)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "held by another process")
+	assert.Contains(t, err.Error(), vectorsWriteLockFile)
 }
 
 // TestEmbeddingsBuildFullRebuildPromptsAndAborts asserts --full-rebuild
@@ -934,8 +914,6 @@ func TestEmbeddingsBuildDirectConcurrentFlockFails(t *testing.T) {
 // embeddable-unit count (the seeded user message and the assistant run are
 // one document each), and a "no" answer aborts without building.
 func TestEmbeddingsBuildFullRebuildPromptsAndAborts(t *testing.T) {
-	assert := assert.New(t)
-
 	dataDir := testDataDir(t)
 	stub := newEmbeddingsStubServer(t, 3)
 	defer stub.Close()
@@ -949,9 +927,9 @@ func TestEmbeddingsBuildFullRebuildPromptsAndAborts(t *testing.T) {
 	cmd.SetArgs([]string{"--full-rebuild"})
 	require.NoError(t, cmd.Execute())
 
-	assert.Contains(out.String(), "This re-embeds all 2 documents. Continue?")
-	assert.Contains(out.String(), "Aborted.")
-	assert.NotContains(out.String(), "Embedded")
+	assert.Contains(t, out.String(), "This re-embeds all 2 documents. Continue?")
+	assert.Contains(t, out.String(), "Aborted.")
+	assert.NotContains(t, out.String(), "Embedded")
 }
 
 // TestEmbeddingsBuildFullRebuildYesSkipsPrompt asserts --yes skips the
@@ -1201,37 +1179,34 @@ max_retries = 1
 // message, and that --force performs the retirement and prints the success
 // line.
 func TestEmbeddingsRetireDirectRoundTrip(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := testDataDir(t)
 	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1")
 
 	cfg, err := config.LoadMinimal()
-	require.NoError(err)
+	require.NoError(t, err)
 	ctx := t.Context()
 	ix, err := vector.Open(ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false,
 		cfg.Vector.Embeddings.MaxInputChars)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = ix.EnsureGeneration(ctx, vectorGeneration(cfg.Vector.Embeddings), sqlitevec.StateActive)
-	require.NoError(err)
-	require.NoError(ix.Close())
+	require.NoError(t, err)
+	require.NoError(t, ix.Close())
 
 	retireCmd := newEmbeddingsRetireCommand()
 	var out bytes.Buffer
 	retireCmd.SetOut(&out)
 	retireCmd.SetArgs([]string{"1"})
 	err = retireCmd.Execute()
-	require.Error(err)
-	assert.Contains(err.Error(), "is active")
-	assert.Contains(err.Error(), "use --force")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is active")
+	assert.Contains(t, err.Error(), "use --force")
 
 	forceCmd := newEmbeddingsRetireCommand()
 	var forceOut bytes.Buffer
 	forceCmd.SetOut(&forceOut)
 	forceCmd.SetArgs([]string{"1", "--force"})
-	require.NoError(forceCmd.Execute())
-	assert.Equal("Generation 1 retired.\n", forceOut.String())
+	require.NoError(t, forceCmd.Execute())
+	assert.Equal(t, "Generation 1 retired.\n", forceOut.String())
 }
 
 // TestEmbeddingsActivateDirectRefusalThenForce builds generation 1
@@ -1240,9 +1215,6 @@ func TestEmbeddingsRetireDirectRoundTrip(t *testing.T) {
 // surfaces Manager.Activate's refusal wording verbatim without --force,
 // then succeeds with --force.
 func TestEmbeddingsActivateDirectRefusalThenForce(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := testDataDir(t)
 	stub := newEmbeddingsStubServer(t, 3)
 	defer stub.Close()
@@ -1253,34 +1225,34 @@ func TestEmbeddingsActivateDirectRefusalThenForce(t *testing.T) {
 	var buildOut bytes.Buffer
 	buildCmd.SetOut(&buildOut)
 	buildCmd.SetArgs(nil)
-	require.NoError(buildCmd.Execute())
+	require.NoError(t, buildCmd.Execute())
 
 	cfg, err := config.LoadMinimal()
-	require.NoError(err)
+	require.NoError(t, err)
 	ctx := t.Context()
 	ix, err := vector.Open(ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false,
 		cfg.Vector.Embeddings.MaxInputChars)
-	require.NoError(err)
+	require.NoError(t, err)
 	otherGen := kitvec.Generation{Model: "other-model", Dimensions: 3}
 	_, err = ix.EnsureGeneration(ctx, otherGen, sqlitevec.StateBuilding)
-	require.NoError(err)
-	require.NoError(ix.Close())
+	require.NoError(t, err)
+	require.NoError(t, ix.Close())
 
 	activateCmd := newEmbeddingsActivateCommand()
 	var out bytes.Buffer
 	activateCmd.SetOut(&out)
 	activateCmd.SetArgs([]string{"2"})
 	err = activateCmd.Execute()
-	require.Error(err)
-	assert.Equal("generation 2 still has 2 documents needing embedding; use --force",
+	require.Error(t, err)
+	assert.Equal(t, "generation 2 still has 2 documents needing embedding; use --force",
 		err.Error(), "the manager's refusal message must surface verbatim")
 
 	forceCmd := newEmbeddingsActivateCommand()
 	var forceOut bytes.Buffer
 	forceCmd.SetOut(&forceOut)
 	forceCmd.SetArgs([]string{"2", "--force"})
-	require.NoError(forceCmd.Execute())
-	assert.Equal("Generation 2 activated.\n", forceOut.String())
+	require.NoError(t, forceCmd.Execute())
+	assert.Equal(t, "Generation 2 activated.\n", forceOut.String())
 }
 
 // TestEmbeddingsActivateInvalidIDReturnsError asserts a non-numeric
@@ -1295,29 +1267,23 @@ func TestEmbeddingsActivateInvalidIDReturnsError(t *testing.T) {
 }
 
 func TestResolveEmbeddingsDaemonClientReportsIncompatibleDaemon(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := runtimeTestDir(t)
 	writeLiveRuntime(t, dataDir, false,
 		withRuntimeVersion("old"),
 		withRuntimeAPIVersion(daemonAPIVersion-1),
 	)
-	require.True(IsLocalDaemonActive(dataDir))
-	require.Nil(FindDaemonRuntime(dataDir))
+	require.True(t, IsLocalDaemonActive(dataDir))
+	require.Nil(t, FindDaemonRuntime(dataDir))
 
 	_, err := resolveEmbeddingsDaemonClient(config.Config{DataDir: dataDir})
-	require.Error(err)
-	assert.Contains(err.Error(), "daemon API version")
-	assert.Contains(err.Error(), "restart the daemon after upgrading AgentsView")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "daemon API version")
+	assert.Contains(t, err.Error(), "restart the daemon after upgrading AgentsView")
 }
 
 func TestResolveEmbeddingsDaemonClientPrefersIncompatibleWritableDaemonError(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := runtimeTestDir(t)
 	readOnlyEndpoint, _ := writeLiveRuntime(t, dataDir, true)
 
@@ -1329,18 +1295,18 @@ func TestResolveEmbeddingsDaemonClientPrefersIncompatibleWritableDaemonError(
 		withRuntimeVersion("old"),
 		withRuntimeAPIVersion(daemonAPIVersion-1),
 	))
-	require.NoError(err)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.Remove(writablePath) })
 
 	compatible := FindDaemonRuntime(dataDir)
-	require.NotNil(compatible)
-	require.True(compatible.ReadOnly)
-	assert.Equal(readOnlyEndpoint.Port, compatible.Port)
+	require.NotNil(t, compatible)
+	require.True(t, compatible.ReadOnly)
+	assert.Equal(t, readOnlyEndpoint.Port, compatible.Port)
 
 	_, err = resolveEmbeddingsDaemonClient(config.Config{DataDir: dataDir})
-	require.Error(err)
-	assert.Contains(err.Error(), "daemon API version")
-	assert.Contains(err.Error(), "restart the daemon after upgrading AgentsView")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "daemon API version")
+	assert.Contains(t, err.Error(), "restart the daemon after upgrading AgentsView")
 }
 
 // startEmbeddingsTestDaemon starts an httptest server that answers the kit
@@ -1372,8 +1338,6 @@ func startEmbeddingsTestDaemon(
 // the command routes through the daemon's /generations endpoint (never
 // touching vectors.db, which does not exist) and renders its response.
 func TestEmbeddingsListDispatchesToDaemon(t *testing.T) {
-	assert := assert.New(t)
-
 	dataDir := testDataDir(t)
 	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1")
 
@@ -1397,10 +1361,10 @@ func TestEmbeddingsListDispatchesToDaemon(t *testing.T) {
 	cmd.SetArgs(nil)
 	require.NoError(t, cmd.Execute())
 
-	assert.True(listCalled.Load(), "list must route through the daemon endpoint")
-	assert.Contains(out.String(), "daemon-model")
-	assert.Contains(out.String(), "abcdef012345")
-	assert.NoFileExists(filepath.Join(dataDir, "vectors.db"),
+	assert.True(t, listCalled.Load(), "list must route through the daemon endpoint")
+	assert.Contains(t, out.String(), "daemon-model")
+	assert.Contains(t, out.String(), "abcdef012345")
+	assert.NoFileExists(t, filepath.Join(dataDir, "vectors.db"),
 		"daemon-dispatched list must not open vectors.db directly")
 }
 
@@ -1409,8 +1373,6 @@ func TestEmbeddingsListDispatchesToDaemon(t *testing.T) {
 // accepts the build (202) and immediately reports a completed run, so the
 // poll terminates after one status call and prints the final summary.
 func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
-	assert := assert.New(t)
-
 	dataDir := testDataDir(t)
 	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1")
 
@@ -1419,9 +1381,9 @@ func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
 		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
 			buildCalled.Store(true)
 			var req vector.BuildRequest
-			assert.NoError(json.UnmarshalRead(r.Body, &req))
-			assert.False(req.Backstop)
-			assert.True(req.RepairInvalid,
+			assert.NoError(t, json.UnmarshalRead(r.Body, &req))
+			assert.False(t, req.Backstop)
+			assert.True(t, req.RepairInvalid,
 				"--repair-invalid must pass through to the daemon")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
@@ -1450,24 +1412,22 @@ func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
 	cmd.SetArgs([]string{"--repair-invalid"})
 	require.NoError(t, cmd.Execute())
 
-	assert.True(buildCalled.Load(), "build must route through the daemon endpoint")
-	assert.True(statusCalled.Load(), "build must poll the daemon status endpoint")
-	assert.Contains(out.String(), "Embedded 5 documents (6 chunks), skipped 0, stale 0")
-	assert.Contains(out.String(), "Repair targets: 2 documents (3 chunks invalidated).")
-	assert.Contains(out.String(), "Generation activated.")
-	assert.NoFileExists(filepath.Join(dataDir, "vectors.db"),
+	assert.True(t, buildCalled.Load(), "build must route through the daemon endpoint")
+	assert.True(t, statusCalled.Load(), "build must poll the daemon status endpoint")
+	assert.Contains(t, out.String(), "Embedded 5 documents (6 chunks), skipped 0, stale 0")
+	assert.Contains(t, out.String(), "Repair targets: 2 documents (3 chunks invalidated).")
+	assert.Contains(t, out.String(), "Generation activated.")
+	assert.NoFileExists(t, filepath.Join(dataDir, "vectors.db"),
 		"daemon-dispatched build must not open vectors.db directly")
 }
 
 func TestEmbeddingsBuildRejectsBackstopWithRepair(t *testing.T) {
-	require := require.New(t)
-
 	cmd := newEmbeddingsBuildCommand()
-	require.NoError(cmd.Flags().Set("backstop", "true"))
-	require.NoError(cmd.Flags().Set("repair-invalid", "true"))
+	require.NoError(t, cmd.Flags().Set("backstop", "true"))
+	require.NoError(t, cmd.Flags().Set("repair-invalid", "true"))
 
 	err := cmd.ValidateFlagGroups()
-	require.Error(err)
+	require.Error(t, err)
 	assert.ErrorContains(t, err, "if any flags in the group")
 }
 
@@ -1561,8 +1521,6 @@ func TestEmbeddingsActivateDispatchesToDaemon(t *testing.T) {
 // poll, asserting the CLI prints the "already running" notice and then the
 // same final summary format the direct path uses.
 func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
-	assert := assert.New(t)
-
 	orig := embeddingsPollInterval
 	embeddingsPollInterval = time.Millisecond
 	t.Cleanup(func() { embeddingsPollInterval = orig })
@@ -1596,10 +1554,10 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 	err := buildViaDaemon(t.Context(), &out, client, vector.BuildRequest{})
 	require.NoError(t, err)
 
-	assert.Contains(out.String(), "a build is already running (daemon)")
-	assert.Contains(out.String(), "Embedded 3 documents (3 chunks), skipped 0, stale 0")
-	assert.Contains(out.String(), "Generation activated.")
-	assert.GreaterOrEqual(statusCalls.Load(), int32(2))
+	assert.Contains(t, out.String(), "a build is already running (daemon)")
+	assert.Contains(t, out.String(), "Embedded 3 documents (3 chunks), skipped 0, stale 0")
+	assert.Contains(t, out.String(), "Generation activated.")
+	assert.GreaterOrEqual(t, statusCalls.Load(), int32(2))
 }
 
 // TestBuildViaDaemonAlwaysSendsIncludeAutomated pins the wire contract for
@@ -1644,8 +1602,6 @@ func TestBuildViaDaemonAlwaysSendsIncludeAutomated(t *testing.T) {
 // non-empty LastError becomes the returned error, so the CLI exits
 // non-zero, matching the direct path's error propagation.
 func TestBuildViaDaemonLastErrorReturnsNonZero(t *testing.T) {
-	assert := assert.New(t)
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1673,10 +1629,10 @@ func TestBuildViaDaemonLastErrorReturnsNonZero(t *testing.T) {
 	var out bytes.Buffer
 	err := buildViaDaemon(t.Context(), &out, client, vector.BuildRequest{})
 	require.Error(t, err)
-	assert.Equal("encoder rejected input", err.Error())
-	assert.Contains(out.String(), "Repair targets: 2 documents (3 chunks invalidated).")
-	assert.Contains(out.String(), "Repair incomplete: 1 failed, 1 remaining.")
-	assert.Contains(out.String(), "Embedded 1 documents (1 chunks), skipped 0, stale 0")
+	assert.Equal(t, "encoder rejected input", err.Error())
+	assert.Contains(t, out.String(), "Repair targets: 2 documents (3 chunks invalidated).")
+	assert.Contains(t, out.String(), "Repair incomplete: 1 failed, 1 remaining.")
+	assert.Contains(t, out.String(), "Embedded 1 documents (1 chunks), skipped 0, stale 0")
 }
 
 // TestDirectListGenerationsVersionMismatchSurfacesRebuildRequired pins the
@@ -1684,26 +1640,23 @@ func TestBuildViaDaemonLastErrorReturnsNonZero(t *testing.T) {
 // by an older mirror schema version it must surface the rebuild-required
 // error instead of listing stale-shape generation data.
 func TestDirectListGenerationsVersionMismatchSurfacesRebuildRequired(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := t.TempDir()
 	cfg := vectorTestConfig(dataDir)
 	path := cfg.Vector.ResolvedDBPath(dataDir)
 
 	seed, err := vector.Open(t.Context(), path, false, cfg.Vector.Embeddings.MaxInputChars)
-	require.NoError(err)
-	require.NoError(seed.Close())
+	require.NoError(t, err)
+	require.NoError(t, seed.Close())
 	raw, err := sql.Open("sqlite3", path)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = raw.ExecContext(t.Context(), `UPDATE vector_meta SET value = '2' WHERE key = 'mirror_schema_version'`)
-	require.NoError(err)
-	require.NoError(raw.Close())
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
 
 	_, err = directListGenerations(t.Context(), cfg, vector.MessageIndexSpec())
-	require.Error(err)
-	require.ErrorIs(err, vector.ErrMirrorVersionMismatch,
+	require.Error(t, err)
+	require.ErrorIs(t, err, vector.ErrMirrorVersionMismatch,
 		"a stale-shape vectors.db must not be listed as if it were current")
-	assert.Contains(err.Error(), "embeddings build",
+	assert.Contains(t, err.Error(), "embeddings build",
 		"the error must carry the rebuild remediation")
 }

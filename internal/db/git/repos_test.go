@@ -70,15 +70,12 @@ func TestDiscoverRepos_Dedup(t *testing.T) {
 }
 
 func TestDiscoverRepos_EmptyInputReturnsEmptySlice(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	got := DiscoverRepos(t.Context(), nil)
-	require.NotNil(got, "DiscoverRepos(nil)")
-	assert.Empty(got, "DiscoverRepos(nil) should be empty slice")
+	require.NotNil(t, got, "DiscoverRepos(nil)")
+	assert.Empty(t, got, "DiscoverRepos(nil) should be empty slice")
 	got = DiscoverRepos(t.Context(), []string{})
-	require.NotNil(got, "DiscoverRepos([])")
-	assert.Empty(got, "DiscoverRepos([]) should be empty slice")
+	require.NotNil(t, got, "DiscoverRepos([])")
+	assert.Empty(t, got, "DiscoverRepos([]) should be empty slice")
 }
 
 // TestDiscoverRepos_LinkedWorktreeResolves covers the regression flagged

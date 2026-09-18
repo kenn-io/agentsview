@@ -67,7 +67,7 @@ func (r *CleanupRegistry) Run(
 }
 
 func retryCleanup(err error) error {
-	if retained, ok := err.(*retainedCleanupError); ok {
+	if retained, ok := errors.AsType[*retainedCleanupError](err); ok {
 		if retained.RetryCleanup() != nil {
 			return retained
 		}
@@ -126,7 +126,7 @@ func cleanupRetriers(err error) []cleanupRetrier {
 			!containsCleanupRetrier(retriers, retrier) {
 			retriers = append(retriers, retrier)
 		}
-		switch wrapped := current.(type) {
+		switch wrapped := current.(type) { //nolint:errorlint // Visit every joined branch; errors.As finds only the first match.
 		case interface{ Unwrap() []error }:
 			stack = append(stack, wrapped.Unwrap()...)
 		case interface{ Unwrap() error }:
@@ -154,6 +154,8 @@ func containsCleanupRetrier(
 			if left.Pointer() == right.Pointer() {
 				return true
 			}
+		default:
+			// Other non-comparable values have no cleanup identity.
 		}
 	}
 	return false

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"text/tabwriter"
@@ -26,7 +27,7 @@ func newDBAdoptMachineCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				database, err := openReadOnlyDB(cfg)
+				database, err := openReadOnlyDB(cmd.Context(), cfg)
 				if err != nil {
 					return err
 				}
@@ -49,9 +50,9 @@ func newDBAdoptMachineCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			database, lock, err := openWriteDBWith(cmd.Context(), cfg, func(cfg config.Config) (*db.DB, error) {
+			database, lock, err := openWriteDBWith(cmd.Context(), cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
 				applyClassifierConfig(cfg)
-				database, err := db.Open(cfg.DBPath)
+				database, err := db.Open(ctx, cfg.DBPath)
 				if err != nil {
 					return nil, err
 				}

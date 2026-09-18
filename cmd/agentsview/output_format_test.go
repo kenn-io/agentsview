@@ -25,6 +25,7 @@ func TestOutputFormat_Resolves(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			cmd := &cobra.Command{Use: "x"}
 			registerFormatFlags(cmd.Flags())
 			require.NoError(t, cmd.ParseFlags(tt.args))

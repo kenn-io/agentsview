@@ -11,8 +11,10 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
-const activityReportTokenVersion = 1
-const activitySessionCursorVersion = 2
+const (
+	activityReportTokenVersion   = 1
+	activitySessionCursorVersion = 2
+)
 
 type activityReportTokenQuery struct {
 	Timezone      string              `json:"tz"`

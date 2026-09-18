@@ -21,9 +21,6 @@ import (
 func TestReconcileProviderRootsZedContainerPassReclaimsRemovedMember(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	zedDir := t.TempDir()
 	dbPath := filepath.Join(zedDir, "threads", "threads.db")
 	createZedThreadsDB(t, dbPath, []zedThreadFixture{
@@ -39,30 +36,30 @@ func TestReconcileProviderRootsZedContainerPassReclaimsRemovedMember(
 		},
 	})
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentZed: {zedDir}},
 		Machine:   "local",
 	})
 	t.Cleanup(engine.Close)
-	require.Equal(2, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
 
 	conn, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), "DELETE FROM threads WHERE id = 'removed'")
-	require.NoError(conn.Close())
-	require.NoError(err)
+	require.NoError(t, conn.Close())
+	require.NoError(t, err)
 
-	require.NoError(engine.ReconcileProviderRoots(
+	require.NoError(t, engine.ReconcileProviderRoots(
 		t.Context(), parser.AgentZed, []string{dbPath},
 	))
 
 	removed, err := database.GetSession(t.Context(), "zed:removed")
-	require.NoError(err)
-	assert.NotNil(removed,
+	require.NoError(t, err)
+	assert.NotNil(t, removed,
 		"a container-scoped pass reclaims a removed member")
 	kept, err := database.GetSession(t.Context(), "zed:kept")
-	require.NoError(err)
-	assert.NotNil(kept, "a surviving member keeps its session")
+	require.NoError(t, err)
+	assert.NotNil(t, kept, "a surviving member keeps its session")
 }
 
 // TestReconcileProviderRootsZedContainerPassPreservesMovedMember pins the
@@ -74,8 +71,6 @@ func TestReconcileProviderRootsZedContainerPassReclaimsRemovedMember(
 func TestReconcileProviderRootsZedContainerPassPreservesMovedMember(
 	t *testing.T,
 ) {
-	require := require.New(t)
-
 	firstDir := t.TempDir()
 	secondDir := t.TempDir()
 	firstDB := filepath.Join(firstDir, "threads", "threads.db")
@@ -89,38 +84,38 @@ func TestReconcileProviderRootsZedContainerPassPreservesMovedMember(
 	createZedThreadsDB(t, secondDB, nil)
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentZed: {firstDir, secondDir},
 		},
 		Machine: "local",
 	})
 	t.Cleanup(engine.Close)
-	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 
 	// The thread moves between containers; only the source container is
 	// reconciled, so the pass cannot see the destination's membership.
 	firstConn, err := sql.Open("sqlite3", firstDB)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = firstConn.ExecContext(t.Context(), "DELETE FROM threads WHERE id = 'moved'")
-	require.NoError(firstConn.Close())
-	require.NoError(err)
+	require.NoError(t, firstConn.Close())
+	require.NoError(t, err)
 	secondConn, err := sql.Open("sqlite3", secondDB)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = secondConn.ExecContext(t.Context(), `INSERT INTO threads (
 		id, summary, updated_at, data_type, data,
 		parent_id, folder_paths, created_at
 	) VALUES ('moved', 'Moved thread', '2026-06-09T02:32:00Z', 'json',
 		'{"messages":[]}', NULL, '', '')`)
-	require.NoError(secondConn.Close())
-	require.NoError(err)
+	require.NoError(t, secondConn.Close())
+	require.NoError(t, err)
 
-	require.NoError(engine.ReconcileProviderRoots(
+	require.NoError(t, engine.ReconcileProviderRoots(
 		t.Context(), parser.AgentZed, []string{firstDB},
 	))
 
 	survivor, err := database.GetSession(t.Context(), "zed:moved")
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.NotNil(t, survivor,
 		"a member found under another configured root is a move, not a deletion")
 }

@@ -660,7 +660,7 @@ func (s *Store) CommitCapture(
 ) error {
 	s.objectMu.Lock()
 	defer s.objectMu.Unlock()
-	validated, metadataBytes, uniqueObjects, err := validateCapturedGeneration(s, generation)
+	validated, metadataBytes, uniqueObjects, err := validateCapturedGeneration(ctx, s, generation)
 	if err != nil {
 		return err
 	}
@@ -1135,28 +1135,35 @@ func loadAcknowledgedBase(
 	}
 	rows.Close()
 	for i, ordinal := range ordinals {
-		objectRows, err := queryer.QueryContext(ctx, `SELECT sha256, length
+		if err := func() error {
+			objectRows, err := queryer.QueryContext(ctx, `SELECT sha256, length
 			FROM raw_source_base_objects
 			WHERE provider = ? AND configured_root_id = ? AND source_key = ?
 			AND entry_ordinal = ? ORDER BY object_ordinal`, string(source.Provider),
-			source.ConfiguredRootID, source.SourceKey, ordinal)
-		if err != nil {
-			return nil, fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
-		}
-		for objectRows.Next() {
-			var ref rawsync.ObjectRef
-			if err := objectRows.Scan(&ref.SHA256, &ref.Length); err != nil {
-				objectRows.Close()
-				return nil, fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
+				source.ConfiguredRootID, source.SourceKey, ordinal)
+			if err != nil {
+				return fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
 			}
-			entries[i].Objects = append(entries[i].Objects, ref)
-		}
-		if err := objectRows.Err(); err != nil {
-			objectRows.Close()
-			return nil, fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
-		}
-		if err := objectRows.Close(); err != nil {
-			return nil, fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
+			defer objectRows.Close()
+			for objectRows.Next() {
+				var ref rawsync.ObjectRef
+				if err := objectRows.Scan(&ref.SHA256, &ref.Length); err != nil {
+					objectRows.Close()
+					return fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
+				}
+				entries[i].Objects = append(entries[i].Objects, ref)
+			}
+			if err := objectRows.Err(); err != nil {
+				objectRows.Close()
+				return fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
+			}
+			if err := objectRows.Close(); err != nil {
+				return fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
+			}
+
+			return nil
+		}(); err != nil {
+			return nil, err
 		}
 	}
 	return entries, nil
@@ -1246,26 +1253,33 @@ func loadGenerationEntries(
 		return nil, fmt.Errorf("rawcheckpoint: load generation entries: %w", err)
 	}
 	for i, ordinal := range ordinals {
-		objectRows, err := queryer.QueryContext(ctx, `SELECT sha256, length
+		if err := func() error {
+			objectRows, err := queryer.QueryContext(ctx, `SELECT sha256, length
 			FROM outbox_entry_objects WHERE capture_id = ? AND entry_ordinal = ?
 			ORDER BY object_ordinal`, captureID, ordinal)
-		if err != nil {
-			return nil, fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
-		}
-		for objectRows.Next() {
-			var ref rawsync.ObjectRef
-			if err := objectRows.Scan(&ref.SHA256, &ref.Length); err != nil {
-				objectRows.Close()
-				return nil, fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
+			if err != nil {
+				return fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
 			}
-			entries[i].Objects = append(entries[i].Objects, ref)
-		}
-		if err := objectRows.Err(); err != nil {
-			objectRows.Close()
-			return nil, fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
-		}
-		if err := objectRows.Close(); err != nil {
-			return nil, fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
+			defer objectRows.Close()
+			for objectRows.Next() {
+				var ref rawsync.ObjectRef
+				if err := objectRows.Scan(&ref.SHA256, &ref.Length); err != nil {
+					objectRows.Close()
+					return fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
+				}
+				entries[i].Objects = append(entries[i].Objects, ref)
+			}
+			if err := objectRows.Err(); err != nil {
+				objectRows.Close()
+				return fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
+			}
+			if err := objectRows.Close(); err != nil {
+				return fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
+			}
+
+			return nil
+		}(); err != nil {
+			return nil, err
 		}
 	}
 	return entries, nil
@@ -1286,6 +1300,7 @@ func (s *Store) CollectGarbage(ctx context.Context) (GarbageCollectionReport, er
 		if err != nil {
 			return fmt.Errorf("rawcheckpoint: list garbage: %w", err)
 		}
+		defer rows.Close()
 		var refs []rawsync.ObjectRef
 		for rows.Next() {
 			var ref rawsync.ObjectRef
@@ -1372,7 +1387,7 @@ func (s *Store) DiscardUnreferencedObjects(
 	})
 }
 
-func validateCapturedGeneration(
+func validateCapturedGeneration(ctx context.Context,
 	store *Store,
 	generation CapturedGeneration,
 ) (CapturedGeneration, int64, map[string]rawsync.ObjectRef, error) {
@@ -1434,7 +1449,7 @@ func validateCapturedGeneration(
 	}
 	for _, ref := range uniqueObjects {
 		var state string
-		dbErr := store.db.QueryRow(`SELECT state FROM outbox_objects
+		dbErr := store.db.QueryRowContext(ctx, `SELECT state FROM outbox_objects
 			WHERE sha256 = ? AND length = ?`, ref.SHA256, ref.Length).Scan(&state)
 		info, err := os.Stat(store.ObjectPath(ref))
 		if dbErr == nil && state == "remote" {

@@ -202,6 +202,7 @@ func (c *copilotSourceCache) usageHash(ctx context.Context, path, sessionID stri
    COALESCE((SELECT MAX(id) FROM assistant_usage_events WHERE session_id = sessions.id), 0)
    FROM sessions`)
 		if err == nil {
+			defer rows.Close()
 			for rows.Next() {
 				var id string
 				var lastID int64

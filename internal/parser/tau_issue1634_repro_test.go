@@ -11,40 +11,37 @@ import (
 )
 
 func TestTauIssue1634ArtifactReproduction(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	artifact := filepath.Join("testdata", "tau", "issue-session.jsonl")
 	data, err := os.ReadFile(artifact)
-	require.NoError(err)
-	require.NotEmpty(data)
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
 
 	factory, ok := ProviderFactoryByType(AgentType("tau"))
-	require.True(ok, "AgentType(\"tau\") provider must be registered")
+	require.True(t, ok, "AgentType(\"tau\") provider must be registered")
 	root := t.TempDir()
 	project := filepath.Join(root, "project.with-hyphen_and-dots")
-	require.NoError(os.MkdirAll(project, 0o755))
+	require.NoError(t, os.MkdirAll(project, 0o755))
 	path := filepath.Join(project, "issue-session.jsonl")
-	require.NoError(os.WriteFile(path, data, 0o644))
+	require.NoError(t, os.WriteFile(path, data, 0o644))
 
 	provider := factory.NewProvider(ProviderConfig{
 		Roots: []string{root}, Machine: "test-machine",
 	})
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0].Result
-	assert.Equal("tau:issue-session", result.Session.ID)
-	assert.Len(dataLines(data), 33)
-	assert.Equal(14, result.Session.MessageCount)
-	assert.Equal(4, result.Session.UserMessageCount)
-	assert.Equal(3, countTauToolCalls(result.Messages))
-	assert.Equal(3, countTauToolResults(result.Messages))
-	assert.Equal(7985, sumTauUsage(result.Messages, "input_tokens"))
-	assert.Equal(588, sumTauUsage(result.Messages, "output_tokens"))
+	assert.Equal(t, "tau:issue-session", result.Session.ID)
+	assert.Len(t, dataLines(data), 33)
+	assert.Equal(t, 14, result.Session.MessageCount)
+	assert.Equal(t, 4, result.Session.UserMessageCount)
+	assert.Equal(t, 3, countTauToolCalls(result.Messages))
+	assert.Equal(t, 3, countTauToolResults(result.Messages))
+	assert.Equal(t, 7985, sumTauUsage(result.Messages, "input_tokens"))
+	assert.Equal(t, 588, sumTauUsage(result.Messages, "output_tokens"))
 }
 
 func dataLines(data []byte) []string {

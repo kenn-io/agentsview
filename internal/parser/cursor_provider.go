@@ -53,7 +53,7 @@ func (f *cursorProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 
 // ResolveMetadataDir returns the sibling .cursor/chats directory for a local
 // .cursor/projects root. Remote, rewritten and unrelated roots yield "".
-func (f cursorProviderFactory) ResolveMetadataDir(path string) (string, error) {
+func (f *cursorProviderFactory) ResolveMetadataDir(path string) (string, error) {
 	root, err := pathutil.ResolveAbsolute(path)
 	if err != nil {
 		return "", err
@@ -152,7 +152,7 @@ func (p *cursorProvider) Parse(
 	if errors.Is(enrichErr, errCursorStoreFormat) {
 		log.Printf("warning: %v; using Cursor transcript only", enrichErr)
 	} else if enrichErr != nil {
-		return ParseOutcome{
+		return ParseOutcome{ //nolint:nilerr // The operational error is carried in ParseOutcome.SourceErrors for retry classification.
 			SourceErrors: []SourceError{{
 				SourceKey:   req.Source.Key,
 				DisplayPath: path,

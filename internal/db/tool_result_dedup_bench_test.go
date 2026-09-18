@@ -5,6 +5,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // benchSummary renders the parser's summary for the seeded events without
@@ -31,10 +33,10 @@ func seedBenchToolResultSession(
 	b *testing.B, d *DB, sessionID string, msgs, callsPerMsg, eventsPerCall int,
 ) {
 	b.Helper()
-	if err := d.UpsertSession(Session{
+	if err := d.UpsertSession(b.Context(), Session{
 		ID: sessionID, Project: "bench", Machine: "local", Agent: "claude",
 	}); err != nil {
-		b.Fatalf("seed session: %v", err)
+		require.NoError(b, err, "seed session")
 	}
 	out := make([]Message, 0, msgs)
 	for i := range msgs {
@@ -78,12 +80,14 @@ func seedBenchToolResultSession(
 		}
 		out = append(out, m)
 	}
-	if err := d.InsertMessages(out); err != nil {
-		b.Fatalf("seed messages: %v", err)
+	if err := d.InsertMessages(b.Context(), out); err != nil {
+		require.NoError(b, err, "seed messages")
 	}
 }
 
 func benchGetMessagesWithEvents(b *testing.B, eventsPerCall int) {
+	b.Helper()
+
 	d := testDB(b)
 	const msgs, callsPerMsg = 200, 3
 	seedBenchToolResultSession(b, d, "bench-events", msgs, callsPerMsg, eventsPerCall)
@@ -92,10 +96,12 @@ func benchGetMessagesWithEvents(b *testing.B, eventsPerCall int) {
 	for b.Loop() {
 		got, err := d.GetMessages(ctx, "bench-events", 0, msgs, true)
 		if err != nil {
-			b.Fatal(err)
+			require.NoError(b, err)
 		}
 		if len(got) != msgs || got[0].ToolCalls[0].ResultContent == "" {
-			b.Fatal("unexpected load")
+			require.NotEmpty(b, got, "unexpected load")
+			require.NotEmpty(b, got[0].ToolCalls, "unexpected load")
+			require.NotEmpty(b, got[0].ToolCalls[0].ResultContent, "unexpected load")
 		}
 	}
 }
@@ -117,10 +123,12 @@ func BenchmarkRecallEvidenceWindowFiveAgentEventCalls(b *testing.B) {
 	for b.Loop() {
 		w, err := d.BuildRecallEvidenceWindow(ctx, "bench-recall", 0, msgs-1)
 		if err != nil {
-			b.Fatal(err)
+			require.NoError(b, err)
 		}
 		if len(w.Messages) != msgs || w.Messages[0].ToolCalls[0].ResultContent == "" {
-			b.Fatal("unexpected window")
+			require.Len(b, w.Messages, msgs, "unexpected window")
+			require.NotEmpty(b, w.Messages[0].ToolCalls, "unexpected window")
+			require.NotEmpty(b, w.Messages[0].ToolCalls[0].ResultContent, "unexpected window")
 		}
 	}
 }
@@ -142,10 +150,12 @@ func BenchmarkRecallEvidenceWindowSingleEventCallsColdPools(b *testing.B) {
 		b.StartTimer()
 		w, err := d.BuildRecallEvidenceWindow(ctx, "bench-recall-1", 0, msgs-1)
 		if err != nil {
-			b.Fatal(err)
+			require.NoError(b, err)
 		}
 		if len(w.Messages) != msgs || w.Messages[0].ToolCalls[0].ResultContent == "" {
-			b.Fatal("unexpected window")
+			require.Len(b, w.Messages, msgs, "unexpected window")
+			require.NotEmpty(b, w.Messages[0].ToolCalls, "unexpected window")
+			require.NotEmpty(b, w.Messages[0].ToolCalls[0].ResultContent, "unexpected window")
 		}
 	}
 }

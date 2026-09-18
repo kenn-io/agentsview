@@ -335,7 +335,7 @@ func writePGVectorPushSummary(w io.Writer, v postgres.VectorPushResult) {
 	}
 }
 
-func runPGStatus(targetName string, cfg PGStatusConfig) error {
+func runPGStatus(ctx context.Context, targetName string, cfg PGStatusConfig) error {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -353,7 +353,7 @@ func runPGStatus(targetName string, cfg PGStatusConfig) error {
 	}
 
 	applyClassifierConfig(appCfg)
-	database, err := openReadOnlyDB(appCfg)
+	database, err := openReadOnlyDB(ctx, appCfg)
 	if err != nil {
 		log.Printf(
 			"warning: reading local pg status watermark: %v",
@@ -430,7 +430,7 @@ func runPGStatusTarget(
 
 	lastPush := ""
 	if database != nil {
-		lastPush, err = postgres.ReadLastPushAt(
+		lastPush, err = postgres.ReadLastPushAt(ctx,
 			database,
 			target.SyncStateTarget,
 			projects,
@@ -584,7 +584,7 @@ func preparePGServeImpl(appCfg config.Config, basePath string) (pgServeStartup, 
 		BasePath:      basePath,
 		RequestedPort: appCfg.Port,
 	}
-	appCfg, err = prepareServeRuntimeConfig(appCfg, rtOpts)
+	appCfg, err = prepareServeRuntimeConfig(ctx, appCfg, rtOpts)
 	if err != nil {
 		cleanup()
 		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)

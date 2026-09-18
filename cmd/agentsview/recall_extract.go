@@ -372,7 +372,7 @@ func newRecallExtractStatusCommand() *cobra.Command {
 				return err
 			}
 			applyClassifierConfig(cfg)
-			database, err := db.OpenReadOnly(cfg.DBPath)
+			database, err := db.OpenReadOnly(cmd.Context(), cfg.DBPath)
 			if err != nil {
 				return err
 			}

@@ -29,74 +29,63 @@ func parseCursorTestFile(t *testing.T, path string) (*ParsedSession, []ParsedMes
 }
 
 func TestCursorLegacyTimestampReproduction(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	data, err := os.ReadFile("testdata/cursor/legacy-timestamps.txt")
-	require.NoError(err)
+	require.NoError(t, err)
 	path := filepath.Join(t.TempDir(), "legacy-timestamps.txt")
-	require.NoError(os.WriteFile(path, data, 0o644))
+	require.NoError(t, os.WriteFile(path, data, 0o644))
 
 	session, messages := parseCursorTestFile(t, path)
-	require.Len(messages, 4)
-	assert.Equal(cursorTestTime(t, "2026-07-02T15:11:00Z"), messages[0].Timestamp)
-	assert.Equal("Inspect the repository.", messages[0].Content)
-	assert.Zero(messages[1].Timestamp)
-	assert.Equal(cursorTestTime(t, "2026-07-02T15:12:00Z"), messages[2].Timestamp)
-	assert.Equal("Continue with the next step.", messages[2].Content)
-	assert.Zero(messages[3].Timestamp)
-	assert.Equal(messages[0].Timestamp, session.StartedAt)
-	assert.Equal(messages[2].Timestamp, session.EndedAt)
+	require.Len(t, messages, 4)
+	assert.Equal(t, cursorTestTime(t, "2026-07-02T15:11:00Z"), messages[0].Timestamp)
+	assert.Equal(t, "Inspect the repository.", messages[0].Content)
+	assert.Zero(t, messages[1].Timestamp)
+	assert.Equal(t, cursorTestTime(t, "2026-07-02T15:12:00Z"), messages[2].Timestamp)
+	assert.Equal(t, "Continue with the next step.", messages[2].Content)
+	assert.Zero(t, messages[3].Timestamp)
+	assert.Equal(t, messages[0].Timestamp, session.StartedAt)
+	assert.Equal(t, messages[2].Timestamp, session.EndedAt)
 	t.Logf("turn 1 = %s; turn 2 = %s; assistant_timestamp_zero=%t", messages[0].Timestamp.Format(time.RFC3339), messages[2].Timestamp.Format(time.RFC3339), messages[1].Timestamp.IsZero())
 }
 
 func TestCursorJSONLTimestampFromTextBlock(t *testing.T) {
-	assert := assert.New(t)
-
 	data := strings.Join([]string{
 		`{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Tuesday, Jun 16, 2026, 8:41 PM (UTC-4)</timestamp>\n<user_query>Inspect the logs.</user_query>"}]}}`,
 		`{"role":"assistant","message":{"content":[{"type":"text","text":"The logs are clean."}]}}`,
 	}, "\n")
 	messages := parseCursorJSONL(data)
 	require.Len(t, messages, 2)
-	assert.Equal(cursorTestTime(t, "2026-06-17T00:41:00Z"), messages[0].Timestamp)
-	assert.Equal("Inspect the logs.", messages[0].Content)
-	assert.Zero(messages[1].Timestamp)
+	assert.Equal(t, cursorTestTime(t, "2026-06-17T00:41:00Z"), messages[0].Timestamp)
+	assert.Equal(t, "Inspect the logs.", messages[0].Content)
+	assert.Zero(t, messages[1].Timestamp)
 }
 
 func TestCursorTimestampDayBoundary(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	late, ok := parseCursorTimestamp(
 		"<timestamp>Thursday, Jul 2, 2026, 11:59 PM (UTC-4)</timestamp>",
 	)
-	require.True(ok)
+	require.True(t, ok)
 	early, ok := parseCursorTimestamp(
 		"<timestamp>Friday, Jul 3, 2026, 12:00 AM (UTC-4)</timestamp>",
 	)
-	require.True(ok)
-	assert.True(late.Before(early))
-	assert.Zero(late.Second())
-	assert.Zero(late.Nanosecond())
-	assert.Zero(early.Second())
-	assert.Zero(early.Nanosecond())
+	require.True(t, ok)
+	assert.True(t, late.Before(early))
+	assert.Zero(t, late.Second())
+	assert.Zero(t, late.Nanosecond())
+	assert.Zero(t, early.Second())
+	assert.Zero(t, early.Nanosecond())
 }
 
 func TestCursorTimestampNoonMidnight(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	midnight, ok := parseCursorTimestamp(
 		"<timestamp>Thursday, Jul 2, 2026, 12:00 AM (UTC-4)</timestamp>",
 	)
-	require.True(ok)
+	require.True(t, ok)
 	noon, ok := parseCursorTimestamp(
 		"<timestamp>Thursday, Jul 2, 2026, 12:00 PM (UTC-4)</timestamp>",
 	)
-	require.True(ok)
-	assert.Equal(cursorTestTime(t, "2026-07-02T04:00:00Z"), midnight)
-	assert.Equal(cursorTestTime(t, "2026-07-02T16:00:00Z"), noon)
+	require.True(t, ok)
+	assert.Equal(t, cursorTestTime(t, "2026-07-02T04:00:00Z"), midnight)
+	assert.Equal(t, cursorTestTime(t, "2026-07-02T16:00:00Z"), noon)
 }
 
 func TestCursorTimestampExplicitOffsets(t *testing.T) {
@@ -164,18 +153,15 @@ func TestCursorMalformedTimestampTag(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			path := filepath.Join(t.TempDir(), "malformed.txt")
-			require.NoError(os.WriteFile(path, []byte(tt.text), 0o644))
-			require.NoError(os.Chtimes(path, fallback, fallback))
+			require.NoError(t, os.WriteFile(path, []byte(tt.text), 0o644))
+			require.NoError(t, os.Chtimes(path, fallback, fallback))
 			session, messages := parseCursorTestFile(t, path)
-			require.Len(messages, 1)
-			assert.Zero(messages[0].Timestamp)
-			assert.Equal(tt.wantContent, messages[0].Content)
-			assert.True(session.StartedAt.Equal(fallback))
-			assert.True(session.EndedAt.Equal(fallback))
+			require.Len(t, messages, 1)
+			assert.Zero(t, messages[0].Timestamp)
+			assert.Equal(t, tt.wantContent, messages[0].Content)
+			assert.True(t, session.StartedAt.Equal(fallback))
+			assert.True(t, session.EndedAt.Equal(fallback))
 		})
 	}
 }
@@ -193,8 +179,6 @@ func TestCursorTimestampRequiresLeadingCompleteUserQuery(t *testing.T) {
 }
 
 func TestCursorLiteralTimestampXML(t *testing.T) {
-	assert := assert.New(t)
-
 	text := strings.Join([]string{
 		"user:",
 		"<user_query>Show the literal <timestamp>Thursday, Jul 2, 2026, 11:11 AM (UTC-4)</timestamp> text.</user_query>",
@@ -203,84 +187,72 @@ func TestCursorLiteralTimestampXML(t *testing.T) {
 	}, "\n")
 	messages := parseCursorMessages(strings.Split(text, "\n"))
 	require.Len(t, messages, 2)
-	assert.Contains(messages[0].Content, "<timestamp>")
-	assert.Contains(messages[1].Content, "<timestamp>")
-	assert.Zero(messages[0].Timestamp)
-	assert.Zero(messages[1].Timestamp)
+	assert.Contains(t, messages[0].Content, "<timestamp>")
+	assert.Contains(t, messages[1].Content, "<timestamp>")
+	assert.Zero(t, messages[0].Timestamp)
+	assert.Zero(t, messages[1].Timestamp)
 }
 
 func TestCursorSessionBoundsFromTurns(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	text := strings.Join([]string{
 		"user:", "<timestamp>Thursday, Jul 2, 2026, 11:59 PM (UTC-4)</timestamp>", "<user_query>late</user_query>",
 		"assistant:", "answer",
 		"user:", "<timestamp>Friday, Jul 3, 2026, 12:00 AM (UTC-4)</timestamp>", "<user_query>early</user_query>",
 	}, "\n")
 	path := filepath.Join(t.TempDir(), "bounds.txt")
-	require.NoError(os.WriteFile(path, []byte(text), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(text), 0o644))
 	session, messages := parseCursorTestFile(t, path)
-	require.Len(messages, 3)
-	assert.Equal(cursorTestTime(t, "2026-07-03T03:59:00Z"), session.StartedAt)
-	assert.Equal(cursorTestTime(t, "2026-07-03T04:00:00Z"), session.EndedAt)
-	assert.Equal(RoleUser, messages[0].Role)
-	assert.Equal(RoleAssistant, messages[1].Role)
-	assert.Equal(RoleUser, messages[2].Role)
+	require.Len(t, messages, 3)
+	assert.Equal(t, cursorTestTime(t, "2026-07-03T03:59:00Z"), session.StartedAt)
+	assert.Equal(t, cursorTestTime(t, "2026-07-03T04:00:00Z"), session.EndedAt)
+	assert.Equal(t, RoleUser, messages[0].Role)
+	assert.Equal(t, RoleAssistant, messages[1].Role)
+	assert.Equal(t, RoleUser, messages[2].Role)
 }
 
 func TestCursorMixedTaggedUntagged(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	text := "user:\n<timestamp>Thursday, Jul 2, 2026, 11:11 AM (UTC-4)</timestamp>\n<user_query>tagged</user_query>\n" +
 		"assistant:\nanswer\nuser:\n<user_query>untagged</user_query>\n"
 	path := filepath.Join(t.TempDir(), "mixed.txt")
-	require.NoError(os.WriteFile(path, []byte(text), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(text), 0o644))
 	_, messages := parseCursorTestFile(t, path)
-	require.Len(messages, 3)
-	assert.False(messages[0].Timestamp.IsZero())
-	assert.Zero(messages[1].Timestamp)
-	assert.Zero(messages[2].Timestamp)
+	require.Len(t, messages, 3)
+	assert.False(t, messages[0].Timestamp.IsZero())
+	assert.Zero(t, messages[1].Timestamp)
+	assert.Zero(t, messages[2].Timestamp)
 }
 
 func TestCursorIdenticalContentDifferentMtimeSameTimes(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	text := "user:\n<timestamp>Thursday, Jul 2, 2026, 11:11 AM (UTC-4)</timestamp>\n<user_query>same</user_query>\n"
 	firstPath := filepath.Join(t.TempDir(), "first.txt")
 	secondPath := filepath.Join(t.TempDir(), "second.txt")
-	require.NoError(os.WriteFile(firstPath, []byte(text), 0o644))
-	require.NoError(os.WriteFile(secondPath, []byte(text), 0o644))
+	require.NoError(t, os.WriteFile(firstPath, []byte(text), 0o644))
+	require.NoError(t, os.WriteFile(secondPath, []byte(text), 0o644))
 	firstMtime := cursorTestTime(t, "2026-01-01T00:00:00Z")
 	secondMtime := cursorTestTime(t, "2026-02-01T00:00:00Z")
-	require.NoError(os.Chtimes(firstPath, firstMtime, firstMtime))
-	require.NoError(os.Chtimes(secondPath, secondMtime, secondMtime))
+	require.NoError(t, os.Chtimes(firstPath, firstMtime, firstMtime))
+	require.NoError(t, os.Chtimes(secondPath, secondMtime, secondMtime))
 	firstSession, firstMessages := parseCursorTestFile(t, firstPath)
 	secondSession, secondMessages := parseCursorTestFile(t, secondPath)
-	assert.NotEqual(firstSession.File.Mtime, secondSession.File.Mtime)
-	assert.Equal(firstMessages[0].Timestamp, secondMessages[0].Timestamp)
-	assert.Equal(firstSession.StartedAt, secondSession.StartedAt)
-	assert.Equal(firstSession.EndedAt, secondSession.EndedAt)
+	assert.NotEqual(t, firstSession.File.Mtime, secondSession.File.Mtime)
+	assert.Equal(t, firstMessages[0].Timestamp, secondMessages[0].Timestamp)
+	assert.Equal(t, firstSession.StartedAt, secondSession.StartedAt)
+	assert.Equal(t, firstSession.EndedAt, secondSession.EndedAt)
 }
 
 func TestCursorParentAndChildTimestamps(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	parentPath := filepath.Join(root, "parent.txt")
 	childPath := filepath.Join(root, "child.txt")
-	require.NoError(os.WriteFile(parentPath, []byte("user:\n<timestamp>Thursday, Jul 2, 2026, 11:11 AM (UTC-4)</timestamp>\n<user_query>parent</user_query>\n"), 0o644))
-	require.NoError(os.WriteFile(childPath, []byte("user:\n<timestamp>Thursday, Jul 2, 2026, 11:12 AM (UTC-4)</timestamp>\n<user_query>child</user_query>\n"), 0o644))
+	require.NoError(t, os.WriteFile(parentPath, []byte("user:\n<timestamp>Thursday, Jul 2, 2026, 11:11 AM (UTC-4)</timestamp>\n<user_query>parent</user_query>\n"), 0o644))
+	require.NoError(t, os.WriteFile(childPath, []byte("user:\n<timestamp>Thursday, Jul 2, 2026, 11:12 AM (UTC-4)</timestamp>\n<user_query>child</user_query>\n"), 0o644))
 	parent, parentMessages := parseCursorTestFile(t, parentPath)
 	child, childMessages := parseCursorTestFile(t, childPath)
-	require.Len(parentMessages, 1)
-	require.Len(childMessages, 1)
-	assert.Equal(parentMessages[0].Timestamp, parent.StartedAt)
-	assert.Equal(childMessages[0].Timestamp, child.StartedAt)
-	assert.NotEqual(parent.StartedAt, child.StartedAt)
+	require.Len(t, parentMessages, 1)
+	require.Len(t, childMessages, 1)
+	assert.Equal(t, parentMessages[0].Timestamp, parent.StartedAt)
+	assert.Equal(t, childMessages[0].Timestamp, child.StartedAt)
+	assert.NotEqual(t, parent.StartedAt, child.StartedAt)
 }
 
 func TestExtractAssistantContent(t *testing.T) {
@@ -438,30 +410,25 @@ func TestExtractAssistantContent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			text, hasThinking, toolCalls := extractAssistantContent(
 				tt.lines,
 			)
-			assert.Equal(tt.wantText, text, "text")
-			assert.Equal(tt.wantThinking, hasThinking, "hasThinking")
+			assert.Equal(t, tt.wantText, text, "text")
+			assert.Equal(t, tt.wantThinking, hasThinking, "hasThinking")
 			require.Len(t, toolCalls, tt.wantToolCount, "tool call count")
 			for i, call := range toolCalls {
 				wantResults := 0
 				if tt.wantResultCounts != nil {
 					wantResults = tt.wantResultCounts[i]
 				}
-				assert.Len(call.ResultEvents, wantResults, "results for call %d", i)
+				assert.Len(t, call.ResultEvents, wantResults, "results for call %d", i)
 			}
 		})
 	}
 }
 
 func TestCursorLegacyToolResultMultiline(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
-	assert.Equal(CapabilitySupported,
+	assert.Equal(t, CapabilitySupported,
 		cursorProviderCapabilities().Content.ToolResultEvents)
 
 	lines := []string{
@@ -487,34 +454,31 @@ func TestCursorLegacyToolResultMultiline(t *testing.T) {
 
 	messages := parseCursorMessages(lines)
 
-	require.Len(messages, 1)
-	require.Len(messages[0].ToolCalls, 2)
-	assert.Equal("Visible prose line one.\nVisible prose line two.",
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 2)
+	assert.Equal(t, "Visible prose line one.\nVisible prose line two.",
 		messages[0].Content)
 	firstCall := messages[0].ToolCalls[0]
-	require.Len(firstCall.ResultEvents, 2)
-	assert.Equal("first line\n\nuser:\nassistant:\nsecond line",
+	require.Len(t, firstCall.ResultEvents, 2)
+	assert.Equal(t, "first line\n\nuser:\nassistant:\nsecond line",
 		firstCall.ResultEvents[0].Content)
-	assert.Equal("third result", firstCall.ResultEvents[1].Content)
+	assert.Equal(t, "third result", firstCall.ResultEvents[1].Content)
 	for _, event := range firstCall.ResultEvents {
-		assert.Empty(event.ToolUseID)
-		assert.Empty(event.AgentID)
-		assert.Empty(event.SubagentSessionID)
-		assert.Empty(event.Source)
-		assert.Empty(event.Status)
-		assert.Zero(event.Timestamp)
+		assert.Empty(t, event.ToolUseID)
+		assert.Empty(t, event.AgentID)
+		assert.Empty(t, event.SubagentSessionID)
+		assert.Empty(t, event.Source)
+		assert.Empty(t, event.Status)
+		assert.Zero(t, event.Timestamp)
 	}
 
 	secondCall := messages[0].ToolCalls[1]
-	require.Len(secondCall.ResultEvents, 1)
-	assert.Equal("second call result",
+	require.Len(t, secondCall.ResultEvents, 1)
+	assert.Equal(t, "second call result",
 		secondCall.ResultEvents[0].Content)
 }
 
 func TestCursorLegacyToolResultStaysWithinAssistantBlock(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	messages := parseCursorMessages([]string{
 		"assistant:",
 		"[Tool call] Shell",
@@ -525,16 +489,14 @@ func TestCursorLegacyToolResultStaysWithinAssistantBlock(t *testing.T) {
 		"Later prose.",
 	})
 
-	require.Len(messages, 2)
-	require.Len(messages[0].ToolCalls, 1)
-	assert.Empty(messages[0].ToolCalls[0].ResultEvents)
-	assert.Equal("Later prose.", messages[1].Content)
-	assert.Empty(messages[1].ToolCalls)
+	require.Len(t, messages, 2)
+	require.Len(t, messages[0].ToolCalls, 1)
+	assert.Empty(t, messages[0].ToolCalls[0].ResultEvents)
+	assert.Equal(t, "Later prose.", messages[1].Content)
+	assert.Empty(t, messages[1].ToolCalls)
 }
 
 func TestExtractAssistantContentCursorApplyPatch(t *testing.T) {
-	assert := assert.New(t)
-
 	patch := "@@ -1,1 +1,1 @@\n-old\n+new"
 	lines := []string{
 		"[Tool call] ApplyPatch",
@@ -543,12 +505,12 @@ func TestExtractAssistantContentCursorApplyPatch(t *testing.T) {
 
 	text, hasThinking, toolCalls := extractAssistantContent(lines)
 
-	assert.Empty(text)
-	assert.False(hasThinking)
+	assert.Empty(t, text)
+	assert.False(t, hasThinking)
 	require.Len(t, toolCalls, 1)
-	assert.Equal("ApplyPatch", toolCalls[0].ToolName)
-	assert.Equal("Edit", toolCalls[0].Category)
-	assert.JSONEq(`{"patch":"@@ -1,1 +1,1 @@\n-old\n+new","path":"src/app.ts"}`,
+	assert.Equal(t, "ApplyPatch", toolCalls[0].ToolName)
+	assert.Equal(t, "Edit", toolCalls[0].Category)
+	assert.JSONEq(t, `{"patch":"@@ -1,1 +1,1 @@\n-old\n+new","path":"src/app.ts"}`,
 		toolCalls[0].InputJSON)
 }
 
@@ -791,8 +753,6 @@ func TestParseCursorJSONL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			data := strings.Join(tt.lines, "\n")
 			msgs := parseCursorJSONL(data)
 
@@ -802,23 +762,23 @@ func TestParseCursorJSONL(t *testing.T) {
 			}
 
 			first := msgs[0]
-			assert.Equal(tt.wantFirstRole, first.Role, "first role")
+			assert.Equal(t, tt.wantFirstRole, first.Role, "first role")
 			if tt.wantFirstContent != "" {
-				assert.Equal(tt.wantFirstContent, first.Content, "first content")
+				assert.Equal(t, tt.wantFirstContent, first.Content, "first content")
 			}
 
 			// Check assistant properties on last message
 			if tt.wantThinking || tt.wantToolUse ||
 				tt.wantToolCount > 0 {
 				last := msgs[len(msgs)-1]
-				assert.Equal(tt.wantThinking, last.HasThinking, "hasThinking")
-				assert.Equal(tt.wantToolUse, last.HasToolUse, "hasToolUse")
-				assert.Len(last.ToolCalls, tt.wantToolCount, "tool count")
+				assert.Equal(t, tt.wantThinking, last.HasThinking, "hasThinking")
+				assert.Equal(t, tt.wantToolUse, last.HasToolUse, "hasToolUse")
+				assert.Len(t, last.ToolCalls, tt.wantToolCount, "tool count")
 			}
 
 			// Verify ordinals are contiguous
 			for i, m := range msgs {
-				assert.Equal(i, m.Ordinal, "ordinal[%d]", i)
+				assert.Equal(t, i, m.Ordinal, "ordinal[%d]", i)
 			}
 		})
 	}

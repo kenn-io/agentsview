@@ -3,8 +3,8 @@ package sync
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -12,14 +12,12 @@ import (
 )
 
 func TestProcessFileOpenHandsUsesSnapshotMtimeForRetryCache(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	sessionDir := filepath.Join(
 		root, "086c7ecf6cb746b69fbcb900358d1247",
 	)
 	eventsDir := filepath.Join(sessionDir, "events")
-	require.NoError(os.MkdirAll(eventsDir, 0o755))
+	require.NoError(t, os.MkdirAll(eventsDir, 0o755))
 
 	baseStatePath := filepath.Join(sessionDir, "base_state.json")
 	eventPath := filepath.Join(eventsDir, "event-00000-user.json")
@@ -36,7 +34,7 @@ func TestProcessFileOpenHandsUsesSnapshotMtimeForRetryCache(t *testing.T) {
 	}`))
 
 	dirInfo, err := os.Stat(sessionDir)
-	require.NoError(err)
+	require.NoError(t, err)
 	oldDirMtime := dirInfo.ModTime()
 
 	engine := &Engine{
@@ -52,26 +50,33 @@ func TestProcessFileOpenHandsUsesSnapshotMtimeForRetryCache(t *testing.T) {
 		skipCache: map[string]int64{sessionDir: oldDirMtime.UnixNano()},
 	}
 
-	time.Sleep(10 * time.Millisecond)
-	dbtest.WriteTestFile(t, eventPath, []byte(`{
+	for range 10_000 {
+		dbtest.WriteTestFile(t, eventPath, []byte(`{
 		"id":"e0",
 		"timestamp":"2026-04-02T15:25:41.706887",
 		"source":"user",
 		"llm_message":{"role":"user","content":[{"type":"text","text":"Updated version"}]},
 		"kind":"MessageEvent"
 	}`))
-	require.NoError(os.Chtimes(sessionDir, oldDirMtime, oldDirMtime))
+		require.NoError(t, os.Chtimes(sessionDir, oldDirMtime, oldDirMtime))
+		snapshot, err := parser.OpenHandsSnapshot(sessionDir)
+		require.NoError(t, err)
+		if snapshot.Mtime != oldDirMtime.UnixNano() {
+			break
+		}
+		runtime.Gosched()
+	}
 
 	snapshot, err := parser.OpenHandsSnapshot(sessionDir)
-	require.NoError(err)
-	require.NotEqual(oldDirMtime.UnixNano(), snapshot.Mtime)
+	require.NoError(t, err)
+	require.NotEqual(t, oldDirMtime.UnixNano(), snapshot.Mtime)
 
 	res := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  sessionDir,
 		Agent: parser.AgentOpenHands,
 	})
-	require.False(res.skip)
-	require.NoError(res.err)
-	require.Len(res.results, 1)
-	require.Equal(snapshot.Mtime, res.mtime)
+	require.False(t, res.skip)
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 1)
+	require.Equal(t, snapshot.Mtime, res.mtime)
 }

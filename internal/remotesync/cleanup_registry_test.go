@@ -12,9 +12,6 @@ import (
 )
 
 func TestCleanupRegistryRetriesBeforeReturningAndBeforeLaterWork(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	operationErr := errors.New("operation failed")
 	cleanupErr := errors.New("cleanup failed")
 	owner := &cleanupRetryTestError{
@@ -33,46 +30,43 @@ func TestCleanupRegistryRetriesBeforeReturningAndBeforeLaterWork(t *testing.T) {
 		runs++
 		return SyncStats{}, owner
 	})
-	require.Same(owner, err)
-	require.ErrorIs(err, operationErr)
-	assert.Equal(1, owner.retryCount())
-	assert.Equal(1, runs)
+	require.Same(t, owner, err)
+	require.ErrorIs(t, err, operationErr)
+	assert.Equal(t, 1, owner.retryCount())
+	assert.Equal(t, 1, runs)
 
 	_, err = registry.Run(func() (SyncStats, error) {
 		runs++
 		return SyncStats{}, nil
 	})
 	var pending *PendingCleanupError
-	require.ErrorAs(err, &pending)
-	assert.NotSame(owner, err)
-	assert.Same(owner, pending.Err)
-	require.ErrorIs(err, owner)
-	require.ErrorIs(err, operationErr)
-	assert.Equal(2, owner.retryCount())
-	assert.Equal(1, runs, "retained cleanup blocks new work")
+	require.ErrorAs(t, err, &pending)
+	assert.NotSame(t, owner, err)
+	assert.Same(t, owner, pending.Err)
+	require.ErrorIs(t, err, owner)
+	require.ErrorIs(t, err, operationErr)
+	assert.Equal(t, 2, owner.retryCount())
+	assert.Equal(t, 1, runs, "retained cleanup blocks new work")
 
 	_, err = registry.Run(func() (SyncStats, error) {
 		runs++
 		return SyncStats{}, nil
 	})
-	require.ErrorAs(err, &pending)
-	require.ErrorIs(err, owner)
-	assert.Equal(3, owner.retryCount())
-	assert.Equal(1, runs, "later calls remain explicitly blocked")
+	require.ErrorAs(t, err, &pending)
+	require.ErrorIs(t, err, owner)
+	assert.Equal(t, 3, owner.retryCount())
+	assert.Equal(t, 1, runs, "later calls remain explicitly blocked")
 
 	_, err = registry.Run(func() (SyncStats, error) {
 		runs++
 		return SyncStats{SessionsSynced: 1}, nil
 	})
-	require.NoError(err)
-	assert.Equal(4, owner.retryCount())
-	assert.Equal(2, runs, "new work starts only after retained ownership releases")
+	require.NoError(t, err)
+	assert.Equal(t, 4, owner.retryCount())
+	assert.Equal(t, 2, runs, "new work starts only after retained ownership releases")
 }
 
 func TestCleanupRegistryRetriesEveryDistinctJoinedOwner(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	firstFailure := errors.New("first cleanup still blocked")
 	first := &cleanupRetryTestError{
 		cause:   errors.New("first cleanup owner"),
@@ -95,10 +89,10 @@ func TestCleanupRegistryRetriesEveryDistinctJoinedOwner(t *testing.T) {
 		runs++
 		return SyncStats{}, joined
 	})
-	require.Same(joined, err)
-	assert.Equal(1, first.retryCount(),
+	require.Same(t, joined, err)
+	assert.Equal(t, 1, first.retryCount(),
 		"one owner appearing twice in the error tree is retried once")
-	assert.Equal(1, second.retryCount(),
+	assert.Equal(t, 1, second.retryCount(),
 		"a sibling owner is retried even when the first owner retains cleanup")
 
 	_, err = registry.Run(func() (SyncStats, error) {
@@ -106,23 +100,23 @@ func TestCleanupRegistryRetriesEveryDistinctJoinedOwner(t *testing.T) {
 		return SyncStats{SessionsSynced: 1}, nil
 	})
 	var pending *PendingCleanupError
-	require.ErrorAs(err, &pending)
-	require.ErrorIs(err, first.cause)
-	require.ErrorIs(err, second.cause)
-	assert.Equal(2, first.retryCount())
-	assert.Equal(2, second.retryCount())
-	assert.Equal(1, runs,
+	require.ErrorAs(t, err, &pending)
+	require.ErrorIs(t, err, first.cause)
+	require.ErrorIs(t, err, second.cause)
+	assert.Equal(t, 2, first.retryCount())
+	assert.Equal(t, 2, second.retryCount())
+	assert.Equal(t, 1, runs,
 		"new work stays blocked while any retained owner still fails")
 
 	_, err = registry.Run(func() (SyncStats, error) {
 		runs++
 		return SyncStats{SessionsSynced: 1}, nil
 	})
-	require.NoError(err)
-	assert.Equal(2, first.retryCount(),
+	require.NoError(t, err)
+	assert.Equal(t, 2, first.retryCount(),
 		"successful owners are not retried with the retained failures")
-	assert.Equal(3, second.retryCount())
-	assert.Equal(2, runs,
+	assert.Equal(t, 3, second.retryCount())
+	assert.Equal(t, 2, runs,
 		"new work starts after every retained owner releases")
 }
 

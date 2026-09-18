@@ -13,8 +13,6 @@ import (
 )
 
 func TestPairActivityEventsPreservesOrdinalAdjacencyAtRangeEdges(t *testing.T) {
-	assert := assert.New(t)
-
 	p := baseParams(t, "2026-06-16", "UTC")
 	events := []ActivityEvent{
 		{SessionID: "edge", Ordinal: 1, Timestamp: "2026-06-15T23:54:59Z", Role: "user"},
@@ -29,25 +27,25 @@ func TestPairActivityEventsPreservesOrdinalAdjacencyAtRangeEdges(t *testing.T) {
 	got := PairActivityEvents(events, p.RangeStart, p.EffectiveEnd, 5*time.Minute)
 
 	require.Len(t, got, 4)
-	assert.Equal(IntervalCandidate{
+	assert.Equal(t, IntervalCandidate{
 		SessionID: "edge", StartOrdinal: 2, EndOrdinal: 3,
 		Start:       mustStart(t, "2026-06-15T23:59:30Z"),
 		End:         mustStart(t, "2026-06-16T23:59:00Z"),
 		ClosingRole: "user", ClosingModel: "", PriorModel: "old",
 	}, got[0], "a start inside the left cap window remains eligible")
-	assert.Equal(IntervalCandidate{
+	assert.Equal(t, IntervalCandidate{
 		SessionID: "nonmonotone", StartOrdinal: 2, EndOrdinal: 3,
 		Start:       mustStart(t, "2026-06-16T09:00:00Z"),
 		End:         mustStart(t, "2026-06-16T10:06:00Z"),
 		ClosingRole: "assistant", ClosingModel: "m2", PriorModel: "unknown",
 	}, got[1])
-	assert.Equal(IntervalCandidate{
+	assert.Equal(t, IntervalCandidate{
 		SessionID: "nonmonotone", StartOrdinal: 1, EndOrdinal: 2,
 		Start:       mustStart(t, "2026-06-16T10:05:00Z"),
 		End:         mustStart(t, "2026-06-16T09:00:00Z"),
 		ClosingRole: "assistant", ClosingModel: "m1", PriorModel: "unknown",
 	}, got[2], "the adapter emits the real adjacent pair for shared rejection")
-	assert.Equal(IntervalCandidate{
+	assert.Equal(t, IntervalCandidate{
 		SessionID: "edge", StartOrdinal: 3, EndOrdinal: 4,
 		Start:       mustStart(t, "2026-06-16T23:59:00Z"),
 		End:         mustStart(t, "2026-06-17T00:20:00Z"),
@@ -88,9 +86,6 @@ func TestMergeCandidateSlicePreservesCandidateOrder(t *testing.T) {
 }
 
 func TestAggregateCandidatesDifferential(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	p := baseParams(t, "2026-06-16", "UTC")
 	sessions := []SessionMeta{
 		{SessionID: "a", Title: "A", Project: "p", Agent: "claude"},
@@ -105,21 +100,19 @@ func TestAggregateCandidatesDifferential(t *testing.T) {
 	}
 
 	want, err := Aggregate(p, append([]SessionMeta(nil), sessions...), events, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	candidates := PairActivityEvents(events, p.RangeStart, p.EffectiveEnd, 5*time.Minute)
 	got, err := AggregateCandidates(
 		t.Context(), p, append([]SessionMeta(nil), sessions...), candidates, nil,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	want.Intervals = []ReportInterval{}
-	assert.Empty(got.Intervals, "candidate reports do not expose raw intervals")
-	assert.Equal(want, got)
+	assert.Empty(t, got.Intervals, "candidate reports do not expose raw intervals")
+	assert.Equal(t, want, got)
 }
 
 func TestBuildCandidateArtifactsUsesSecondPrecisionMembership(t *testing.T) {
-	assert := assert.New(t)
-
 	p := baseParams(t, "2026-06-16", "UTC")
 	events := []ActivityEvent{
 		{SessionID: "edge", Ordinal: 1, Timestamp: "2026-06-16T00:04:59.900000Z", Role: "user"},
@@ -138,24 +131,21 @@ func TestBuildCandidateArtifactsUsesSecondPrecisionMembership(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	assert.True(artifacts.Membership["edge"].Contains(0))
-	assert.False(artifacts.Membership["edge"].Contains(1),
+	assert.True(t, artifacts.Membership["edge"].Contains(0))
+	assert.False(t, artifacts.Membership["edge"].Contains(1),
 		"whole-second drill-down omits the microsecond-only right overlap")
-	assert.True(artifacts.Membership["point"].Contains(1),
+	assert.True(t, artifacts.Membership["point"].Contains(1),
 		"a sub-second span collapses to a point in its containing half-open bucket")
-	assert.InDelta(0.1/60, artifacts.Report.Buckets[0].AgentMinutes, 1e-12)
-	assert.InDelta(0.9/60, artifacts.Report.Buckets[1].AgentMinutes, 1e-12)
+	assert.InDelta(t, 0.1/60, artifacts.Report.Buckets[0].AgentMinutes, 1e-12)
+	assert.InDelta(t, 0.9/60, artifacts.Report.Buckets[1].AgentMinutes, 1e-12)
 }
 
 func TestBuildCandidateArtifactsNormalizesFractionalCustomBucketBoundsForMembership(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	query, err := ResolveQuery(QueryInput{
 		Preset: "custom", Timezone: "UTC", BucketOverride: "5m",
 		From: "2026-06-16T00:00:00.500Z", To: "2026-06-16T00:10:00.500Z",
 	}, fixedNow(t))
-	require.NoError(err)
+	require.NoError(t, err)
 	p := paramsFromQuery(query)
 	events := []ActivityEvent{
 		{SessionID: "range-start", Ordinal: 1, Timestamp: "2026-06-16T00:00:00.600Z", Role: "user"},
@@ -170,15 +160,15 @@ func TestBuildCandidateArtifactsNormalizesFractionalCustomBucketBoundsForMembers
 	artifacts, err := BuildCandidateArtifacts(
 		t.Context(), p, nil, candidates, nil,
 	)
-	require.NoError(err)
-	require.Len(artifacts.Report.Buckets, 2)
-	assert.Equal("2026-06-16T00:00:00Z", artifacts.Report.Buckets[0].Start)
-	assert.Equal("2026-06-16T00:05:00Z", artifacts.Report.Buckets[1].Start)
-	assert.True(artifacts.Membership["range-start"].Contains(0),
+	require.NoError(t, err)
+	require.Len(t, artifacts.Report.Buckets, 2)
+	assert.Equal(t, "2026-06-16T00:00:00Z", artifacts.Report.Buckets[0].Start)
+	assert.Equal(t, "2026-06-16T00:05:00Z", artifacts.Report.Buckets[1].Start)
+	assert.True(t, artifacts.Membership["range-start"].Contains(0),
 		"the first serialized bucket includes a point at its start")
-	assert.False(artifacts.Membership["range-start"].Contains(1))
-	assert.False(artifacts.Membership["bucket-boundary"].Contains(0))
-	assert.True(artifacts.Membership["bucket-boundary"].Contains(1),
+	assert.False(t, artifacts.Membership["range-start"].Contains(1))
+	assert.False(t, artifacts.Membership["bucket-boundary"].Contains(0))
+	assert.True(t, artifacts.Membership["bucket-boundary"].Contains(1),
 		"a point at the serialized boundary belongs to the following bucket")
 }
 
@@ -200,9 +190,6 @@ func TestAggregateCandidatesCarriesConcurrencyAcrossBucketBoundary(t *testing.T)
 }
 
 func TestAggregateCandidatesKeepsTrimmedOverlapInStartOrder(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	p := baseParams(t, "2026-06-16", "UTC")
 	at := func(value string) time.Time { return mustStart(t, value) }
 	candidates := []IntervalCandidate{
@@ -221,11 +208,11 @@ func TestAggregateCandidatesKeepsTrimmedOverlapInStartOrder(t *testing.T) {
 	}
 
 	got, err := AggregateCandidates(t.Context(), p, nil, candidates, nil)
-	require.NoError(err)
-	require.Len(got.Buckets, 288)
-	assert.Equal(2, got.Buckets[0].MaxAgents,
+	require.NoError(t, err)
+	require.Len(t, got.Buckets, 288)
+	assert.Equal(t, 2, got.Buckets[0].MaxAgents,
 		"the interleaved session overlaps in the first bucket")
-	assert.Equal(1, got.Buckets[1].MaxAgents,
+	assert.Equal(t, 1, got.Buckets[1].MaxAgents,
 		"the interleaved session must not move with the trimmed overlap")
 }
 

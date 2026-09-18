@@ -66,7 +66,7 @@ func (db *DB) adoptMachineIdentity(
 	if strings.TrimSpace(identity) == "" || identity == "local" {
 		return errors.New("installation identity is required")
 	}
-	return db.Update(func(tx *sql.Tx) error {
+	return db.Update(ctx, func(tx *sql.Tx) error {
 		if err := lockArtifactPublicationTx(ctx, tx); err != nil {
 			return err
 		}

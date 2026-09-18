@@ -533,7 +533,7 @@ func (s *Server) humaPGPush(
 		return nil, apiError(http.StatusBadRequest, err.Error())
 	}
 
-	engine := s.syncEngineForLocal(local)
+	engine := s.syncEngineForLocal(ctx, local)
 	vectorSource := s.pgPushVectorSource(pgCfg, in.Body.NoVectors)
 	body := in.Body
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
@@ -697,7 +697,7 @@ func (s *Server) humaDuckDBPush(
 		return nil, apiError(http.StatusBadRequest, err.Error())
 	}
 
-	engine := s.syncEngineForLocal(local)
+	engine := s.syncEngineForLocal(ctx, local)
 	opts := duckDBPushSyncOptions(in.Body)
 	body := in.Body
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {

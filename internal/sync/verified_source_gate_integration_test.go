@@ -91,6 +91,8 @@ func newVerifiedSourceArchive(
 	t *testing.T,
 	count int,
 ) (*Engine, *verifiedSourceCountingProvider, []parser.DiscoveredFile) {
+	t.Helper()
+
 	return newVerifiedSourceArchiveWithRewriter(t, count, nil)
 }
 
@@ -100,6 +102,7 @@ func newVerifiedSourceArchiveWithRewriter(
 	pathRewriter func(string) string,
 ) (*Engine, *verifiedSourceCountingProvider, []parser.DiscoveredFile) {
 	t.Helper()
+
 	root := t.TempDir()
 	database := openTestDB(t)
 	provider := &verifiedSourceCountingProvider{
@@ -117,7 +120,7 @@ func newVerifiedSourceArchiveWithRewriter(
 		sources: make(map[string]parser.SourceRef, count),
 	}
 	factory := verifiedSourceCountingFactory{provider: provider}
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -146,12 +149,12 @@ func newVerifiedSourceArchiveWithRewriter(
 		fileSize := fingerprint.Size
 		fileMtime := fingerprint.MTimeNS
 		fileHash := fingerprint.Hash
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: "codex:" + uuid, Project: "project", Machine: "host",
 			Agent: string(parser.AgentCodex), FilePath: &filePath,
 			FileSize: &fileSize, FileMtime: &fileMtime, FileHash: &fileHash,
 		}))
-		require.NoError(t, database.SetSessionDataVersion(
+		require.NoError(t, database.SetSessionDataVersion(t.Context(),
 			"codex:"+uuid, db.CurrentDataVersion(),
 		))
 		seedVerifiedSourceCheckpoint(
@@ -192,7 +195,7 @@ func seedVerifiedSourceCheckpoint(
 	require.NoError(t, err)
 	inode, device := getFileIdentity(path, info)
 	changeTime, _ := fileChangeTime(path, info)
-	require.NoError(t, database.UpsertParserCheckpoint(db.ParserCheckpoint{
+	require.NoError(t, database.UpsertParserCheckpoint(t.Context(), db.ParserCheckpoint{
 		SessionID:        sessionID,
 		Agent:            string(agent),
 		FilePath:         engine.effectiveSourcePath(path),
@@ -260,7 +263,7 @@ func TestVerifiedSourceGateWarmTrustDoesNotMaskDatabaseRepair(t *testing.T) {
 			wantFingerprints: 0,
 			mutate: func(t *testing.T, database *db.DB) {
 				t.Helper()
-				require.NoError(t, database.DeleteSession(sessionID))
+				require.NoError(t, database.DeleteSession(t.Context(), sessionID))
 			},
 		},
 		{
@@ -268,7 +271,7 @@ func TestVerifiedSourceGateWarmTrustDoesNotMaskDatabaseRepair(t *testing.T) {
 			wantFingerprints: 1,
 			mutate: func(t *testing.T, database *db.DB) {
 				t.Helper()
-				require.NoError(t, database.SetSessionDataVersion(
+				require.NoError(t, database.SetSessionDataVersion(t.Context(),
 					sessionID, db.CurrentDataVersion()-1,
 				))
 			},
@@ -278,13 +281,14 @@ func TestVerifiedSourceGateWarmTrustDoesNotMaskDatabaseRepair(t *testing.T) {
 			wantFingerprints: 1,
 			mutate: func(t *testing.T, database *db.DB) {
 				t.Helper()
+
 				session, err := database.GetSessionFull(
 					t.Context(), sessionID,
 				)
 				require.NoError(t, err)
 				require.NotNil(t, session)
 				session.Project = "_tmp_workspace"
-				require.NoError(t, database.UpsertSession(*session))
+				require.NoError(t, database.UpsertSession(t.Context(), *session))
 			},
 		},
 		{
@@ -295,7 +299,7 @@ func TestVerifiedSourceGateWarmTrustDoesNotMaskDatabaseRepair(t *testing.T) {
 			wantFingerprints: 1,
 			mutate: func(t *testing.T, database *db.DB) {
 				t.Helper()
-				require.NoError(t, database.ResetAllMtimes())
+				require.NoError(t, database.ResetAllMtimes(t.Context()))
 			},
 		},
 	}
@@ -320,16 +324,14 @@ func TestVerifiedSourceGateWarmTrustDoesNotMaskDatabaseRepair(t *testing.T) {
 }
 
 func TestVerifiedSourceGateDoesNotBorrowRepairState(t *testing.T) {
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(
 		root,
 		"rollout-2026-07-11T00-00-00-00000000-0000-0000-0000-000000000001.jsonl",
 	)
-	require.NoError(os.WriteFile(path, []byte("session\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("session\n"), 0o600))
 	fingerprint, err := verifiedSourceFingerprint(path)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	newProvider := func(agent parser.AgentType) *verifiedSourceCountingProvider {
 		return &verifiedSourceCountingProvider{
@@ -364,18 +366,18 @@ func TestVerifiedSourceGateDoesNotBorrowRepairState(t *testing.T) {
 		parser.AgentCodex, parser.AgentTraeX,
 	} {
 		id := string(agent) + ":shared"
-		require.NoError(database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "project", Machine: "host",
 			Agent: string(agent), FilePath: &filePath,
 			FileSize: &fileSize, FileMtime: &fileMtime,
 			FileHash: &fileHash,
 		}))
-		require.NoError(database.SetSessionDataVersion(
+		require.NoError(t, database.SetSessionDataVersion(t.Context(),
 			id, db.CurrentDataVersion(),
 		))
 	}
 
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root}, parser.AgentTraeX: {root},
 		},
@@ -415,62 +417,62 @@ func TestVerifiedSourceGateDoesNotBorrowRepairState(t *testing.T) {
 	runVerifiedSourcePass(t, engine, []parser.DiscoveredFile{
 		fileFor(parser.AgentTraeX),
 	})
-	require.NoError(database.DeleteSession("traex:shared"))
+	require.NoError(t, database.DeleteSession(t.Context(), "traex:shared"))
 
 	res := engine.processFile(t.Context(), fileFor(parser.AgentTraeX))
-	require.ErrorContains(res.err,
+	require.ErrorContains(t, res.err,
 		"unexpected parse after seeding stored source state")
 	assert.Zero(t, traexProvider.fingerprintCalls,
 		"the checkpointed pass must not fingerprint; the missing TraeX row declines and reverifies")
 }
 
 func TestVerifiedSourceGateRechecksAfterStatAndWatcherInvalidation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	engine, provider, files := newVerifiedSourceArchive(t, 1)
 	file := files[0]
 	runVerifiedSourcePass(t, engine, files)
 	runVerifiedSourcePass(t, engine, files)
-	require.Zero(provider.fingerprintCalls,
+	require.Zero(t, provider.fingerprintCalls,
 		"checkpointed sources skip both passes")
 
 	info, err := os.Stat(file.Path)
-	require.NoError(err)
+	require.NoError(t, err)
 	baselineChangeTime, ok := fileChangeTime(file.Path, info)
-	require.True(ok, "native change time unavailable")
+	require.True(t, ok, "native change time unavailable")
 	changeTime := baselineChangeTime
-	deadline := time.Now().Add(2 * time.Second)
-	for changeTime == baselineChangeTime && time.Now().Before(deadline) {
-		require.NoError(os.WriteFile(file.Path, []byte("changed\n"), 0o600))
-		require.NoError(os.Chtimes(file.Path, info.ModTime(), info.ModTime()))
-		changedInfo, statErr := os.Stat(file.Path)
-		require.NoError(statErr)
-		changeTime, ok = fileChangeTime(file.Path, changedInfo)
-		require.True(ok, "native change time unavailable after rewrite")
-		if changeTime == baselineChangeTime {
-			time.Sleep(time.Millisecond)
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		if !assert.NoError(c, os.WriteFile(file.Path, []byte("changed\n"), 0o600)) {
+			return
 		}
-	}
-	require.NotEqual(baselineChangeTime, changeTime,
+		if !assert.NoError(c, os.Chtimes(file.Path, info.ModTime(), info.ModTime())) {
+			return
+		}
+		changedInfo, statErr := os.Stat(file.Path)
+		if !assert.NoError(c, statErr) {
+			return
+		}
+		changeTime, ok = fileChangeTime(file.Path, changedInfo)
+		assert.True(c, ok, "native change time unavailable after rewrite")
+		assert.NotEqual(c, baselineChangeTime, changeTime)
+	}, 2*time.Second, time.Millisecond)
+	require.NotEqual(t, baselineChangeTime, changeTime,
 		"fixture must cross a native change-time tick")
 	runVerifiedSourcePass(t, engine, files)
-	assert.Equal(1, provider.fingerprintCalls,
+	assert.Equal(t, 1, provider.fingerprintCalls,
 		"same-size rewrite with restored mtime must deep-verify")
 
 	classified := requireClassifyPaths(t, engine, []string{file.Path})
-	require.Len(classified, 1)
+	require.Len(t, classified, 1)
 	res := engine.processFile(t.Context(), classified[0])
-	require.NoError(res.err)
-	assert.True(res.skip)
-	assert.Equal(2, provider.fingerprintCalls,
+	require.NoError(t, res.err)
+	assert.True(t, res.skip)
+	assert.Equal(t, 2, provider.fingerprintCalls,
 		"a watcher-classified source must invalidate warm trust")
 
-	engine.clearWatcherOverflowCaches()
+	engine.clearWatcherOverflowCaches(t.Context())
 	res = engine.processFile(t.Context(), file)
-	require.NoError(res.err)
-	assert.True(res.skip)
-	assert.Equal(3, provider.fingerprintCalls,
+	require.NoError(t, res.err)
+	assert.True(t, res.skip)
+	assert.Equal(t, 3, provider.fingerprintCalls,
 		"watcher overflow must clear every verified-source trust record")
 }
 
@@ -488,24 +490,21 @@ func TestVerifiedSourceGateBypassesPathRewrittenSources(t *testing.T) {
 }
 
 func TestVerifiedSourceGateLegacyClaudeRowMustEstablishFingerprint(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	path := filepath.Join(root, "legacy-session.jsonl")
-	require.NoError(os.WriteFile(path, []byte("session\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("session\n"), 0o600))
 	info, err := os.Stat(path)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	database := openTestDB(t)
 	fileSize := info.Size()
 	fileMtime := info.ModTime().UnixNano()
-	require.NoError(database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "claude:legacy-session", Project: "project", Machine: "host",
 		Agent: string(parser.AgentClaude), FilePath: &path,
 		FileSize: &fileSize, FileMtime: &fileMtime,
 	}))
-	require.NoError(database.SetSessionDataVersion(
+	require.NoError(t, database.SetSessionDataVersion(t.Context(),
 		"claude:legacy-session", db.CurrentDataVersion(),
 	))
 
@@ -527,7 +526,7 @@ func TestVerifiedSourceGateLegacyClaudeRowMustEstablishFingerprint(t *testing.T)
 		root:    root,
 		sources: make(map[string]parser.SourceRef),
 	}
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -547,14 +546,14 @@ func TestVerifiedSourceGateLegacyClaudeRowMustEstablishFingerprint(t *testing.T)
 		ProviderSource: &source, ProviderProcess: true,
 	})
 
-	require.ErrorContains(res.err,
+	require.ErrorContains(t, res.err,
 		"unexpected parse after seeding stored source state")
-	assert.Equal(1, provider.fingerprintCalls,
+	assert.Equal(t, 1, provider.fingerprintCalls,
 		"a legacy row without file_hash must not keep taking the stat-only skip")
 	record, ok := engine.verifiedSources[verifiedSourceKey{
 		agent: parser.AgentClaude, path: path,
 	}]
-	require.True(ok)
-	assert.False(record.trusted,
+	require.True(t, ok)
+	assert.False(t, record.trusted,
 		"failed parsing must not promote source trust")
 }

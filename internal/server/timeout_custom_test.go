@@ -37,6 +37,8 @@ func TestWithTimeout(t *testing.T) {
 				w.Write([]byte("too slow"))
 			},
 			assertResponse: func(t *testing.T, resp *http.Response) {
+				t.Helper()
+
 				assertTimeoutResponse(
 					t, resp,
 					"GET /test",
@@ -104,8 +106,6 @@ func TestWithTimeout(t *testing.T) {
 }
 
 func TestTimeoutBodyParity(t *testing.T) {
-	assert := assert.New(t)
-
 	t.Parallel()
 
 	operation := "GET /api/v1/sessions"
@@ -115,8 +115,8 @@ func TestTimeoutBodyParity(t *testing.T) {
 
 	var je jsonError
 	require.NoError(t, json.Unmarshal([]byte(msg), &je))
-	assert.Equal("request timed out", je.Error)
-	assert.Contains(je.Detail, operation)
-	assert.Contains(je.Detail, "30s")
-	assert.Contains(je.Detail, "--write-timeout")
+	assert.Equal(t, "request timed out", je.Error)
+	assert.Contains(t, je.Detail, operation)
+	assert.Contains(t, je.Detail, "30s")
+	assert.Contains(t, je.Detail, "--write-timeout")
 }

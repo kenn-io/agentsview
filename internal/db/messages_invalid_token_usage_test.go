@@ -14,7 +14,7 @@ import (
 // database can genuinely hold; the read path is what has to cope with it.
 func corruptTokenUsage(t *testing.T, d *DB, sessionID string, ordinal int, raw string) {
 	t.Helper()
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(t.Context(),
 		`UPDATE messages SET token_usage = ? WHERE session_id = ? AND ordinal = ?`,
 		raw, sessionID, ordinal,
 	)
@@ -51,6 +51,7 @@ func TestReadPathDropsInvalidTokenUsage(t *testing.T) {
 		{
 			name: "GetMessages",
 			read: func(t *testing.T, d *DB) []Message {
+				t.Helper()
 				got, err := d.GetMessages(t.Context(), "s1", 0, 100, true)
 				require.NoError(t, err)
 				return got
@@ -59,6 +60,7 @@ func TestReadPathDropsInvalidTokenUsage(t *testing.T) {
 		{
 			name: "GetAllMessages",
 			read: func(t *testing.T, d *DB) []Message {
+				t.Helper()
 				got, err := d.GetAllMessages(t.Context(), "s1")
 				require.NoError(t, err)
 				return got
@@ -67,6 +69,7 @@ func TestReadPathDropsInvalidTokenUsage(t *testing.T) {
 		{
 			name: "GetMessagesWindow",
 			read: func(t *testing.T, d *DB) []Message {
+				t.Helper()
 				from := 0
 				got, err := d.GetMessagesWindow(t.Context(), "s1",
 					MessageWindow{Limit: 100, Asc: true, From: &from})
@@ -76,27 +79,24 @@ func TestReadPathDropsInvalidTokenUsage(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			d := testDB(t)
 			seedMessageWithUsage(t, d)
 			corruptTokenUsage(t, d, "s1", 0, truncated)
 
 			got := tc.read(t, d)
-			require.Len(got, 1)
-			assert.Empty(string(got[0].TokenUsage),
+			require.Len(t, got, 1)
+			assert.Empty(t, string(got[0].TokenUsage),
 				"invalid token_usage must not reach the caller")
 
 			// The real regression: the row must be marshalable.
 			_, err := json.Marshal(struct {
 				Messages []Message `json:"messages"`
 			}{Messages: got})
-			require.NoError(err)
+			require.NoError(t, err)
 
 			// Everything else on the row survives.
-			assert.Equal("hi", got[0].Content)
-			assert.Equal("claude-opus-4", got[0].Model)
+			assert.Equal(t, "hi", got[0].Content)
+			assert.Equal(t, "claude-opus-4", got[0].Model)
 		})
 	}
 }

@@ -41,11 +41,6 @@ type RecallImportOptions struct {
 	AllowProductionImport   bool
 }
 
-type recallImportQueryer interface {
-	recallEvidenceQueryer
-	recallQueryRower
-}
-
 type probeAcceptedRecallEntry struct {
 	CandidateID       string              `json:"candidate_id"`
 	RunID             string              `json:"run_id"`
@@ -291,7 +286,7 @@ func newRecallImportDryRunProjection() *recallImportDryRunProjection {
 
 func (p *recallImportDryRunProjection) validateSupersession(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	recall RecallEntry,
 ) error {
 	targetID := recall.SupersedesEntryID
@@ -316,7 +311,7 @@ func (p *recallImportDryRunProjection) add(recall RecallEntry) {
 
 func recallImportEntryExistsWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	id string,
 ) (bool, error) {
 	var duplicate bool
@@ -330,7 +325,7 @@ func recallImportEntryExistsWithQueryer(
 
 func validateRecallImportSupersessionWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	recall RecallEntry,
 ) error {
 	if recall.SupersedesEntryID == "" {
@@ -343,7 +338,7 @@ func validateRecallImportSupersessionWithQueryer(
 
 func rejectUnverifiedRecallImportTrustedSupersession(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	recall RecallEntry,
 ) error {
 	if recall.SupersedesEntryID == "" {
@@ -450,7 +445,7 @@ func (db *DB) importAcceptedRecallEntry(
 		); err != nil {
 			return false, err
 		}
-	} else if err := insertRecallEntryTx(tx, recall); err != nil {
+	} else if err := insertRecallEntryTx(ctx, tx, recall); err != nil {
 		return false, err
 	}
 
@@ -535,7 +530,7 @@ func normalizeProbeToolUseIDs(ids []string) []string {
 
 func requireRecallImportSessionWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	m probeAcceptedRecallEntry,
 ) error {
 	var exists bool
@@ -555,7 +550,7 @@ func requireRecallImportSessionWithQueryer(
 
 func requireRecallImportEvidenceWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	recall RecallEntry,
 ) error {
 	if len(recall.Evidence) == 0 {
@@ -598,7 +593,7 @@ func requireRecallImportEvidenceWithQueryer(
 
 func bindVerifiedRecallImportEvidenceWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	recall *RecallEntry,
 ) error {
 	if len(recall.Evidence) == 0 {
@@ -635,10 +630,8 @@ func bindVerifiedRecallImportEvidenceWithQueryer(
 		return err
 	}
 	for i := range recall.Evidence {
-		recall.Evidence[i].MessageStartSourceUUID =
-			metadata.MessageStartSourceUUID
-		recall.Evidence[i].MessageEndSourceUUID =
-			metadata.MessageEndSourceUUID
+		recall.Evidence[i].MessageStartSourceUUID = metadata.MessageStartSourceUUID
+		recall.Evidence[i].MessageEndSourceUUID = metadata.MessageEndSourceUUID
 		recall.Evidence[i].ContentDigest = metadata.ContentDigest
 	}
 	return nil
@@ -646,7 +639,7 @@ func bindVerifiedRecallImportEvidenceWithQueryer(
 
 func requireRecallEvidenceRangeWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	evidence RecallEvidence,
 ) error {
 	want := evidence.MessageEndOrdinal - evidence.MessageStartOrdinal + 1
@@ -676,7 +669,7 @@ func requireRecallEvidenceRangeWithQueryer(
 
 func requireRecallEvidenceToolUseWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	evidence RecallEvidence,
 ) error {
 	var got int
@@ -753,7 +746,7 @@ func ensureRecallImportSessionTx(
 
 func validateRecallImportPlaceholderSessionStateWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	sessionID string,
 ) error {
 	var excluded bool

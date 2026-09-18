@@ -33,24 +33,21 @@ func positAssistantTestConvPath(root string, elem ...string) string {
 }
 
 func TestPositAssistantProviderDiscoverAndWatch(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := positAssistantTestRoot(t)
 	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	plan, err := provider.WatchPlan(t.Context())
-	require.NoError(err)
-	require.Len(plan.Roots, 1)
-	assert.Equal(root, plan.Roots[0].Path)
-	assert.True(plan.Roots[0].Recursive)
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 1)
+	assert.Equal(t, root, plan.Roots[0].Path)
+	assert.True(t, plan.Roots[0].Recursive)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 3)
+	require.NoError(t, err)
+	require.Len(t, discovered, 3)
 
 	byPath := make(map[string]SourceRef, len(discovered))
 	for _, source := range discovered {
@@ -68,12 +65,12 @@ func TestPositAssistantProviderDiscoverAndWatch(t *testing.T) {
 		root, "default", "33333333",
 		"conversation.json",
 	)
-	require.Contains(byPath, mainPath)
-	require.Contains(byPath, subPath)
-	require.Contains(byPath, defaultPath)
-	assert.Equal("sales-dashboard", byPath[mainPath].ProjectHint)
-	assert.Equal("sales-dashboard", byPath[subPath].ProjectHint)
-	assert.Equal("unknown", byPath[defaultPath].ProjectHint)
+	require.Contains(t, byPath, mainPath)
+	require.Contains(t, byPath, subPath)
+	require.Contains(t, byPath, defaultPath)
+	assert.Equal(t, "sales-dashboard", byPath[mainPath].ProjectHint)
+	assert.Equal(t, "sales-dashboard", byPath[subPath].ProjectHint)
+	assert.Equal(t, "unknown", byPath[defaultPath].ProjectHint)
 }
 
 func TestPositAssistantProviderFindSource(t *testing.T) {
@@ -194,191 +191,182 @@ func TestPositAssistantProviderClassifiesChangedPaths(t *testing.T) {
 }
 
 func TestPositAssistantProviderParseMainConversation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := positAssistantTestRoot(t)
 	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: positAssistantTestMainID,
 	})
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	fingerprint, err := provider.Fingerprint(t.Context(), source)
-	require.NoError(err)
+	require.NoError(t, err)
 	convInfo, err := os.Stat(source.DisplayPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	lmInfo, err := os.Stat(
 		filepath.Join(filepath.Dir(source.DisplayPath), "lm-messages.jsonl"),
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	wsInfo, err := os.Stat(
 		filepath.Join(root, "a1b2c3d4", "workspace.json"),
 	)
-	require.NoError(err)
-	assert.Equal(source.DisplayPath, fingerprint.Key)
-	assert.Equal(convInfo.Size()+lmInfo.Size()+wsInfo.Size(), fingerprint.Size)
-	assert.NotEmpty(fingerprint.Hash)
+	require.NoError(t, err)
+	assert.Equal(t, source.DisplayPath, fingerprint.Key)
+	assert.Equal(t, convInfo.Size()+lmInfo.Size()+wsInfo.Size(), fingerprint.Size)
+	assert.NotEmpty(t, fingerprint.Hash)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      source,
 		Fingerprint: fingerprint,
 	})
-	require.NoError(err)
-	require.True(outcome.ResultSetComplete)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.True(t, outcome.ResultSetComplete)
+	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0]
-	assert.Equal(DataVersionCurrent, result.DataVersion)
+	assert.Equal(t, DataVersionCurrent, result.DataVersion)
 
 	sess := result.Result.Session
-	assert.Equal("posit-assistant:"+positAssistantTestMainID, sess.ID)
-	assert.Equal(AgentPositAssistant, sess.Agent)
-	assert.Equal("sales-dashboard", sess.Project)
-	assert.Equal("/home/dev/projects/sales-dashboard", sess.Cwd)
-	assert.Equal("feature/quarterly-report", sess.GitBranch)
-	assert.Equal("devbox", sess.Machine)
-	assert.Equal("Sales data loading", sess.SessionName)
-	assert.Equal("How do I load the sales data?", sess.FirstMessage)
-	assert.Equal(6, sess.MessageCount)
-	assert.Equal(2, sess.UserMessageCount)
-	assert.Equal(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), sess.StartedAt)
-	assert.Equal(time.Date(2025, 1, 1, 0, 0, 40, 0, time.UTC), sess.EndedAt)
-	assert.Equal(34+20+5, sess.TotalOutputTokens)
-	assert.True(sess.HasTotalOutputTokens)
-	assert.Equal(12+100+100, sess.PeakContextTokens)
-	assert.True(sess.HasPeakContextTokens)
-	assert.Equal(fingerprint.Hash, sess.File.Hash)
-	assert.Empty(sess.ParentSessionID)
-	assert.Equal(0, sess.MalformedLines)
+	assert.Equal(t, "posit-assistant:"+positAssistantTestMainID, sess.ID)
+	assert.Equal(t, AgentPositAssistant, sess.Agent)
+	assert.Equal(t, "sales-dashboard", sess.Project)
+	assert.Equal(t, "/home/dev/projects/sales-dashboard", sess.Cwd)
+	assert.Equal(t, "feature/quarterly-report", sess.GitBranch)
+	assert.Equal(t, "devbox", sess.Machine)
+	assert.Equal(t, "Sales data loading", sess.SessionName)
+	assert.Equal(t, "How do I load the sales data?", sess.FirstMessage)
+	assert.Equal(t, 6, sess.MessageCount)
+	assert.Equal(t, 2, sess.UserMessageCount)
+	assert.Equal(t, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), sess.StartedAt)
+	assert.Equal(t, time.Date(2025, 1, 1, 0, 0, 40, 0, time.UTC), sess.EndedAt)
+	assert.Equal(t, 34+20+5, sess.TotalOutputTokens)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Equal(t, 12+100+100, sess.PeakContextTokens)
+	assert.True(t, sess.HasPeakContextTokens)
+	assert.Equal(t, fingerprint.Hash, sess.File.Hash)
+	assert.Empty(t, sess.ParentSessionID)
+	assert.Equal(t, 0, sess.MalformedLines)
 
 	msgs := result.Result.Messages
-	require.Len(msgs, 6)
+	require.Len(t, msgs, 6)
 
-	assert.Equal(RoleUser, msgs[0].Role)
-	assert.Equal("How do I load the sales data?", msgs[0].Content)
-	assert.Equal(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), msgs[0].Timestamp)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "How do I load the sales data?", msgs[0].Content)
+	assert.Equal(t, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), msgs[0].Timestamp)
 
 	first := msgs[1]
-	assert.Equal(RoleAssistant, first.Role)
-	assert.Equal("Let me look at the data folder.", first.Content,
+	assert.Equal(t, RoleAssistant, first.Role)
+	assert.Equal(t, "Let me look at the data folder.", first.Content,
 		"MESSAGESUMMARY tag must be stripped from displayed text")
-	assert.Equal("The user wants to load data.", first.ThinkingText)
-	assert.True(first.HasThinking)
-	assert.True(first.HasToolUse)
-	assert.Equal("claude-sonnet-4-6", first.Model)
-	assert.Equal("positai", first.ProviderID)
-	assert.Equal(212, first.ContextTokens)
-	assert.Equal(34, first.OutputTokens)
-	assert.JSONEq(`{
+	assert.Equal(t, "The user wants to load data.", first.ThinkingText)
+	assert.True(t, first.HasThinking)
+	assert.True(t, first.HasToolUse)
+	assert.Equal(t, "claude-sonnet-4-6", first.Model)
+	assert.Equal(t, "positai", first.ProviderID)
+	assert.Equal(t, 212, first.ContextTokens)
+	assert.Equal(t, 34, first.OutputTokens)
+	assert.JSONEq(t, `{
 			"input_tokens": 12,
 			"output_tokens": 34,
 			"cache_creation_input_tokens": 100,
 			"cache_read_input_tokens": 100
 		}`,
 		string(first.TokenUsage))
-	require.Len(first.ToolCalls, 1)
-	assert.Equal("toolu_01", first.ToolCalls[0].ToolUseID)
-	assert.Equal("read", first.ToolCalls[0].ToolName)
-	assert.Equal("Read", first.ToolCalls[0].Category)
-	assert.Equal("data/sales.csv", first.ToolCalls[0].FilePath)
-	assert.JSONEq(`{"file_path":"data/sales.csv"}`,
+	require.Len(t, first.ToolCalls, 1)
+	assert.Equal(t, "toolu_01", first.ToolCalls[0].ToolUseID)
+	assert.Equal(t, "read", first.ToolCalls[0].ToolName)
+	assert.Equal(t, "Read", first.ToolCalls[0].Category)
+	assert.Equal(t, "data/sales.csv", first.ToolCalls[0].FilePath)
+	assert.JSONEq(t, `{"file_path":"data/sales.csv"}`,
 		first.ToolCalls[0].InputJSON)
 
 	toolMsg := msgs[2]
-	assert.Equal(RoleTool, toolMsg.Role)
-	require.Len(toolMsg.ToolResults, 1)
-	assert.Equal("toolu_01", toolMsg.ToolResults[0].ToolUseID)
-	assert.Equal(len("region,amount\nwest,100\n"),
+	assert.Equal(t, RoleTool, toolMsg.Role)
+	require.Len(t, toolMsg.ToolResults, 1)
+	assert.Equal(t, "toolu_01", toolMsg.ToolResults[0].ToolUseID)
+	assert.Equal(t, len("region,amount\nwest,100\n"),
 		toolMsg.ToolResults[0].ContentLength)
 
-	assert.Equal(RoleAssistant, msgs[3].Role)
-	assert.Equal(`Use read.csv("data/sales.csv") to load it.`, msgs[3].Content)
-	assert.Equal(RoleUser, msgs[4].Role)
-	assert.Equal("thanks", msgs[4].Content)
-	assert.Equal(RoleAssistant, msgs[5].Role)
-	assert.Equal("You're welcome!", msgs[5].Content)
+	assert.Equal(t, RoleAssistant, msgs[3].Role)
+	assert.Equal(t, `Use read.csv("data/sales.csv") to load it.`, msgs[3].Content)
+	assert.Equal(t, RoleUser, msgs[4].Role)
+	assert.Equal(t, "thanks", msgs[4].Content)
+	assert.Equal(t, RoleAssistant, msgs[5].Role)
+	assert.Equal(t, "You're welcome!", msgs[5].Content)
 
 	for _, msg := range msgs {
-		assert.NotEqual("This branch was abandoned.", msg.Content,
+		assert.NotEqual(t, "This branch was abandoned.", msg.Content,
 			"inactive tree branches must not appear in the transcript")
 	}
 }
 
 func TestPositAssistantProviderParseSubagentConversation(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := positAssistantTestRoot(t)
 	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: positAssistantTestSubID,
 	})
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	fingerprint, err := provider.Fingerprint(t.Context(), source)
-	require.NoError(err)
+	require.NoError(t, err)
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      source,
 		Fingerprint: fingerprint,
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 
 	sess := outcome.Results[0].Result.Session
-	assert.Equal("posit-assistant:"+positAssistantTestSubID, sess.ID)
-	assert.Equal("posit-assistant:"+positAssistantTestMainID, sess.ParentSessionID)
-	assert.Equal(RelSubagent, sess.RelationshipType)
-	assert.Equal("sales-dashboard", sess.Project)
-	assert.Equal("Explore the data folder and report its layout", sess.FirstMessage)
+	assert.Equal(t, "posit-assistant:"+positAssistantTestSubID, sess.ID)
+	assert.Equal(t, "posit-assistant:"+positAssistantTestMainID, sess.ParentSessionID)
+	assert.Equal(t, RelSubagent, sess.RelationshipType)
+	assert.Equal(t, "sales-dashboard", sess.Project)
+	assert.Equal(t, "Explore the data folder and report its layout", sess.FirstMessage)
 
 	msgs := outcome.Results[0].Result.Messages
-	require.Len(msgs, 2)
-	assert.Equal("claude-haiku-4-5", msgs[1].Model)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "claude-haiku-4-5", msgs[1].Model)
 }
 
 func TestPositAssistantProviderParseDefaultWorkspace(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := positAssistantTestRoot(t)
 	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "33333333",
 	})
-	require.NoError(err)
-	require.True(ok)
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	fingerprint, err := provider.Fingerprint(t.Context(), source)
-	require.NoError(err)
+	require.NoError(t, err)
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      source,
 		Fingerprint: fingerprint,
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 
 	sess := outcome.Results[0].Result.Session
-	assert.Equal("unknown", sess.Project)
-	assert.Empty(sess.Cwd)
-	assert.Empty(sess.SessionName)
-	assert.Empty(sess.GitBranch,
+	assert.Equal(t, "unknown", sess.Project)
+	assert.Empty(t, sess.Cwd)
+	assert.Empty(t, sess.SessionName)
+	assert.Empty(t, sess.GitBranch,
 		"conversations without recorded gitBranch metadata must parse cleanly")
-	assert.Equal("hello", sess.FirstMessage)
+	assert.Equal(t, "hello", sess.FirstMessage)
 }
 
 func TestPositAssistantProviderParseEdgeCases(t *testing.T) {
@@ -427,9 +415,6 @@ func TestPositAssistantProviderParseEdgeCases(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			convDir := filepath.Join(
 				root, "ws1", "44444444-4444-4444-8444-444444444444",
@@ -444,32 +429,29 @@ func TestPositAssistantProviderParseEdgeCases(t *testing.T) {
 			provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
 				Roots: []string{root},
 			})
-			require.True(ok)
+			require.True(t, ok)
 			discovered, err := provider.Discover(t.Context())
-			require.NoError(err)
-			require.Len(discovered, 1)
+			require.NoError(t, err)
+			require.Len(t, discovered, 1)
 
 			outcome, err := provider.Parse(t.Context(), ParseRequest{
 				Source: discovered[0],
 			})
-			require.NoError(err)
+			require.NoError(t, err)
 			if tt.wantSkip {
-				assert.Empty(outcome.Results)
-				assert.Equal(SkipNoSession, outcome.SkipReason)
+				assert.Empty(t, outcome.Results)
+				assert.Equal(t, SkipNoSession, outcome.SkipReason)
 				return
 			}
-			require.Len(outcome.Results, 1)
+			require.Len(t, outcome.Results, 1)
 			result := outcome.Results[0].Result
-			assert.Len(result.Messages, tt.wantMessages)
-			assert.Equal(tt.wantMalformed, result.Session.MalformedLines)
+			assert.Len(t, result.Messages, tt.wantMessages)
+			assert.Equal(t, tt.wantMalformed, result.Session.MalformedLines)
 		})
 	}
 }
 
 func TestPositAssistantProviderParseSparseTokenUsage(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	convDir := filepath.Join(root, "ws1", "88888888-8888-4888-8888-888888888888")
 	writeSourceFile(t, filepath.Join(convDir, "conversation.json"), `{
@@ -491,30 +473,30 @@ func TestPositAssistantProviderParseSparseTokenUsage(t *testing.T) {
 	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
+	require.True(t, ok)
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: discovered[0],
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 	msgs := outcome.Results[0].Result.Messages
-	require.Len(msgs, 3)
+	require.Len(t, msgs, 3)
 
 	partial := msgs[1]
-	assert.Equal(17, partial.OutputTokens)
-	assert.True(partial.HasOutputTokens)
-	assert.False(partial.HasContextTokens)
-	assert.JSONEq(`{"output_tokens":17}`, string(partial.TokenUsage))
+	assert.Equal(t, 17, partial.OutputTokens)
+	assert.True(t, partial.HasOutputTokens)
+	assert.False(t, partial.HasContextTokens)
+	assert.JSONEq(t, `{"output_tokens":17}`, string(partial.TokenUsage))
 
 	empty := msgs[2]
-	assert.Empty(empty.TokenUsage,
+	assert.Empty(t, empty.TokenUsage,
 		"usage objects without recognized token fields must not mark coverage")
-	assert.False(empty.HasOutputTokens)
-	assert.False(empty.HasContextTokens)
+	assert.False(t, empty.HasOutputTokens)
+	assert.False(t, empty.HasContextTokens)
 }
 
 func TestPositAssistantProviderNormalizesInferredCacheWrites(t *testing.T) {
@@ -584,9 +566,6 @@ func TestPositAssistantProviderNormalizesInferredCacheWrites(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			root := t.TempDir()
 			convDir := filepath.Join(root, "ws1", "99999999-9999-4999-8999-999999999999")
 			writeSourceFile(t, filepath.Join(convDir, "conversation.json"), `{
@@ -601,33 +580,30 @@ func TestPositAssistantProviderNormalizesInferredCacheWrites(t *testing.T) {
 			provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
 				Roots: []string{root},
 			})
-			require.True(ok)
+			require.True(t, ok)
 			discovered, err := provider.Discover(t.Context())
-			require.NoError(err)
-			require.Len(discovered, 1)
+			require.NoError(t, err)
+			require.Len(t, discovered, 1)
 			outcome, err := provider.Parse(t.Context(), ParseRequest{
 				Source: discovered[0],
 			})
-			require.NoError(err)
-			require.Len(outcome.Results, 1)
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
 			messages := outcome.Results[0].Result.Messages
-			require.Len(messages, 2)
+			require.Len(t, messages, 2)
 			assistant := messages[1]
 
-			assert.Equal(tt.wantModel, assistant.Model)
-			assert.JSONEq(tt.wantUsage, string(assistant.TokenUsage))
-			assert.Equal(tt.wantContext, assistant.ContextTokens)
-			assert.True(assistant.HasContextTokens)
-			assert.Equal(tt.wantOutput, assistant.OutputTokens)
-			assert.True(assistant.HasOutputTokens)
+			assert.Equal(t, tt.wantModel, assistant.Model)
+			assert.JSONEq(t, tt.wantUsage, string(assistant.TokenUsage))
+			assert.Equal(t, tt.wantContext, assistant.ContextTokens)
+			assert.True(t, assistant.HasContextTokens)
+			assert.Equal(t, tt.wantOutput, assistant.OutputTokens)
+			assert.True(t, assistant.HasOutputTokens)
 		})
 	}
 }
 
 func TestPositAssistantProviderClassifiesDeletedPaths(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	convDir := filepath.Join(root, "ws1", "55555555-5555-4555-8555-555555555555")
 	convPath := filepath.Join(convDir, "conversation.json")
@@ -639,35 +615,32 @@ func TestPositAssistantProviderClassifiesDeletedPaths(t *testing.T) {
 	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	// A removed transcript must map back to the surviving conversation
 	// source so the session reparses without the deleted messages.
-	require.NoError(os.Remove(lmPath))
+	require.NoError(t, os.Remove(lmPath))
 	sources, err := provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: lmPath, EventKind: "remove"},
 	)
-	require.NoError(err)
-	require.Len(sources, 1)
-	assert.Equal(convPath, sources[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, convPath, sources[0].DisplayPath)
 
 	// A fully deleted conversation still classifies structurally; the engine
 	// owns the decision to keep the stored session archived.
-	require.NoError(os.RemoveAll(convDir))
+	require.NoError(t, os.RemoveAll(convDir))
 	sources, err = provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: convPath, EventKind: "remove"},
 	)
-	require.NoError(err)
-	require.Len(sources, 1)
-	assert.Equal(convPath, sources[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, convPath, sources[0].DisplayPath)
 }
 
 func TestPositAssistantProviderFingerprintTracksTranscriptAppends(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	convDir := filepath.Join(root, "ws1", "66666666-6666-4666-8666-666666666666")
 	convPath := filepath.Join(convDir, "conversation.json")
@@ -679,33 +652,30 @@ func TestPositAssistantProviderFingerprintTracksTranscriptAppends(t *testing.T) 
 	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
+	require.True(t, ok)
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 
 	before, err := provider.Fingerprint(t.Context(), discovered[0])
-	require.NoError(err)
+	require.NoError(t, err)
 
 	f, err := os.OpenFile(lmPath, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = f.WriteString(
 		`{"id":1,"message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}` + "\n",
 	)
-	require.NoError(err)
-	require.NoError(f.Close())
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 
 	after, err := provider.Fingerprint(t.Context(), discovered[0])
-	require.NoError(err)
-	assert.NotEqual(before.Hash, after.Hash,
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, after.Hash,
 		"appending to lm-messages.jsonl must change the composite fingerprint")
-	assert.Greater(after.Size, before.Size)
+	assert.Greater(t, after.Size, before.Size)
 }
 
 func TestPositAssistantProviderFingerprintTracksWorkspaceManifest(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	wsPath := filepath.Join(root, "ws1", "workspace.json")
 	convDir := filepath.Join(root, "ws1", "77777777-7777-4777-8777-777777777777")
@@ -717,32 +687,29 @@ func TestPositAssistantProviderFingerprintTracksWorkspaceManifest(t *testing.T) 
 	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
+	require.True(t, ok)
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 
 	// Creating the manifest after the fact must invalidate freshness so the
 	// session picks up its project and cwd instead of staying "unknown".
 	before, err := provider.Fingerprint(t.Context(), discovered[0])
-	require.NoError(err)
+	require.NoError(t, err)
 	writeSourceFile(t, wsPath, `{"path":"/home/dev/projects/created-later"}`)
 	created, err := provider.Fingerprint(t.Context(), discovered[0])
-	require.NoError(err)
-	assert.NotEqual(before.Hash, created.Hash,
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, created.Hash,
 		"creating workspace.json must change the composite fingerprint")
 
 	writeSourceFile(t, wsPath, `{"path":"/home/dev/projects/renamed-app"}`)
 	edited, err := provider.Fingerprint(t.Context(), discovered[0])
-	require.NoError(err)
-	assert.NotEqual(created.Hash, edited.Hash,
+	require.NoError(t, err)
+	assert.NotEqual(t, created.Hash, edited.Hash,
 		"editing workspace.json must change the composite fingerprint")
 }
 
 func TestPositAssistantProviderParseUsageEventsSidecar(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	convDir := filepath.Join(root, "ws1", "99999999-9999-4999-8999-999999999999")
 	writeSourceFile(t, filepath.Join(convDir, "conversation.json"), `{
@@ -768,77 +735,74 @@ func TestPositAssistantProviderParseUsageEventsSidecar(t *testing.T) {
 	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
-	assert.Equal(CapabilitySupported,
+	require.True(t, ok)
+	assert.Equal(t, CapabilitySupported,
 		provider.Capabilities().Content.AggregateUsageEvents)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: discovered[0],
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0].Result
 
 	events := result.UsageEvents
-	require.Len(events, 4)
+	require.Len(t, events, 4)
 
 	keepalive := events[0]
-	assert.Equal("posit-assistant:99999999-9999-4999-8999-999999999999",
+	assert.Equal(t, "posit-assistant:99999999-9999-4999-8999-999999999999",
 		keepalive.SessionID)
-	assert.Equal("posit-assistant-keepalive", keepalive.Source)
-	assert.Equal("claude-sonnet-4-5", keepalive.Model)
-	assert.Equal("anthropic", keepalive.ProviderID)
-	assert.Equal(3, keepalive.InputTokens)
-	assert.Equal(2, keepalive.OutputTokens)
-	assert.Equal(50, keepalive.CacheCreationInputTokens)
-	assert.Equal(24600, keepalive.CacheReadInputTokens)
-	require.NotNil(keepalive.MessageOrdinal)
-	assert.Equal(0, *keepalive.MessageOrdinal,
+	assert.Equal(t, "posit-assistant-keepalive", keepalive.Source)
+	assert.Equal(t, "claude-sonnet-4-5", keepalive.Model)
+	assert.Equal(t, "anthropic", keepalive.ProviderID)
+	assert.Equal(t, 3, keepalive.InputTokens)
+	assert.Equal(t, 2, keepalive.OutputTokens)
+	assert.Equal(t, 50, keepalive.CacheCreationInputTokens)
+	assert.Equal(t, 24600, keepalive.CacheReadInputTokens)
+	require.NotNil(t, keepalive.MessageOrdinal)
+	assert.Equal(t, 0, *keepalive.MessageOrdinal,
 		"anchorMessageId must map to the anchor node's first message ordinal")
-	assert.Equal("2025-01-01T00:05:00Z", keepalive.OccurredAt)
-	assert.Nil(keepalive.Cost, "cost is catalog-priced downstream")
+	assert.Equal(t, "2025-01-01T00:05:00Z", keepalive.OccurredAt)
+	assert.Nil(t, keepalive.Cost, "cost is catalog-priced downstream")
 
 	classifier := events[1]
-	assert.Equal("posit-assistant-classifier", classifier.Source)
-	assert.Equal("claude-haiku-4-5", classifier.Model)
-	assert.Equal("positai", classifier.ProviderID)
-	assert.Nil(classifier.MessageOrdinal,
+	assert.Equal(t, "posit-assistant-classifier", classifier.Source)
+	assert.Equal(t, "claude-haiku-4-5", classifier.Model)
+	assert.Equal(t, "positai", classifier.ProviderID)
+	assert.Nil(t, classifier.MessageOrdinal,
 		"unknown anchor nodes must not fabricate an ordinal")
 
 	glm := events[2]
-	assert.Equal(300, glm.InputTokens,
+	assert.Equal(t, 300, glm.InputTokens,
 		"auto-cache families fold the cache-write remainder into input")
-	assert.Zero(glm.CacheCreationInputTokens)
-	assert.Equal(600, glm.CacheReadInputTokens)
-	assert.Equal("positai", glm.ProviderID)
+	assert.Zero(t, glm.CacheCreationInputTokens)
+	assert.Equal(t, 600, glm.CacheReadInputTokens)
+	assert.Equal(t, "positai", glm.ProviderID)
 
-	assert.Equal("2025-01-01T00:00:01Z", events[3].OccurredAt,
+	assert.Equal(t, "2025-01-01T00:00:01Z", events[3].OccurredAt,
 		"missing event timestamps fall back to the session end")
 
 	seen := make(map[string]struct{}, len(events))
 	for _, event := range events {
-		require.NotEmpty(event.DedupKey)
+		require.NotEmpty(t, event.DedupKey)
 		_, dup := seen[event.DedupKey]
-		require.False(dup, "dedup keys must be unique per sidecar line")
+		require.False(t, dup, "dedup keys must be unique per sidecar line")
 		seen[event.DedupKey] = struct{}{}
 	}
 
 	sess := result.Session
-	assert.Equal(1, sess.MalformedLines,
+	assert.Equal(t, 1, sess.MalformedLines,
 		"unparseable sidecar lines must be counted")
-	assert.Equal(5, sess.TotalOutputTokens,
+	assert.Equal(t, 5, sess.TotalOutputTokens,
 		"sidecar events are supplementary; session totals stay message-derived")
-	assert.Equal(110, sess.PeakContextTokens)
+	assert.Equal(t, 110, sess.PeakContextTokens)
 }
 
 func TestPositAssistantProviderPreservesUsageOnlySession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	conversationID := "88888888-8888-4888-8888-888888888888"
 	convDir := filepath.Join(root, "ws1", conversationID)
@@ -857,35 +821,32 @@ func TestPositAssistantProviderPreservesUsageOnlySession(t *testing.T) {
 	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
+	require.True(t, ok)
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: discovered[0],
 	})
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0].Result
 
-	assert.Equal(positAssistantIDPrefix+conversationID, result.Session.ID)
-	assert.Zero(result.Session.MessageCount)
-	assert.Empty(result.Messages)
-	require.Len(result.UsageEvents, 1)
-	assert.Equal("posit-assistant-classifier", result.UsageEvents[0].Source)
-	assert.Equal("claude-haiku-4-5", result.UsageEvents[0].Model)
-	assert.Equal(400, result.UsageEvents[0].InputTokens)
-	assert.Equal(10, result.UsageEvents[0].OutputTokens)
-	assert.Equal("2025-01-01T00:05:00Z", result.UsageEvents[0].OccurredAt)
-	assert.Equal("2025-01-01T00:05:00Z",
+	assert.Equal(t, positAssistantIDPrefix+conversationID, result.Session.ID)
+	assert.Zero(t, result.Session.MessageCount)
+	assert.Empty(t, result.Messages)
+	require.Len(t, result.UsageEvents, 1)
+	assert.Equal(t, "posit-assistant-classifier", result.UsageEvents[0].Source)
+	assert.Equal(t, "claude-haiku-4-5", result.UsageEvents[0].Model)
+	assert.Equal(t, 400, result.UsageEvents[0].InputTokens)
+	assert.Equal(t, 10, result.UsageEvents[0].OutputTokens)
+	assert.Equal(t, "2025-01-01T00:05:00Z", result.UsageEvents[0].OccurredAt)
+	assert.Equal(t, "2025-01-01T00:05:00Z",
 		result.Session.EndedAt.Format(time.RFC3339Nano))
 }
 
 func TestPositAssistantProviderFingerprintTracksUsageEventsSidecar(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	convDir := filepath.Join(root, "ws1", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 	uePath := filepath.Join(convDir, "usage-events.jsonl")
@@ -897,44 +858,44 @@ func TestPositAssistantProviderFingerprintTracksUsageEventsSidecar(t *testing.T)
 	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(ok)
+	require.True(t, ok)
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
 
 	// Creating the sidecar after the fact must invalidate freshness: idle
 	// sessions receive keepalive appends without any transcript change.
 	before, err := provider.Fingerprint(t.Context(), discovered[0])
-	require.NoError(err)
+	require.NoError(t, err)
 	writeSourceFile(t, uePath,
 		`{"type":"usage","kind":"keepalive","timestamp":1735689900000,"anchorMessageId":"n1","providerId":"anthropic","modelId":"claude-sonnet-4-5","inputTokens":3,"outputTokens":2,"totalTokens":5,"cacheReadTokens":0,"cacheWriteTokens":0}`+"\n")
 	created, err := provider.Fingerprint(t.Context(), discovered[0])
-	require.NoError(err)
-	assert.NotEqual(before.Hash, created.Hash,
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, created.Hash,
 		"creating usage-events.jsonl must change the composite fingerprint")
-	assert.Greater(created.Size, before.Size)
+	assert.Greater(t, created.Size, before.Size)
 
 	f, err := os.OpenFile(uePath, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = f.WriteString(
 		`{"type":"usage","kind":"keepalive","timestamp":1735689960000,"anchorMessageId":"n1","providerId":"anthropic","modelId":"claude-sonnet-4-5","inputTokens":3,"outputTokens":2,"totalTokens":5,"cacheReadTokens":0,"cacheWriteTokens":0}` + "\n",
 	)
-	require.NoError(err)
-	require.NoError(f.Close())
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 
 	appended, err := provider.Fingerprint(t.Context(), discovered[0])
-	require.NoError(err)
-	assert.NotEqual(created.Hash, appended.Hash,
+	require.NoError(t, err)
+	assert.NotEqual(t, created.Hash, appended.Hash,
 		"appending to usage-events.jsonl must change the composite fingerprint")
-	assert.Greater(appended.Size, created.Size)
+	assert.Greater(t, appended.Size, created.Size)
 
 	// The engine's incremental-sync cutoff reads MTimeNS, so the sidecar's
 	// mtime must drive the composite even when no other file changes —
 	// otherwise fallback polling would never resync a sidecar-only append.
 	future := time.Now().Add(2 * time.Hour)
-	require.NoError(os.Chtimes(uePath, future, future))
+	require.NoError(t, os.Chtimes(uePath, future, future))
 	touched, err := provider.Fingerprint(t.Context(), discovered[0])
-	require.NoError(err)
-	assert.Equal(future.UnixNano(), touched.MTimeNS,
+	require.NoError(t, err)
+	assert.Equal(t, future.UnixNano(), touched.MTimeNS,
 		"sidecar mtime must drive the composite fingerprint MTimeNS")
 }

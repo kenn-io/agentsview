@@ -486,7 +486,7 @@ func TestFindSessionIDsByPartialLiteralCaseSensitivePG(t *testing.T) {
 
 	local := testDB(t)
 	for _, id := range []string{"abc_def", "abcXdef", "abc%def", "ABCdef"} {
-		require.NoError(t, local.UpsertSession(db.Session{
+		require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "proj", Machine: "local",
 			Agent: "claude", MessageCount: 1,
 		}), "upsert %q", id)

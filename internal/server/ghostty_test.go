@@ -12,7 +12,7 @@ import (
 
 func TestLaunchResumeDarwinGhosttyDirectCli(t *testing.T) {
 	cwd := t.TempDir()
-	proc := launchResumeDarwin(
+	proc := launchResumeDarwin(t.Context(),
 		Opener{
 			ID:   "ghostty",
 			Name: "Ghostty",
@@ -31,10 +31,8 @@ func TestLaunchResumeDarwinGhosttyDirectCli(t *testing.T) {
 }
 
 func TestLaunchResumeDarwinGhosttyAppBundle(t *testing.T) {
-	assert := assert.New(t)
-
 	cwd := t.TempDir()
-	proc := launchResumeDarwin(
+	proc := launchResumeDarwin(t.Context(),
 		Opener{
 			ID:   "ghostty",
 			Name: "Ghostty",
@@ -46,17 +44,17 @@ func TestLaunchResumeDarwinGhosttyAppBundle(t *testing.T) {
 	)
 	require.NotNil(t, proc, "launchResumeDarwin returned nil")
 	// App bundle wraps with `open -na`.
-	assert.True(strings.HasSuffix(proc.Args[0], "open"),
+	assert.True(t, strings.HasSuffix(proc.Args[0], "open"),
 		"expected open for app bundle, got %q", proc.Args[0])
-	assert.True(sliceContains(proc.Args, "-na"),
+	assert.True(t, sliceContains(proc.Args, "-na"),
 		"missing -na flag: %v", proc.Args)
 	wantWD := "--working-directory=" + cwd
-	assert.True(sliceContains(proc.Args, wantWD),
+	assert.True(t, sliceContains(proc.Args, wantWD),
 		"missing %q in args: %v", wantWD, proc.Args)
 }
 
 func TestLaunchResumeDarwinGhosttyNoCwd(t *testing.T) {
-	proc := launchResumeDarwin(
+	proc := launchResumeDarwin(t.Context(),
 		Opener{
 			ID:   "ghostty",
 			Name: "Ghostty",
@@ -78,7 +76,7 @@ func TestLaunchTerminalInDirGhosttyDirectCliOnDarwin(t *testing.T) {
 		t.Skip("macOS-specific Ghostty launch path")
 	}
 	dir := t.TempDir()
-	proc := launchTerminalInDir(
+	proc := launchTerminalInDir(t.Context(),
 		Opener{
 			ID:   "ghostty",
 			Name: "Ghostty",

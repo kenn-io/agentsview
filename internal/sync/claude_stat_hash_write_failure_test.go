@@ -61,18 +61,15 @@ func (f digestFingerprintCountingFactory) NewProvider(
 // source-level outcome for Claude DAG transcripts. One committed branch cannot
 // make the shared transcript fresh while another branch still needs a write.
 func TestSyncClaudeForkWriteFailureRetriesWholeSource(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := openTestDB(t)
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "project-a")
-	require.NoError(os.MkdirAll(projectDir, 0o755))
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
 	path := filepath.Join(projectDir, "forked.jsonl")
 	builder := newClaudeDAGBuilder(false)
-	require.NoError(os.WriteFile(path, []byte(builder.String()), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(builder.String()), 0o644))
 
-	initialEngine := NewEngine(database, EngineConfig{
+	initialEngine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -80,17 +77,17 @@ func TestSyncClaudeForkWriteFailureRetriesWholeSource(t *testing.T) {
 	})
 	t.Cleanup(initialEngine.Close)
 	initial := initialEngine.SyncAll(t.Context(), nil)
-	require.Equal(1, initial.Synced)
-	require.Zero(initial.Failed)
-	require.Equal(db.CurrentDataVersion(),
-		database.GetSessionDataVersion("forked"))
+	require.Equal(t, 1, initial.Synced)
+	require.Zero(t, initial.Failed)
+	require.Equal(t, db.CurrentDataVersion(),
+		database.GetSessionDataVersion(t.Context(), "forked"))
 
 	addClaudeDAGFork(builder)
-	require.NoError(os.WriteFile(path, []byte(builder.String()), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(builder.String()), 0o644))
 
 	raw, err := sql.Open("sqlite3", database.Path())
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(raw.Close()) })
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, raw.Close()) })
 	_, err = raw.ExecContext(t.Context(), `
 		CREATE TRIGGER fail_claude_fork_insert
 		BEFORE INSERT ON sessions
@@ -106,9 +103,9 @@ func TestSyncClaudeForkWriteFailureRetriesWholeSource(t *testing.T) {
 			SELECT RAISE(FAIL, 'injected Claude main demotion failure');
 		END;
 	`)
-	require.NoError(err)
+	require.NoError(t, err)
 
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -117,21 +114,21 @@ func TestSyncClaudeForkWriteFailureRetriesWholeSource(t *testing.T) {
 	t.Cleanup(engine.Close)
 
 	failedDemotion := engine.SyncAll(t.Context(), nil)
-	require.Zero(failedDemotion.Synced)
-	require.Equal(1, failedDemotion.Failed)
-	require.Equal(db.CurrentDataVersion(),
-		database.GetSessionDataVersion("forked"),
+	require.Zero(t, failedDemotion.Synced)
+	require.Equal(t, 1, failedDemotion.Failed)
+	require.Equal(t, db.CurrentDataVersion(),
+		database.GetSessionDataVersion(t.Context(), "forked"),
 		"a rejected pre-write demotion must abort before changing the row")
 	_, hasDigest, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentClaude, path,
 	)
-	require.NoError(err)
-	assert.False(hasDigest,
+	require.NoError(t, err)
+	assert.False(t, hasDigest,
 		"a rejected source demotion must revoke the old digest")
 
 	_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_claude_main_demotion`)
-	require.NoError(err)
-	partialEngine := NewEngine(database, EngineConfig{
+	require.NoError(t, err)
+	partialEngine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -139,27 +136,27 @@ func TestSyncClaudeForkWriteFailureRetriesWholeSource(t *testing.T) {
 	})
 	t.Cleanup(partialEngine.Close)
 	failed := partialEngine.SyncAll(t.Context(), nil)
-	require.Equal(1, failed.Synced)
-	require.Equal(1, failed.Failed)
+	require.Equal(t, 1, failed.Synced)
+	require.Equal(t, 1, failed.Failed)
 	main, err := database.GetSession(t.Context(), "forked")
-	require.NoError(err)
-	require.NotNil(main, "the first DAG branch must commit before the failure")
-	assert.Less(main.DataVersion, db.CurrentDataVersion(),
+	require.NoError(t, err)
+	require.NotNil(t, main, "the first DAG branch must commit before the failure")
+	assert.Less(t, main.DataVersion, db.CurrentDataVersion(),
 		"the committed main branch must remain retryable")
 	fork, err := database.GetSession(t.Context(), "forked-i")
-	require.NoError(err)
-	assert.Nil(fork, "the injected fork write must leave the branch absent")
+	require.NoError(t, err)
+	assert.Nil(t, fork, "the injected fork write must leave the branch absent")
 
 	_, hasDigest, err = database.GetProviderStatHash(
 		t.Context(), parser.AgentClaude, path,
 	)
-	require.NoError(err)
-	assert.False(hasDigest,
+	require.NoError(t, err)
+	assert.False(t, hasDigest,
 		"a partial DAG write must not mark the shared source fresh")
 
 	_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_claude_fork_insert`)
-	require.NoError(err)
-	restarted := NewEngine(database, EngineConfig{
+	require.NoError(t, err)
+	restarted := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -168,18 +165,18 @@ func TestSyncClaudeForkWriteFailureRetriesWholeSource(t *testing.T) {
 	t.Cleanup(restarted.Close)
 
 	retry := restarted.SyncAll(t.Context(), nil)
-	require.Equal(2, retry.Synced,
+	require.Equal(t, 2, retry.Synced,
 		"the unchanged DAG source must retry every branch after a partial write")
-	require.Zero(retry.Failed)
+	require.Zero(t, retry.Failed)
 	fork, err = database.GetSession(t.Context(), "forked-i")
-	require.NoError(err)
-	require.NotNil(fork, "the retry must restore the missing fork")
+	require.NoError(t, err)
+	require.NotNil(t, fork, "the retry must restore the missing fork")
 
 	_, hasDigest, err = database.GetProviderStatHash(
 		t.Context(), parser.AgentClaude, path,
 	)
-	require.NoError(err)
-	assert.True(hasDigest,
+	require.NoError(t, err)
+	assert.True(t, hasDigest,
 		"the digest may persist after every branch commits")
 }
 
@@ -192,51 +189,48 @@ func TestRestartedDigestGateIgnoresStaleTrashedClaudeMembers(t *testing.T) {
 		{name: "all members trashed", trashMainToo: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			database := openTestDB(t)
 			root := t.TempDir()
 			projectDir := filepath.Join(root, "project-a")
-			require.NoError(os.MkdirAll(projectDir, 0o755))
+			require.NoError(t, os.MkdirAll(projectDir, 0o755))
 			path := filepath.Join(projectDir, "forked.jsonl")
-			require.NoError(os.WriteFile(
+			require.NoError(t, os.WriteFile(
 				path, []byte(newClaudeDAGBuilder(true).String()), 0o644,
 			))
 
-			initial := NewEngine(database, EngineConfig{
+			initial := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentClaude: {root},
 				},
 				Machine: "local",
 			})
-			require.Equal(2, initial.SyncAll(t.Context(), nil).Synced)
+			require.Equal(t, 2, initial.SyncAll(t.Context(), nil).Synced)
 			initial.Close()
 			_, hasDigest, err := database.GetProviderStatHash(
 				t.Context(), parser.AgentClaude, path,
 			)
-			require.NoError(err)
-			require.True(hasDigest)
+			require.NoError(t, err)
+			require.True(t, hasDigest)
 
-			require.NoError(database.SoftDeleteSession("forked-i"))
-			require.NoError(database.SetSessionDataVersion(
+			require.NoError(t, database.SoftDeleteSession(t.Context(), "forked-i"))
+			require.NoError(t, database.SetSessionDataVersion(t.Context(),
 				"forked-i", db.CurrentDataVersion()-1,
 			))
 			if tc.trashMainToo {
-				require.NoError(database.SoftDeleteSession("forked"))
-				require.NoError(database.SetSessionDataVersion(
+				require.NoError(t, database.SoftDeleteSession(t.Context(), "forked"))
+				require.NoError(t, database.SetSessionDataVersion(t.Context(),
 					"forked", db.CurrentDataVersion()-1,
 				))
 			}
 
 			innerFactory, ok := parser.ProviderFactoryByType(parser.AgentClaude)
-			require.True(ok)
+			require.True(t, ok)
 			inner := innerFactory.NewProvider(parser.ProviderConfig{
 				Roots: []string{root}, Machine: "local",
 			})
-			require.NotNil(inner)
+			require.NotNil(t, inner)
 			counting := &digestFingerprintCountingProvider{Provider: inner}
-			restarted := NewEngine(database, EngineConfig{
+			restarted := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentClaude: {root},
 				},
@@ -260,11 +254,11 @@ func TestRestartedDigestGateIgnoresStaleTrashedClaudeMembers(t *testing.T) {
 
 			stats := restarted.SyncAll(t.Context(), nil)
 
-			assert.Zero(stats.Synced)
-			assert.Zero(stats.Failed)
-			assert.Zero(counting.calls.Load(),
+			assert.Zero(t, stats.Synced)
+			assert.Zero(t, stats.Failed)
+			assert.Zero(t, counting.calls.Load(),
 				"stale trashed members must not defeat the persisted digest")
-			assert.Zero(contentHashCalls.Load(),
+			assert.Zero(t, contentHashCalls.Load(),
 				"stale trashed members must not force a transcript hash")
 		})
 	}
@@ -282,18 +276,15 @@ func TestSyncClaudeDAGIntentionalSkipCompletesActiveMembers(t *testing.T) {
 		{name: "sync_single/trashed", trashed: true, syncSingle: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			database := openTestDB(t)
 			root := t.TempDir()
 			projectDir := filepath.Join(root, "project-a")
-			require.NoError(os.MkdirAll(projectDir, 0o755))
+			require.NoError(t, os.MkdirAll(projectDir, 0o755))
 			path := filepath.Join(projectDir, "forked.jsonl")
 			builder := newClaudeDAGBuilder(true)
-			require.NoError(os.WriteFile(path, []byte(builder.String()), 0o644))
+			require.NoError(t, os.WriteFile(path, []byte(builder.String()), 0o644))
 
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentClaude: {root},
 				},
@@ -301,12 +292,12 @@ func TestSyncClaudeDAGIntentionalSkipCompletesActiveMembers(t *testing.T) {
 			})
 			t.Cleanup(engine.Close)
 			initial := engine.SyncAll(t.Context(), nil)
-			require.Equal(2, initial.Synced)
-			require.Zero(initial.Failed)
+			require.Equal(t, 2, initial.Synced)
+			require.Zero(t, initial.Failed)
 			if tc.trashed {
-				require.NoError(database.SoftDeleteSession("forked-i"))
+				require.NoError(t, database.SoftDeleteSession(t.Context(), "forked-i"))
 			} else {
-				require.NoError(database.DeleteSession("forked-i"))
+				require.NoError(t, database.DeleteSession(t.Context(), "forked-i"))
 			}
 
 			builder.AddClaudeUserWithUUID(
@@ -314,31 +305,31 @@ func TestSyncClaudeDAGIntentionalSkipCompletesActiveMembers(t *testing.T) {
 			).AddClaudeAssistantWithUUID(
 				"2024-01-01T10:02:01Z", "ok-6", "n", "m",
 			)
-			require.NoError(os.Remove(path))
-			require.NoError(os.WriteFile(path, []byte(builder.String()), 0o644))
+			require.NoError(t, os.Remove(path))
+			require.NoError(t, os.WriteFile(path, []byte(builder.String()), 0o644))
 
 			if tc.syncSingle {
-				require.NoError(engine.SyncSingleSession("forked"))
+				require.NoError(t, engine.SyncSingleSession("forked"))
 			} else {
 				changed := engine.SyncAll(t.Context(), nil)
-				require.Equal(1, changed.Synced)
-				require.Zero(changed.Failed)
+				require.Equal(t, 1, changed.Synced)
+				require.Zero(t, changed.Failed)
 			}
-			assert.Equal(db.CurrentDataVersion(),
-				database.GetSessionDataVersion("forked"))
+			assert.Equal(t, db.CurrentDataVersion(),
+				database.GetSessionDataVersion(t.Context(), "forked"))
 			if tc.trashed {
-				assert.Equal(db.CurrentDataVersion(),
-					database.GetSessionDataVersion("forked-i"),
+				assert.Equal(t, db.CurrentDataVersion(),
+					database.GetSessionDataVersion(t.Context(), "forked-i"),
 					"the trashed fork must not be demoted")
 			}
 			_, hasDigest, err := database.GetProviderStatHash(
 				t.Context(), parser.AgentClaude, path,
 			)
-			require.NoError(err)
-			assert.True(hasDigest,
+			require.NoError(t, err)
+			assert.True(t, hasDigest,
 				"an intentional fork skip must not block source freshness")
 
-			restarted := NewEngine(database, EngineConfig{
+			restarted := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentClaude: {root},
 				},
@@ -346,25 +337,25 @@ func TestSyncClaudeDAGIntentionalSkipCompletesActiveMembers(t *testing.T) {
 			})
 			t.Cleanup(restarted.Close)
 			noop := restarted.SyncAll(t.Context(), nil)
-			assert.Zero(noop.Synced,
+			assert.Zero(t, noop.Synced,
 				"a completed active branch must not rewrite on restart")
-			assert.Zero(noop.Failed)
+			assert.Zero(t, noop.Failed)
 
 			if !tc.trashed {
 				return
 			}
-			restoredCount, err := database.RestoreSession("forked-i")
-			require.NoError(err)
-			require.EqualValues(1, restoredCount)
-			assert.Less(database.GetSessionDataVersion("forked-i"),
+			restoredCount, err := database.RestoreSession(t.Context(), "forked-i")
+			require.NoError(t, err)
+			require.EqualValues(t, 1, restoredCount)
+			assert.Less(t, database.GetSessionDataVersion(t.Context(), "forked-i"),
 				db.CurrentDataVersion(),
 				"a restored fork must be eligible for source reparse",
 			)
 			_, hasDigest, err = database.GetProviderStatHash(
 				t.Context(), parser.AgentClaude, path,
 			)
-			require.NoError(err)
-			assert.False(hasDigest,
+			require.NoError(t, err)
+			assert.False(t, hasDigest,
 				"restoring a fork must invalidate the source digest")
 
 			// Pin the source stat to the current main row. The restored fork's
@@ -372,41 +363,41 @@ func TestSyncClaudeDAGIntentionalSkipCompletesActiveMembers(t *testing.T) {
 			// Normalize the project and unavailable file identity so this does
 			// not depend on temporary-directory naming or inode reuse by the host.
 			raw, err := sql.Open("sqlite3", database.Path())
-			require.NoError(err)
-			t.Cleanup(func() { require.NoError(raw.Close()) })
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, raw.Close()) })
 			_, err = raw.ExecContext(t.Context(),
 				`UPDATE sessions
 				 SET project = ?, file_inode = 0, file_device = 0
 				 WHERE file_path = ?`,
 				"project-a", path,
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 			mainSession, err := database.GetSession(t.Context(), "forked")
-			require.NoError(err)
-			require.NotNil(mainSession)
-			require.Equal("project-a", mainSession.Project)
-			require.Equal(path, database.GetSessionFilePath("forked"))
-			storedSize, storedMtime, ok := database.GetSessionFileInfo("forked")
-			require.True(ok)
+			require.NoError(t, err)
+			require.NotNil(t, mainSession)
+			require.Equal(t, "project-a", mainSession.Project)
+			require.Equal(t, path, database.GetSessionFilePath(t.Context(), "forked"))
+			storedSize, storedMtime, ok := database.GetSessionFileInfo(t.Context(), "forked")
+			require.True(t, ok)
 			info, err := os.Stat(path)
-			require.NoError(err)
-			require.Equal(storedSize, info.Size())
+			require.NoError(t, err)
+			require.Equal(t, storedSize, info.Size())
 			storedTime := time.Unix(0, storedMtime)
-			require.NoError(os.Chtimes(path, storedTime, storedTime))
+			require.NoError(t, os.Chtimes(path, storedTime, storedTime))
 			info, err = os.Stat(path)
-			require.NoError(err)
-			require.Equal(storedMtime, info.ModTime().UnixNano())
+			require.NoError(t, err)
+			require.Equal(t, storedMtime, info.ModTime().UnixNano())
 
 			if tc.syncSingle {
-				require.NoError(restarted.SyncSingleSession("forked"))
+				require.NoError(t, restarted.SyncSingleSession("forked"))
 			} else {
 				restoredSync := restarted.SyncAll(t.Context(), nil)
-				require.Zero(restoredSync.Failed)
-				assert.Equal(2, restoredSync.Synced,
+				require.Zero(t, restoredSync.Failed)
+				assert.Equal(t, 2, restoredSync.Synced,
 					"restoring a fork must reparse the complete DAG")
 			}
-			assert.Equal(db.CurrentDataVersion(),
-				database.GetSessionDataVersion("forked-i"))
+			assert.Equal(t, db.CurrentDataVersion(),
+				database.GetSessionDataVersion(t.Context(), "forked-i"))
 		})
 	}
 }

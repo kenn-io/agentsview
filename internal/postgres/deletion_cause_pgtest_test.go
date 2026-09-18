@@ -44,8 +44,8 @@ func TestEnsureSchemaRepairsLegacySourceMissingDeletion(t *testing.T) {
 		assert.Nil(t, cause)
 	}
 
-	require.NoError(t, store.SoftDeleteSession("source-single"))
-	count, err := store.SoftDeleteSessions([]string{"source-batch"})
+	require.NoError(t, store.SoftDeleteSession(t.Context(), "source-single"))
+	count, err := store.SoftDeleteSessions(t.Context(), []string{"source-batch"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 

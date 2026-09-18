@@ -1040,8 +1040,10 @@ func (s kiroSourceSet) Fingerprint(
 				fingerprint.MTimeNS = sideInfo.ModTime().UnixNano()
 			}
 		}
+	case kiroSourceSQLiteDB, kiroSourceSQLiteSession:
+		// SQLite sources have no JSONL sidecar.
 	}
-	hash := ""
+	var hash string
 	switch src.Kind {
 	case kiroSourceCurrentJSONL:
 		sidecar = ""
@@ -1211,6 +1213,8 @@ func (s kiroSourceSet) newSourceRef(
 		key = sessionID
 	case kiroSourceLegacyJSONL:
 		key = KiroSessionIDFromPath(path)
+	case kiroSourceSQLiteDB:
+		// Whole databases retain their path as the source key.
 	}
 	return SourceRef{
 		Provider:       AgentKiro,

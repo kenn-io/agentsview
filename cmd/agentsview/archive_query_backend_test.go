@@ -20,9 +20,6 @@ import (
 )
 
 func TestDaemonArchiveQueryBackendDefaultsMappedLocalTimezone(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Setenv("TZ", "America/New_York")
 	oldLocal := time.Local                                         //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
 	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60) //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
@@ -39,18 +36,18 @@ func TestDaemonArchiveQueryBackendDefaultsMappedLocalTimezone(t *testing.T) {
 	_, err := backend.ActivityReport(t.Context(), ActivityReportConfig{
 		Preset: "day",
 	})
-	require.NoError(err)
-	require.Len(queries, 1)
-	assert.Equal("America/New_York", queries[0].Get("timezone"))
-	assert.Equal(todayIn("America/New_York"), queries[0].Get("date"))
+	require.NoError(t, err)
+	require.Len(t, queries, 1)
+	assert.Equal(t, "America/New_York", queries[0].Get("timezone"))
+	assert.Equal(t, todayIn("America/New_York"), queries[0].Get("date"))
 
 	_, err = backend.ActivityReport(t.Context(), ActivityReportConfig{
 		Preset: "day", Date: "2026-03-09", Timezone: "Europe/Berlin",
 	})
-	require.NoError(err)
-	require.Len(queries, 2)
-	assert.Equal("Europe/Berlin", queries[1].Get("timezone"))
-	assert.Equal("2026-03-09", queries[1].Get("date"))
+	require.NoError(t, err)
+	require.Len(t, queries, 2)
+	assert.Equal(t, "Europe/Berlin", queries[1].Get("timezone"))
+	assert.Equal(t, "2026-03-09", queries[1].Get("date"))
 }
 
 func TestResolveArchiveQueryBackendNoSyncStartsNoSyncDaemon(t *testing.T) {
@@ -72,8 +69,6 @@ func TestResolveArchiveQueryBackendNoSyncStartsNoSyncDaemon(t *testing.T) {
 }
 
 func TestResolveArchiveQueryBackendRefusesReadOnlyDaemonForFreshQueries(t *testing.T) {
-	assert := assert.New(t)
-
 	dataDir := testDataDir(t)
 
 	var called bool
@@ -92,9 +87,9 @@ func TestResolveArchiveQueryBackendRefusesReadOnlyDaemonForFreshQueries(t *testi
 		t.Cleanup(cleanup)
 	}
 	require.Error(t, err)
-	assert.Contains(err.Error(), "read-only")
-	assert.NotContains(err.Error(), "--pg")
-	assert.False(called)
+	assert.Contains(t, err.Error(), "read-only")
+	assert.NotContains(t, err.Error(), "--pg")
+	assert.False(t, called)
 }
 
 func TestResolveArchiveQueryBackendUsesGeneratedAutostartToken(t *testing.T) {
@@ -129,14 +124,11 @@ func TestResolveArchiveQueryBackendUsesGeneratedAutostartToken(t *testing.T) {
 func TestLocalArchiveQuerySessionUsageNoSyncSkipsSingleSessionSync(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := t.TempDir()
 	dbPath := filepath.Join(dataDir, "sessions.db")
 	writer := dbtest.OpenTestDBAt(t, dbPath)
 	started := "2026-06-23T12:00:00Z"
-	require.NoError(writer.UpsertSession(db.Session{
+	require.NoError(t, writer.UpsertSession(t.Context(), db.Session{
 		ID:                   "codex:no-sync-usage",
 		Project:              "proj",
 		Machine:              "local",
@@ -146,10 +138,10 @@ func TestLocalArchiveQuerySessionUsageNoSyncSkipsSingleSessionSync(
 		TotalOutputTokens:    42,
 		HasTotalOutputTokens: true,
 	}))
-	require.NoError(writer.Close())
+	require.NoError(t, writer.Close())
 
-	readonly, err := db.OpenReadOnly(dbPath)
-	require.NoError(err)
+	readonly, err := db.OpenReadOnly(t.Context(), dbPath)
+	require.NoError(t, err)
 	t.Cleanup(func() { readonly.Close() })
 
 	backend := localArchiveQueryBackend{
@@ -163,13 +155,13 @@ func TestLocalArchiveQuerySessionUsageNoSyncSkipsSingleSessionSync(
 			t.Context(),
 			sessionUsageQuery{SessionID: "codex:no-sync-usage"},
 		)
-		require.NoError(err)
-		require.NotNil(out)
-		assert.Equal(tokenUseExitOK, exitCode)
-		assert.Equal(42, out.TotalOutputTokens)
+		require.NoError(t, err)
+		require.NotNil(t, out)
+		assert.Equal(t, tokenUseExitOK, exitCode)
+		assert.Equal(t, 42, out.TotalOutputTokens)
 	})
-	assert.NotContains(stderr, "warning: sync failed")
-	assert.NotContains(stderr, "warning: pricing seed failed")
+	assert.NotContains(t, stderr, "warning: sync failed")
+	assert.NotContains(t, stderr, "warning: pricing seed failed")
 }
 
 // TestLocalSessionUsageRefreshesSubagentTranscripts covers the freshness
@@ -178,9 +170,6 @@ func TestLocalArchiveQuerySessionUsageNoSyncSkipsSingleSessionSync(
 // beside it. Without that, a session that just finished would report a
 // combined cost missing its most recent subagents.
 func TestLocalSessionUsageRefreshesSubagentTranscripts(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dataDir := testDataDir(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -194,10 +183,10 @@ func TestLocalSessionUsageRefreshesSubagentTranscripts(t *testing.T) {
 	t.Setenv("CLAUDE_PROJECTS_DIR", claudeDir)
 
 	projDir := filepath.Join(claudeDir, "-home-proj")
-	require.NoError(os.MkdirAll(
+	require.NoError(t, os.MkdirAll(
 		filepath.Join(projDir, "parent-uuid", "subagents"), 0o755))
 	parentPath := filepath.Join(projDir, "parent-uuid.jsonl")
-	require.NoError(os.WriteFile(parentPath, []byte(
+	require.NoError(t, os.WriteFile(parentPath, []byte(
 		testjsonl.NewSessionBuilder().
 			AddClaudeUser("2026-05-20T10:00:00Z", "delegate this").
 			AddClaudeAssistant("2026-05-20T10:00:05Z", "on it").
@@ -222,9 +211,9 @@ func TestLocalSessionUsageRefreshesSubagentTranscripts(t *testing.T) {
 	// Code does after the parent's own file was last synced.
 	_, _, err := backend.SessionUsage(
 		ctx, sessionUsageQuery{SessionID: "parent-uuid"})
-	require.NoError(err)
+	require.NoError(t, err)
 
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		filepath.Join(projDir, "parent-uuid", "subagents",
 			"agent-worker1.jsonl"),
 		[]byte(testjsonl.NewSessionBuilder().
@@ -237,36 +226,36 @@ func TestLocalSessionUsageRefreshesSubagentTranscripts(t *testing.T) {
 	// Passive reads must leave newly written source transcripts unindexed.
 	archived, _, err := backend.SessionUsage(
 		ctx, sessionUsageQuery{SessionID: "parent-uuid", NoSync: true})
-	require.NoError(err)
-	require.NotNil(archived)
-	assert.Zero(archived.SubagentCount)
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	assert.Zero(t, archived.SubagentCount)
 	unsynced, err := database.GetSession(ctx, "agent-worker1")
-	require.NoError(err)
-	assert.Nil(unsynced)
+	require.NoError(t, err)
+	assert.Nil(t, unsynced)
 
 	out, _, err := backend.SessionUsage(
 		ctx, sessionUsageQuery{SessionID: "parent-uuid"})
-	require.NoError(err)
-	require.NotNil(out)
-	assert.Equal(1, out.SubagentCount,
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, 1, out.SubagentCount,
 		"the new subagent transcript must be ingested before the query")
 
 	child, err := database.GetSession(ctx, "agent-worker1")
-	require.NoError(err)
-	require.NotNil(child, "subagent session was not synced")
-	require.NotNil(child.ParentSessionID)
-	assert.Equal("parent-uuid", *child.ParentSessionID)
+	require.NoError(t, err)
+	require.NotNil(t, child, "subagent session was not synced")
+	require.NotNil(t, child.ParentSessionID)
+	assert.Equal(t, "parent-uuid", *child.ParentSessionID)
 
 	archived, _, err = backend.SessionUsage(
 		ctx, sessionUsageQuery{SessionID: "parent-uuid", NoSync: true})
-	require.NoError(err)
-	require.NotNil(archived)
-	assert.Equal(out.SessionUsage, archived.SessionUsage)
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	assert.Equal(t, out.SessionUsage, archived.SessionUsage)
 
 	// --own-only skips the subagent refresh and the combined view.
 	own, _, err := backend.SessionUsage(
 		ctx, sessionUsageQuery{SessionID: "parent-uuid", OwnOnly: true})
-	require.NoError(err)
-	require.NotNil(own)
-	assert.Zero(own.SubagentCount)
+	require.NoError(t, err)
+	require.NotNil(t, own)
+	assert.Zero(t, own.SubagentCount)
 }

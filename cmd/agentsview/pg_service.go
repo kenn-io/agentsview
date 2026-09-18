@@ -187,13 +187,13 @@ func runServiceStatus(kind serviceKind) {
 	out, _ := mgr.status(ctx)
 	// Show the last successful push time from local sync state.
 	appCfg := loadServiceConfig(kind)
-	database, derr := openReadOnlyDB(appCfg)
+	database, derr := openReadOnlyDB(ctx, appCfg)
 	if derr != nil {
 		writeServiceStatus(os.Stdout, out, "", false)
 		return
 	}
 	defer database.Close()
-	lastPush, gerr := readServiceLastPush(kind, appCfg, database)
+	lastPush, gerr := readServiceLastPush(ctx, kind, appCfg, database)
 	if gerr != nil {
 		writeServiceStatus(os.Stdout, out, "", false)
 		return
@@ -216,7 +216,7 @@ func writeServiceStatus(
 	fmt.Fprintf(out, "Last push: %s\n", valueOrNever(lastPush))
 }
 
-func readServiceLastPush(
+func readServiceLastPush(ctx context.Context,
 	kind serviceKind,
 	appCfg config.Config,
 	database *db.DB,
@@ -258,7 +258,7 @@ func readServiceLastPush(
 	if err != nil {
 		return "", err
 	}
-	return postgres.ReadLastPushAt(
+	return postgres.ReadLastPushAt(ctx,
 		database,
 		target.SyncStateTarget,
 		target.PG.Projects,

@@ -31,7 +31,7 @@ func engineWithDispatchHandler(
 ) *syncpkg.Engine {
 	t.Helper()
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
 		Machine:   "local",
 		OnStartupReconciled: newStartupReconciliationHandler(
@@ -97,8 +97,6 @@ func TestCompleteWorkerStartupReconciliationLogsLifecycle(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			logs := captureLogOutput(t)
 			reconcileCalls := 0
 			queued := false
@@ -114,14 +112,14 @@ func TestCompleteWorkerStartupReconciliationLogsLifecycle(t *testing.T) {
 			)
 
 			output := logs.String()
-			assert.Contains(output,
+			assert.Contains(t, output,
 				"startup gap reconciliation started: roots="+strconv.Itoa(len(tc.roots)))
-			assert.Contains(output, "startup gap reconciliation finished:")
-			assert.Contains(output, "duration=")
-			assert.Contains(output, "outcome="+tc.wantOutcome)
-			assert.Equal(len(tc.roots) > 0, reconcileCalls > 0)
-			assert.Equal(tc.wantQueued, queued)
-			assert.Equal(tc.err, recordedErr)
+			assert.Contains(t, output, "startup gap reconciliation finished:")
+			assert.Contains(t, output, "duration=")
+			assert.Contains(t, output, "outcome="+tc.wantOutcome)
+			assert.Equal(t, len(tc.roots) > 0, reconcileCalls > 0)
+			assert.Equal(t, tc.wantQueued, queued)
+			assert.Equal(t, tc.err, recordedErr)
 		})
 	}
 }
@@ -134,7 +132,7 @@ func TestCompleteWorkerStartupReconciliationLogsLifecycle(t *testing.T) {
 func TestStartupWorkerPathDefersMaintenanceUntilReconciled(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
 		Machine:   "local",
 		DeferStartupMaintenance: deferStartupMaintenance(
@@ -153,8 +151,7 @@ func TestStartupWorkerPathDefersMaintenanceUntilReconciled(t *testing.T) {
 
 	select {
 	case <-maintenanceRan:
-		require.FailNow(t,
-			"startup maintenance must wait for the deferred gap reconciliation")
+		require.FailNow(t, "startup maintenance must wait for the deferred gap reconciliation")
 	case <-time.After(150 * time.Millisecond):
 	}
 
@@ -170,8 +167,7 @@ func TestStartupWorkerPathDefersMaintenanceUntilReconciled(t *testing.T) {
 	select {
 	case <-maintenanceRan:
 	case <-time.After(2 * time.Second):
-		require.FailNow(t,
-			"maintenance never released after RecordStartupReconciled")
+		require.FailNow(t, "maintenance never released after RecordStartupReconciled")
 	}
 }
 
@@ -179,9 +175,6 @@ func TestStartupWorkerPathDefersMaintenanceUntilReconciled(t *testing.T) {
 // is surfaced (so runServe falls back), and the in-process initial sync still
 // reconciles startup and opens dispatch.
 func TestStartupWorkerFailureFallsBackInProcess(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	cfg := testConfigWithClaudeFixture(t)
 
 	restore := stubLaunchSyncWorker(t, func(
@@ -194,17 +187,17 @@ func TestStartupWorkerFailureFallsBackInProcess(t *testing.T) {
 	_, err := runStartupSyncViaWorker(
 		t.Context(), cfg, newStartupStateWriter(cfg.DataDir, time.Now),
 	)
-	require.Error(err, "worker failure must be surfaced so the daemon falls back")
+	require.Error(t, err, "worker failure must be surfaced so the daemon falls back")
 
 	opened := make(chan struct{}, 1)
 	engine := engineWithDispatchHandler(t, cfg, opened)
 	stats := runInitialSync(t.Context(), engine, nil)
-	assert.False(stats.Aborted)
-	assert.Equal(3, stats.Synced, "in-process fallback syncs the fixture archive")
+	assert.False(t, stats.Aborted)
+	assert.Equal(t, 3, stats.Synced, "in-process fallback syncs the fixture archive")
 	select {
 	case <-opened:
 	case <-time.After(2 * time.Second):
-		require.FailNow("in-process fallback did not open dispatch")
+		require.FailNow(t, "in-process fallback did not open dispatch")
 	}
 }
 
@@ -240,8 +233,7 @@ func TestStartupWorkerPublishesEnrichedResyncProgress(t *testing.T) {
 		state = readStartupState(cfg.DataDir)
 		require.NotNil(t, state)
 		assert.Equal(t, "full resync", state.Phase)
-		assert.Equal(t,
-			"Syncing sessions into rebuilt database: 25/100 sessions (25%) · 800 messages",
+		assert.Equal(t, "Syncing sessions into rebuilt database: 25/100 sessions (25%) · 800 messages",
 			state.Detail,
 		)
 
@@ -257,23 +249,20 @@ func TestStartupWorkerPublishesEnrichedResyncProgress(t *testing.T) {
 }
 
 func TestStartupWorkerReportsDatabaseUpgradeBeforeSync(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	cfg := testConfigWithClaudeFixture(t)
-	database, err := db.Open(cfg.DBPath)
-	require.NoError(err)
-	require.NoError(database.Close())
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
 	// Reproduce the archive shape before reasoning effort and result indexes.
 	archive, err := sql.Open("sqlite3", cfg.DBPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer archive.Close()
 	_, err = archive.ExecContext(t.Context(), `ALTER TABLE messages DROP COLUMN reasoning_effort;
 		DROP INDEX idx_tool_result_events_summary; PRAGMA user_version = 96;`)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	logFile, err := os.Create(serveLogPath(cfg.DataDir))
-	require.NoError(err)
+	require.NoError(t, err)
 	defer logFile.Close()
 	origStdout := os.Stdout
 	os.Stdout = logFile
@@ -294,41 +283,41 @@ func TestStartupWorkerReportsDatabaseUpgradeBeforeSync(t *testing.T) {
 			onLine(workerLine{Progress: &p})
 			if p.Phase != "opening_database" {
 				// Release the probe before the worker swaps archive files.
-				require.NoError(archive.Close())
+				require.NoError(t, archive.Close())
 				return
 			}
 			details = append(details, p.Detail)
 			state := readStartupState(cfg.DataDir)
-			require.NotNil(state)
-			assert.Equal("opening database", state.Phase)
-			assert.Equal(p.Detail, state.Detail, "publish each stage immediately")
+			require.NotNil(t, state)
+			assert.Equal(t, "opening database", state.Phase)
+			assert.Equal(t, p.Detail, state.Detail, "publish each stage immediately")
 			output, err := os.ReadFile(logFile.Name())
-			require.NoError(err)
-			assert.Contains(string(output), p.Detail, "log the stage before doing its work")
+			require.NoError(t, err)
+			assert.Contains(t, string(output), p.Detail, "log the stage before doing its work")
 			if p.Detail == "Updating database schema and indexes" {
 				var count int
-				require.NoError(archive.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master
+				require.NoError(t, archive.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master
 					WHERE name = 'idx_tool_result_events_summary'`).Scan(&count))
-				assert.Zero(count, "announce index construction before it runs")
+				assert.Zero(t, count, "announce index construction before it runs")
 			}
 		})
 		return result, err
 	})
 	defer restore()
 	result, err := runStartupSyncViaWorker(t.Context(), cfg, progress)
-	require.NoError(err)
-	assert.Equal(3, result.Synced)
-	assert.Contains(details, "Opening database")
-	assert.Contains(details, "Database upgrade requires full resync")
-	assert.Contains(details, "Updating database schema and indexes")
-	assert.Contains(details, "Adding column messages.reasoning_effort")
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.Synced)
+	assert.Contains(t, details, "Opening database")
+	assert.Contains(t, details, "Database upgrade requires full resync")
+	assert.Contains(t, details, "Updating database schema and indexes")
+	assert.Contains(t, details, "Adding column messages.reasoning_effort")
 	output, err := os.ReadFile(logFile.Name())
-	require.NoError(err)
-	assert.Contains(string(output), "Updating database schema and indexes completed in ")
-	assert.Contains(string(output), "Adding column messages.reasoning_effort completed in ")
-	assert.NotContains(string(output), "Database upgrade requires full resync completed",
+	require.NoError(t, err)
+	assert.Contains(t, string(output), "Updating database schema and indexes completed in ")
+	assert.Contains(t, string(output), "Adding column messages.reasoning_effort completed in ")
+	assert.NotContains(t, string(output), "Database upgrade requires full resync completed",
 		"announcing a required resync must not report that it completed")
-	assert.NotContains(string(output), "Running initial sync",
+	assert.NotContains(t, string(output), "Running initial sync",
 		"a known full resync must not be presented as incremental sync")
 }
 
@@ -399,8 +388,6 @@ func TestStartupWorkerOutcomeDiscriminatesSpawnFromRanFailed(t *testing.T) {
 // (done stays true), and the gap reconciliation plus RecordStartupReconciled
 // still open watcher dispatch, carrying the worker's aborted stats.
 func TestStartupWorkerRanFailedSurfacedWithoutResync(t *testing.T) {
-	require := require.New(t)
-
 	cfg := testConfigWithClaudeFixture(t)
 
 	restore := stubLaunchSyncWorker(t, func(
@@ -414,14 +401,14 @@ func TestStartupWorkerRanFailedSurfacedWithoutResync(t *testing.T) {
 	result, syncErr := runStartupSyncViaWorker(
 		t.Context(), cfg, newStartupStateWriter(cfg.DataDir, time.Now),
 	)
-	require.Error(syncErr)
-	require.NotErrorIs(syncErr, errWorkerSpawn,
+	require.Error(t, syncErr)
+	require.NotErrorIs(t, syncErr, errWorkerSpawn,
 		"ran-and-failed must be distinct from spawn failure")
 
 	carried, done := startupWorkerOutcome(result, syncErr)
-	require.True(done, "daemon must not re-run the in-process initial sync")
+	require.True(t, done, "daemon must not re-run the in-process initial sync")
 	stats := statsFromWorkerResult(carried)
-	require.True(stats.Aborted, "carried stats must reflect the aborted pass")
+	require.True(t, stats.Aborted, "carried stats must reflect the aborted pass")
 
 	opened := make(chan struct{}, 1)
 	engine := engineWithDispatchHandler(t, cfg, opened)
@@ -431,30 +418,26 @@ func TestStartupWorkerRanFailedSurfacedWithoutResync(t *testing.T) {
 	select {
 	case <-opened:
 	case <-time.After(2 * time.Second):
-		require.FailNow("dispatch did not open after ran-and-failed handshake")
+		require.FailNow(t, "dispatch did not open after ran-and-failed handshake")
 	}
 }
 
 func TestStatsFromWorkerResultMapsDiscoveryOntoAborted(t *testing.T) {
-	assert := assert.New(t)
-
 	complete := statsFromWorkerResult(workerResult{
 		Status: "ok", Synced: 5, Skipped: 1, Failed: 0, DiscoveryComplete: true,
 	})
-	assert.False(complete.Aborted)
-	assert.True(complete.AuthoritativeDiscoveryComplete())
-	assert.Equal(5, complete.Synced)
+	assert.False(t, complete.Aborted)
+	assert.True(t, complete.AuthoritativeDiscoveryComplete())
+	assert.Equal(t, 5, complete.Synced)
 
 	incomplete := statsFromWorkerResult(workerResult{
 		Status: "aborted", DiscoveryComplete: false,
 	})
-	assert.True(incomplete.Aborted)
-	assert.False(incomplete.AuthoritativeDiscoveryComplete())
+	assert.True(t, incomplete.Aborted)
+	assert.False(t, incomplete.AuthoritativeDiscoveryComplete())
 }
 
 func TestSyncWorkerChildArgsForwardsServeConfigFlags(t *testing.T) {
-	assert := assert.New(t)
-
 	parent := []string{
 		"serve", "--host", "0.0.0.0", "--port", "9999",
 		"--background", "--pprof",
@@ -462,13 +445,13 @@ func TestSyncWorkerChildArgsForwardsServeConfigFlags(t *testing.T) {
 	args := syncWorkerChildArgs(parent, "startup")
 
 	require.Equal(t, "sync-worker", args[0])
-	assert.Equal([]string{"--mode", "startup"}, args[1:3])
-	assert.Contains(args, "--host=0.0.0.0", "serve config flag forwarded")
-	assert.Contains(args, "--port=9999", "serve config flag forwarded")
+	assert.Equal(t, []string{"--mode", "startup"}, args[1:3])
+	assert.Contains(t, args, "--host=0.0.0.0", "serve config flag forwarded")
+	assert.Contains(t, args, "--port=9999", "serve config flag forwarded")
 	for _, a := range args {
-		assert.NotContains(a, "background",
+		assert.NotContains(t, a, "background",
 			"serve-only lifecycle flag must not reach the worker")
-		assert.NotContains(a, "pprof",
+		assert.NotContains(t, a, "pprof",
 			"serve-only lifecycle flag must not reach the worker")
 	}
 }
@@ -477,9 +460,6 @@ func TestSyncWorkerChildArgsForwardsServeConfigFlags(t *testing.T) {
 // worker mode against an isolated fixture archive and validates the on-the-wire
 // protocol: NDJSON lines, exactly one terminal result, exit 0.
 func TestSyncWorkerRealSpawnEmitsTerminalResult(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("real-spawn worker test re-execs the binary; skipped in -short")
 	}
@@ -514,7 +494,7 @@ func TestSyncWorkerRealSpawnEmitsTerminalResult(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	require.NoError(cmd.Run(),
+	require.NoError(t, cmd.Run(),
 		"worker must exit 0 on an authoritative pass; stderr:\n%s", stderr.String())
 
 	var results []workerResult
@@ -522,7 +502,7 @@ func TestSyncWorkerRealSpawnEmitsTerminalResult(t *testing.T) {
 	sc := bufio.NewScanner(&stdout)
 	for sc.Scan() {
 		var line workerLine
-		require.NoError(json.Unmarshal(sc.Bytes(), &line),
+		require.NoError(t, json.Unmarshal(sc.Bytes(), &line),
 			"every stdout line must be a workerLine JSON object; got %q", sc.Text())
 		if line.Progress != nil {
 			sawProgress = true
@@ -531,12 +511,12 @@ func TestSyncWorkerRealSpawnEmitsTerminalResult(t *testing.T) {
 			results = append(results, *line.Result)
 		}
 	}
-	require.NoError(sc.Err())
-	assert.True(sawProgress, "worker must stream progress")
-	require.Len(results, 1, "exactly one terminal result")
-	assert.Equal("ok", results[0].Status)
-	assert.True(results[0].DiscoveryComplete)
-	assert.Equal(3, results[0].Synced)
+	require.NoError(t, sc.Err())
+	assert.True(t, sawProgress, "worker must stream progress")
+	require.Len(t, results, 1, "exactly one terminal result")
+	assert.Equal(t, "ok", results[0].Status)
+	assert.True(t, results[0].DiscoveryComplete)
+	assert.Equal(t, 3, results[0].Synced)
 }
 
 // TestSyncWorkerMainHelperProcess is the re-exec target for the real-spawn test.
@@ -553,5 +533,5 @@ func TestSyncWorkerMainHelperProcess(t *testing.T) {
 			os.Exit(0)
 		}
 	}
-	t.Fatal("missing helper args")
+	require.FailNow(t, "missing helper args")
 }

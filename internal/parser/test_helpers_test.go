@@ -294,6 +294,7 @@ func generateLargeString(size int) string {
 
 func assertSessionMeta(t *testing.T, s *ParsedSession, wantID, wantProject string, wantAgent AgentType) {
 	t.Helper()
+
 	require.NotNil(t, s, "session is nil")
 	assert.Equal(t, wantID, s.ID, "session ID")
 	assert.Equal(t, wantProject, s.Project, "project")

@@ -169,9 +169,6 @@ func openRowErrorDB(t *testing.T, mode string) (*sql.DB, *rowErrorScenario) {
 }
 
 func TestRecoverStopsBeforeSpoolSweepOnObjectIterationError(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	db, _ := openRowErrorDB(t, "recovery_objects")
 	store := &Store{
 		db: db, spoolDir: t.TempDir(), now: func() time.Time { return time.Unix(0, 0) },
@@ -180,14 +177,14 @@ func TestRecoverStopsBeforeSpoolSweepOnObjectIterationError(t *testing.T) {
 	omitted := rawsync.ObjectRef{SHA256: validCheckpointDigest(2), Length: 1}
 	for _, ref := range []rawsync.ObjectRef{known, omitted} {
 		path := store.ObjectPath(ref)
-		require.NoError(os.MkdirAll(filepath.Dir(path), 0o700))
-		require.NoError(os.WriteFile(path, []byte{1}, 0o600))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		require.NoError(t, os.WriteFile(path, []byte{1}, 0o600))
 	}
 
 	_, err := store.Recover(t.Context())
 
-	assert.ErrorIs(err, errInjectedRowIteration)
-	assert.FileExists(store.ObjectPath(omitted))
+	require.ErrorIs(t, err, errInjectedRowIteration)
+	assert.FileExists(t, store.ObjectPath(omitted))
 }
 
 func TestRecoverPreservesReservationsOnIterationError(t *testing.T) {
@@ -198,7 +195,7 @@ func TestRecoverPreservesReservationsOnIterationError(t *testing.T) {
 
 	_, err := store.Recover(t.Context())
 
-	assert.ErrorIs(t, err, errInjectedRowIteration)
+	require.ErrorIs(t, err, errInjectedRowIteration)
 	assert.Zero(t, scenario.reservationDeletes.Load())
 }
 
@@ -223,23 +220,20 @@ func TestReleaseGenerationObjectsStopsBeforeUpdatesOnIterationError(t *testing.T
 
 	err = releaseGenerationObjectsConn(t.Context(), conn, "capture-a")
 
-	assert.ErrorIs(t, err, errInjectedRowIteration)
+	require.ErrorIs(t, err, errInjectedRowIteration)
 	assert.Zero(t, scenario.objectUpdates.Load())
 }
 
 func TestCollectGarbageStopsBeforeFileRemovalOnIterationError(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	db, _ := openRowErrorDB(t, "garbage_objects")
 	store := &Store{db: db, spoolDir: t.TempDir()}
 	ref := rawsync.ObjectRef{SHA256: validCheckpointDigest(1), Length: 1}
 	path := store.ObjectPath(ref)
-	require.NoError(os.MkdirAll(filepath.Dir(path), 0o700))
-	require.NoError(os.WriteFile(path, []byte{1}, 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte{1}, 0o600))
 
 	_, err := store.CollectGarbage(t.Context())
 
-	assert.ErrorIs(err, errInjectedRowIteration)
-	assert.FileExists(path)
+	require.ErrorIs(t, err, errInjectedRowIteration)
+	assert.FileExists(t, path)
 }

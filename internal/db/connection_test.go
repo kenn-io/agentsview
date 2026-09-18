@@ -33,7 +33,8 @@ func TestSQLiteConnectionMemoryPragmas(t *testing.T) {
 		{
 			name: "Open writer",
 			open: func(t *testing.T, path string) *sql.DB {
-				database, err := Open(path)
+				t.Helper()
+				database, err := Open(t.Context(), path)
 				require.NoError(t, err)
 				t.Cleanup(func() {
 					require.NoError(t, database.Close())
@@ -44,7 +45,8 @@ func TestSQLiteConnectionMemoryPragmas(t *testing.T) {
 		{
 			name: "Open reader",
 			open: func(t *testing.T, path string) *sql.DB {
-				database, err := Open(path)
+				t.Helper()
+				database, err := Open(t.Context(), path)
 				require.NoError(t, err)
 				t.Cleanup(func() {
 					require.NoError(t, database.Close())
@@ -55,11 +57,13 @@ func TestSQLiteConnectionMemoryPragmas(t *testing.T) {
 		{
 			name: "OpenReadOnly reader",
 			open: func(t *testing.T, path string) *sql.DB {
-				writable, err := Open(path)
+				t.Helper()
+
+				writable, err := Open(t.Context(), path)
 				require.NoError(t, err)
 				require.NoError(t, writable.Close())
 
-				readonly, err := OpenReadOnly(path)
+				readonly, err := OpenReadOnly(t.Context(), path)
 				require.NoError(t, err)
 				t.Cleanup(func() {
 					require.NoError(t, readonly.Close())
@@ -78,31 +82,28 @@ func TestSQLiteConnectionMemoryPragmas(t *testing.T) {
 }
 
 func TestReaderPoolRetainsConfiguredBurstConnections(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	path := filepath.Join(t.TempDir(), "sessions.db")
-	database, err := Open(path)
-	require.NoError(err)
+	database, err := Open(t.Context(), path)
+	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(database.Close())
+		require.NoError(t, database.Close())
 	})
 
 	reader := database.rawReader()
-	require.Equal(readerMaxOpenConns, reader.Stats().MaxOpenConnections)
+	require.Equal(t, readerMaxOpenConns, reader.Stats().MaxOpenConnections)
 
 	connections := make([]*sql.Conn, 0, readerMaxOpenConns)
 	for range readerMaxOpenConns {
 		conn, connErr := reader.Conn(t.Context())
-		require.NoError(connErr)
+		require.NoError(t, connErr)
 		connections = append(connections, conn)
 	}
-	assert.Equal(readerMaxOpenConns, reader.Stats().InUse)
+	assert.Equal(t, readerMaxOpenConns, reader.Stats().InUse)
 
 	for _, conn := range connections {
-		require.NoError(conn.Close())
+		require.NoError(t, conn.Close())
 	}
 	stats := reader.Stats()
-	assert.Equal(readerMaxOpenConns, stats.Idle)
-	assert.Zero(stats.MaxIdleClosed)
+	assert.Equal(t, readerMaxOpenConns, stats.Idle)
+	assert.Zero(t, stats.MaxIdleClosed)
 }

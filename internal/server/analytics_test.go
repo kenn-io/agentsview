@@ -35,6 +35,19 @@ type seedStats struct {
 	TopSessionOutputTokens int
 }
 
+var serverAnalyticsFixtureRoot string
+
+func TestMain(m *testing.M) {
+	var err error
+	serverAnalyticsFixtureRoot, err = os.MkdirTemp("", "agentsview-server-fixtures-*")
+	if err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(serverAnalyticsFixtureRoot)
+	os.Exit(code)
+}
+
 // seedAnalyticsEnv populates the test env with sessions and
 // messages suitable for analytics endpoint tests. Some messages
 // include tool_calls for tool analytics testing.
@@ -106,7 +119,7 @@ func seedAnalyticsEnv(t *testing.T, te *testEnv) seedStats {
 			Messages: msgs,
 		})
 	}
-	result, err := te.db.WriteSessionBatchAtomic(writes)
+	result, err := te.db.WriteSessionBatchAtomic(t.Context(), writes)
 	require.NoError(t, err)
 	require.Equal(t, len(entries), result.WrittenSessions)
 	require.Equal(t, stats.TotalMessages, result.WrittenMessages)
@@ -173,7 +186,7 @@ func seedAnalyticsTokenEnv(t *testing.T, te *testEnv) seedStats {
 			}
 		}
 	}
-	result, err := te.db.WriteSessionBatchAtomic(writes)
+	result, err := te.db.WriteSessionBatchAtomic(t.Context(), writes)
 	require.NoError(t, err)
 	require.Equal(t, stats.TotalSessions, result.WrittenSessions)
 	require.Equal(t, stats.TotalMessages, result.WrittenMessages)
@@ -189,11 +202,11 @@ type analyticsDBFixture struct {
 var (
 	analyticsFixtureOnce sync.Once
 	analyticsFixture     analyticsDBFixture
-	analyticsFixtureErr  error
+	errAnalyticsFixture  error
 
 	analyticsTokenFixtureOnce sync.Once
 	analyticsTokenFixture     analyticsDBFixture
-	analyticsTokenFixtureErr  error
+	errAnalyticsTokenFixture  error
 )
 
 func setupAnalyticsEnv(t *testing.T) (*testEnv, seedStats) {
@@ -201,7 +214,7 @@ func setupAnalyticsEnv(t *testing.T) (*testEnv, seedStats) {
 	fixture := analyticsFixtureFor(t,
 		&analyticsFixtureOnce,
 		&analyticsFixture,
-		&analyticsFixtureErr,
+		&errAnalyticsFixture,
 		"analytics",
 		seedAnalyticsEnv,
 	)
@@ -213,7 +226,7 @@ func setupAnalyticsTokenEnv(t *testing.T) (*testEnv, seedStats) {
 	fixture := analyticsFixtureFor(t,
 		&analyticsTokenFixtureOnce,
 		&analyticsTokenFixture,
-		&analyticsTokenFixtureErr,
+		&errAnalyticsTokenFixture,
 		"analytics-token",
 		seedAnalyticsTokenEnv,
 	)
@@ -242,17 +255,14 @@ func buildAnalyticsDBFixture(
 	seed func(*testing.T, *testEnv) seedStats,
 ) (analyticsDBFixture, error) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "agentsview-server-"+name+"-*")
-	if err != nil {
-		return analyticsDBFixture{}, fmt.Errorf(
-			"creating analytics fixture dir: %w", err,
-		)
+	dir := filepath.Join(serverAnalyticsFixtureRoot, name)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return analyticsDBFixture{}, fmt.Errorf("creating analytics fixture dir: %w", err)
 	}
-	defer os.RemoveAll(dir)
 
 	path := filepath.Join(dir, "test.db")
 	dbtest.EnsureTestDBAt(t, path)
-	database, err := db.Open(path)
+	database, err := db.Open(t.Context(), path)
 	if err != nil {
 		return analyticsDBFixture{}, fmt.Errorf(
 			"opening analytics fixture db: %w", err,
@@ -332,17 +342,15 @@ func TestAnalyticsSummary(t *testing.T) {
 	te, stats := setupAnalyticsEnv(t)
 
 	t.Run("OK", func(t *testing.T) {
-		assert := assert.New(t)
-
 		w := te.get(t, buildURLWithRange("summary", map[string]string{"timezone": "UTC"}))
 		assertStatus(t, w, http.StatusOK)
 
 		resp := decode[db.AnalyticsSummary](t, w)
-		assert.Equal(stats.TotalSessions, resp.TotalSessions)
-		assert.Equal(stats.TotalMessages, resp.TotalMessages)
-		assert.Equal(stats.ActiveProjects, resp.ActiveProjects)
-		assert.Equal(stats.ActiveDays, resp.ActiveDays)
-		assert.Equal([]string{"claude-3-5-sonnet", "gpt-4o"},
+		assert.Equal(t, stats.TotalSessions, resp.TotalSessions)
+		assert.Equal(t, stats.TotalMessages, resp.TotalMessages)
+		assert.Equal(t, stats.ActiveProjects, resp.ActiveProjects)
+		assert.Equal(t, stats.ActiveDays, resp.ActiveDays)
+		assert.Equal(t, []string{"claude-3-5-sonnet", "gpt-4o"},
 			resp.Models,
 		)
 	})
@@ -690,8 +698,6 @@ func TestAnalyticsHeatmap(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			params := make(map[string]string)
 			if tt.metric != "" {
 				params["metric"] = tt.metric
@@ -705,9 +711,9 @@ func TestAnalyticsHeatmap(t *testing.T) {
 				if expectedMetric == "" {
 					expectedMetric = "messages" // default
 				}
-				assert.Equal(expectedMetric, resp.Metric)
+				assert.Equal(t, expectedMetric, resp.Metric)
 				if tt.wantEntries >= 0 {
-					assert.Len(resp.Entries, tt.wantEntries)
+					assert.Len(t, resp.Entries, tt.wantEntries)
 				}
 				if tt.wantEntries > 0 {
 					total := 0
@@ -716,9 +722,9 @@ func TestAnalyticsHeatmap(t *testing.T) {
 					}
 					switch expectedMetric {
 					case "messages":
-						assert.Equal(stats.TotalMessages, total)
+						assert.Equal(t, stats.TotalMessages, total)
 					case "sessions":
-						assert.Equal(stats.TotalSessions, total)
+						assert.Equal(t, stats.TotalSessions, total)
 					}
 				}
 			}
@@ -889,19 +895,17 @@ func TestAnalyticsTools(t *testing.T) {
 	te, stats := setupAnalyticsEnv(t)
 
 	t.Run("OK", func(t *testing.T) {
-		assert := assert.New(t)
-
 		w := te.get(t, buildURLWithRange("tools", map[string]string{"timezone": "UTC"}))
 		assertStatus(t, w, http.StatusOK)
 
 		resp := decode[db.ToolsAnalyticsResponse](t, w)
-		assert.Equal(stats.TotalToolCalls, resp.TotalCalls)
-		assert.NotEmpty(resp.ByCategory)
+		assert.Equal(t, stats.TotalToolCalls, resp.TotalCalls)
+		assert.NotEmpty(t, resp.ByCategory)
 		require.NotEmpty(t, resp.ByTool)
-		assert.NotEmpty(resp.ByTool[0].ToolName)
-		assert.NotZero(resp.ByTool[0].CallCount)
-		assert.NotZero(resp.ByTool[0].SessionCount)
-		assert.Len(resp.ByAgent, stats.Agents)
+		assert.NotEmpty(t, resp.ByTool[0].ToolName)
+		assert.NotZero(t, resp.ByTool[0].CallCount)
+		assert.NotZero(t, resp.ByTool[0].SessionCount)
+		assert.Len(t, resp.ByAgent, stats.Agents)
 	})
 
 	t.Run("WithProjectFilter", func(t *testing.T) {
@@ -922,16 +926,14 @@ func TestAnalyticsSkills(t *testing.T) {
 	te, stats := setupAnalyticsEnv(t)
 
 	t.Run("OK", func(t *testing.T) {
-		assert := assert.New(t)
-
 		w := te.get(t, buildURLWithRange("skills", map[string]string{"timezone": "UTC"}))
 		assertStatus(t, w, http.StatusOK)
 
 		resp := decode[db.SkillsAnalyticsResponse](t, w)
-		assert.Equal(stats.TotalSkillCalls, resp.TotalSkillCalls)
-		assert.Equal(1, resp.DistinctSkills)
+		assert.Equal(t, stats.TotalSkillCalls, resp.TotalSkillCalls)
+		assert.Equal(t, 1, resp.DistinctSkills)
 		require.NotEmpty(t, resp.BySkill)
-		assert.Equal("review-code", resp.BySkill[0].SkillName)
+		assert.Equal(t, "review-code", resp.BySkill[0].SkillName)
 	})
 
 	t.Run("WithProjectFilter", func(t *testing.T) {
@@ -966,8 +968,6 @@ func TestAnalyticsTopSessions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			params := make(map[string]string)
 			if tt.metric != "" {
 				params["metric"] = tt.metric
@@ -988,15 +988,15 @@ func TestAnalyticsTopSessions(t *testing.T) {
 				if expectedMetric == "" {
 					expectedMetric = "messages"
 				}
-				assert.Equal(expectedMetric, resp.Metric)
+				assert.Equal(t, expectedMetric, resp.Metric)
 				if tt.project == "" {
 					expected := min(stats.TotalSessions, 10)
-					assert.Len(resp.Sessions, expected)
+					assert.Len(t, resp.Sessions, expected)
 				}
 				if tt.project != "" {
-					assert.NotEmpty(resp.Sessions, "project %q", tt.project)
+					assert.NotEmpty(t, resp.Sessions, "project %q", tt.project)
 					for _, s := range resp.Sessions {
-						assert.Equal(tt.project, s.Project)
+						assert.Equal(t, tt.project, s.Project)
 					}
 				}
 			}
@@ -1024,9 +1024,6 @@ func TestAnalyticsTopSessions_OutputTokens(t *testing.T) {
 // all agree. This catches regressions where one endpoint counts
 // sub-agent, fork, or empty sessions that others exclude.
 func TestSessionCountConsistency(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	te := setup(t)
 
 	// Seed root sessions with messages (should be counted).
@@ -1132,17 +1129,17 @@ func TestSessionCountConsistency(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	summaryResp := decode[db.AnalyticsSummary](t, w)
 
-	assert.Equal(wantNavCount, listResp.Total, "session list total")
-	assert.Equal(wantNavCount, statsResp.SessionCount, "stats session_count")
-	assert.Equal(wantAnalyticsCount, summaryResp.TotalSessions,
+	assert.Equal(t, wantNavCount, listResp.Total, "session list total")
+	assert.Equal(t, wantNavCount, statsResp.SessionCount, "stats session_count")
+	assert.Equal(t, wantAnalyticsCount, summaryResp.TotalSessions,
 		"analytics total_sessions counts subagents")
 
 	// List and stats (navigation) agree; analytics counts subagents on
 	// top, so it is intentionally higher.
-	require.Equal(listResp.Total, statsResp.SessionCount,
+	require.Equal(t, listResp.Total, statsResp.SessionCount,
 		"navigation session counts disagree: list=%d stats=%d",
 		listResp.Total, statsResp.SessionCount)
-	require.Greater(summaryResp.TotalSessions, listResp.Total,
+	require.Greater(t, summaryResp.TotalSessions, listResp.Total,
 		"analytics should count more than navigation: analytics=%d list=%d",
 		summaryResp.TotalSessions, listResp.Total)
 }

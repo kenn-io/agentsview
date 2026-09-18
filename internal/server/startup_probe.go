@@ -18,10 +18,6 @@ const (
 	startupProbeProofHeader     = "X-AgentsView-Startup-Proof"
 )
 
-func (s *Server) registerStartupProbeRoute() {
-	s.handleHTTP(s.api.OpenAPI().Paths[startupProbePath].Get, s.handleStartupProbe)
-}
-
 // EnableStartupProbe creates a process-local secret for proving that startup
 // readiness reached this Server instance without sending the persistent bearer
 // token over a socket whose owner is not yet known.
@@ -96,7 +92,7 @@ func ValidStartupProbeResponse(resp *http.Response, expected string) bool {
 
 // describeStartupProbe keeps the temporary native route in the generated client.
 func (s *Server) describeStartupProbe() {
-	s.api.OpenAPI().AddOperation(&huma.Operation{
+	op := &huma.Operation{
 		OperationID: "get-startup-probe", Method: http.MethodGet, Path: startupProbePath,
 		Summary: "Prove daemon startup readiness", Tags: []string{"Startup"},
 		Parameters: []*huma.Param{{Name: startupProbeChallengeHeader, In: "header", Required: true, Schema: &huma.Schema{Type: "string"}}},
@@ -104,5 +100,7 @@ func (s *Server) describeStartupProbe() {
 			"204": {Description: "Startup proof", Headers: map[string]*huma.Param{startupProbeProofHeader: {Schema: &huma.Schema{Type: "string"}}}},
 			"404": {Description: "Startup probe disabled or challenge invalid"},
 		},
-	})
+	}
+	s.api.OpenAPI().AddOperation(op)
+	s.handleHTTP(op, s.handleStartupProbe)
 }

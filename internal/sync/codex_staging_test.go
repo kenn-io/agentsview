@@ -21,11 +21,9 @@ import (
 )
 
 func TestDrainResultsReleasesStagedScratchAndGCGuard(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
-	sink, err := newCodexStagingSink(dir, nil)
-	require.NoError(err)
+	sink, err := newCodexStagingSink(t.Context(), dir, nil)
+	require.NoError(t, err)
 
 	// SetGCPercent(-1) disables GC rather than querying it on this
 	// toolchain, so drive the restore check with an explicit baseline and
@@ -34,7 +32,7 @@ func TestDrainResultsReleasesStagedScratchAndGCGuard(t *testing.T) {
 	t.Cleanup(func() { debug.SetGCPercent(100) })
 	guard := beginStagedColdSync()
 	t.Cleanup(guard)
-	require.Equal(stagedColdSyncGCPercent,
+	require.Equal(t, stagedColdSyncGCPercent,
 		debug.SetGCPercent(stagedColdSyncGCPercent),
 		"the staged parse must lower the GC target")
 
@@ -45,19 +43,16 @@ func TestDrainResultsReleasesStagedScratchAndGCGuard(t *testing.T) {
 	}
 	drainResults(results, 1)
 
-	require.Equal(200, debug.SetGCPercent(200),
+	require.Equal(t, 200, debug.SetGCPercent(200),
 		"draining must restore the process GC target")
 	entries, err := os.ReadDir(dir)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Empty(t, entries,
 		"draining must remove the staged scratch file")
 }
 
 func TestCancelledCollectorReleasesReceivedAndPendingStagedResults(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		Machine: "local", DiscardPendingWritesOnCancel: true,
 	})
 	t.Cleanup(engine.Close)
@@ -66,8 +61,8 @@ func TestCancelledCollectorReleasesReceivedAndPendingStagedResults(t *testing.T)
 	t.Cleanup(func() { debug.SetGCPercent(previousGC) })
 	results := make(chan syncJob, 2)
 	for _, id := range []string{"pending", "received"} {
-		sink, err := newCodexStagingSink(dir, nil)
-		require.NoError(err)
+		sink, err := newCodexStagingSink(t.Context(), dir, nil)
+		require.NoError(t, err)
 		t.Cleanup(func() { _ = sink.Close() })
 		guard := beginStagedColdSync()
 		t.Cleanup(guard)
@@ -91,22 +86,20 @@ func TestCancelledCollectorReleasesReceivedAndPendingStagedResults(t *testing.T)
 			}
 		}},
 	)
-	assert.True(stats.Aborted)
-	assert.Zero(stats.Synced)
-	assert.Equal(200, debug.SetGCPercent(200),
+	assert.True(t, stats.Aborted)
+	assert.Zero(t, stats.Synced)
+	assert.Equal(t, 200, debug.SetGCPercent(200),
 		"cancelling must release both staged GC guards")
 	entries, err := os.ReadDir(dir)
-	require.NoError(err)
-	assert.Empty(entries, "cancelling must remove both scratch databases")
+	require.NoError(t, err)
+	assert.Empty(t, entries, "cancelling must remove both scratch databases")
 }
 
 func TestCodexStagingBlockedContentNeverEntersScratch(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
-	sink, err := newCodexStagingSink(dir, map[string]bool{"Bash": true})
-	require.NoError(err)
-	defer func() { require.NoError(sink.Close()) }()
+	sink, err := newCodexStagingSink(t.Context(), dir, map[string]bool{"Bash": true})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, sink.Close()) }()
 
 	sink.AppendMessage(parser.ParsedMessage{ToolCalls: []parser.ParsedToolCall{{
 		ToolUseID: "call_secret",
@@ -114,25 +107,25 @@ func TestCodexStagingBlockedContentNeverEntersScratch(t *testing.T) {
 		Category:  "Bash",
 	}}})
 	const secret = "AKIA7QHWN2DKR4FYPLJM blocked payload"
-	sink.AppendToolResultEvent("call_secret", nil, parser.ParsedToolResultEvent{
+	sink.AppendToolResultEvent(t.Context(), "call_secret", nil, parser.ParsedToolResultEvent{
 		ToolUseID: "call_secret",
 		Source:    "function_call_output",
 		Content:   secret,
 	})
-	require.NoError(sink.Err())
+	require.NoError(t, sink.Err())
 
 	var content string
 	var length, blanked int
-	require.NoError(sink.scratch.QueryRowContext(t.Context(),
+	require.NoError(t, sink.scratch.QueryRowContext(t.Context(),
 		`SELECT content, content_length, blanked FROM stage_events LIMIT 1`,
 	).Scan(&content, &length, &blanked))
-	require.Empty(content)
-	require.Equal(len(secret), length)
-	require.Equal(1, blanked)
+	require.Empty(t, content)
+	require.Equal(t, len(secret), length)
+	require.Equal(t, 1, blanked)
 
 	raw, err := os.ReadFile(sink.path)
-	require.NoError(err)
-	require.NotContains(string(raw), secret,
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), secret,
 		"blocked raw content must not be recoverable from scratch storage")
 }
 
@@ -144,46 +137,41 @@ func TestCodexStagingBlockedContentNeverEntersScratch(t *testing.T) {
 // being discarded, since that content is an uncloned reference into the
 // source line's backing buffer and can be arbitrarily large.
 func TestCodexStagingDropsOrphanResultEvents(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
-	sink, err := newCodexStagingSink(dir, nil)
-	require.NoError(err)
-	defer func() { require.NoError(sink.Close()) }()
+	sink, err := newCodexStagingSink(t.Context(), dir, nil)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, sink.Close()) }()
 
 	large := strings.Repeat("orphan output ", 1000)
-	sink.AppendToolResultEvent("call_never_registered", nil,
+	sink.AppendToolResultEvent(t.Context(), "call_never_registered", nil,
 		parser.ParsedToolResultEvent{
 			ToolUseID: "call_never_registered",
 			Source:    "function_call_output",
 			Content:   large,
 		},
 	)
-	require.NoError(sink.Err())
+	require.NoError(t, sink.Err())
 
-	assert.Empty(sink.ToolCallUpdates(),
+	assert.Empty(t, sink.ToolCallUpdates(),
 		"an orphan event must not be retained in the collecting "+
 			"sink's toolCallUpdates, which no full-parse consumer reads")
 
 	var rowCount int
-	require.NoError(sink.scratch.QueryRowContext(t.Context(),
+	require.NoError(t, sink.scratch.QueryRowContext(t.Context(),
 		`SELECT COUNT(*) FROM stage_events`,
 	).Scan(&rowCount))
-	assert.Zero(rowCount, "an orphan event must not be staged either")
+	assert.Zero(t, rowCount, "an orphan event must not be staged either")
 }
 
 func TestStagedCodexParseOutcomeCopiesFingerprintHash(t *testing.T) {
-	require := require.New(t)
-
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b04"
 	root := t.TempDir()
 	day := filepath.Join(root, "2024", "01", "01")
-	require.NoError(os.MkdirAll(day, 0o755))
+	require.NoError(t, os.MkdirAll(day, 0o755))
 	path := filepath.Join(
 		day, "rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
 	)
-	require.NoError(os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON(
 			uuid, "/tmp", "user", "2024-01-01T10:00:00Z",
 		),
@@ -192,17 +180,17 @@ func TestStagedCodexParseOutcomeCopiesFingerprintHash(t *testing.T) {
 
 	cfg := parser.ProviderConfig{Roots: []string{root}, Machine: "local"}
 	provider, ok := parser.NewProvider(parser.AgentCodex, cfg)
-	require.True(ok)
+	require.True(t, ok)
 	source, found, err := provider.FindSource(
 		t.Context(), parser.FindSourceRequest{
 			FullSessionID: "codex:" + uuid,
 		},
 	)
-	require.NoError(err)
-	require.True(found)
+	require.NoError(t, err)
+	require.True(t, found)
 
-	staged, err := newCodexStagingSink("", map[string]bool{})
-	require.NoError(err)
+	staged, err := newCodexStagingSink(t.Context(), "", map[string]bool{})
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = staged.Close() })
 
 	outcome, err := stagedCodexParseOutcome(
@@ -210,21 +198,19 @@ func TestStagedCodexParseOutcomeCopiesFingerprintHash(t *testing.T) {
 		parser.SourceFingerprint{Hash: "sha256:abc"},
 		staged,
 	)
-	require.NoError(err)
-	require.Len(outcome.Results, 1)
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, "sha256:abc",
 		outcome.Results[0].Result.Session.File.Hash,
 		"the staged path must persist the fingerprint hash the collecting path would")
 }
 
 func TestSyncSingleSessionStagedPublishesRealContent(t *testing.T) {
-	require := require.New(t)
-
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122c11"
 	root := writeCodexParityRoot(t, uuid)
 	stagingDir := t.TempDir()
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -235,12 +221,12 @@ func TestSyncSingleSessionStagedPublishesRealContent(t *testing.T) {
 	t.Cleanup(engine.Close)
 	sessionID := "codex:" + uuid
 
-	require.NoError(engine.SyncSingleSession(sessionID))
+	require.NoError(t, engine.SyncSingleSession(sessionID))
 	msgs, err := database.GetAllMessages(
 		t.Context(), sessionID,
 	)
-	require.NoError(err)
-	require.NotEmpty(msgs)
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
 
 	found := false
 	for _, m := range msgs {
@@ -249,17 +235,17 @@ func TestSyncSingleSessionStagedPublishesRealContent(t *testing.T) {
 				continue
 			}
 			found = true
-			require.NotContains(tc.ResultEvents[0].Content, "staged:",
+			require.NotContains(t, tc.ResultEvents[0].Content, "staged:",
 				"the single-session path must publish real output, "+
 					"not staged placeholders")
-			require.Contains(tc.ResultEvents[0].Content,
+			require.Contains(t, tc.ResultEvents[0].Content,
 				"build passed")
 		}
 	}
-	require.True(found, "call_a output must be stored")
+	require.True(t, found, "call_a output must be stored")
 
 	entries, err := os.ReadDir(stagingDir)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Empty(t, entries,
 		"the single-session path must release its scratch file")
 }
@@ -268,7 +254,7 @@ func TestParseDiffLargeCodexDoesNotStagePlaceholders(t *testing.T) {
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122c12"
 	root := writeCodexParityRoot(t, uuid)
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -278,7 +264,7 @@ func TestParseDiffLargeCodexDoesNotStagePlaceholders(t *testing.T) {
 	t.Cleanup(engine.Close)
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 
-	diff := NewDiffEngine(database, EngineConfig{
+	diff := NewDiffEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -299,8 +285,6 @@ func TestParseDiffLargeCodexDoesNotStagePlaceholders(t *testing.T) {
 // call, and result-event projections field by field, plus findings and
 // status- and content-driven signals.
 func TestCodexStreamingParseParityWithLegacy(t *testing.T) {
-	require := require.New(t)
-
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b05"
 	assertCodexStagedParity(t, uuid, codexParityTranscript(uuid))
 
@@ -309,15 +293,15 @@ func TestCodexStreamingParseParityWithLegacy(t *testing.T) {
 	// exactly those two failures.
 	root := t.TempDir()
 	day := filepath.Join(root, "2024", "01", "01")
-	require.NoError(os.MkdirAll(day, 0o755))
+	require.NoError(t, os.MkdirAll(day, 0o755))
 	path := filepath.Join(
 		day, "rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
 	)
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		path, []byte(codexParityTranscript(uuid)), 0o644,
 	))
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -325,15 +309,15 @@ func TestCodexStreamingParseParityWithLegacy(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 	stats := engine.SyncAll(t.Context(), nil)
-	require.Zero(stats.Failed)
-	require.Equal(1, stats.Synced)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced)
 	sess, err := database.GetSessionFull(t.Context(), "codex:"+uuid)
-	require.NoError(err)
-	require.NotNil(sess)
-	require.Equal(2, sess.ToolFailureSignalCount)
-	require.Equal(2, sess.ConsecutiveFailureMax)
-	require.Equal(2, sess.FinalFailureStreak)
-	require.Equal(1, sess.SecretLeakCount)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Equal(t, 2, sess.ToolFailureSignalCount)
+	require.Equal(t, 2, sess.ConsecutiveFailureMax)
+	require.Equal(t, 2, sess.FinalFailureStreak)
+	require.Equal(t, 1, sess.SecretLeakCount)
 }
 
 // codexParityTranscript is the deterministic dual-path fixture: a session
@@ -366,7 +350,7 @@ func syncCodexParityEngine(
 	t *testing.T, database *db.DB, root string, stagedMin int64,
 ) {
 	t.Helper()
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -432,8 +416,6 @@ func codexParityTranscript(uuid string) string {
 // match exactly. This is the default-CI coverage for the staged wiring
 // that the macro gates cannot provide.
 func TestCodexEngineStagedSyncParity(t *testing.T) {
-	require := require.New(t)
-
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b05"
 	legacyDB := openTestDB(t)
 	stagedDB := openTestDB(t)
@@ -446,39 +428,39 @@ func TestCodexEngineStagedSyncParity(t *testing.T) {
 	sessionID := "codex:" + uuid
 
 	msgsL, err := legacyDB.GetAllMessages(t.Context(), sessionID)
-	require.NoError(err)
+	require.NoError(t, err)
 	msgsS, err := stagedDB.GetAllMessages(t.Context(), sessionID)
-	require.NoError(err)
-	require.Equal(msgsL, msgsS,
+	require.NoError(t, err)
+	require.Equal(t, msgsL, msgsS,
 		"staged engine sync must match the collecting projection")
 
 	sessL, err := legacyDB.GetSessionFull(t.Context(), sessionID)
-	require.NoError(err)
+	require.NoError(t, err)
 	sessS, err := stagedDB.GetSessionFull(t.Context(), sessionID)
-	require.NoError(err)
-	require.Equal(sessL.ToolFailureSignalCount,
+	require.NoError(t, err)
+	require.Equal(t, sessL.ToolFailureSignalCount,
 		sessS.ToolFailureSignalCount)
-	require.Equal(sessL.ConsecutiveFailureMax,
+	require.Equal(t, sessL.ConsecutiveFailureMax,
 		sessS.ConsecutiveFailureMax)
-	require.Equal(sessL.FinalFailureStreak, sessS.FinalFailureStreak)
-	require.Equal(sessL.SecretLeakCount, sessS.SecretLeakCount)
+	require.Equal(t, sessL.FinalFailureStreak, sessS.FinalFailureStreak)
+	require.Equal(t, sessL.SecretLeakCount, sessS.SecretLeakCount)
 
 	findingsL, err := legacyDB.SessionSecretFindings(
 		t.Context(), sessionID,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	findingsS, err := stagedDB.SessionSecretFindings(
 		t.Context(), sessionID,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	sortFindings(findingsL)
 	sortFindings(findingsS)
-	require.Len(findingsS, len(findingsL))
+	require.Len(t, findingsS, len(findingsL))
 	for i := range findingsL {
-		require.Equal(findingsL[i].RuleName, findingsS[i].RuleName)
-		require.Equal(findingsL[i].MessageOrdinal,
+		require.Equal(t, findingsL[i].RuleName, findingsS[i].RuleName)
+		require.Equal(t, findingsL[i].MessageOrdinal,
 			findingsS[i].MessageOrdinal)
-		require.Equal(findingsL[i].EventIndex, findingsS[i].EventIndex)
+		require.Equal(t, findingsL[i].EventIndex, findingsS[i].EventIndex)
 	}
 }
 
@@ -498,9 +480,6 @@ func TestCodexStagedToolResultSummaryStorage(t *testing.T) {
 		{"sanitized single event", []string{"before\x00after"}, "", "beforeafter", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			const uuid = "019eb791-cf7d-75c1-8439-9ed74c122d01"
 			lines := []string{
 				testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project-a", "codex_cli_rs", "2026-07-10T07:00:00Z"),
@@ -514,19 +493,19 @@ func TestCodexStagedToolResultSummaryStorage(t *testing.T) {
 			syncCodexParityEngine(t, database, writeCodexTranscriptRoot(t, uuid, testjsonl.JoinJSONL(lines...)), 1)
 			var stored string
 			var length, events int
-			require.NoError(database.Reader().QueryRow(`SELECT COALESCE(result_content, ''), result_content_length FROM tool_calls WHERE session_id = ? AND tool_use_id = 'call_a'`, "codex:"+uuid).Scan(&stored, &length))
-			assert.Equal(tc.wantStored, stored)
-			assert.Equal(len(tc.wantDisplay), length)
-			require.NoError(database.Reader().QueryRow(`SELECT COUNT(*) FROM tool_result_events WHERE session_id = ?`, "codex:"+uuid).Scan(&events))
-			assert.Equal(tc.wantEvents, events)
+			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT COALESCE(result_content, ''), result_content_length FROM tool_calls WHERE session_id = ? AND tool_use_id = 'call_a'`, "codex:"+uuid).Scan(&stored, &length))
+			assert.Equal(t, tc.wantStored, stored)
+			assert.Equal(t, len(tc.wantDisplay), length)
+			require.NoError(t, database.Reader().QueryRow(t.Context(), `SELECT COUNT(*) FROM tool_result_events WHERE session_id = ?`, "codex:"+uuid).Scan(&events))
+			assert.Equal(t, tc.wantEvents, events)
 			msgs, err := database.GetAllMessages(t.Context(), "codex:"+uuid)
-			require.NoError(err)
+			require.NoError(t, err)
 			var calls []db.ToolCall
 			for _, msg := range msgs {
 				calls = append(calls, msg.ToolCalls...)
 			}
-			require.Len(calls, 1)
-			assert.Equal(tc.wantDisplay, calls[0].ResultContent)
+			require.Len(t, calls, 1)
+			assert.Equal(t, tc.wantDisplay, calls[0].ResultContent)
 		})
 	}
 }
@@ -577,6 +556,7 @@ func TestCodexEngineStagedSanitizesToolResultContent(t *testing.T) {
 
 	assertStored := func(t *testing.T, database *db.DB) []db.Message {
 		t.Helper()
+
 		msgs, err := database.GetAllMessages(t.Context(), "codex:"+uuid)
 		require.NoError(t, err)
 		var calls []db.ToolCall
@@ -635,7 +615,7 @@ func TestCodexEngineStagedSubagentEventIDPrefix(t *testing.T) {
 	syncPrefixed := func(t *testing.T, stagedMin int64) *db.DB {
 		t.Helper()
 		database := openTestDB(t)
-		engine := NewEngine(database, EngineConfig{
+		engine := NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentCodex: {writeCodexTranscriptRoot(t, uuid, transcript)},
 			},
@@ -682,8 +662,6 @@ func TestCodexEngineStagedSubagentEventIDPrefix(t *testing.T) {
 // publish real tool outputs, never the staged placeholders, and must
 // match the plain cold sync projection.
 func TestCodexEngineResyncBulkStagedParity(t *testing.T) {
-	require := require.New(t)
-
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b05"
 	sessionID := "codex:" + uuid
 
@@ -693,7 +671,7 @@ func TestCodexEngineResyncBulkStagedParity(t *testing.T) {
 	)
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {writeCodexParityRoot(t, uuid)},
 		},
@@ -702,20 +680,20 @@ func TestCodexEngineResyncBulkStagedParity(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 	stats := engine.ResyncAll(t.Context(), nil)
-	require.False(stats.Aborted, "resync aborted: %v", stats.Warnings)
-	require.Zero(stats.Failed)
-	require.Equal(1, stats.Synced)
+	require.False(t, stats.Aborted, "resync aborted: %v", stats.Warnings)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced)
 
 	msgsL, err := legacyDB.GetAllMessages(t.Context(), sessionID)
-	require.NoError(err)
+	require.NoError(t, err)
 	msgsS, err := database.GetAllMessages(t.Context(), sessionID)
-	require.NoError(err)
-	require.Equal(msgsL, msgsS,
+	require.NoError(t, err)
+	require.Equal(t, msgsL, msgsS,
 		"bulk resync must publish real tool outputs, not placeholders")
 	for _, m := range msgsS {
 		for _, tc := range m.ToolCalls {
 			for _, ev := range tc.ResultEvents {
-				require.NotContains(ev.Content, "staged:",
+				require.NotContains(t, ev.Content, "staged:",
 					"bulk resync wrote a staging placeholder")
 			}
 		}
@@ -729,6 +707,7 @@ func TestCodexEngineResyncBulkStagedParity(t *testing.T) {
 // dual-path comparison.
 func assertCodexStagedParity(t *testing.T, uuid, content string) {
 	t.Helper()
+
 	root := t.TempDir()
 	day := filepath.Join(root, "2024", "01", "01")
 	require.NoError(t, os.MkdirAll(day, 0o755))
@@ -758,7 +737,7 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 	require.NotNil(t, legacySess)
 
 	// Staging parse.
-	stagedSink, err := newCodexStagingSink("", map[string]bool{})
+	stagedSink, err := newCodexStagingSink(t.Context(), "", map[string]bool{})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, stagedSink.Close()) }()
 	stagedSess, stagedMsgs, stagedCursor, stagedHash, stagedAnchor, stagedRetry, err := parser.ParseCodexSessionStreaming(t.Context(), cfg, source, stagedSink)
@@ -818,7 +797,7 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 			UserMessageCount: sess.UserMessageCount,
 			IsAutomated:      false,
 		}
-		require.NoError(t, database.UpsertSession(row))
+		require.NoError(t, database.UpsertSession(t.Context(), row))
 		return row
 	}
 	rowL := writeSessionRow(dbLegacy, legacySess)
@@ -832,7 +811,7 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 	}, nil)
 
 	updateL, findingsL := computeSignalsAndSecrets(rowL, legacyDBMsgs)
-	require.NoError(t, dbLegacy.ReplaceSessionContent(
+	require.NoError(t, dbLegacy.ReplaceSessionContent(t.Context(),
 		rowL.ID, legacyDBMsgs, updateL, findingsL,
 	))
 
@@ -941,9 +920,6 @@ func assertCodexStagedParity(t *testing.T, uuid, content string) {
 // blanks the summary before computing signals, so the staged summary
 // resolver must evaluate its verdict against empty content too.
 func TestCodexStagedBlockedCategorySignalParity(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b09"
 	blocked := map[string]bool{"Bash": true}
 	content := testjsonl.JoinJSONL(
@@ -962,29 +938,29 @@ func TestCodexStagedBlockedCategorySignalParity(t *testing.T) {
 
 	root := t.TempDir()
 	day := filepath.Join(root, "2024", "01", "01")
-	require.NoError(os.MkdirAll(day, 0o755))
+	require.NoError(t, os.MkdirAll(day, 0o755))
 	path := filepath.Join(
 		day, "rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
 	)
-	require.NoError(os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
 	cfg := parser.ProviderConfig{Roots: []string{root}, Machine: "local"}
 	provider, ok := parser.NewProvider(parser.AgentCodex, cfg)
-	require.True(ok)
+	require.True(t, ok)
 	source, found, err := provider.FindSource(
 		t.Context(), parser.FindSourceRequest{
 			FullSessionID: "codex:" + uuid,
 		},
 	)
-	require.NoError(err)
-	require.True(found)
+	require.NoError(t, err)
+	require.True(t, found)
 
 	// Legacy collecting parse: the blocked map blanks Bash content, so the
 	// status-less "command not found" output is not a content failure.
 	legacySink := parser.NewCodexCollectingSink(0)
 	legacySess, legacyMsgs, _, _, _, _, err := parser.ParseCodexSessionStreaming(t.Context(), cfg, source, legacySink)
-	require.NoError(err)
-	require.NotNil(legacySess)
+	require.NoError(t, err)
+	require.NotNil(t, legacySess)
 	legacyDBMsgs := toDBMessages(pendingWrite{
 		sess: *legacySess, msgs: legacyMsgs,
 	}, blocked)
@@ -994,12 +970,12 @@ func TestCodexStagedBlockedCategorySignalParity(t *testing.T) {
 
 	// Staging parse with the same blocked map; resolving summaries records
 	// the per-call content-failure verdicts the publish transaction folds.
-	stagedSink, err := newCodexStagingSink("", blocked)
-	require.NoError(err)
-	defer func() { require.NoError(stagedSink.Close()) }()
+	stagedSink, err := newCodexStagingSink(t.Context(), "", blocked)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, stagedSink.Close()) }()
 	stagedSess, stagedMsgs, _, _, _, _, err := parser.ParseCodexSessionStreaming(t.Context(), cfg, source, stagedSink)
-	require.NoError(err)
-	require.NotNil(stagedSess)
+	require.NoError(t, err)
+	require.NotNil(t, stagedSess)
 	stagedDBMsgs := toDBMessages(pendingWrite{
 		sess: *stagedSess, msgs: stagedMsgs,
 	}, blocked)
@@ -1011,7 +987,7 @@ func TestCodexStagedBlockedCategorySignalParity(t *testing.T) {
 			_, _, err := stagedSink.ResolveSummary(
 				t.Context(), tc.ToolUseID,
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 		}
 	}
 	stagedUpdate, _ := computeSignalsAndSecretsWithContentFailures(
@@ -1019,10 +995,10 @@ func TestCodexStagedBlockedCategorySignalParity(t *testing.T) {
 		stagedSink.ContentFailures(),
 	)
 
-	assert.Equal(legacyUpdate.ToolFailureSignalCount,
+	assert.Equal(t, legacyUpdate.ToolFailureSignalCount,
 		stagedUpdate.ToolFailureSignalCount,
 		"blocked-category failure signals must match the legacy path")
-	assert.Zero(legacyUpdate.ToolFailureSignalCount,
+	assert.Zero(t, legacyUpdate.ToolFailureSignalCount,
 		"a blocked output with a failure marker must never be a content failure")
 }
 
@@ -1048,33 +1024,29 @@ func sortFindings(findings []db.SecretFinding) {
 func TestCodexStagedStableSnapshotCountsMalformedTail(t *testing.T) {
 	for _, threshold := range []int64{1, 1 << 30} {
 		t.Run(strconv.FormatInt(threshold, 10), func(t *testing.T) {
-			require := require.New(t)
-
 			const uuid = "019eb791-cf7d-75c1-8439-9ed74c122d02"
 			root := writeCodexTranscriptRoot(t, uuid, testjsonl.JoinJSONL(
 				testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project-a", "codex_cli_rs", "2026-07-10T07:00:00Z"),
 				testjsonl.CodexMsgJSON("user", "hello", "2026-07-10T07:00:01Z"),
 			)+`{"type":`)
 			database := openTestDB(t)
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
 				Machine:   "local", Ephemeral: true, StableSourceSnapshots: true,
 				StagedCodexParseMinBytes: threshold, DisableFilesystemProjectDiscovery: true,
 			})
 			t.Cleanup(engine.Close)
 			stats := engine.SyncAll(t.Context(), nil)
-			require.Equal(1, stats.Synced)
+			require.Equal(t, 1, stats.Synced)
 			sess, err := database.GetSessionFull(t.Context(), "codex:"+uuid)
-			require.NoError(err)
-			require.NotNil(sess)
+			require.NoError(t, err)
+			require.NotNil(t, sess)
 			assert.Equal(t, 1, sess.ParserMalformedLines)
 		})
 	}
 }
 
 func TestCodexStagedParseCancellation(t *testing.T) {
-	require := require.New(t)
-
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122d03"
 	fixture := testjsonl.NewSessionBuilder().AddCodexMeta("2026-07-10T07:00:00Z", uuid, "/workspace/project-a", "codex_cli_rs").AddCodexMessage("2026-07-10T07:00:01Z", "user", "run the command")
 	for i := range 3000 {
@@ -1084,12 +1056,12 @@ func TestCodexStagedParseCancellation(t *testing.T) {
 	}
 	root := writeCodexTranscriptRoot(t, uuid, fixture.String())
 	paths, err := filepath.Glob(filepath.Join(root, "2024", "01", "01", "*.jsonl"))
-	require.NoError(err)
-	require.Len(paths, 1)
+	require.NoError(t, err)
+	require.Len(t, paths, 1)
 	info, err := os.Stat(paths[0])
-	require.NoError(err)
+	require.NoError(t, err)
 	stage := t.TempDir()
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
 		Machine:   "local", Ephemeral: true, StagedCodexParseMinBytes: 1,
 		CodexStagingDir: stage, DisableFilesystemProjectDiscovery: true,
@@ -1129,9 +1101,9 @@ func TestCodexStagedParseCancellation(t *testing.T) {
 	defer result.releaseStaged()
 	defer result.retentionLease.Release()
 	cancel()
-	require.True(<-observed, "cancel after the parser stores its first result event")
-	require.ErrorIs(result.err, context.Canceled)
+	require.True(t, <-observed, "cancel after the parser stores its first result event")
+	require.ErrorIs(t, result.err, context.Canceled)
 	entries, err := os.ReadDir(stage)
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Empty(t, entries, "cancellation releases scratch storage")
 }

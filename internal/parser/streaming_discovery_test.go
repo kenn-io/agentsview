@@ -13,14 +13,11 @@ import (
 )
 
 func TestStreamDirectoryTreeContinuesAfterUnreadableSubtree(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	nested := filepath.Join(root, "a-nested")
-	require.NoError(os.Mkdir(nested, 0o755))
+	require.NoError(t, os.Mkdir(nested, 0o755))
 	healthy := filepath.Join(root, "z-healthy.jsonl")
-	require.NoError(os.WriteFile(healthy, []byte("{}\n"), 0o600))
+	require.NoError(t, os.WriteFile(healthy, []byte("{}\n"), 0o600))
 	injected := errors.New("subtree unavailable")
 	ctx := withStreamingDirectoryReader(t.Context(), func(
 		ctx context.Context, dir string, yield func(os.DirEntry) error,
@@ -46,10 +43,10 @@ func TestStreamDirectoryTreeContinuesAfterUnreadableSubtree(t *testing.T) {
 		return nil
 	})
 
-	assert.ErrorIs(err, injected)
+	require.ErrorIs(t, err, injected)
 	var incomplete DiscoveryIncompleteError
-	assert.ErrorAs(err, &incomplete)
-	assert.Equal([]string{healthy}, yielded)
+	require.ErrorAs(t, err, &incomplete)
+	assert.Equal(t, []string{healthy}, yielded)
 }
 
 func TestStreamDirectoryTreeYieldErrorAbortsImmediately(t *testing.T) {
@@ -69,18 +66,15 @@ func TestStreamDirectoryTreeYieldErrorAbortsImmediately(t *testing.T) {
 		return injected
 	})
 
-	assert.ErrorIs(t, err, injected)
+	require.ErrorIs(t, err, injected)
 	assert.Equal(t, 1, calls)
 }
 
 func TestStreamDirectoryEntriesBoundsUnderlyingReadBatch(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dir := t.TempDir()
 	for i := range 300 {
 		path := filepath.Join(dir, fmt.Sprintf("entry-%03d", i))
-		require.NoError(os.WriteFile(path, nil, 0o600))
+		require.NoError(t, os.WriteFile(path, nil, 0o600))
 	}
 	maxBuffered := 0
 	ctx := WithStreamingDiscoveryBufferObserver(
@@ -94,10 +88,10 @@ func TestStreamDirectoryEntriesBoundsUnderlyingReadBatch(t *testing.T) {
 		return nil
 	})
 
-	require.NoError(err)
-	assert.Equal(300, count)
-	assert.Positive(maxBuffered)
-	assert.LessOrEqual(maxBuffered, streamingDirectoryBatchSize)
+	require.NoError(t, err)
+	assert.Equal(t, 300, count)
+	assert.Positive(t, maxBuffered)
+	assert.LessOrEqual(t, maxBuffered, streamingDirectoryBatchSize)
 }
 
 func TestStreamDirectoryEntriesStopsAfterMidTraversalCancellation(t *testing.T) {
@@ -117,17 +111,15 @@ func TestStreamDirectoryEntriesStopsAfterMidTraversalCancellation(t *testing.T) 
 		return nil
 	})
 
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, streamingDirectoryBatchSize+1, count)
 }
 
 func TestStreamDirectoryEntriesRejectsReplacementWhilePaused(t *testing.T) {
-	require := require.New(t)
-
 	dir := filepath.Join(t.TempDir(), "sessions")
-	require.NoError(os.Mkdir(dir, 0o700))
+	require.NoError(t, os.Mkdir(dir, 0o700))
 	for _, name := range []string{"a.jsonl", "b.jsonl"} {
-		require.NoError(os.WriteFile(filepath.Join(dir, name), nil, 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), nil, 0o600))
 	}
 	paused := make(chan struct{})
 	resume := make(chan struct{})
@@ -150,9 +142,9 @@ func TestStreamDirectoryEntriesRejectsReplacementWhilePaused(t *testing.T) {
 
 	<-paused
 	moved := dir + "-moved"
-	require.NoError(os.Rename(dir, moved))
-	require.NoError(os.Mkdir(dir, 0o700))
-	require.NoError(os.WriteFile(filepath.Join(dir, "replacement.jsonl"), nil, 0o600))
+	require.NoError(t, os.Rename(dir, moved))
+	require.NoError(t, os.Mkdir(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "replacement.jsonl"), nil, 0o600))
 	close(resume)
 
 	assert.ErrorIs(t, <-errCh, errStreamingDirectoryChanged)

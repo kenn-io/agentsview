@@ -126,14 +126,12 @@ func (c *Cache) lookup(
 		return nil, false, fmt.Errorf("git_cache lookup: %w", err)
 	}
 	t, parseErr := time.Parse(time.RFC3339Nano, computedAt)
-	if parseErr != nil {
-		// Malformed timestamp: treat as stale so compute runs and overwrites.
-		return nil, false, nil
+	// Only a valid timestamp inside the TTL makes a cache entry fresh.
+	// Malformed timestamps remain cache misses and get overwritten by compute.
+	if parseErr == nil && time.Since(t) <= ttl {
+		return []byte(payload), true, nil
 	}
-	if time.Since(t) > ttl {
-		return nil, false, nil
-	}
-	return []byte(payload), true, nil
+	return nil, false, nil
 }
 
 // tokenIdentity returns a stable hex digest of ghToken suitable for

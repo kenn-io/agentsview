@@ -27,7 +27,7 @@ func seedSubagentSession(
 			Content: rc[1], Timestamp: "2026-05-20T12:00:0" + itoa(i) + "Z",
 		})
 	}
-	require.NoError(t, d.ReplaceSessionMessages(id, out), "ReplaceSessionMessages")
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, out), "ReplaceSessionMessages")
 }
 
 // seedScopeFixture seeds one top-level session ("top") and one subagent
@@ -64,7 +64,7 @@ func matchSessionIDs(page ContentSearchPage) []string {
 // requireHybridReady skips hybrid-mode subtests when FTS5 is unavailable.
 func requireHybridReady(t *testing.T, d *DB, mode string) {
 	t.Helper()
-	if mode == "hybrid" && !d.HasFTS() {
+	if mode == "hybrid" && !d.HasFTS(t.Context()) {
 		t.Skip("fts5 not available")
 	}
 }
@@ -134,9 +134,6 @@ func TestSearchContentScopeSubordinateOnly(t *testing.T) {
 // universe: scope governs visibility, so false and true return the same
 // session set.
 func TestSearchContentScopeSupersedesIncludeChildren(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	searcher := seedScopeFixture(t, d)
 	d.SetVectorSearcher(searcher)
@@ -144,15 +141,15 @@ func TestSearchContentScopeSupersedesIncludeChildren(t *testing.T) {
 	withoutChildren, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "semantic", IncludeChildren: false, Limit: 50,
 	})
-	require.NoError(err, "SearchContent IncludeChildren=false")
+	require.NoError(t, err, "SearchContent IncludeChildren=false")
 	withChildren, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "semantic", IncludeChildren: true, Limit: 50,
 	})
-	require.NoError(err, "SearchContent IncludeChildren=true")
+	require.NoError(t, err, "SearchContent IncludeChildren=true")
 
-	assert.Equal(matchSessionIDs(withChildren), matchSessionIDs(withoutChildren),
+	assert.Equal(t, matchSessionIDs(withChildren), matchSessionIDs(withoutChildren),
 		"include_children must be superseded in semantic mode")
-	assert.Contains(matchSessionIDs(withoutChildren), "sub")
+	assert.Contains(t, matchSessionIDs(withoutChildren), "sub")
 }
 
 // TestSearchContentScopeStillAppliesSessionFilters guards that lifting the
@@ -161,6 +158,7 @@ func TestSearchContentScopeSupersedesIncludeChildren(t *testing.T) {
 func TestSearchContentScopeStillAppliesSessionFilters(t *testing.T) {
 	seedExtra := func(t *testing.T, d *DB) *fakeVectorSearcher {
 		t.Helper()
+
 		searcher := seedScopeFixture(t, d)
 		// ReplaceSessionMessages recomputes is_automated from the stored
 		// transcript, so the automated session must genuinely classify as
@@ -171,7 +169,7 @@ func TestSearchContentScopeStillAppliesSessionFilters(t *testing.T) {
 			s.UserMessageCount = 1
 			s.FirstMessage = Ptr(autoContent)
 		})
-		require.NoError(t, d.ReplaceSessionMessages("auto", []Message{
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), "auto", []Message{
 			{
 				SessionID: "auto", Ordinal: 0, Role: "user",
 				Content: autoContent, Timestamp: "2026-05-20T12:00:00Z",
@@ -181,7 +179,7 @@ func TestSearchContentScopeStillAppliesSessionFilters(t *testing.T) {
 			s.Agent = "claude"
 			s.UserMessageCount = 1
 		})
-		require.NoError(t, d.ReplaceSessionMessages("oneshot", []Message{
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), "oneshot", []Message{
 			{
 				SessionID: "oneshot", Ordinal: 0, Role: "user",
 				Content: "zebra one-shot", Timestamp: "2026-05-20T12:00:00Z",
@@ -191,7 +189,7 @@ func TestSearchContentScopeStillAppliesSessionFilters(t *testing.T) {
 			s.Agent = "claude"
 			s.UserMessageCount = 2
 		})
-		require.NoError(t, d.ReplaceSessionMessages("elsewhere", []Message{
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), "elsewhere", []Message{
 			{
 				SessionID: "elsewhere", Ordinal: 0, Role: "user",
 				Content: "zebra elsewhere", Timestamp: "2026-05-20T12:00:00Z",
@@ -233,11 +231,8 @@ func TestSearchContentScopeStillAppliesSessionFilters(t *testing.T) {
 // semantics — a subagent child is hidden by default and reachable only via
 // IncludeChildren=true.
 func TestSearchContentFTSModeIncludeChildrenUnchanged(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("fts5 not available")
 	}
 	d.SetVectorSearcher(seedScopeFixture(t, d))
@@ -246,14 +241,14 @@ func TestSearchContentFTSModeIncludeChildrenUnchanged(t *testing.T) {
 		Pattern: "zebra", Mode: "fts", Sources: []string{"messages"}, Limit: 50,
 	}
 	page, err := d.SearchContent(t.Context(), base)
-	require.NoError(err, "SearchContent fts default")
-	assert.Equal([]string{"top"}, matchSessionIDs(page),
+	require.NoError(t, err, "SearchContent fts default")
+	assert.Equal(t, []string{"top"}, matchSessionIDs(page),
 		"fts mode must keep excluding sidebar children by default")
 
 	base.IncludeChildren = true
 	page, err = d.SearchContent(t.Context(), base)
-	require.NoError(err, "SearchContent fts include_children")
-	assert.ElementsMatch([]string{"top", "sub"}, matchSessionIDs(page))
+	require.NoError(t, err, "SearchContent fts include_children")
+	assert.ElementsMatch(t, []string{"top", "sub"}, matchSessionIDs(page))
 }
 
 // seedOneShotSubagentFixture seeds a normal top-level session ("top"), a
@@ -272,7 +267,7 @@ func seedOneShotSubagentFixture(t *testing.T, d *DB) *fakeVectorSearcher {
 		s.ParentSessionID = Ptr("top")
 		s.RelationshipType = "subagent"
 	})
-	require.NoError(t, d.ReplaceSessionMessages("sub1", []Message{
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "sub1", []Message{
 		{
 			SessionID: "sub1", Ordinal: 0, Role: "user",
 			Content: "zebra prompt for the subagent", Timestamp: "2026-05-20T12:00:00Z",
@@ -282,7 +277,7 @@ func seedOneShotSubagentFixture(t *testing.T, d *DB) *fakeVectorSearcher {
 		s.Agent = "claude"
 		s.UserMessageCount = 1
 	})
-	require.NoError(t, d.ReplaceSessionMessages("solo", []Message{
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "solo", []Message{
 		{
 			SessionID: "solo", Ordinal: 0, Role: "user",
 			Content: "zebra one-shot at top level", Timestamp: "2026-05-20T12:00:00Z",
@@ -311,8 +306,6 @@ func seedOneShotSubagentFixture(t *testing.T, d *DB) *fakeVectorSearcher {
 func TestSearchContentOneShotSubagentVisibleInSemanticModes(t *testing.T) {
 	for _, mode := range []string{"semantic", "hybrid"} {
 		t.Run(mode, func(t *testing.T) {
-			assert := assert.New(t)
-
 			d := testDB(t)
 			requireHybridReady(t, d, mode)
 			d.SetVectorSearcher(seedOneShotSubagentFixture(t, d))
@@ -322,10 +315,10 @@ func TestSearchContentOneShotSubagentVisibleInSemanticModes(t *testing.T) {
 			})
 			require.NoError(t, err, "SearchContent")
 			ids := matchSessionIDs(page)
-			assert.Contains(ids, "sub1",
+			assert.Contains(t, ids, "sub1",
 				"one-shot subagent unit must survive the one-shot gate in %s mode", mode)
-			assert.Contains(ids, "top")
-			assert.NotContains(ids, "solo",
+			assert.Contains(t, ids, "top")
+			assert.NotContains(t, ids, "solo",
 				"top-level one-shot must keep being excluded by default")
 		})
 	}
@@ -336,7 +329,7 @@ func TestSearchContentOneShotSubagentVisibleInSemanticModes(t *testing.T) {
 // subagent session (both as a child and as a one-shot).
 func TestSearchContentFTSModeOneShotSubagentStillExcluded(t *testing.T) {
 	d := testDB(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("fts5 not available")
 	}
 	d.SetVectorSearcher(seedOneShotSubagentFixture(t, d))

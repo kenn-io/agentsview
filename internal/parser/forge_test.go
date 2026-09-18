@@ -1,8 +1,7 @@
 package parser
 
-import "context"
-
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -231,8 +230,6 @@ func TestListForgeSessionMeta(t *testing.T) {
 }
 
 func TestCollectForgeToolCalls_TaskSubagentIDPrefixed(t *testing.T) {
-	require := require.New(t)
-
 	dbPath, seeder, db := newForgeTestDB(t)
 	defer db.Close()
 
@@ -271,9 +268,9 @@ func TestCollectForgeToolCalls_TaskSubagentIDPrefixed(t *testing.T) {
 	)
 
 	sess, msgs, err := parseForgeSession(t.Context(), dbPath, "parent-conv", "m", false)
-	require.NoError(err, "parseForgeSession")
-	require.NotNil(sess, "expected non-nil session")
-	require.NotEmpty(msgs, "expected messages")
+	require.NoError(t, err, "parseForgeSession")
+	require.NotNil(t, sess, "expected non-nil session")
+	require.NotEmpty(t, msgs, "expected messages")
 	var taskCall *ParsedToolCall
 	for i := range msgs {
 		for j := range msgs[i].ToolCalls {
@@ -282,7 +279,7 @@ func TestCollectForgeToolCalls_TaskSubagentIDPrefixed(t *testing.T) {
 			}
 		}
 	}
-	require.NotNil(taskCall, "expected task tool call")
+	require.NotNil(t, taskCall, "expected task tool call")
 	assertEq(t, "SubagentSessionID", taskCall.SubagentSessionID, "forge:child-conv-001")
 }
 
@@ -790,9 +787,6 @@ func TestParseForgeTimestamp(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestForgeEndedAtFallback(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	dbPath, seeder, db := newForgeTestDB(t)
 	defer db.Close()
 
@@ -819,14 +813,14 @@ func TestForgeEndedAtFallback(t *testing.T) {
 	)
 	// Override to NULL updated_at.
 	_, err := db.ExecContext(t.Context(), "UPDATE conversations SET updated_at = NULL WHERE conversation_id = 'ended-fallback'")
-	require.NoError(err, "update")
+	require.NoError(t, err, "update")
 
 	sessions, err := parseForgeAll(dbPath, "m")
-	require.NoError(err, "ParseForgeDB")
-	require.Len(sessions, 1)
+	require.NoError(t, err, "ParseForgeDB")
+	require.Len(t, sessions, 1)
 	s := sessions[0].Session
-	assert.False(s.EndedAt.IsZero(), "EndedAt is zero, want fallback to StartedAt")
-	assert.True(s.StartedAt.Equal(s.EndedAt),
+	assert.False(t, s.EndedAt.IsZero(), "EndedAt is zero, want fallback to StartedAt")
+	assert.True(t, s.StartedAt.Equal(s.EndedAt),
 		"EndedAt = %v, want StartedAt = %v", s.EndedAt, s.StartedAt)
 }
 
@@ -837,8 +831,6 @@ func TestForgeEndedAtFallback(t *testing.T) {
 func TestForgeToolOutputText(t *testing.T) {
 	// values[].text covered in standard test; test top-level text fallback.
 	t.Run("top_level_text", func(t *testing.T) {
-		require := require.New(t)
-
 		dbPath, seeder, db := newForgeTestDB(t)
 		defer db.Close()
 
@@ -874,12 +866,12 @@ func TestForgeToolOutputText(t *testing.T) {
 		)
 
 		sessions, err := parseForgeAll(dbPath, "m")
-		require.NoError(err, "ParseForgeDB")
-		require.Len(sessions, 1)
+		require.NoError(t, err, "ParseForgeDB")
+		require.Len(t, sessions, 1)
 		msgs := sessions[0].Messages
-		require.GreaterOrEqual(len(msgs), 2, "want at least 2 messages")
+		require.GreaterOrEqual(t, len(msgs), 2, "want at least 2 messages")
 		// Second message is the tool result (role=user with ToolResults)
-		require.NotEmpty(msgs[1].ToolResults, "expected tool result")
+		require.NotEmpty(t, msgs[1].ToolResults, "expected tool result")
 	})
 }
 

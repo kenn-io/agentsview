@@ -1,8 +1,12 @@
 package parser
 
+import
+
 // codexSeedSink assigns message ordinals while discarding normalized content.
 // Prefix reconstruction uses it to recover occurrence-qualified pending-call
 // coordinates without retaining the transcript in memory.
+"context"
+
 type codexSeedSink struct {
 	nextOrdinal    int
 	hadReservation bool
@@ -27,7 +31,7 @@ func (s *codexSeedSink) ReserveOrdinal() int {
 
 func (*codexSeedSink) InsertMessage(ParsedMessage) int { return 0 }
 
-func (*codexSeedSink) AppendToolResultEvent(
+func (*codexSeedSink) AppendToolResultEvent(context.Context,
 	string, *ParsedToolCallPosition, ParsedToolResultEvent,
 ) {
 }

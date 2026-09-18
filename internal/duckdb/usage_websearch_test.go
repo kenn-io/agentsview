@@ -70,6 +70,8 @@ func webSearchWrites(model string, searches int) []db.SessionBatchWrite {
 func webSearchStores(
 	t *testing.T, model string, searches int,
 ) (*db.DB, *Store) {
+	t.Helper()
+
 	return webSearchStoresFromWrites(t, webSearchWrites(model, searches))
 }
 
@@ -77,10 +79,11 @@ func webSearchStoresFromWrites(
 	t *testing.T, writes []db.SessionBatchWrite,
 ) (*db.DB, *Store) {
 	t.Helper()
+
 	ctx := t.Context()
 	local := newLocalDB(t)
 	require.NoError(t, local.UpsertModelPricing(webSearchPricing))
-	_, err := local.WriteSessionBatchAtomic(writes)
+	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
@@ -111,51 +114,42 @@ func asymmetricWebSearchWrites() []db.SessionBatchWrite {
 }
 
 func TestDuckSessionUsageBillsWebSearchRequestsLikeSQLite(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local, duck := webSearchStores(t, "claude-websearch-test", 2)
 
 	sqliteGot, err := local.GetSessionUsage(ctx, "duck-ws", true)
-	require.NoError(err)
-	require.NotNil(sqliteGot)
+	require.NoError(t, err)
+	require.NotNil(t, sqliteGot)
 	duckGot, err := duck.GetSessionUsage(ctx, "duck-ws", true)
-	require.NoError(err)
-	require.NotNil(duckGot)
+	require.NoError(t, err)
+	require.NotNil(t, duckGot)
 
 	// Two turns at $0.30 of tokens each, plus two searches at $0.01.
-	assert.Equal(money.MustParseDollars("0.62"), sqliteGot.Cost)
-	assert.Equal(sqliteGot.Cost, duckGot.Cost)
-	assert.Equal(sqliteGot.HasCost, duckGot.HasCost)
-	require.Len(duckGot.Breakdown, 2)
-	assert.Equal(sqliteGot.Breakdown, duckGot.Breakdown)
-	assert.Equal(2, duckGot.Breakdown[0].WebSearchRequests)
-	assert.Zero(duckGot.Breakdown[1].WebSearchRequests)
+	assert.Equal(t, money.MustParseDollars("0.62"), sqliteGot.Cost)
+	assert.Equal(t, sqliteGot.Cost, duckGot.Cost)
+	assert.Equal(t, sqliteGot.HasCost, duckGot.HasCost)
+	require.Len(t, duckGot.Breakdown, 2)
+	assert.Equal(t, sqliteGot.Breakdown, duckGot.Breakdown)
+	assert.Equal(t, 2, duckGot.Breakdown[0].WebSearchRequests)
+	assert.Zero(t, duckGot.Breakdown[1].WebSearchRequests)
 }
 
 func TestDuckDailyUsageBillsWebSearchRequestsLikeSQLite(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local, duck := webSearchStores(t, "claude-websearch-test", 2)
 	filter := db.UsageFilter{From: "2026-07-01", To: "2026-07-31"}
 
 	sqliteGot, err := local.GetDailyUsage(ctx, filter)
-	require.NoError(err)
+	require.NoError(t, err)
 	duckGot, err := duck.GetDailyUsage(ctx, filter)
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.Equal(money.MustParseDollars("0.62"),
+	assert.Equal(t, money.MustParseDollars("0.62"),
 		sqliteGot.Totals.TotalCost)
-	assert.Equal(sqliteGot.Totals.TotalCost, duckGot.Totals.TotalCost)
+	assert.Equal(t, sqliteGot.Totals.TotalCost, duckGot.Totals.TotalCost)
 }
 
 func TestDuckWebSearchOnlyChargeMakesReportedSessionMixed(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	reportedCost := money.MustParseDollars("0.03")
 	writes := []db.SessionBatchWrite{{
 		Session: db.Session{
@@ -184,139 +178,127 @@ func TestDuckWebSearchOnlyChargeMakesReportedSessionMixed(t *testing.T) {
 	local, duck := webSearchStoresFromWrites(t, writes)
 
 	sqliteSession, err := local.GetSessionUsage(ctx, "duck-ws-mixed", false)
-	require.NoError(err)
-	require.NotNil(sqliteSession)
+	require.NoError(t, err)
+	require.NotNil(t, sqliteSession)
 	duckSession, err := duck.GetSessionUsage(ctx, "duck-ws-mixed", false)
-	require.NoError(err)
-	require.NotNil(duckSession)
-	assert.Equal(money.MustParseDollars("0.05"), sqliteSession.Cost)
-	assert.Equal(sqliteSession.Cost, duckSession.Cost)
-	assert.Equal(export.CostSourceMixed, sqliteSession.CostSource)
-	assert.Equal(sqliteSession.CostSource, duckSession.CostSource)
+	require.NoError(t, err)
+	require.NotNil(t, duckSession)
+	assert.Equal(t, money.MustParseDollars("0.05"), sqliteSession.Cost)
+	assert.Equal(t, sqliteSession.Cost, duckSession.Cost)
+	assert.Equal(t, export.CostSourceMixed, sqliteSession.CostSource)
+	assert.Equal(t, sqliteSession.CostSource, duckSession.CostSource)
 
 	filter := db.UsageFilter{From: "2026-07-30", To: "2026-07-30"}
 	sqliteDaily, err := local.GetDailyUsage(ctx, filter)
-	require.NoError(err)
+	require.NoError(t, err)
 	duckDaily, err := duck.GetDailyUsage(ctx, filter)
-	require.NoError(err)
-	require.NotNil(sqliteDaily.Pricing)
-	require.NotNil(duckDaily.Pricing)
-	assert.Equal(export.CostSourceMixed, sqliteDaily.Pricing.CostSource)
-	assert.Equal(sqliteDaily.Pricing.CostSource,
+	require.NoError(t, err)
+	require.NotNil(t, sqliteDaily.Pricing)
+	require.NotNil(t, duckDaily.Pricing)
+	assert.Equal(t, export.CostSourceMixed, sqliteDaily.Pricing.CostSource)
+	assert.Equal(t, sqliteDaily.Pricing.CostSource,
 		duckDaily.Pricing.CostSource)
 }
 
 func TestDuckAsymmetricClaudeSnapshotsPreserveWebSearchFeeLikeSQLite(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local, duck := webSearchStoresFromWrites(t, asymmetricWebSearchWrites())
 
 	sqliteSession, err := local.GetSessionUsage(ctx, "duck-ws", true)
-	require.NoError(err)
-	require.NotNil(sqliteSession)
+	require.NoError(t, err)
+	require.NotNil(t, sqliteSession)
 	duckSession, err := duck.GetSessionUsage(ctx, "duck-ws", true)
-	require.NoError(err)
-	require.NotNil(duckSession)
-	assert.Equal(money.MustParseDollars("0.82"), sqliteSession.Cost)
-	assert.Equal(sqliteSession.Cost, duckSession.Cost)
+	require.NoError(t, err)
+	require.NotNil(t, duckSession)
+	assert.Equal(t, money.MustParseDollars("0.82"), sqliteSession.Cost)
+	assert.Equal(t, sqliteSession.Cost, duckSession.Cost)
 
 	filter := db.UsageFilter{From: "2026-07-30", To: "2026-07-30"}
 	sqliteDaily, err := local.GetDailyUsage(ctx, filter)
-	require.NoError(err)
+	require.NoError(t, err)
 	duckDaily, err := duck.GetDailyUsage(ctx, filter)
-	require.NoError(err)
-	assert.Equal(money.MustParseDollars("0.82"),
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("0.82"),
 		sqliteDaily.Totals.TotalCost)
-	assert.Equal(sqliteDaily.Totals.TotalCost,
+	assert.Equal(t, sqliteDaily.Totals.TotalCost,
 		duckDaily.Totals.TotalCost)
 
 	sqliteReport, err := local.GetActivityReport(ctx,
 		db.AnalyticsFilter{Timezone: "UTC"},
 		duckDayQuery(t, "2026-07-30", "UTC"))
-	require.NoError(err)
+	require.NoError(t, err)
 	duckReport, err := duck.GetActivityReport(ctx,
 		db.AnalyticsFilter{Timezone: "UTC"},
 		duckDayQuery(t, "2026-07-30", "UTC"))
-	require.NoError(err)
-	assert.Equal(money.MustParseDollars("0.82"),
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("0.82"),
 		sqliteReport.Totals.Cost)
-	assert.Equal(sqliteReport.Totals.Cost, duckReport.Totals.Cost)
+	assert.Equal(t, sqliteReport.Totals.Cost, duckReport.Totals.Cost)
 }
 
 func TestDuckActivityReportBillsWebSearchRequestsLikeSQLite(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local, duck := webSearchStores(t, "claude-websearch-test", 2)
 
 	sqliteGot, err := local.GetActivityReport(ctx,
 		db.AnalyticsFilter{Timezone: "UTC"},
 		duckDayQuery(t, "2026-07-30", "UTC"))
-	require.NoError(err)
+	require.NoError(t, err)
 	duckGot, err := duck.GetActivityReport(ctx,
 		db.AnalyticsFilter{Timezone: "UTC"},
 		duckDayQuery(t, "2026-07-30", "UTC"))
-	require.NoError(err)
+	require.NoError(t, err)
 
-	assert.Equal(money.MustParseDollars("0.62"), sqliteGot.Totals.Cost)
-	assert.Equal(sqliteGot.Totals.Cost, duckGot.Totals.Cost)
+	assert.Equal(t, money.MustParseDollars("0.62"), sqliteGot.Totals.Cost)
+	assert.Equal(t, sqliteGot.Totals.Cost, duckGot.Totals.Cost)
 }
 
 func TestDuckSessionUsageRowsCarryWebSearchRequestsLikeSQLite(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local, duck := webSearchStores(t, "claude-websearch-test", 2)
 
 	sqliteRowSet, err := local.GetSessionUsageRows(ctx, []string{"duck-ws"})
-	require.NoError(err)
+	require.NoError(t, err)
 	duckRowSet, err := duck.GetSessionUsageRows(ctx, []string{"duck-ws"})
-	require.NoError(err)
+	require.NoError(t, err)
 	sqliteRows := sqliteRowSet.Rows
 	duckRows := duckRowSet.Rows
 
-	require.Len(duckRows, 2)
-	assert.Equal(sqliteRows, duckRows)
-	assert.Equal(2, duckRows[0].WebSearchRequests)
-	assert.Equal(money.MustParseDollars("0.32"), duckRows[0].Cost)
-	assert.Zero(duckRows[1].WebSearchRequests)
+	require.Len(t, duckRows, 2)
+	assert.Equal(t, sqliteRows, duckRows)
+	assert.Equal(t, 2, duckRows[0].WebSearchRequests)
+	assert.Equal(t, money.MustParseDollars("0.32"), duckRows[0].Cost)
+	assert.Zero(t, duckRows[1].WebSearchRequests)
 }
 
 func TestDuckWebSearchFeeOnUnpricedModelMatchesSQLite(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ctx := t.Context()
 	local, duck := webSearchStores(t, "some-unlisted-model", 2)
 
 	sqliteGot, err := local.GetSessionUsage(ctx, "duck-ws", true)
-	require.NoError(err)
-	require.NotNil(sqliteGot)
+	require.NoError(t, err)
+	require.NotNil(t, sqliteGot)
 	duckGot, err := duck.GetSessionUsage(ctx, "duck-ws", true)
-	require.NoError(err)
-	require.NotNil(duckGot)
+	require.NoError(t, err)
+	require.NotNil(t, duckGot)
 
-	assert.False(sqliteGot.HasCost)
-	assert.Equal(sqliteGot.HasCost, duckGot.HasCost)
-	assert.Equal(sqliteGot.UnpricedModels, duckGot.UnpricedModels)
-	require.Len(duckGot.Breakdown, 2)
-	assert.Equal(money.MustParseDollars("0.02"),
+	assert.False(t, sqliteGot.HasCost)
+	assert.Equal(t, sqliteGot.HasCost, duckGot.HasCost)
+	assert.Equal(t, sqliteGot.UnpricedModels, duckGot.UnpricedModels)
+	require.Len(t, duckGot.Breakdown, 2)
+	assert.Equal(t, money.MustParseDollars("0.02"),
 		duckGot.Breakdown[0].Cost)
-	assert.Equal(sqliteGot.Breakdown, duckGot.Breakdown)
+	assert.Equal(t, sqliteGot.Breakdown, duckGot.Breakdown)
 
 	filter := db.UsageFilter{From: "2026-07-01", To: "2026-07-31"}
 	sqliteDaily, err := local.GetDailyUsage(ctx, filter)
-	require.NoError(err)
+	require.NoError(t, err)
 	duckDaily, err := duck.GetDailyUsage(ctx, filter)
-	require.NoError(err)
-	assert.Equal(money.MustParseDollars("0.02"),
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("0.02"),
 		sqliteDaily.Totals.TotalCost)
-	assert.Equal(sqliteDaily.Totals.TotalCost,
+	assert.Equal(t, sqliteDaily.Totals.TotalCost,
 		duckDaily.Totals.TotalCost)
 }

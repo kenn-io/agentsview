@@ -20,24 +20,21 @@ import (
 // flag. The worker build-and-swap mechanism is covered by the engine split tests
 // and the resync-build worker mode test.
 func TestForegroundResyncRunnerFallsBackInProcess(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	cfg := testConfigWithClaudeFixture(t)
-	database, err := db.Open(cfg.DBPath)
-	require.NoError(err)
-	t.Cleanup(func() { require.NoError(database.Close()) })
-	engine := sync.NewEngine(database, workerEngineConfig(cfg))
+	database, err := db.Open(t.Context(), cfg.DBPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := sync.NewEngine(t.Context(), database, workerEngineConfig(cfg))
 	t.Cleanup(engine.Close)
-	require.Equal(3, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
 
 	runner := newForegroundResyncRunner(t.Context(), cfg, engine, database)
 	stats, err := runner(t.Context(), nil)
 
-	require.NoError(err)
-	assert.False(stats.Aborted)
-	assert.Equal(3, stats.Synced, "in-process resync fallback rebuilds the archive")
-	assert.False(database.NeedsResync())
+	require.NoError(t, err)
+	assert.False(t, stats.Aborted)
+	assert.Equal(t, 3, stats.Synced, "in-process resync fallback rebuilds the archive")
+	assert.False(t, database.NeedsResync())
 }
 
 // requireStartupMaintenanceReleased asserts that RunStartupMaintenance is no
@@ -70,12 +67,12 @@ func requireStartupMaintenanceReleased(t *testing.T, engine *sync.Engine) {
 // returns early, and archive-wide backfills stay blocked until shutdown.
 func TestForegroundResyncRunnerReleasesStartupMaintenance(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	engineCfg := workerEngineConfig(cfg)
 	engineCfg.DeferStartupMaintenance = true
-	engine := sync.NewEngine(database, engineCfg)
+	engine := sync.NewEngine(t.Context(), database, engineCfg)
 	t.Cleanup(engine.Close)
 
 	runner := newForegroundResyncRunner(t.Context(), cfg, engine, database)
@@ -97,7 +94,7 @@ func TestForegroundResyncRunnerAbortedResyncFallsBackIncremental(t *testing.T) {
 	dbtest.SeedSession(t, database, "existing", "proj", func(s *db.Session) {
 		s.FilePath = &missingPath
 	})
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		Machine:                 "local",
 		DeferStartupMaintenance: true,
 	})
@@ -123,7 +120,7 @@ func TestForegroundResyncRunnerAbortedResyncFallsBackIncremental(t *testing.T) {
 func TestSyncAllReleasingStartupMaintenance(t *testing.T) {
 	t.Run("releases after completed pass", func(t *testing.T) {
 		database := dbtest.OpenTestDB(t)
-		engine := sync.NewEngine(database, sync.EngineConfig{
+		engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 			Machine:                 "local",
 			DeferStartupMaintenance: true,
 		})
@@ -135,7 +132,7 @@ func TestSyncAllReleasingStartupMaintenance(t *testing.T) {
 	})
 	t.Run("releases when cancelled after reconciliation", func(t *testing.T) {
 		database := dbtest.OpenTestDB(t)
-		engine := sync.NewEngine(database, sync.EngineConfig{
+		engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 			Machine:                 "local",
 			DeferStartupMaintenance: true,
 		})
@@ -158,7 +155,7 @@ func TestSyncAllReleasingStartupMaintenance(t *testing.T) {
 	})
 	t.Run("keeps gate closed when cancelled", func(t *testing.T) {
 		database := dbtest.OpenTestDB(t)
-		engine := sync.NewEngine(database, sync.EngineConfig{
+		engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 			Machine:                 "local",
 			DeferStartupMaintenance: true,
 		})

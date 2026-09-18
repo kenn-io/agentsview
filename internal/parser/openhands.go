@@ -275,8 +275,7 @@ func parseOpenHandsMessageEvent(
 		return ParsedMessage{}, false, ""
 	}
 
-	content, _, _, _, toolCalls, toolResults :=
-		ExtractTextContent(context.Background(), llmMessage.Get("content"))
+	content, _, _, _, toolCalls, toolResults := ExtractTextContent(context.Background(), llmMessage.Get("content"))
 	content, hasThinking := openHandsAppendThinking(
 		content, ev,
 	)

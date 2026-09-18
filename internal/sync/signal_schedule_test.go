@@ -133,8 +133,6 @@ func TestSignalSchedulerFirstMarkRunsInline(t *testing.T) {
 }
 
 func TestSignalSchedulerDefersWithinIntervalThenQuietFlush(t *testing.T) {
-	assert := assert.New(t)
-
 	h := newSchedulerHarness(10*time.Second, 2*time.Second)
 
 	h.sched.markDirty("s1")
@@ -143,21 +141,21 @@ func TestSignalSchedulerDefersWithinIntervalThenQuietFlush(t *testing.T) {
 	h.advance(1 * time.Second)
 	h.sched.markDirty("s1")
 	h.sched.tick()
-	assert.Len(h.runsSnapshot(), 1,
+	assert.Len(t, h.runsSnapshot(), 1,
 		"mark within interval should defer, not recompute")
 
 	h.advance(1 * time.Second)
 	h.sched.tick()
-	assert.Len(h.runsSnapshot(), 1,
+	assert.Len(t, h.runsSnapshot(), 1,
 		"tick before quiet delay elapses should not flush")
 
 	h.advance(1 * time.Second)
 	h.sched.tick()
-	assert.Equal([]string{"s1", "s1"}, h.runsSnapshot(),
+	assert.Equal(t, []string{"s1", "s1"}, h.runsSnapshot(),
 		"tick after quiet delay should flush the deferred recompute")
 
 	h.sched.tick()
-	assert.Len(h.runsSnapshot(), 2,
+	assert.Len(t, h.runsSnapshot(), 2,
 		"flushed session should not run again")
 }
 
@@ -214,61 +212,55 @@ func TestSignalSchedulerFlushAllRunsEverythingPending(t *testing.T) {
 }
 
 func TestSignalSchedulerTimerArmsOncePerBurstAndRearms(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	h := newSchedulerHarness(10*time.Second, 2*time.Second)
 
 	h.sched.markDirty("s1")
-	require.Zero(h.armedCount())
+	require.Zero(t, h.armedCount())
 
 	h.advance(1 * time.Second)
 	h.sched.markDirty("s1")
-	require.Equal(1, h.armedCount(),
+	require.Equal(t, 1, h.armedCount(),
 		"first deferral should arm the flush timer")
 	h.sched.markDirty("s1")
-	require.Equal(1, h.armedCount(),
+	require.Equal(t, 1, h.armedCount(),
 		"further deferrals must not stack timers")
 
 	// Timer fires before the quiet delay has elapsed: nothing
 	// flushes, but the timer must re-arm to cover the still-dirty
 	// session.
 	h.fireTimer(t)
-	assert.Len(h.runsSnapshot(), 1)
-	require.Equal(1, h.armedCount(),
+	assert.Len(t, h.runsSnapshot(), 1)
+	require.Equal(t, 1, h.armedCount(),
 		"early fire with dirty sessions should re-arm")
 
 	h.advance(2 * time.Second)
 	h.fireTimer(t)
-	assert.Len(h.runsSnapshot(), 2,
+	assert.Len(t, h.runsSnapshot(), 2,
 		"fire after quiet delay should flush")
-	assert.Zero(h.armedCount(),
+	assert.Zero(t, h.armedCount(),
 		"no dirty sessions left, timer should stay disarmed")
 }
 
 func TestSignalSchedulerStopFlushesAndRunsInlineAfter(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	h := newSchedulerHarness(10*time.Second, 2*time.Second)
 
 	h.sched.markDirty("s1")
 	h.advance(1 * time.Second)
 	h.sched.markDirty("s1")
-	require.Len(h.runsSnapshot(), 1)
+	require.Len(t, h.runsSnapshot(), 1)
 
-	require.Equal(1, h.armedCount(),
+	require.Equal(t, 1, h.armedCount(),
 		"deferral should have armed the flush timer")
 	h.sched.stop()
-	assert.Len(h.runsSnapshot(), 2,
+	assert.Len(t, h.runsSnapshot(), 2,
 		"stop should flush pending recomputes")
-	assert.Zero(h.armedCount(),
+	assert.Zero(t, h.armedCount(),
 		"stop should cancel the pending flush timer")
 
 	h.sched.markDirty("s1")
-	assert.Len(h.runsSnapshot(), 3,
+	assert.Len(t, h.runsSnapshot(), 3,
 		"marks after stop should recompute inline")
-	assert.Zero(h.armedCount(),
+	assert.Zero(t, h.armedCount(),
 		"stopped scheduler must not arm new timers")
 
 	h.sched.stop() // double-stop must not panic
@@ -342,8 +334,6 @@ func TestSignalSchedulerStopWaitsForInflightTimerRun(t *testing.T) {
 // must recompute pending sessions via the inline callback, never
 // the deferred (lock-taking) one, and leave the scheduler running.
 func TestSignalSchedulerFlushAllInlineUsesInlinePath(t *testing.T) {
-	assert := assert.New(t)
-
 	h := newSchedulerHarness(10*time.Second, 2*time.Second)
 
 	h.sched.markDirty("s1")
@@ -352,14 +342,14 @@ func TestSignalSchedulerFlushAllInlineUsesInlinePath(t *testing.T) {
 	require.Len(t, h.runsSnapshot(), 1, "second mark should defer")
 
 	h.sched.flushAllInline()
-	assert.Equal([]string{"s1", "s1"}, h.runsSnapshot(),
+	assert.Equal(t, []string{"s1", "s1"}, h.runsSnapshot(),
 		"inline flush should recompute every pending session")
-	assert.Empty(h.deferredSnapshot(),
+	assert.Empty(t, h.deferredSnapshot(),
 		"inline flush must not use the deferred path")
 
 	h.advance(1 * time.Second)
 	h.sched.markDirty("s1")
-	assert.Len(h.runsSnapshot(), 2,
+	assert.Len(t, h.runsSnapshot(), 2,
 		"scheduler must keep debouncing after an inline flush")
 }
 
@@ -369,32 +359,30 @@ func TestSignalSchedulerFlushAllInlineUsesInlinePath(t *testing.T) {
 // the sync lock only in exclusive, so misrouting either way would
 // mean recomputes racing sync writes or a self-deadlock.
 func TestSignalSchedulerRoutesDeferredRunsSeparately(t *testing.T) {
-	assert := assert.New(t)
-
 	h := newSchedulerHarness(10*time.Second, 2*time.Second)
 
 	h.sched.markDirty("s1")
-	assert.Empty(h.deferredSnapshot(),
+	assert.Empty(t, h.deferredSnapshot(),
 		"leading-edge run must use the inline path")
 
 	h.advance(1 * time.Second)
 	h.sched.markDirty("s1")
 	h.advance(2 * time.Second)
 	h.sched.tick()
-	assert.Equal([]string{"s1"}, h.deferredSnapshot(),
+	assert.Equal(t, []string{"s1"}, h.deferredSnapshot(),
 		"tick flushes must use the deferred path")
 
 	h.advance(1 * time.Second)
 	h.sched.markDirty("s1")
 	h.sched.flushAll()
-	assert.Equal([]string{"s1", "s1"}, h.deferredSnapshot(),
+	assert.Equal(t, []string{"s1", "s1"}, h.deferredSnapshot(),
 		"flushAll must use the deferred path")
 
 	h.sched.stop()
 	h.sched.markDirty("s1")
-	assert.Equal([]string{"s1", "s1"}, h.deferredSnapshot(),
+	assert.Equal(t, []string{"s1", "s1"}, h.deferredSnapshot(),
 		"stopped pass-through marks must stay inline")
-	assert.Len(h.runsSnapshot(), 4,
+	assert.Len(t, h.runsSnapshot(), 4,
 		"every mark and flush must still recompute exactly once")
 }
 
@@ -440,8 +428,6 @@ func TestDeferredSignalRecomputeSerializesWithSync(t *testing.T) {
 // pre-push flush (flushAllInline in SyncThenRun) sees no pending
 // work and pushes stale signal fields.
 func TestLockedFlushSeesSessionClaimedByBlockedTimer(t *testing.T) {
-	require := require.New(t)
-
 	fx := newEngineFixture(t)
 	e := fx.engine
 
@@ -458,12 +444,12 @@ func TestLockedFlushSeesSessionClaimedByBlockedTimer(t *testing.T) {
 
 	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
 	e.SyncPaths([]string{path})
-	require.Equal(1, secretLeakCount(t, fx, sid))
+	require.Equal(t, 1, secretLeakCount(t, fx, sid))
 	fx.appendClaudeMessage(t, path, "key AKIA9XKQV3ZTN8WMB2RC leaked")
 	e.SyncPaths([]string{path})
-	require.Equal(1, secretLeakCount(t, fx, sid),
+	require.Equal(t, 1, secretLeakCount(t, fx, sid),
 		"second write within interval should defer the recompute")
-	require.NotNil(timerCB, "deferral should arm the flush timer")
+	require.NotNil(t, timerCB, "deferral should arm the flush timer")
 
 	// The quiet delay has elapsed by the time the timer fires, so
 	// its takeDue pass considers the session due.
@@ -471,6 +457,16 @@ func TestLockedFlushSeesSessionClaimedByBlockedTimer(t *testing.T) {
 		return time.Now().Add(3 * time.Second)
 	}
 
+	// Observe the timer requesting the existing exclusive section.
+	exclusiveEntered := make(chan struct{}, 1)
+	exclusive := e.signalSched.exclusive
+	e.signalSched.exclusive = func(flush func()) {
+		select {
+		case exclusiveEntered <- struct{}{}:
+		default:
+		}
+		exclusive(flush)
+	}
 	// A sync is in progress when the timer fires.
 	e.syncMu.Lock()
 	timerDone := make(chan struct{})
@@ -478,9 +474,7 @@ func TestLockedFlushSeesSessionClaimedByBlockedTimer(t *testing.T) {
 		timerCB()
 		close(timerDone)
 	}()
-	// Give the timer goroutine time to reach the lock (and, in the
-	// buggy ordering, to claim the session before blocking).
-	time.Sleep(50 * time.Millisecond)
+	<-exclusiveEntered
 
 	// The sync now flushes before its push work, as SyncThenRun does.
 	e.signalSched.flushAllInline()
@@ -489,7 +483,7 @@ func TestLockedFlushSeesSessionClaimedByBlockedTimer(t *testing.T) {
 
 	assert.Equal(t, 2, seen,
 		"locked flush must recompute sessions the blocked timer would handle")
-	require.Eventually(func() bool {
+	require.Eventually(t, func() bool {
 		select {
 		case <-timerDone:
 			return true
@@ -510,49 +504,43 @@ func secretLeakCount(t *testing.T, fx *engineFixture, sessionID string) int {
 }
 
 func TestWriteIncrementalDebouncesSignalRecompute(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	fx := newEngineFixture(t)
 	path := fx.writeClaudeSession(t, "proj", "sig-debounce.jsonl", "hello")
 	fx.engine.SyncAll(t.Context(), nil)
 	sid := fx.sessionIDFor(t, path)
-	require.Zero(secretLeakCount(t, fx, sid))
+	require.Zero(t, secretLeakCount(t, fx, sid))
 
 	// First incremental append is the session's first mark, so the
 	// leading edge recomputes inline and the new secret is counted
 	// immediately.
 	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
 	fx.engine.SyncPaths([]string{path})
-	require.Equal(1, secretLeakCount(t, fx, sid),
+	require.Equal(t, 1, secretLeakCount(t, fx, sid),
 		"first incremental write should recompute signals inline")
 
 	// A second append inside the debounce interval must defer the
 	// recompute: the stored signal stays stale until a flush.
 	fx.appendClaudeMessage(t, path, "key AKIA9XKQV3ZTN8WMB2RC leaked")
 	fx.engine.SyncPaths([]string{path})
-	assert.Equal(1, secretLeakCount(t, fx, sid),
+	assert.Equal(t, 1, secretLeakCount(t, fx, sid),
 		"second write within interval should defer the recompute")
 
 	fx.engine.FlushSignals()
-	assert.Equal(2, secretLeakCount(t, fx, sid),
+	assert.Equal(t, 2, secretLeakCount(t, fx, sid),
 		"flush should persist the deferred recompute")
 
 	// FlushSignals must leave the scheduler running: another write
 	// inside the interval defers again instead of running inline.
 	fx.appendClaudeMessage(t, path, "key AKIA2PLVWX6QR8ZKN4TJ leaked")
 	fx.engine.SyncPaths([]string{path})
-	assert.Equal(2, secretLeakCount(t, fx, sid),
+	assert.Equal(t, 2, secretLeakCount(t, fx, sid),
 		"scheduler must keep debouncing after FlushSignals")
 	fx.engine.FlushSignals()
-	assert.Equal(3, secretLeakCount(t, fx, sid),
+	assert.Equal(t, 3, secretLeakCount(t, fx, sid),
 		"third secret must flush, proving the deferral was real")
 }
 
 func TestClaudeAssistantAppendDebouncesSignalRecompute(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	fx := newEngineFixture(t)
 	path := fx.writeClaudeSession(t, "proj", "assistant-debounce.jsonl", "hello")
 	fx.engine.SyncAll(t.Context(), nil)
@@ -566,14 +554,14 @@ func TestClaudeAssistantAppendDebouncesSignalRecompute(t *testing.T) {
 		"2026-06-20T11:00:00Z", "key AKIA7QHWN2DKR4FYPLJM leaked",
 	).String()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = f.WriteString(line)
-	require.NoError(err)
-	require.NoError(f.Close())
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 	fx.engine.SyncPaths([]string{path})
-	assert.Zero(secretLeakCount(t, fx, sid), "assistant appends must debounce")
+	assert.Zero(t, secretLeakCount(t, fx, sid), "assistant appends must debounce")
 	fx.engine.FlushSignals()
-	assert.Equal(1, secretLeakCount(t, fx, sid))
+	assert.Equal(t, 1, secretLeakCount(t, fx, sid))
 }
 
 // TestSyncThenRunFlushesSignalsBeforeWork mirrors the PG/DuckDB push
@@ -581,8 +569,6 @@ func TestClaudeAssistantAppendDebouncesSignalRecompute(t *testing.T) {
 // deferred signal recompute must be flushed before work runs or the
 // push carries stale fields such as secret_leak_count.
 func TestSyncThenRunFlushesSignalsBeforeWork(t *testing.T) {
-	require := require.New(t)
-
 	fx := newEngineFixture(t)
 	path := fx.writeClaudeSession(t, "proj", "sig-flush.jsonl", "hello")
 	fx.engine.SyncAll(t.Context(), nil)
@@ -590,10 +576,10 @@ func TestSyncThenRunFlushesSignalsBeforeWork(t *testing.T) {
 
 	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
 	fx.engine.SyncPaths([]string{path})
-	require.Equal(1, secretLeakCount(t, fx, sid))
+	require.Equal(t, 1, secretLeakCount(t, fx, sid))
 	fx.appendClaudeMessage(t, path, "key AKIA9XKQV3ZTN8WMB2RC leaked")
 	fx.engine.SyncPaths([]string{path})
-	require.Equal(1, secretLeakCount(t, fx, sid),
+	require.Equal(t, 1, secretLeakCount(t, fx, sid),
 		"second write within interval should defer the recompute")
 
 	var seen int
@@ -602,7 +588,7 @@ func TestSyncThenRunFlushesSignalsBeforeWork(t *testing.T) {
 			seen = secretLeakCount(t, fx, sid)
 			return nil
 		})
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Equal(t, 2, seen,
 		"work must observe flushed signal fields before pushing")
 }
@@ -611,8 +597,6 @@ func TestSyncThenRunFlushesSignalsBeforeWork(t *testing.T) {
 // daemon push path: the sync ran in a worker process, so the push half runs
 // through RunExclusiveFlushed and must still observe flushed signal fields.
 func TestRunExclusiveFlushedFlushesSignalsBeforeWork(t *testing.T) {
-	require := require.New(t)
-
 	fx := newEngineFixture(t)
 	path := fx.writeClaudeSession(t, "proj", "sig-flush-excl.jsonl", "hello")
 	fx.engine.SyncAll(t.Context(), nil)
@@ -620,10 +604,10 @@ func TestRunExclusiveFlushedFlushesSignalsBeforeWork(t *testing.T) {
 
 	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
 	fx.engine.SyncPaths([]string{path})
-	require.Equal(1, secretLeakCount(t, fx, sid))
+	require.Equal(t, 1, secretLeakCount(t, fx, sid))
 	fx.appendClaudeMessage(t, path, "key AKIA9XKQV3ZTN8WMB2RC leaked")
 	fx.engine.SyncPaths([]string{path})
-	require.Equal(1, secretLeakCount(t, fx, sid),
+	require.Equal(t, 1, secretLeakCount(t, fx, sid),
 		"second write within interval should defer the recompute")
 
 	var seen int
@@ -631,7 +615,7 @@ func TestRunExclusiveFlushedFlushesSignalsBeforeWork(t *testing.T) {
 		seen = secretLeakCount(t, fx, sid)
 		return nil
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	assert.Equal(t, 2, seen,
 		"work must observe flushed signal fields before pushing")
 }

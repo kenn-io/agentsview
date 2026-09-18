@@ -565,19 +565,19 @@ func firstString(params map[string]any, keys ...string) string {
 	return ""
 }
 
-func truncateMarkdownFallback(s string, max int) string {
-	if len(s) <= max {
+func truncateMarkdownFallback(s string, maximum int) string {
+	if len(s) <= maximum {
 		return s
 	}
-	return stringutil.SafeTruncate(s, max) + "…"
+	return stringutil.SafeTruncate(s, maximum) + "…"
 }
 
-func capLines(text string, max int) string {
+func capLines(text string, maximum int) string {
 	lines := strings.Split(text, "\n")
-	if len(lines) <= max {
+	if len(lines) <= maximum {
 		return text
 	}
-	return strings.Join(lines[:max], "\n") + fmt.Sprintf("\n... (%d lines total)", len(lines))
+	return strings.Join(lines[:maximum], "\n") + fmt.Sprintf("\n... (%d lines total)", len(lines))
 }
 
 func sortedJSONKeys(m map[string]any) []string {

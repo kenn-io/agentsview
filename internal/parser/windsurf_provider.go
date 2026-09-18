@@ -1273,6 +1273,7 @@ func WriteSanitizedWindsurfStateDB(ctx context.Context, dstPath, dbPath string) 
 		_ = tx.Rollback()
 		return fmt.Errorf("prepare sanitized windsurf export: %w", err)
 	}
+	defer stmt.Close()
 	for _, value := range values {
 		if _, err := stmt.ExecContext(ctx, value.Key, value.Value); err != nil {
 			_ = stmt.Close()

@@ -163,14 +163,11 @@ func TestWatchPollingObligationsUnwatchedFallbackBothAgents(t *testing.T) {
 // agent group instead of Gemini's group, and healthy Claude changes would be
 // frozen.
 func TestRegisterWatcherUnavailablePreservesAgents(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	parent := t.TempDir()
 	claudeDir := filepath.Join(parent, "claude-dir")
-	require.NoError(os.Mkdir(claudeDir, 0o755))
+	require.NoError(t, os.Mkdir(claudeDir, 0o755))
 	geminiDir := filepath.Join(parent, "gemini-dir")
-	require.NoError(os.Mkdir(geminiDir, 0o755))
+	require.NoError(t, os.Mkdir(geminiDir, 0o755))
 
 	var mu sync.Mutex
 	var registered []agentsync.PollingObligation
@@ -193,7 +190,7 @@ func TestRegisterWatcherUnavailablePreservesAgents(t *testing.T) {
 	}}
 
 	err := registerWatcherUnavailableObligations(opts, roots, nil, nil, nil)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	mu.Lock()
 	obs := append([]agentsync.PollingObligation(nil), registered...)
@@ -205,11 +202,11 @@ func TestRegisterWatcherUnavailablePreservesAgents(t *testing.T) {
 			agentSet[scope.Agent] = true
 		}
 	}
-	assert.True(agentSet[string(parser.AgentClaude)],
+	assert.True(t, agentSet[string(parser.AgentClaude)],
 		"Claude's agent must be preserved in watcher-unavailable obligations")
-	assert.True(agentSet[string(parser.AgentGemini)],
+	assert.True(t, agentSet[string(parser.AgentGemini)],
 		"Gemini's agent must be preserved in watcher-unavailable obligations")
-	assert.False(agentSet[""],
+	assert.False(t, agentSet[""],
 		"no scope must be stripped to the empty agent; per-provider blocking requires real agents")
 }
 
@@ -264,9 +261,6 @@ func TestWatchPollingObligationsPersistentDirCarriesAgentFromSymlinkOnlyProvider
 // current code emits on backend Start failure). After the fix, geminiDir must
 // NOT be reconciled while the nested root is missing; otherDir must still run.
 func TestWatcherStartFailureEmptyAgentBypassesNamedGate(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	parent := t.TempDir()
 	nestedRoot := filepath.Join(parent, "gemini-nested") // does not exist
 	geminiDir := requireExistingPollRoot(t, parent, "gemini-dir")
@@ -281,7 +275,7 @@ func TestWatcherStartFailureEmptyAgentBypassesNamedGate(t *testing.T) {
 
 	// Named Gemini obligation with a missing probe gate — the nested physical
 	// root (gemini-nested) is gone, so Gemini should be deferred.
-	require.NoError(coordinator.AddObligation(pollingObligation{
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
 		Key:    pollingObligationKey("gemini", geminiDir),
 		Scopes: []pollingScope{{Agent: parser.AgentGemini, Root: geminiDir}},
 		Probe:  nestedRoot,
@@ -290,7 +284,7 @@ func TestWatcherStartFailureEmptyAgentBypassesNamedGate(t *testing.T) {
 	// current code calls it on backend Start failure even though
 	// OnPollingRequired is also set: an empty-agent obligation covering every
 	// registered root.
-	require.NoError(coordinator.AddObligation(pollingObligation{
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
 		Key: "watcher-fallback",
 		Scopes: []pollingScope{
 			{Agent: parser.AgentType(""), Root: geminiDir},
@@ -308,10 +302,10 @@ func TestWatcherStartFailureEmptyAgentBypassesNamedGate(t *testing.T) {
 			reconciledRoots[r] = true
 		}
 	}
-	assert.False(reconciledRoots[geminiDir],
+	assert.False(t, reconciledRoots[geminiDir],
 		"geminiDir must not be reconciled while its nested root is missing: "+
 			"the empty-agent obligation must be blocked by cross-agent deferral")
-	assert.True(reconciledRoots[otherDir],
+	assert.True(t, reconciledRoots[otherDir],
 		"otherDir must still be reconciled via the empty-agent obligation")
 }
 
@@ -321,9 +315,6 @@ func TestWatcherStartFailureEmptyAgentBypassesNamedGate(t *testing.T) {
 // coordinator must defer only that provider; a second, healthy provider must
 // still be reconciled.
 func TestSymlinkGateNamedProviderDefersOnlyThatProvider(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	parent := t.TempDir()
 	claudeDir := requireExistingPollRoot(t, parent, "claude-dir")
 	geminiDir := requireExistingPollRoot(t, parent, "gemini-dir")
@@ -336,17 +327,17 @@ func TestSymlinkGateNamedProviderDefersOnlyThatProvider(t *testing.T) {
 	)
 	t.Cleanup(coordinator.Stop)
 
-	require.NoError(coordinator.AddObligation(pollingObligation{
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
 		Key:    "gemini-persistent",
 		Scopes: []pollingScope{{Agent: parser.AgentGemini, Root: geminiDir}},
 	}))
 	// Symlink gate for Gemini: when probe is missing this must defer ONLY Gemini.
-	require.NoError(coordinator.AddObligation(pollingObligation{
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
 		Key:    "gemini-symlink-gate",
 		Scopes: []pollingScope{{Agent: parser.AgentGemini, Root: geminiDir}},
 		Probe:  missingProbe,
 	}))
-	require.NoError(coordinator.AddObligation(pollingObligation{
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
 		Key:    "claude-persistent",
 		Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: claudeDir}},
 	}))
@@ -359,9 +350,9 @@ func TestSymlinkGateNamedProviderDefersOnlyThatProvider(t *testing.T) {
 	for _, c := range calls {
 		agents[c.Agent] = true
 	}
-	assert.True(agents[parser.AgentClaude],
+	assert.True(t, agents[parser.AgentClaude],
 		"Claude must be reconciled; it is not affected by Gemini's broken symlink gate")
-	assert.False(agents[parser.AgentGemini],
+	assert.False(t, agents[parser.AgentGemini],
 		"Gemini must NOT be reconciled while its symlink probe is missing")
 }
 
@@ -410,9 +401,6 @@ func TestSharedSyncDirBothProvidersReconciled(t *testing.T) {
 //  2. No second reconcile call must start before the captured timer fires.
 //  3. Exactly one second reconcile call must happen after the timer fires.
 func TestUnwatchedPollCooldownIsExactlyOneInterval(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	ticks := make(chan time.Time, 2)
 	passRelease := make(chan struct{})
 	passStarted := make(chan struct{}, 1)
@@ -471,7 +459,7 @@ func TestUnwatchedPollCooldownIsExactlyOneInterval(t *testing.T) {
 	)
 	t.Cleanup(coordinator.Stop)
 
-	require.NoError(coordinator.AddObligation(pollingObligation{
+	require.NoError(t, coordinator.AddObligation(pollingObligation{
 		Key:    "test-root",
 		Scopes: []pollingScope{{Root: root}},
 	}))
@@ -481,7 +469,7 @@ func TestUnwatchedPollCooldownIsExactlyOneInterval(t *testing.T) {
 	select {
 	case <-passStarted:
 	case <-time.After(2 * time.Second):
-		t.Fatal("first pass did not start before timeout")
+		require.FailNow(t, "first pass did not start before timeout")
 	}
 
 	// Second tick arrives while the first pass is running.
@@ -500,7 +488,7 @@ func TestUnwatchedPollCooldownIsExactlyOneInterval(t *testing.T) {
 	select {
 	case <-firstCallDone:
 	case <-time.After(2 * time.Second):
-		t.Fatal("first pass did not complete before timeout")
+		require.FailNow(t, "first pass did not complete before timeout")
 	}
 
 	// The worker must call after() with exactly unwatchedPollInterval.
@@ -508,21 +496,21 @@ func TestUnwatchedPollCooldownIsExactlyOneInterval(t *testing.T) {
 	select {
 	case timerCh = <-afterTimers:
 	case <-time.After(2 * time.Second):
-		t.Fatal("after() was not called for the cooldown wait")
+		require.FailNow(t, "after() was not called for the cooldown wait")
 	}
 
 	afterMu.Lock()
 	args := append([]time.Duration(nil), afterArgs...)
 	afterMu.Unlock()
-	require.Len(args, 1)
-	assert.Equal(unwatchedPollInterval, args[0],
+	require.Len(t, args, 1)
+	assert.Equal(t, unwatchedPollInterval, args[0],
 		"cooldown must wait exactly unwatchedPollInterval, not just a positive duration")
 
 	// No second reconcile must have started before the timer fires.
 	callMu.Lock()
 	beforeFire := callCount
 	callMu.Unlock()
-	assert.Equal(1, beforeFire,
+	assert.Equal(t, 1, beforeFire,
 		"no second reconcile must start before the cooldown timer fires")
 
 	// Fire the cooldown timer.
@@ -532,12 +520,12 @@ func TestUnwatchedPollCooldownIsExactlyOneInterval(t *testing.T) {
 	select {
 	case <-passStarted:
 	case <-time.After(2 * time.Second):
-		t.Fatal("second reconcile did not start after the cooldown timer fired")
+		require.FailNow(t, "second reconcile did not start after the cooldown timer fired")
 	}
 
 	callMu.Lock()
 	afterFire := callCount
 	callMu.Unlock()
-	assert.Equal(2, afterFire,
+	assert.Equal(t, 2, afterFire,
 		"exactly one second reconcile must fire after the cooldown timer")
 }

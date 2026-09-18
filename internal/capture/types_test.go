@@ -12,9 +12,6 @@ import (
 )
 
 func TestResultDistinguishesZeroFromUnavailable(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	zero := 0
 	result := Result{
 		Schema:       Schema{Name: ResultSchemaName, Version: ResultSchemaVersion},
@@ -26,14 +23,14 @@ func TestResultDistinguishesZeroFromUnavailable(t *testing.T) {
 	}
 
 	encoded, err := json.Marshal(result)
-	require.NoError(err)
-	assert.Contains(string(encoded), `"input_tokens":0`)
-	assert.NotContains(string(encoded), "cache_creation_input_tokens")
+	require.NoError(t, err)
+	assert.Contains(t, string(encoded), `"input_tokens":0`)
+	assert.NotContains(t, string(encoded), "cache_creation_input_tokens")
 
 	result.Usage = nil
 	encoded, err = json.Marshal(result)
-	require.NoError(err)
-	assert.NotContains(string(encoded), `"usage"`)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), `"usage"`)
 }
 
 func TestDecodeResultRejectsUnknownContract(t *testing.T) {
@@ -57,9 +54,6 @@ func TestClaudeWorkDirEncodingMatchesObservedProducerLayout(t *testing.T) {
 }
 
 func TestResultMarksIncompleteTokenAndCostProvenance(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	termination := string(parser.TerminationClean)
 	result, err := resultFromIngest(t.Context(), manifest{
 		OccurrenceID: "partial-provenance", Provider: string(ProviderClaude),
@@ -78,17 +72,17 @@ func TestResultMarksIncompleteTokenAndCostProvenance(t *testing.T) {
 			}},
 		},
 	}, "test")
-	require.NoError(err)
+	require.NoError(t, err)
 
-	require.NotNil(result.Usage)
+	require.NotNil(t, result.Usage)
 	assertIntPointer(t, result.Usage.OutputTokens, 70)
-	assert.Nil(result.Usage.InputTokens)
-	assert.Nil(result.Usage.CacheCreationInputTokens)
-	assert.Nil(result.Usage.CacheReadInputTokens)
-	assert.Nil(result.Cost)
-	assert.Equal(AssurancePartial, result.Assurance.State)
-	assert.Contains(result.Assurance.Reasons, ReasonUsageUnavailable)
-	assert.Contains(result.Assurance.Reasons, ReasonCostUnavailable)
+	assert.Nil(t, result.Usage.InputTokens)
+	assert.Nil(t, result.Usage.CacheCreationInputTokens)
+	assert.Nil(t, result.Usage.CacheReadInputTokens)
+	assert.Nil(t, result.Cost)
+	assert.Equal(t, AssurancePartial, result.Assurance.State)
+	assert.Contains(t, result.Assurance.Reasons, ReasonUsageUnavailable)
+	assert.Contains(t, result.Assurance.Reasons, ReasonCostUnavailable)
 }
 
 func TestBoundedMetadataDoesNotSplitUTF8(t *testing.T) {

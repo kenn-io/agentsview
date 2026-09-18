@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -761,7 +762,7 @@ func buildTerminalArgs(bin, cmd string) []string {
 // inside the terminal identified by the opener. Returns nil if the
 // opener kind is not "terminal" (or "action" for special openers like
 // Claude Desktop) or the terminal is not supported.
-func launchResumeInOpener(
+func launchResumeInOpener(ctx context.Context,
 	o Opener, cmd string, cwd string,
 ) *exec.Cmd {
 	if o.ID == "claude-desktop" {
@@ -772,13 +773,13 @@ func launchResumeInOpener(
 	}
 
 	if runtime.GOOS == "darwin" {
-		return launchResumeDarwin(o, cmd, cwd)
+		return launchResumeDarwin(ctx, o, cmd, cwd)
 	}
 
 	// Linux: launch via CLI binary with per-terminal arg patterns.
 	// Wrap the resume command so the shell stays open after it exits.
 	args := buildTerminalArgs(o.ID, cmd+"; exec bash")
-	proc := exec.Command(o.Bin, args...)
+	proc := exec.CommandContext(ctx, o.Bin, args...)
 	if cwd != "" {
 		proc.Dir = cwd
 	}
@@ -791,7 +792,7 @@ func launchResumeInOpener(
 // launchResumeDarwin launches a resume command in a macOS terminal
 // app. Uses AppleScript for iTerm2/Terminal.app and `open -na` with
 // appropriate flags for others.
-func launchResumeDarwin(
+func launchResumeDarwin(ctx context.Context,
 	o Opener, cmd string, cwd string,
 ) *exec.Cmd {
 	// For AppleScript-based terminals, build a single shell command
@@ -823,7 +824,7 @@ func launchResumeDarwin(
 				end tell
 			end tell`, safe,
 		)
-		return exec.Command("osascript", "-e", script)
+		return exec.CommandContext(ctx, "osascript", "-e", script)
 	case "terminal":
 		script := fmt.Sprintf(
 			`tell application "Terminal"
@@ -831,7 +832,7 @@ func launchResumeDarwin(
 				do script "%s"
 			end tell`, safe,
 		)
-		return exec.Command("osascript", "-e", script)
+		return exec.CommandContext(ctx, "osascript", "-e", script)
 	case "ghostty":
 		var args []string
 		if cwd != "" {
@@ -839,14 +840,14 @@ func launchResumeDarwin(
 		}
 		args = append(args, "-e", "bash", "-c",
 			cmd+"; exec bash")
-		return macExecCommand(o.Bin, args...)
+		return macExecCommand(ctx, o.Bin, args...)
 	case "kitty":
 		var args []string
 		if cwd != "" {
 			args = append(args, "-d", cwd)
 		}
 		args = append(args, "bash", "-c", cmd+"; exec bash")
-		return macExecCommand(o.Bin, args...)
+		return macExecCommand(ctx, o.Bin, args...)
 	case "alacritty":
 		var args []string
 		if cwd != "" {
@@ -854,7 +855,7 @@ func launchResumeDarwin(
 		}
 		args = append(args, "-e", "bash", "-c",
 			cmd+"; exec bash")
-		return macExecCommand(o.Bin, args...)
+		return macExecCommand(ctx, o.Bin, args...)
 	case "wezterm":
 		args := []string{"start"}
 		if cwd != "" {
@@ -862,7 +863,7 @@ func launchResumeDarwin(
 		}
 		args = append(args, "--", "bash", "-c",
 			cmd+"; exec bash")
-		return macExecCommand(o.Bin, args...)
+		return macExecCommand(ctx, o.Bin, args...)
 	default:
 		return nil
 	}
@@ -871,10 +872,10 @@ func launchResumeDarwin(
 // launchClaudeDesktop builds an exec.Cmd that opens a Claude Code
 // session in Claude Desktop via the claude:// URL scheme. The URL
 // format is claude://resume?session={id}&cwd={path}.
-func launchClaudeDesktop(sessionID string, cwd string) *exec.Cmd {
+func launchClaudeDesktop(ctx context.Context, sessionID string, cwd string) *exec.Cmd {
 	u := "claude://resume?session=" + url.QueryEscape(sessionID)
 	if cwd != "" {
 		u += "&cwd=" + url.QueryEscape(cwd)
 	}
-	return exec.Command("open", u)
+	return exec.CommandContext(ctx, "open", u)
 }

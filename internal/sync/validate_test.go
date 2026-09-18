@@ -170,17 +170,15 @@ func TestSanitizeMessage(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			m := tc.in
 			stats := sanitizeMessage(&m)
-			assert.Equal(tc.wantRole, m.Role, "role")
-			assert.Equal(tc.wantContent, m.Content, "content")
-			assert.Equal(tc.wantModel, m.Model, "model")
-			assert.Equal(tc.wantCtx, m.ContextTokens, "context tokens")
-			assert.Equal(tc.wantOut, m.OutputTokens, "output tokens")
-			assert.Equal(tc.wantTS, m.Timestamp, "timestamp")
-			assert.Equal(tc.wantStats, stats, "stats")
+			assert.Equal(t, tc.wantRole, m.Role, "role")
+			assert.Equal(t, tc.wantContent, m.Content, "content")
+			assert.Equal(t, tc.wantModel, m.Model, "model")
+			assert.Equal(t, tc.wantCtx, m.ContextTokens, "context tokens")
+			assert.Equal(t, tc.wantOut, m.OutputTokens, "output tokens")
+			assert.Equal(t, tc.wantTS, m.Timestamp, "timestamp")
+			assert.Equal(t, tc.wantStats, stats, "stats")
 		})
 	}
 }
@@ -190,8 +188,6 @@ func TestSanitizeMessage(t *testing.T) {
 // raw content length, after control runes are stripped it must match the
 // actually-stored byte length, not the original raw length.
 func TestSanitizeMessageRecomputesContentLength(t *testing.T) {
-	assert := assert.New(t)
-
 	raw := "before\x1b]0;title\x07after"
 	m := db.Message{
 		Role:          "assistant",
@@ -203,18 +199,18 @@ func TestSanitizeMessageRecomputesContentLength(t *testing.T) {
 
 	stats := sanitizeMessage(&m)
 
-	assert.Equal("before]0;titleafter", m.Content)
-	assert.Equal(len(m.Content), m.ContentLength,
+	assert.Equal(t, "before]0;titleafter", m.Content)
+	assert.Equal(t, len(m.Content), m.ContentLength,
 		"ContentLength must match sanitized content byte length")
-	assert.Less(m.ContentLength, len(raw),
+	assert.Less(t, m.ContentLength, len(raw),
 		"ContentLength must drop below the raw length after stripping")
-	assert.Equal(1, stats.ControlCharsStripped)
+	assert.Equal(t, 1, stats.ControlCharsStripped)
 
 	// Idempotent: a second pass strips nothing and leaves length unchanged.
 	wantLen := m.ContentLength
 	second := sanitizeMessage(&m)
-	assert.Equal(validationStats{}, second, "second pass must be a no-op")
-	assert.Equal(wantLen, m.ContentLength, "length stable on re-run")
+	assert.Equal(t, validationStats{}, second, "second pass must be a no-op")
+	assert.Equal(t, wantLen, m.ContentLength, "length stable on re-run")
 }
 
 // TestSanitizeMessageContentLengthDelta verifies the ContentLength
@@ -260,8 +256,6 @@ func TestSanitizeMessageContentLengthDelta(t *testing.T) {
 	})
 
 	t.Run("reduced by exactly the removed-byte delta", func(t *testing.T) {
-		assert := assert.New(t)
-
 		raw := "before\x1b]0;title\x07after"
 		sanitized := "before]0;titleafter"
 		removed := len(raw) - len(sanitized)
@@ -276,17 +270,15 @@ func TestSanitizeMessageContentLengthDelta(t *testing.T) {
 
 		stats := sanitizeMessage(&m)
 
-		assert.Equal(sanitized, m.Content)
-		assert.Equal(1, stats.ControlCharsStripped)
-		assert.Equal(semantic-removed, m.ContentLength,
+		assert.Equal(t, sanitized, m.Content)
+		assert.Equal(t, 1, stats.ControlCharsStripped)
+		assert.Equal(t, semantic-removed, m.ContentLength,
 			"ContentLength must drop by exactly the removed-byte count, not be overwritten to len(Content)")
-		assert.NotEqual(len(m.Content), m.ContentLength,
+		assert.NotEqual(t, len(m.Content), m.ContentLength,
 			"delta adjustment must not collapse the semantic length to len(Content)")
 	})
 
 	t.Run("thinking-inclusive length reduced by thinking delta", func(t *testing.T) {
-		assert := assert.New(t)
-
 		content := "visible answer"
 		rawThinking := "think\x1b]0;title\x07more"
 		sanitizedThinking := "think]0;titlemore"
@@ -301,20 +293,17 @@ func TestSanitizeMessageContentLengthDelta(t *testing.T) {
 
 		stats := sanitizeMessage(&m)
 
-		assert.Equal(content, m.Content)
-		assert.Equal(sanitizedThinking, m.ThinkingText)
-		assert.Equal(1, stats.ControlCharsStripped)
-		assert.Equal(len(content)+len(sanitizedThinking), m.ContentLength,
+		assert.Equal(t, content, m.Content)
+		assert.Equal(t, sanitizedThinking, m.ThinkingText)
+		assert.Equal(t, 1, stats.ControlCharsStripped)
+		assert.Equal(t, len(content)+len(sanitizedThinking), m.ContentLength,
 			"ContentLength must drop by stripped thinking bytes when thinking contributes to the parser semantic length")
-		assert.Equal(len(content)+len(rawThinking)-removed, m.ContentLength,
+		assert.Equal(t, len(content)+len(rawThinking)-removed, m.ContentLength,
 			"length adjustment must use the same removed-byte delta as content stripping")
 	})
 }
 
 func TestSanitizeMessageStripsNULFromResultContent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	inputRaw := "{\"cmd\":\"ls\x00 -la\"}"
 	inputClean := "{\"cmd\":\"ls -la\"}"
 	resultRaw := "tool\x00result"
@@ -341,23 +330,21 @@ func TestSanitizeMessageStripsNULFromResultContent(t *testing.T) {
 
 	stats := sanitizeMessage(&m)
 
-	require.Len(m.ToolCalls, 1)
+	require.Len(t, m.ToolCalls, 1)
 	tc := m.ToolCalls[0]
-	assert.Equal(inputClean, tc.InputJSON)
-	assert.Equal(resultClean, tc.ResultContent)
-	assert.Equal(len(resultClean), tc.ResultContentLength)
-	require.Len(tc.ResultEvents, 1)
-	assert.Equal(eventClean, tc.ResultEvents[0].Content)
-	assert.Equal(len(eventClean), tc.ResultEvents[0].ContentLength)
-	assert.Equal(3, stats.ControlCharsStripped)
+	assert.Equal(t, inputClean, tc.InputJSON)
+	assert.Equal(t, resultClean, tc.ResultContent)
+	assert.Equal(t, len(resultClean), tc.ResultContentLength)
+	require.Len(t, tc.ResultEvents, 1)
+	assert.Equal(t, eventClean, tc.ResultEvents[0].Content)
+	assert.Equal(t, len(eventClean), tc.ResultEvents[0].ContentLength)
+	assert.Equal(t, 3, stats.ControlCharsStripped)
 
 	second := sanitizeMessage(&m)
-	assert.Equal(validationStats{}, second, "second pass must be a no-op")
+	assert.Equal(t, validationStats{}, second, "second pass must be a no-op")
 }
 
 func TestSanitizeUsageEvent(t *testing.T) {
-	assert := assert.New(t)
-
 	ev := db.UsageEvent{
 		Source:                   "api\x1bcall",
 		Model:                    strings.Repeat("m", 200),
@@ -371,20 +358,20 @@ func TestSanitizeUsageEvent(t *testing.T) {
 	}
 	stats := sanitizeUsageEvent(&ev)
 
-	assert.Equal("apicall", ev.Source)
-	assert.Equal(strings.Repeat("m", maxModelLen), ev.Model)
-	assert.Equal(maxPlausibleTokens, ev.InputTokens)
-	assert.Equal(10, ev.OutputTokens)
-	assert.Equal(0, ev.CacheCreationInputTokens)
-	assert.Equal(maxPlausibleTokens, ev.ReasoningTokens)
-	assert.Empty(ev.OccurredAt)
-	assert.Equal("ok", ev.CostStatus)
+	assert.Equal(t, "apicall", ev.Source)
+	assert.Equal(t, strings.Repeat("m", maxModelLen), ev.Model)
+	assert.Equal(t, maxPlausibleTokens, ev.InputTokens)
+	assert.Equal(t, 10, ev.OutputTokens)
+	assert.Equal(t, 0, ev.CacheCreationInputTokens)
+	assert.Equal(t, maxPlausibleTokens, ev.ReasoningTokens)
+	assert.Empty(t, ev.OccurredAt)
+	assert.Equal(t, "ok", ev.CostStatus)
 
-	assert.Equal(1, stats.ControlCharsStripped)
-	assert.Equal(1, stats.ModelClamped)
+	assert.Equal(t, 1, stats.ControlCharsStripped)
+	assert.Equal(t, 1, stats.ModelClamped)
 	// InputTokens, CacheCreationInputTokens (negative), ReasoningTokens.
-	assert.Equal(3, stats.TokensClamped)
-	assert.Equal(1, stats.TimestampsBlanked)
+	assert.Equal(t, 3, stats.TokensClamped)
+	assert.Equal(t, 1, stats.TimestampsBlanked)
 }
 
 func TestSanitizeUsageEventStripsDirtyModelPrefixBeforeClamp(t *testing.T) {
@@ -400,9 +387,6 @@ func TestSanitizeUsageEventStripsDirtyModelPrefixBeforeClamp(t *testing.T) {
 }
 
 func TestSanitizeSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	first := "hi\x07there"
 	name := "clean name"
 	farPast := "1500-01-01T00:00:00Z"
@@ -420,26 +404,24 @@ func TestSanitizeSession(t *testing.T) {
 	}
 	stats := sanitizeSession(&s)
 
-	assert.Equal("projx", s.Project)
-	assert.Equal("host", s.Machine)
-	assert.Equal("triage", s.AgentLabel)
-	assert.Equal("sdkcli", s.Entrypoint)
-	require.NotNil(s.FirstMessage)
-	assert.Equal("hithere", *s.FirstMessage)
-	require.NotNil(s.SessionName)
-	assert.Equal("clean name", *s.SessionName)
-	assert.Nil(s.StartedAt, "absurd started_at blanked to nil")
-	require.NotNil(s.EndedAt)
-	assert.Equal(good, *s.EndedAt)
+	assert.Equal(t, "projx", s.Project)
+	assert.Equal(t, "host", s.Machine)
+	assert.Equal(t, "triage", s.AgentLabel)
+	assert.Equal(t, "sdkcli", s.Entrypoint)
+	require.NotNil(t, s.FirstMessage)
+	assert.Equal(t, "hithere", *s.FirstMessage)
+	require.NotNil(t, s.SessionName)
+	assert.Equal(t, "clean name", *s.SessionName)
+	assert.Nil(t, s.StartedAt, "absurd started_at blanked to nil")
+	require.NotNil(t, s.EndedAt)
+	assert.Equal(t, good, *s.EndedAt)
 
 	// project + agent label + entrypoint + first message
-	assert.Equal(4, stats.ControlCharsStripped)
-	assert.Equal(1, stats.TimestampsBlanked)
+	assert.Equal(t, 4, stats.ControlCharsStripped)
+	assert.Equal(t, 1, stats.TimestampsBlanked)
 }
 
 func TestValidateAndSanitizeAggregatesStats(t *testing.T) {
-	assert := assert.New(t)
-
 	s := db.Session{Project: "p\x1bq"}
 	msgs := []db.Message{
 		{Role: "bogus", Content: "c\x07"},
@@ -452,15 +434,15 @@ func TestValidateAndSanitizeAggregatesStats(t *testing.T) {
 	stats := validateAndSanitize(&s, msgs, events)
 
 	// project + first message content control strips.
-	assert.Equal(2, stats.ControlCharsStripped)
-	assert.Equal(1, stats.RoleCoerced)
-	assert.Equal(1, stats.ModelClamped)
-	assert.Equal(1, stats.TokensClamped)
+	assert.Equal(t, 2, stats.ControlCharsStripped)
+	assert.Equal(t, 1, stats.RoleCoerced)
+	assert.Equal(t, 1, stats.ModelClamped)
+	assert.Equal(t, 1, stats.TokensClamped)
 
-	assert.Empty(msgs[0].Role)
-	assert.Equal("c", msgs[0].Content)
-	assert.Equal(strings.Repeat("z", maxModelLen), msgs[1].Model)
-	assert.Equal(0, events[0].InputTokens)
+	assert.Empty(t, msgs[0].Role)
+	assert.Equal(t, "c", msgs[0].Content)
+	assert.Equal(t, strings.Repeat("z", maxModelLen), msgs[1].Model)
+	assert.Equal(t, 0, events[0].InputTokens)
 }
 
 func TestValidateAndSanitizeNilArgs(t *testing.T) {
@@ -473,8 +455,6 @@ func TestValidateAndSanitizeNilArgs(t *testing.T) {
 // running the pass over its own output yields no further fixes and an
 // identical result. This is what keeps fingerprints stable across pushes.
 func TestValidateAndSanitizeIdempotent(t *testing.T) {
-	assert := assert.New(t)
-
 	s := db.Session{
 		Project:      "p\x1bq",
 		Cwd:          "/x",
@@ -524,11 +504,11 @@ func TestValidateAndSanitizeIdempotent(t *testing.T) {
 
 	// First pass.
 	first := validateAndSanitize(&s, msgs, events)
-	assert.Positive(first.ControlCharsStripped)
-	assert.Positive(first.ModelClamped)
-	assert.Positive(first.TokensClamped)
-	assert.Positive(first.RoleCoerced)
-	assert.Positive(first.TimestampsBlanked)
+	assert.Positive(t, first.ControlCharsStripped)
+	assert.Positive(t, first.ModelClamped)
+	assert.Positive(t, first.TokensClamped)
+	assert.Positive(t, first.RoleCoerced)
+	assert.Positive(t, first.TimestampsBlanked)
 
 	// Snapshot the cleaned values.
 	sAfter := s
@@ -537,12 +517,12 @@ func TestValidateAndSanitizeIdempotent(t *testing.T) {
 
 	// Second pass over the already-clean output: no further fixes.
 	second := validateAndSanitize(&s, msgs, events)
-	assert.Equal(validationStats{}, second, "second pass must be a no-op")
+	assert.Equal(t, validationStats{}, second, "second pass must be a no-op")
 
 	// Values must be byte-identical after the second pass.
-	assert.Equal(sAfter, s)
-	assert.Equal(msgsAfter, msgs)
-	assert.Equal(eventsAfter, events)
+	assert.Equal(t, sAfter, s)
+	assert.Equal(t, msgsAfter, msgs)
+	assert.Equal(t, eventsAfter, events)
 }
 
 // TestSanitizeUTF8Idempotent guards the shared seam directly: the write
@@ -567,14 +547,12 @@ func TestSanitizeUTF8Idempotent(t *testing.T) {
 }
 
 func TestClampModelRuneBoundary(t *testing.T) {
-	assert := assert.New(t)
-
 	// A multibyte rune straddling the cap must not be split, so the
 	// result stays valid UTF-8 (and re-sanitizing is a no-op).
 	m := strings.Repeat("a", maxModelLen-1) + "é" + "tail"
 	changed := clampModel(&m)
-	assert.True(changed)
-	assert.True(utf8.ValidString(m), "clamped model must be valid UTF-8")
-	assert.LessOrEqual(len(m), maxModelLen)
-	assert.Equal(m, db.SanitizeUTF8(m), "clamped model must survive re-sanitization")
+	assert.True(t, changed)
+	assert.True(t, utf8.ValidString(m), "clamped model must be valid UTF-8")
+	assert.LessOrEqual(t, len(m), maxModelLen)
+	assert.Equal(t, m, db.SanitizeUTF8(m), "clamped model must survive re-sanitization")
 }

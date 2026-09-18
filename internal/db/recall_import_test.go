@@ -13,9 +13,6 @@ import (
 )
 
 func TestImportAcceptedRecallEntriesJSONLImportsReviewedKeepers(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
@@ -29,33 +26,30 @@ func TestImportAcceptedRecallEntriesJSONLImportsReviewedKeepers(t *testing.T) {
 
 	result, err := d.ImportAcceptedRecallEntriesJSONL(t.Context(), input)
 
-	require.NoError(err)
-	assert.Equal(1, result.Imported)
-	assert.Equal(1, result.Skipped)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	assert.Equal(t, 1, result.Skipped)
 	got, err := d.GetRecallEntry(t.Context(), "m1")
-	require.NoError(err)
-	require.NotNil(got)
-	assert.Equal("Check cwd before file reads", got.Title)
-	assert.Equal("s1", got.SourceSessionID)
-	assert.Equal("ep1", got.SourceEpisodeID)
-	assert.Equal("run1", got.SourceRunID)
-	assert.Equal("single", got.ExtractorMethod)
-	assert.True(got.Transferable)
-	assert.Equal("human_reviewed", got.ReviewState)
-	assert.False(got.ProvenanceOK)
-	require.Len(got.Evidence, 1)
-	assert.Empty(got.Evidence[0].MessageStartSourceUUID)
-	assert.Empty(got.Evidence[0].MessageEndSourceUUID)
-	assert.Empty(got.Evidence[0].ContentDigest)
-	assert.Equal("toolu_1", got.Evidence[0].ToolUseID)
-	assert.Equal(3, got.Evidence[0].MessageStartOrdinal)
-	assert.Equal(7, got.Evidence[0].MessageEndOrdinal)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "Check cwd before file reads", got.Title)
+	assert.Equal(t, "s1", got.SourceSessionID)
+	assert.Equal(t, "ep1", got.SourceEpisodeID)
+	assert.Equal(t, "run1", got.SourceRunID)
+	assert.Equal(t, "single", got.ExtractorMethod)
+	assert.True(t, got.Transferable)
+	assert.Equal(t, "human_reviewed", got.ReviewState)
+	assert.False(t, got.ProvenanceOK)
+	require.Len(t, got.Evidence, 1)
+	assert.Empty(t, got.Evidence[0].MessageStartSourceUUID)
+	assert.Empty(t, got.Evidence[0].MessageEndSourceUUID)
+	assert.Empty(t, got.Evidence[0].ContentDigest)
+	assert.Equal(t, "toolu_1", got.Evidence[0].ToolUseID)
+	assert.Equal(t, 3, got.Evidence[0].MessageStartOrdinal)
+	assert.Equal(t, 7, got.Evidence[0].MessageEndOrdinal)
 }
 
 func TestImportAcceptedRecallEntriesJSONLDeduplicatesEvidenceToolUses(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	input := strings.NewReader(`
@@ -64,16 +58,16 @@ func TestImportAcceptedRecallEntriesJSONLDeduplicatesEvidenceToolUses(t *testing
 
 	result, err := d.ImportAcceptedRecallEntriesJSONL(t.Context(), input)
 
-	require.NoError(err)
-	assert.Equal(1, result.Imported)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
 	got, err := d.GetRecallEntry(t.Context(), "m-dedup")
-	require.NoError(err)
-	require.NotNil(got)
-	require.Len(got.Evidence, 2)
-	assert.Equal("toolu_1", got.Evidence[0].ToolUseID)
-	assert.Equal("Verify cwd\nbefore retrying", got.Evidence[0].Snippet)
-	assert.Equal("toolu_2", got.Evidence[1].ToolUseID)
-	assert.Empty(got.Evidence[1].Snippet)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Len(t, got.Evidence, 2)
+	assert.Equal(t, "toolu_1", got.Evidence[0].ToolUseID)
+	assert.Equal(t, "Verify cwd\nbefore retrying", got.Evidence[0].Snippet)
+	assert.Equal(t, "toolu_2", got.Evidence[1].ToolUseID)
+	assert.Empty(t, got.Evidence[1].Snippet)
 }
 
 func TestImportAcceptedRecallEntriesJSONLRejectsMissingEvidence(t *testing.T) {
@@ -90,9 +84,6 @@ func TestImportAcceptedRecallEntriesJSONLRejectsMissingEvidence(t *testing.T) {
 }
 
 func TestImportAcceptedRecallEntriesJSONLRejectsNegativeEvidenceOrdinal(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	input := strings.NewReader(`
@@ -101,17 +92,14 @@ func TestImportAcceptedRecallEntriesJSONLRejectsNegativeEvidenceOrdinal(t *testi
 
 	_, err := d.ImportAcceptedRecallEntriesJSONL(t.Context(), input)
 
-	require.Error(err)
-	assert.Contains(err.Error(), "invalid evidence ordinal range")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid evidence ordinal range")
 	got, getErr := d.GetRecallEntry(t.Context(), "m1")
-	require.NoError(getErr)
-	assert.Nil(got)
+	require.NoError(t, getErr)
+	assert.Nil(t, got)
 }
 
 func TestImportAcceptedRecallEntriesJSONLRejectsInvalidType(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	input := strings.NewReader(`
@@ -120,17 +108,14 @@ func TestImportAcceptedRecallEntriesJSONLRejectsInvalidType(t *testing.T) {
 
 	_, err := d.ImportAcceptedRecallEntriesJSONL(t.Context(), input)
 
-	require.Error(err)
-	assert.Contains(err.Error(), `invalid recall type "local_fix"`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `invalid recall type "local_fix"`)
 	got, getErr := d.GetRecallEntry(t.Context(), "m1")
-	require.NoError(getErr)
-	assert.Nil(got)
+	require.NoError(t, getErr)
+	assert.Nil(t, got)
 }
 
 func TestImportAcceptedRecallEntriesJSONLRejectsInvalidScope(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	input := strings.NewReader(`
@@ -139,17 +124,14 @@ func TestImportAcceptedRecallEntriesJSONLRejectsInvalidScope(t *testing.T) {
 
 	_, err := d.ImportAcceptedRecallEntriesJSONL(t.Context(), input)
 
-	require.Error(err)
-	assert.Contains(err.Error(), `invalid recall scope "workspace"`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `invalid recall scope "workspace"`)
 	got, getErr := d.GetRecallEntry(t.Context(), "m1")
-	require.NoError(getErr)
-	assert.Nil(got)
+	require.NoError(t, getErr)
+	assert.Nil(t, got)
 }
 
 func TestImportAcceptedRecallEntriesJSONLRejectsInvalidConfidence(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	input := strings.NewReader(`
@@ -158,11 +140,11 @@ func TestImportAcceptedRecallEntriesJSONLRejectsInvalidConfidence(t *testing.T) 
 
 	_, err := d.ImportAcceptedRecallEntriesJSONL(t.Context(), input)
 
-	require.Error(err)
-	assert.Contains(err.Error(), "invalid confidence 1.2")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid confidence 1.2")
 	got, getErr := d.GetRecallEntry(t.Context(), "m1")
-	require.NoError(getErr)
-	assert.Nil(got)
+	require.NoError(t, getErr)
+	assert.Nil(t, got)
 }
 
 func TestImportAcceptedRecallEntriesJSONLRejectsControlCharactersInIdentityFields(
@@ -206,9 +188,6 @@ func TestImportAcceptedRecallEntriesJSONLRejectsControlCharactersInIdentityField
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			d := testDB(t)
 			insertSession(t, d, "s1", "agentsview")
 
@@ -216,19 +195,16 @@ func TestImportAcceptedRecallEntriesJSONLRejectsControlCharactersInIdentityField
 				t.Context(), strings.NewReader(tc.input+"\n"),
 			)
 
-			require.Error(err)
-			assert.Contains(err.Error(), tc.want)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
 			got, getErr := d.GetRecallEntry(t.Context(), "m1")
-			require.NoError(getErr)
-			assert.Nil(got)
+			require.NoError(t, getErr)
+			assert.Nil(t, got)
 		})
 	}
 }
 
 func TestImportAcceptedRecallEntriesJSONLCreatesPlaceholderSourceSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	input := strings.NewReader(`
 {"candidate_id":"m1","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","cwd":"/repo/agentsview","git_branch":"main","agent":"codex","session_id":"s-missing","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
@@ -236,26 +212,26 @@ func TestImportAcceptedRecallEntriesJSONLCreatesPlaceholderSourceSession(t *test
 
 	result, err := d.ImportAcceptedRecallEntriesJSONL(t.Context(), input)
 
-	require.NoError(err)
-	assert.Equal(1, result.Imported)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
 	got, err := d.GetRecallEntry(t.Context(), "m1")
-	require.NoError(err)
-	require.NotNil(got)
-	assert.Equal("s-missing", got.SourceSessionID)
-	assert.Equal("human_reviewed", got.ReviewState)
-	assert.False(got.ProvenanceOK)
-	require.Len(got.Evidence, 1)
-	assert.Empty(got.Evidence[0].MessageStartSourceUUID)
-	assert.Empty(got.Evidence[0].MessageEndSourceUUID)
-	assert.Empty(got.Evidence[0].ContentDigest)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "s-missing", got.SourceSessionID)
+	assert.Equal(t, "human_reviewed", got.ReviewState)
+	assert.False(t, got.ProvenanceOK)
+	require.Len(t, got.Evidence, 1)
+	assert.Empty(t, got.Evidence[0].MessageStartSourceUUID)
+	assert.Empty(t, got.Evidence[0].MessageEndSourceUUID)
+	assert.Empty(t, got.Evidence[0].ContentDigest)
 	session, err := d.GetSession(t.Context(), "s-missing")
-	require.NoError(err)
-	require.NotNil(session)
-	assert.Equal("agentsview", session.Project)
-	assert.Equal("codex", session.Agent)
-	assert.Equal("/repo/agentsview", session.Cwd)
-	assert.Equal("main", session.GitBranch)
-	assert.Equal("recall-import-placeholder", session.SourceVersion)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, "agentsview", session.Project)
+	assert.Equal(t, "codex", session.Agent)
+	assert.Equal(t, "/repo/agentsview", session.Cwd)
+	assert.Equal(t, "main", session.GitBranch)
+	assert.Equal(t, "recall-import-placeholder", session.SourceVersion)
 }
 
 func TestImportAcceptedRecallEntriesJSONLPlaceholderSessionStateParity(
@@ -270,7 +246,9 @@ func TestImportAcceptedRecallEntriesJSONLPlaceholderSessionStateParity(
 			name: "excluded",
 			want: ErrSessionExcluded,
 			seed: func(t *testing.T, d *DB) {
-				_, err := d.getWriter().Exec(
+				t.Helper()
+
+				_, err := d.getWriter().Exec(t.Context(),
 					"INSERT INTO excluded_sessions (id) VALUES (?)",
 					"s-blocked",
 				)
@@ -281,8 +259,10 @@ func TestImportAcceptedRecallEntriesJSONLPlaceholderSessionStateParity(
 			name: "trashed",
 			want: ErrSessionTrashed,
 			seed: func(t *testing.T, d *DB) {
+				t.Helper()
+
 				insertSession(t, d, "s-blocked", "agentsview")
-				_, err := d.getWriter().Exec(`
+				_, err := d.getWriter().Exec(t.Context(), `
 					UPDATE sessions
 					SET deleted_at = '2026-07-09T00:00:00Z'
 					WHERE id = 's-blocked'`)
@@ -301,9 +281,6 @@ func TestImportAcceptedRecallEntriesJSONLPlaceholderSessionStateParity(
 	for _, state := range states {
 		for _, mode := range modes {
 			t.Run(state.name+"/"+mode.name, func(t *testing.T) {
-				assert := assert.New(t)
-				require := require.New(t)
-
 				d := testDB(t)
 				state.seed(t, d)
 				input := strings.NewReader(`
@@ -318,21 +295,18 @@ func TestImportAcceptedRecallEntriesJSONLPlaceholderSessionStateParity(
 					},
 				)
 
-				require.ErrorIs(err, state.want)
-				assert.Zero(result.Imported)
-				assert.Zero(result.WouldImport)
+				require.ErrorIs(t, err, state.want)
+				assert.Zero(t, result.Imported)
+				assert.Zero(t, result.WouldImport)
 				got, getErr := d.GetRecallEntry(t.Context(), "m1")
-				require.NoError(getErr)
-				assert.Nil(got)
+				require.NoError(t, getErr)
+				assert.Nil(t, got)
 			})
 		}
 	}
 }
 
 func TestImportAcceptedRecallEntriesJSONLRejectsReviewStateInput(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	input := strings.NewReader(`
 {"candidate_id":"m1","type":"fact","scope":"project","title":"Spoofed review","body":"The payload must not choose its trust state.","session_id":"s-missing","review_state":"human_reviewed","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
@@ -340,11 +314,11 @@ func TestImportAcceptedRecallEntriesJSONLRejectsReviewStateInput(t *testing.T) {
 
 	_, err := d.ImportAcceptedRecallEntriesJSONL(t.Context(), input)
 
-	require.Error(err)
-	assert.Contains(err.Error(), "review_state")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "review_state")
 	got, getErr := d.GetRecallEntry(t.Context(), "m1")
-	require.NoError(getErr)
-	assert.Nil(got)
+	require.NoError(t, getErr)
+	assert.Nil(t, got)
 }
 
 func TestImportAcceptedRecallEntriesJSONLRejectsHostEvidenceMetadataInput(
@@ -360,9 +334,6 @@ func TestImportAcceptedRecallEntriesJSONLRejectsHostEvidenceMetadataInput(
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			d := testDB(t)
 			input := strings.NewReader(`
 {"candidate_id":"m1","type":"fact","scope":"project","title":"Spoofed evidence","body":"The payload must not choose host evidence metadata.","session_id":"s-missing","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0,` + tt.field + `}}
@@ -372,19 +343,16 @@ func TestImportAcceptedRecallEntriesJSONLRejectsHostEvidenceMetadataInput(
 				t.Context(), input,
 			)
 
-			require.Error(err)
-			assert.Contains(err.Error(), "host-controlled")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "host-controlled")
 			got, getErr := d.GetRecallEntry(t.Context(), "m1")
-			require.NoError(getErr)
-			assert.Nil(got)
+			require.NoError(t, getErr)
+			assert.Nil(t, got)
 		})
 	}
 }
 
 func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsMissingSession(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	input := strings.NewReader(`
 {"candidate_id":"m1","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","cwd":"/repo/agentsview","git_branch":"main","agent":"codex","session_id":"s-missing","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
@@ -396,30 +364,27 @@ func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsMissingSe
 		RecallImportOptions{RequireExistingSessions: true},
 	)
 
-	require.Error(err)
-	assert.Contains(err.Error(), "source session s-missing not found")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "source session s-missing not found")
 	got, err := d.GetRecallEntry(t.Context(), "m1")
-	require.NoError(err)
-	assert.Nil(got)
+	require.NoError(t, err)
+	assert.Nil(t, got)
 	session, err := d.GetSession(t.Context(), "s-missing")
-	require.NoError(err)
-	assert.Nil(session)
+	require.NoError(t, err)
+	assert.Nil(t, session)
 }
 
 func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsTrashedSession(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	insertMessages(t, d, userMsg("s1", 0, "Evidence remains in the archive."))
-	_, err := d.getWriter().Exec(`
+	_, err := d.getWriter().Exec(t.Context(), `
 		UPDATE sessions
 		SET deleted_at = '2026-07-09T00:00:00Z'
 		WHERE id = 's1'`)
-	require.NoError(err)
+	require.NoError(t, err)
 	input := strings.NewReader(`
 {"candidate_id":"m1","type":"fact","scope":"project","title":"Hidden-session evidence","body":"Trashed sessions cannot authorize new trusted recall.","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
 `)
@@ -429,17 +394,14 @@ func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsTrashedSe
 		RecallImportOptions{RequireExistingSessions: true},
 	)
 
-	require.Error(err)
-	assert.Contains(err.Error(), "source session s1 not found")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "source session s1 not found")
 	got, getErr := d.GetRecallEntry(t.Context(), "m1")
-	require.NoError(getErr)
-	assert.Nil(got)
+	require.NoError(t, getErr)
+	assert.Nil(t, got)
 }
 
 func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsMissingEvidenceRange(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	input := strings.NewReader(`
@@ -452,17 +414,14 @@ func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsMissingEv
 		RecallImportOptions{RequireExistingSessions: true},
 	)
 
-	require.Error(err)
-	assert.Contains(err.Error(), "source evidence s1:3-7 not found")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "source evidence s1:3-7 not found")
 	got, err := d.GetRecallEntry(t.Context(), "m1")
-	require.NoError(err)
-	assert.Nil(got)
+	require.NoError(t, err)
+	assert.Nil(t, got)
 }
 
 func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsValidatesEvidenceAndToolUse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	messages := []Message{
@@ -495,26 +454,23 @@ func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsValidatesEvidenc
 		RecallImportOptions{RequireExistingSessions: true},
 	)
 
-	require.NoError(err)
-	assert.Equal(1, result.Imported)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
 	got, err := d.GetRecallEntry(t.Context(), "m1")
-	require.NoError(err)
-	require.NotNil(got)
-	assert.Equal("human_reviewed", got.ReviewState)
-	assert.True(got.ProvenanceOK)
-	require.Len(got.Evidence, 1)
-	assert.Equal("toolu_1", got.Evidence[0].ToolUseID)
-	assert.Equal("source-3", got.Evidence[0].MessageStartSourceUUID)
-	assert.Equal("source-7", got.Evidence[0].MessageEndSourceUUID)
-	assert.Len(got.Evidence[0].ContentDigest, 64)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "human_reviewed", got.ReviewState)
+	assert.True(t, got.ProvenanceOK)
+	require.Len(t, got.Evidence, 1)
+	assert.Equal(t, "toolu_1", got.Evidence[0].ToolUseID)
+	assert.Equal(t, "source-3", got.Evidence[0].MessageStartSourceUUID)
+	assert.Equal(t, "source-7", got.Evidence[0].MessageEndSourceUUID)
+	assert.Len(t, got.Evidence[0].ContentDigest, 64)
 }
 
 func TestImportAcceptedRecallEntriesJSONLNeverCommitsStaleEvidenceSnapshot(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	messages := []Message{
@@ -526,18 +482,18 @@ func TestImportAcceptedRecallEntriesJSONLNeverCommitsStaleEvidenceSnapshot(
 	insertMessages(t, d, messages...)
 
 	external, err := sql.Open("sqlite3", makeDSN(d.Path(), false))
-	require.NoError(err)
+	require.NoError(t, err)
 	defer external.Close()
 	_, err = external.ExecContext(t.Context(), `PRAGMA busy_timeout = 5000`)
-	require.NoError(err)
+	require.NoError(t, err)
 	rewrite, err := external.BeginTx(t.Context(), nil)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer rewrite.Rollback()
 	_, err = rewrite.ExecContext(t.Context(), `
 		UPDATE messages
 		SET content = 'The evidence changed before import commit.'
 		WHERE session_id = 's1' AND ordinal = 4`)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	type importOutcome struct {
 		result RecallImportResult
@@ -556,7 +512,7 @@ func TestImportAcceptedRecallEntriesJSONLNeverCommitsStaleEvidenceSnapshot(
 	}()
 
 	var earlyOutcome *importOutcome
-	require.Eventually(func() bool {
+	require.Eventually(t, func() bool {
 		select {
 		case outcome := <-outcomes:
 			earlyOutcome = &outcome
@@ -566,7 +522,7 @@ func TestImportAcceptedRecallEntriesJSONLNeverCommitsStaleEvidenceSnapshot(
 		}
 	}, 5*time.Second, 10*time.Millisecond,
 		"import should reach or safely abort its writer transaction")
-	require.NoError(rewrite.Commit())
+	require.NoError(t, rewrite.Commit())
 
 	var outcome importOutcome
 	if earlyOutcome != nil {
@@ -575,39 +531,36 @@ func TestImportAcceptedRecallEntriesJSONLNeverCommitsStaleEvidenceSnapshot(
 		select {
 		case outcome = <-outcomes:
 		case <-time.After(10 * time.Second):
-			require.FailNow("import did not finish after concurrent rewrite")
+			require.FailNow(t, "import did not finish after concurrent rewrite")
 		}
 	}
 	got, getErr := d.GetRecallEntry(t.Context(), "m-race")
-	require.NoError(getErr)
+	require.NoError(t, getErr)
 	if outcome.err != nil {
-		assert.Nil(got,
+		assert.Nil(t, got,
 			"a snapshot-conflicted import must leave no partial entry")
 		return
 	}
-	require.Equal(1, outcome.result.Imported)
-	require.NotNil(got)
+	require.Equal(t, 1, outcome.result.Imported)
+	require.NotNil(t, got)
 	if !got.ProvenanceOK {
 		return
 	}
-	require.Len(got.Evidence, 1)
+	require.Len(t, got.Evidence, 1)
 	window, err := d.BuildRecallEvidenceWindow(
 		t.Context(), "s1", 3, 4,
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	metadata, err := window.BindSelection(RecallEvidenceSelection{
 		MessageStartOrdinal: 3,
 		MessageEndOrdinal:   4,
 	})
-	require.NoError(err)
-	assert.Equal(metadata.ContentDigest, got.Evidence[0].ContentDigest,
+	require.NoError(t, err)
+	assert.Equal(t, metadata.ContentDigest, got.Evidence[0].ContentDigest,
 		"a successful trusted import must match the committed transcript")
 }
 
 func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsMissingToolUse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	insertMessages(t, d,
@@ -627,36 +580,33 @@ func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsMissingTo
 		RecallImportOptions{RequireExistingSessions: true},
 	)
 
-	require.Error(err)
-	assert.Contains(err.Error(), "source tool use toolu_missing not found")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "source tool use toolu_missing not found")
 	got, err := d.GetRecallEntry(t.Context(), "m1")
-	require.NoError(err)
-	assert.Nil(got)
+	require.NoError(t, err)
+	assert.Nil(t, got)
 }
 
 func TestImportAcceptedRecallEntriesJSONLSkipsDuplicateIDs(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	line := `{"candidate_id":"m1","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}`
 	first, err := d.ImportAcceptedRecallEntriesJSONL(
 		t.Context(), strings.NewReader(line+"\n"),
 	)
-	require.NoError(err)
-	require.Equal(1, first.Imported)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.Imported)
 
 	second, err := d.ImportAcceptedRecallEntriesJSONL(
 		t.Context(), strings.NewReader(line+"\n"),
 	)
 
-	require.NoError(err)
-	assert.Equal(0, second.Imported)
-	assert.Equal(1, second.Skipped)
-	require.Len(second.SkippedEntries, 1)
-	assert.Equal("m1", second.SkippedEntries[0].CandidateID)
-	assert.Equal("duplicate", second.SkippedEntries[0].Reason)
+	require.NoError(t, err)
+	assert.Equal(t, 0, second.Imported)
+	assert.Equal(t, 1, second.Skipped)
+	require.Len(t, second.SkippedEntries, 1)
+	assert.Equal(t, "m1", second.SkippedEntries[0].CandidateID)
+	assert.Equal(t, "duplicate", second.SkippedEntries[0].Reason)
 }
 
 func TestImportAcceptedRecallEntriesJSONLDuplicateRemainsIdempotentAfterEvidenceRemoved(
@@ -673,9 +623,6 @@ func TestImportAcceptedRecallEntriesJSONLDuplicateRemainsIdempotentAfterEvidence
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			d := testDB(t)
 			insertSession(t, d, "s1", "agentsview")
 			messages := []Message{
@@ -690,19 +637,19 @@ func TestImportAcceptedRecallEntriesJSONLDuplicateRemainsIdempotentAfterEvidence
 				t.Context(), strings.NewReader(line+"\n"),
 				RecallImportOptions{RequireExistingSessions: true},
 			)
-			require.NoError(err)
-			require.Equal(1, initial.Imported)
+			require.NoError(t, err)
+			require.Equal(t, 1, initial.Imported)
 			before, err := d.GetRecallEntry(t.Context(), "m-idempotent")
-			require.NoError(err)
-			require.NotNil(before)
-			require.Len(before.Evidence, 1)
+			require.NoError(t, err)
+			require.NotNil(t, before)
+			require.Len(t, before.Evidence, 1)
 			beforeDigest := before.Evidence[0].ContentDigest
-			require.NotEmpty(beforeDigest)
+			require.NotEmpty(t, beforeDigest)
 
-			_, err = d.getWriter().Exec(`
+			_, err = d.getWriter().Exec(t.Context(), `
 				DELETE FROM messages
 				WHERE session_id = 's1' AND ordinal = 4`)
-			require.NoError(err)
+			require.NoError(t, err)
 
 			duplicate, err := d.ImportAcceptedRecallEntriesJSONLWithOptions(
 				t.Context(), strings.NewReader(line+"\n"),
@@ -712,20 +659,20 @@ func TestImportAcceptedRecallEntriesJSONLDuplicateRemainsIdempotentAfterEvidence
 				},
 			)
 
-			require.NoError(err)
-			assert.Zero(duplicate.Imported)
-			assert.Zero(duplicate.WouldImport)
-			assert.Equal(1, duplicate.Skipped)
-			require.Len(duplicate.SkippedEntries, 1)
-			assert.Equal("m-idempotent", duplicate.SkippedEntries[0].CandidateID)
-			assert.Equal("duplicate", duplicate.SkippedEntries[0].Reason)
+			require.NoError(t, err)
+			assert.Zero(t, duplicate.Imported)
+			assert.Zero(t, duplicate.WouldImport)
+			assert.Equal(t, 1, duplicate.Skipped)
+			require.Len(t, duplicate.SkippedEntries, 1)
+			assert.Equal(t, "m-idempotent", duplicate.SkippedEntries[0].CandidateID)
+			assert.Equal(t, "duplicate", duplicate.SkippedEntries[0].Reason)
 
 			after, err := d.GetRecallEntry(t.Context(), "m-idempotent")
-			require.NoError(err)
-			require.NotNil(after)
-			require.Len(after.Evidence, 1)
-			assert.Equal(before, after)
-			assert.Equal(beforeDigest, after.Evidence[0].ContentDigest)
+			require.NoError(t, err)
+			require.NotNil(t, after)
+			require.Len(t, after.Evidence, 1)
+			assert.Equal(t, before, after)
+			assert.Equal(t, beforeDigest, after.Evidence[0].ContentDigest)
 
 			newCandidate := strings.Replace(
 				line, `"m-idempotent"`, `"m-new"`, 1,
@@ -737,19 +684,16 @@ func TestImportAcceptedRecallEntriesJSONLDuplicateRemainsIdempotentAfterEvidence
 					RequireExistingSessions: true,
 				},
 			)
-			require.Error(err)
-			assert.Contains(err.Error(), "source evidence s1:3-4 not found")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "source evidence s1:3-4 not found")
 			got, getErr := d.GetRecallEntry(t.Context(), "m-new")
-			require.NoError(getErr)
-			assert.Nil(got)
+			require.NoError(t, getErr)
+			assert.Nil(t, got)
 		})
 	}
 }
 
 func TestImportAcceptedRecallEntriesJSONLSupersedesExistingRecallEntry(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
@@ -757,7 +701,7 @@ func TestImportAcceptedRecallEntriesJSONLSupersedesExistingRecallEntry(t *testin
 	insertSession(t, d, "s2", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID:              "old",
 		Type:            "fact",
 		Scope:           "project",
@@ -768,46 +712,43 @@ func TestImportAcceptedRecallEntriesJSONLSupersedesExistingRecallEntry(t *testin
 		Agent:           "codex",
 		SourceSessionID: "s1",
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	input := strings.NewReader(`
 {"candidate_id":"new","supersedes_entry_id":"old","type":"fact","scope":"project","title":"Current retry policy","body":"Retry flaky command three times before escalating.","project":"agentsview","agent":"codex","session_id":"s2","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":4,"ordinal_end":5}}
 `)
 
 	result, err := d.ImportAcceptedRecallEntriesJSONL(t.Context(), input)
 
-	require.NoError(err)
-	assert.Equal(1, result.Imported)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
 	var raw struct {
 		ImportedEntries []struct {
 			SupersedesEntryID string `json:"supersedes_entry_id"`
 		} `json:"imported_entries"`
 	}
 	data, err := json.Marshal(result)
-	require.NoError(err)
-	require.NoError(json.Unmarshal(data, &raw))
-	require.Len(raw.ImportedEntries, 1)
-	assert.Equal("old", raw.ImportedEntries[0].SupersedesEntryID)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(data, &raw))
+	require.Len(t, raw.ImportedEntries, 1)
+	assert.Equal(t, "old", raw.ImportedEntries[0].SupersedesEntryID)
 	oldRecallEntry, err := d.GetRecallEntry(t.Context(), "old")
-	require.NoError(err)
-	require.NotNil(oldRecallEntry)
-	assert.Equal("archived", oldRecallEntry.Status)
-	assert.Equal("new", oldRecallEntry.SupersededByEntryID)
+	require.NoError(t, err)
+	require.NotNil(t, oldRecallEntry)
+	assert.Equal(t, "archived", oldRecallEntry.Status)
+	assert.Equal(t, "new", oldRecallEntry.SupersededByEntryID)
 	newRecallEntry, err := d.GetRecallEntry(t.Context(), "new")
-	require.NoError(err)
-	require.NotNil(newRecallEntry)
-	assert.Equal("accepted", newRecallEntry.Status)
-	assert.Equal("old", newRecallEntry.SupersedesEntryID)
+	require.NoError(t, err)
+	require.NotNil(t, newRecallEntry)
+	assert.Equal(t, "accepted", newRecallEntry.Status)
+	assert.Equal(t, "old", newRecallEntry.SupersedesEntryID)
 }
 
 func TestImportAcceptedRecallEntriesJSONLRejectsPlaceholderSupersession(t *testing.T) {
 	for _, dryRun := range []bool{false, true} {
 		t.Run(fmt.Sprintf("dry_run=%t", dryRun), func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			d := testDB(t)
 			insertSession(t, d, "trusted-source", "agentsview")
-			_, err := d.InsertRecallEntry(RecallEntry{
+			_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 				ID:              "trusted-entry",
 				Type:            "fact",
 				Scope:           "project",
@@ -819,7 +760,7 @@ func TestImportAcceptedRecallEntriesJSONLRejectsPlaceholderSupersession(t *testi
 				SourceSessionID: "trusted-source",
 				ProvenanceOK:    true,
 			})
-			require.NoError(err)
+			require.NoError(t, err)
 			input := strings.NewReader(`
 {"candidate_id":"placeholder-replacement","supersedes_entry_id":"trusted-entry","type":"fact","scope":"project","title":"Unverified retry policy","body":"Retry flaky commands three times.","project":"agentsview","session_id":"missing-source","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
 `)
@@ -828,21 +769,21 @@ func TestImportAcceptedRecallEntriesJSONLRejectsPlaceholderSupersession(t *testi
 				t.Context(), input, RecallImportOptions{DryRun: dryRun},
 			)
 
-			require.ErrorContains(
+			require.ErrorContains(t,
 				err,
 				"unverified recall import cannot supersede provenance-valid entry trusted-entry",
 			)
 			trusted, getErr := d.GetRecallEntry(t.Context(), "trusted-entry")
-			require.NoError(getErr)
-			require.NotNil(trusted)
-			assert.Equal("accepted", trusted.Status)
-			assert.Empty(trusted.SupersededByEntryID)
-			assert.True(trusted.ProvenanceOK)
+			require.NoError(t, getErr)
+			require.NotNil(t, trusted)
+			assert.Equal(t, "accepted", trusted.Status)
+			assert.Empty(t, trusted.SupersededByEntryID)
+			assert.True(t, trusted.ProvenanceOK)
 			replacement, getErr := d.GetRecallEntry(
 				t.Context(), "placeholder-replacement",
 			)
-			require.NoError(getErr)
-			assert.Nil(replacement)
+			require.NoError(t, getErr)
+			assert.Nil(t, replacement)
 		})
 	}
 }
@@ -850,13 +791,11 @@ func TestImportAcceptedRecallEntriesJSONLRejectsPlaceholderSupersession(t *testi
 func TestImportAcceptedRecallEntriesJSONLRejectsAlreadySupersededTarget(t *testing.T) {
 	for _, dryRun := range []bool{false, true} {
 		t.Run(fmt.Sprintf("dry_run=%t", dryRun), func(t *testing.T) {
-			require := require.New(t)
-
 			d := testDB(t)
 			for _, id := range []string{"s1", "s2", "s3"} {
 				insertSession(t, d, id, "agentsview")
 			}
-			_, err := d.InsertRecallEntry(RecallEntry{
+			_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 				ID:              "old",
 				Type:            "fact",
 				Scope:           "project",
@@ -866,7 +805,7 @@ func TestImportAcceptedRecallEntriesJSONLRejectsAlreadySupersededTarget(t *testi
 				Project:         "agentsview",
 				SourceSessionID: "s1",
 			})
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = d.SupersedeRecallEntry(t.Context(), "old", RecallEntry{
 				ID:              "first-replacement",
 				Type:            "fact",
@@ -877,7 +816,7 @@ func TestImportAcceptedRecallEntriesJSONLRejectsAlreadySupersededTarget(t *testi
 				Project:         "agentsview",
 				SourceSessionID: "s2",
 			})
-			require.NoError(err)
+			require.NoError(t, err)
 			input := strings.NewReader(`
 {"candidate_id":"second-replacement","supersedes_entry_id":"old","type":"fact","scope":"project","title":"Second replacement","body":"Retry flaky commands three times.","project":"agentsview","session_id":"s3","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
 `)
@@ -886,9 +825,9 @@ func TestImportAcceptedRecallEntriesJSONLRejectsAlreadySupersededTarget(t *testi
 				t.Context(), input, RecallImportOptions{DryRun: dryRun},
 			)
 
-			require.ErrorContains(err, "superseded entry old is not active")
+			require.ErrorContains(t, err, "superseded entry old is not active")
 			second, getErr := d.GetRecallEntry(t.Context(), "second-replacement")
-			require.NoError(getErr)
+			require.NoError(t, getErr)
 			assert.Nil(t, second)
 		})
 	}
@@ -897,14 +836,11 @@ func TestImportAcceptedRecallEntriesJSONLRejectsAlreadySupersededTarget(t *testi
 func TestImportAcceptedRecallEntriesJSONLDryRunTracksSupersessionWithinStream(t *testing.T) {
 	for _, dryRun := range []bool{false, true} {
 		t.Run(fmt.Sprintf("dry_run=%t", dryRun), func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			d := testDB(t)
 			for _, id := range []string{"s1", "s2", "s3"} {
 				insertSession(t, d, id, "agentsview")
 			}
-			_, err := d.InsertRecallEntry(RecallEntry{
+			_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 				ID:              "old",
 				Type:            "fact",
 				Scope:           "project",
@@ -914,7 +850,7 @@ func TestImportAcceptedRecallEntriesJSONLDryRunTracksSupersessionWithinStream(t 
 				Project:         "agentsview",
 				SourceSessionID: "s1",
 			})
-			require.NoError(err)
+			require.NoError(t, err)
 			input := strings.NewReader(`
 {"candidate_id":"first-replacement","supersedes_entry_id":"old","type":"fact","scope":"project","title":"First replacement","body":"Retry flaky commands twice.","project":"agentsview","session_id":"s2","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
 {"candidate_id":"second-replacement","supersedes_entry_id":"old","type":"fact","scope":"project","title":"Second replacement","body":"Retry flaky commands three times.","project":"agentsview","session_id":"s3","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
@@ -924,17 +860,17 @@ func TestImportAcceptedRecallEntriesJSONLDryRunTracksSupersessionWithinStream(t 
 				t.Context(), input, RecallImportOptions{DryRun: dryRun},
 			)
 
-			require.ErrorContains(err, "superseded entry old is not active")
+			require.ErrorContains(t, err, "superseded entry old is not active")
 			if dryRun {
-				assert.Equal(1, result.WouldImport)
-				assert.Zero(result.Imported)
+				assert.Equal(t, 1, result.WouldImport)
+				assert.Zero(t, result.Imported)
 			} else {
-				assert.Equal(1, result.Imported)
-				assert.Zero(result.WouldImport)
+				assert.Equal(t, 1, result.Imported)
+				assert.Zero(t, result.WouldImport)
 			}
 			second, getErr := d.GetRecallEntry(t.Context(), "second-replacement")
-			require.NoError(getErr)
-			assert.Nil(second)
+			require.NoError(t, getErr)
+			assert.Nil(t, second)
 		})
 	}
 }
@@ -959,9 +895,6 @@ func TestImportAcceptedRecallEntriesJSONLDryRunProjectsSupersessionChain(t *test
 }
 
 func TestImportAcceptedRecallEntriesJSONLTrimsIdentityAndScopeFields(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
@@ -995,34 +928,31 @@ func TestImportAcceptedRecallEntriesJSONLTrimsIdentityAndScopeFields(t *testing.
 		RecallImportOptions{RequireExistingSessions: true},
 	)
 
-	require.NoError(err)
-	assert.Equal(1, result.Imported)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
 	got, err := d.GetRecallEntry(t.Context(), "m-trim")
-	require.NoError(err)
-	require.NotNil(got)
-	assert.Equal("debugging_method", got.Type)
-	assert.Equal("repository", got.Scope)
-	assert.Equal("Check cwd before file reads", got.Title)
-	assert.Equal("Verify cwd before retrying failed reads.", got.Body)
-	assert.Equal("file read failure", got.Trigger)
-	assert.Equal("low", got.Uncertainty)
-	assert.Equal("agentsview", got.Project)
-	assert.Equal("/repo/agentsview", got.CWD)
-	assert.Equal("main", got.GitBranch)
-	assert.Equal("codex", got.Agent)
-	assert.Equal("s1", got.SourceSessionID)
-	assert.Equal("ep1", got.SourceEpisodeID)
-	assert.Equal("run1", got.SourceRunID)
-	assert.Equal("single", got.ExtractorMethod)
-	assert.Equal("fake-model", got.Model)
-	require.Len(got.Evidence, 1)
-	assert.Equal("toolu_1", got.Evidence[0].ToolUseID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "debugging_method", got.Type)
+	assert.Equal(t, "repository", got.Scope)
+	assert.Equal(t, "Check cwd before file reads", got.Title)
+	assert.Equal(t, "Verify cwd before retrying failed reads.", got.Body)
+	assert.Equal(t, "file read failure", got.Trigger)
+	assert.Equal(t, "low", got.Uncertainty)
+	assert.Equal(t, "agentsview", got.Project)
+	assert.Equal(t, "/repo/agentsview", got.CWD)
+	assert.Equal(t, "main", got.GitBranch)
+	assert.Equal(t, "codex", got.Agent)
+	assert.Equal(t, "s1", got.SourceSessionID)
+	assert.Equal(t, "ep1", got.SourceEpisodeID)
+	assert.Equal(t, "run1", got.SourceRunID)
+	assert.Equal(t, "single", got.ExtractorMethod)
+	assert.Equal(t, "fake-model", got.Model)
+	require.Len(t, got.Evidence, 1)
+	assert.Equal(t, "toolu_1", got.Evidence[0].ToolUseID)
 }
 
 func TestImportAcceptedRecallEntriesJSONLDryRunReportsWouldImportAndSkips(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	input := strings.NewReader(`
@@ -1035,29 +965,26 @@ func TestImportAcceptedRecallEntriesJSONLDryRunReportsWouldImportAndSkips(t *tes
 		t.Context(), input, RecallImportOptions{DryRun: true},
 	)
 
-	require.NoError(err)
-	assert.Equal(0, result.Imported)
-	assert.Equal(1, result.WouldImport)
-	assert.Equal(2, result.Skipped)
-	require.Len(result.WouldImportEntries, 1)
-	assert.Equal("m-keeper", result.WouldImportEntries[0].CandidateID)
-	assert.Equal("Check cwd before file reads", result.WouldImportEntries[0].Title)
-	assert.Equal("s1", result.WouldImportEntries[0].SourceSessionID)
-	require.Len(result.SkippedEntries, 2)
-	assert.Equal("m-not-transferable", result.SkippedEntries[0].CandidateID)
-	assert.Equal("not_transferable", result.SkippedEntries[0].Reason)
-	assert.Equal("m-wrong", result.SkippedEntries[1].CandidateID)
-	assert.Equal("label_not_keeper", result.SkippedEntries[1].Reason)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Imported)
+	assert.Equal(t, 1, result.WouldImport)
+	assert.Equal(t, 2, result.Skipped)
+	require.Len(t, result.WouldImportEntries, 1)
+	assert.Equal(t, "m-keeper", result.WouldImportEntries[0].CandidateID)
+	assert.Equal(t, "Check cwd before file reads", result.WouldImportEntries[0].Title)
+	assert.Equal(t, "s1", result.WouldImportEntries[0].SourceSessionID)
+	require.Len(t, result.SkippedEntries, 2)
+	assert.Equal(t, "m-not-transferable", result.SkippedEntries[0].CandidateID)
+	assert.Equal(t, "not_transferable", result.SkippedEntries[0].Reason)
+	assert.Equal(t, "m-wrong", result.SkippedEntries[1].CandidateID)
+	assert.Equal(t, "label_not_keeper", result.SkippedEntries[1].Reason)
 
 	got, err := d.GetRecallEntry(t.Context(), "m-keeper")
-	require.NoError(err)
-	assert.Nil(got)
+	require.NoError(t, err)
+	assert.Nil(t, got)
 }
 
 func TestImportAcceptedRecallEntriesJSONLDryRunDedupsCandidateIDsLikeRealImport(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	const input = `
 {"candidate_id":"dup1","type":"fact","scope":"project","title":"First","body":"First body.","project":"agentsview","agent":"codex","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":1,"ordinal_end":1}}
 {"candidate_id":"dup1","type":"fact","scope":"project","title":"Second","body":"Second body.","project":"agentsview","agent":"codex","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":1,"ordinal_end":1}}
@@ -1069,24 +996,24 @@ func TestImportAcceptedRecallEntriesJSONLDryRunDedupsCandidateIDsLikeRealImport(
 		t.Context(), strings.NewReader(input),
 		RecallImportOptions{DryRun: true},
 	)
-	require.NoError(err)
-	assert.Equal(1, dry.WouldImport)
-	assert.Equal(1, dry.Skipped)
-	require.Len(dry.SkippedEntries, 1)
-	assert.Equal("duplicate", dry.SkippedEntries[0].Reason)
+	require.NoError(t, err)
+	assert.Equal(t, 1, dry.WouldImport)
+	assert.Equal(t, 1, dry.Skipped)
+	require.Len(t, dry.SkippedEntries, 1)
+	assert.Equal(t, "duplicate", dry.SkippedEntries[0].Reason)
 
 	realDB := testDB(t)
 	insertSession(t, realDB, "s1", "agentsview")
-	real, err := realDB.ImportAcceptedRecallEntriesJSONLWithOptions(
+	imported, err := realDB.ImportAcceptedRecallEntriesJSONLWithOptions(
 		t.Context(), strings.NewReader(input),
 		RecallImportOptions{},
 	)
-	require.NoError(err)
-	assert.Equal(1, real.Imported)
-	assert.Equal(1, real.Skipped)
+	require.NoError(t, err)
+	assert.Equal(t, 1, imported.Imported)
+	assert.Equal(t, 1, imported.Skipped)
 
 	// The dry-run's projected counts must match the real importer's so a
 	// duplicate candidate_id is never double-counted as WouldImport.
-	assert.Equal(real.Imported, dry.WouldImport)
-	assert.Equal(real.Skipped, dry.Skipped)
+	assert.Equal(t, imported.Imported, dry.WouldImport)
+	assert.Equal(t, imported.Skipped, dry.Skipped)
 }

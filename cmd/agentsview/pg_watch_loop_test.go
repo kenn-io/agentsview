@@ -87,9 +87,6 @@ func TestPushLoopUnscopedDirtySupersedesPendingBatch(t *testing.T) {
 }
 
 func TestPushLoopIntervalTaskSupersedesPendingBatchAndLeavesLaterBatchQueued(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	type attempt struct {
 		reason pushReason
 		batch  *syncpkg.WatchBatch
@@ -115,28 +112,25 @@ func TestPushLoopIntervalTaskSupersedesPendingBatchAndLeavesLaterBatchQueued(t *
 	floor <- time.Now()
 
 	interval := receivePushLoopValue(t, attempts)
-	assert.Equal(reasonInterval, interval.reason)
-	assert.Nil(interval.batch)
+	assert.Equal(t, reasonInterval, interval.reason)
+	assert.Nil(t, interval.batch)
 	<-intervalStarted
 
 	later := loop.NotifyBatchWithAck(syncpkg.WatchBatch{
 		Paths: []string{"/sessions/after-interval"},
 	})
 	close(releaseInterval)
-	require.NoError(receivePushLoopValue(t, covered))
+	require.NoError(t, receivePushLoopValue(t, covered))
 
 	fire <- time.Now()
 	change := receivePushLoopValue(t, attempts)
-	assert.Equal(reasonChange, change.reason)
-	require.NotNil(change.batch)
-	assert.Equal([]string{"/sessions/after-interval"}, change.batch.Paths)
-	require.NoError(receivePushLoopValue(t, later))
+	assert.Equal(t, reasonChange, change.reason)
+	require.NotNil(t, change.batch)
+	assert.Equal(t, []string{"/sessions/after-interval"}, change.batch.Paths)
+	require.NoError(t, receivePushLoopValue(t, later))
 }
 
 func TestPushLoopFailedIntervalTaskRetriesUnscopedBeforeLaterBatch(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	type attempt struct {
 		reason pushReason
 		batch  *syncpkg.WatchBatch
@@ -160,30 +154,27 @@ func TestPushLoopFailedIntervalTaskRetriesUnscopedBeforeLaterBatch(t *testing.T)
 	})
 	floor <- time.Now()
 	first := receivePushLoopValue(t, attempts)
-	assert.Equal(reasonInterval, first.reason)
-	assert.Nil(first.batch)
+	assert.Equal(t, reasonInterval, first.reason)
+	assert.Nil(t, first.batch)
 
 	later := loop.NotifyBatchWithAck(syncpkg.WatchBatch{
 		Paths: []string{"/sessions/after-interval"},
 	})
 	fire <- time.Now()
 	retry := receivePushLoopValue(t, attempts)
-	assert.Equal(reasonInterval, retry.reason)
-	assert.Nil(retry.batch)
-	require.NoError(receivePushLoopValue(t, covered))
+	assert.Equal(t, reasonInterval, retry.reason)
+	assert.Nil(t, retry.batch)
+	require.NoError(t, receivePushLoopValue(t, covered))
 
 	fire <- time.Now()
 	change := receivePushLoopValue(t, attempts)
-	assert.Equal(reasonChange, change.reason)
-	require.NotNil(change.batch)
-	assert.Equal([]string{"/sessions/after-interval"}, change.batch.Paths)
-	require.NoError(receivePushLoopValue(t, later))
+	assert.Equal(t, reasonChange, change.reason)
+	require.NotNil(t, change.batch)
+	assert.Equal(t, []string{"/sessions/after-interval"}, change.batch.Paths)
+	require.NoError(t, receivePushLoopValue(t, later))
 }
 
 func TestPushLoopFailedBatchRestoresAndMergesConcurrentArrival(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	attempts := make(chan *syncpkg.WatchBatch, 2)
 	releaseFirst := make(chan struct{})
 	call := 0
@@ -203,15 +194,15 @@ func TestPushLoopFailedBatchRestoresAndMergesConcurrentArrival(t *testing.T) {
 	loop.NotifyBatch(syncpkg.WatchBatch{Paths: []string{"/sessions/first"}})
 	fire <- time.Now()
 	first := receivePushLoopValue(t, attempts)
-	require.NotNil(first)
-	assert.Equal([]string{"/sessions/first"}, first.Paths)
+	require.NotNil(t, first)
+	assert.Equal(t, []string{"/sessions/first"}, first.Paths)
 	loop.NotifyBatch(syncpkg.WatchBatch{Paths: []string{"/sessions/second"}})
 	close(releaseFirst)
 	fire <- time.Now()
 
 	second := receivePushLoopValue(t, attempts)
-	require.NotNil(second)
-	assert.Equal([]string{"/sessions/first", "/sessions/second"}, second.Paths)
+	require.NotNil(t, second)
+	assert.Equal(t, []string{"/sessions/first", "/sessions/second"}, second.Paths)
 }
 
 func TestPushLoopOverflowBatchSurvivesRetry(t *testing.T) {
@@ -304,11 +295,9 @@ func TestPushLoop_DirtyTriggersOnePush(t *testing.T) {
 
 	select {
 	case r := <-pushed:
-		if r != reasonChange {
-			t.Fatalf("reason = %q, want %q", r, reasonChange)
-		}
+		assert.Equal(t, reasonChange, r)
 	case <-time.After(time.Second):
-		t.Fatal("expected a push")
+		require.FailNow(t, "expected a push")
 	}
 }
 
@@ -330,11 +319,11 @@ func TestPushLoop_BurstCoalesces(t *testing.T) {
 	select {
 	case <-pushed:
 	case <-time.After(time.Second):
-		t.Fatal("expected a push")
+		require.FailNow(t, "expected a push")
 	}
 	select {
 	case <-pushed:
-		t.Fatal("expected exactly one push for a burst")
+		require.FailNow(t, "expected exactly one push for a burst")
 	case <-time.After(100 * time.Millisecond):
 	}
 }
@@ -352,11 +341,9 @@ func TestPushLoop_FloorPushesWithoutDirty(t *testing.T) {
 
 	select {
 	case r := <-pushed:
-		if r != reasonInterval {
-			t.Fatalf("reason = %q, want %q", r, reasonInterval)
-		}
+		assert.Equal(t, reasonInterval, r)
 	case <-time.After(time.Second):
-		t.Fatal("expected an interval push")
+		require.FailNow(t, "expected an interval push")
 	}
 }
 
@@ -383,13 +370,11 @@ func TestPushLoop_ErrorDoesNotStopLoop(t *testing.T) {
 	select {
 	case <-pushed: // second succeeds -> loop survived the error
 	case <-time.After(time.Second):
-		t.Fatal("loop did not survive a push error")
+		require.FailNow(t, "loop did not survive a push error")
 	}
 }
 
 func TestPushLoop_NotifyDirtyWithAckWaitsForSuccessfulRetry(t *testing.T) {
-	require := require.New(t)
-
 	attempts := make(chan pushReason, 2)
 	pushErr := errors.New("target unavailable")
 	call := 0
@@ -407,24 +392,21 @@ func TestPushLoop_NotifyDirtyWithAckWaitsForSuccessfulRetry(t *testing.T) {
 
 	ack := l.NotifyDirtyWithAck()
 	fire <- time.Now()
-	require.Equal(reasonChange, <-attempts)
+	require.Equal(t, reasonChange, <-attempts)
 	select {
 	case err := <-ack:
-		require.Fail("failed push acknowledged dirty generation", "%v", err)
+		require.Fail(t, "failed push acknowledged dirty generation", "%v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
 
 	// Failure retains the dirty generation and rearms debounce without a
 	// second producer notification.
 	fire <- time.Now()
-	require.Equal(reasonChange, <-attempts)
-	require.NoError(<-ack)
+	require.Equal(t, reasonChange, <-attempts)
+	require.NoError(t, <-ack)
 }
 
 func TestPushLoop_NotifyDirtyWithAckIsNonBlockingAndCoalescesWaiters(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	l, fire, _ := newTestLoop(func(context.Context, pushReason) error { return nil })
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
@@ -432,11 +414,11 @@ func TestPushLoop_NotifyDirtyWithAckIsNonBlockingAndCoalescesWaiters(t *testing.
 
 	first := l.NotifyDirtyWithAck()
 	second := l.NotifyDirtyWithAck()
-	assert.NotNil(first)
-	assert.NotNil(second)
+	assert.NotNil(t, first)
+	assert.NotNil(t, second)
 	fire <- time.Now()
-	require.NoError(<-first)
-	require.NoError(<-second)
+	require.NoError(t, <-first)
+	require.NoError(t, <-second)
 }
 
 func TestPushWatchFallbackCoverageMarksLoopDirty(t *testing.T) {
@@ -465,11 +447,9 @@ func TestPushLoop_ShutdownFlushes(t *testing.T) {
 	cancel()
 	select {
 	case r := <-pushed:
-		if r != reasonShutdown {
-			t.Fatalf("reason = %q, want %q", r, reasonShutdown)
-		}
+		assert.Equal(t, reasonShutdown, r)
 	case <-time.After(time.Second):
-		t.Fatal("expected a shutdown flush push")
+		require.FailNow(t, "expected a shutdown flush push")
 	}
 }
 
@@ -488,9 +468,9 @@ func TestPushLoop_ShutdownFlushHonorsTimeout(t *testing.T) {
 	select {
 	case ok := <-gotDeadline:
 		if !ok {
-			t.Fatal("shutdown flush ctx should carry a deadline when flushTimeout > 0")
+			require.FailNow(t, "shutdown flush ctx should carry a deadline when flushTimeout > 0")
 		}
 	case <-time.After(time.Second):
-		t.Fatal("expected a shutdown flush push")
+		require.FailNow(t, "expected a shutdown flush push")
 	}
 }

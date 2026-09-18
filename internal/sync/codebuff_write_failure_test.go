@@ -20,6 +20,7 @@ import (
 // root plus the canonical chat-messages.json path.
 func seedCodebuffSingleSession(t *testing.T) (root, chatPath string) {
 	t.Helper()
+
 	root = t.TempDir()
 	dir := filepath.Join(root, "project-0", "chats", "2026-07-15T10-00-00.000Z")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
@@ -63,15 +64,13 @@ func seedCodebuffSingleSession(t *testing.T) (root, chatPath string) {
 // write-failure invariant for both agent labels — a separate Freebuff test
 // would exercise identical code paths with no additional coverage.
 func TestSyncCodebuffWriteFailureDoesNotPersistStatHash(t *testing.T) {
-	require := require.New(t)
-
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 
 	database := dbtest.OpenTestDB(t)
 	root, chatPath := seedCodebuffSingleSession(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -90,7 +89,7 @@ func TestSyncCodebuffWriteFailureDoesNotPersistStatHash(t *testing.T) {
 	}
 
 	failed := engine.SyncAll(t.Context(), nil)
-	require.Equal(1, failed.Failed,
+	require.Equal(t, 1, failed.Failed,
 		"the injected archive write must fail and be counted as failed")
 	assert.Zero(t, failed.Synced,
 		"no session may be reported synced when the write failed")
@@ -98,8 +97,8 @@ func TestSyncCodebuffWriteFailureDoesNotPersistStatHash(t *testing.T) {
 	_, has, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentCodebuff, chatPath,
 	)
-	require.NoError(err)
-	require.False(has,
+	require.NoError(t, err)
+	require.False(t, has,
 		"a failed write must not persist provider_freshness; a matching "+
 			"digest stamped before a confirmed outcome would suppress "+
 			"every later retry of this source")
@@ -109,7 +108,7 @@ func TestSyncCodebuffWriteFailureDoesNotPersistStatHash(t *testing.T) {
 	// successful-write flush gate must stamp the digest.
 	engine.writeBatchOverride = nil
 	retry := engine.SyncAll(t.Context(), nil)
-	require.Equal(1, retry.Synced,
+	require.Equal(t, 1, retry.Synced,
 		"the retry after a transient write failure must parse and store "+
 			"the session; a skip here means a digest was stamped before "+
 			"the write outcome was confirmed")
@@ -117,7 +116,7 @@ func TestSyncCodebuffWriteFailureDoesNotPersistStatHash(t *testing.T) {
 	_, hasAfter, err := database.GetProviderStatHash(
 		t.Context(), parser.AgentCodebuff, chatPath,
 	)
-	require.NoError(err)
-	require.True(hasAfter,
+	require.NoError(t, err)
+	require.True(t, hasAfter,
 		"the successful retry write must persist provider_freshness")
 }

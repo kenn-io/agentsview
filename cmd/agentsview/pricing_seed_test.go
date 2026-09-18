@@ -34,16 +34,13 @@ func upsertPricingForTest(
 // the bare snapshot version) re-seeds on startup, picking up the
 // supplemental flat K3 aliases without a resync.
 func TestSeedFallbackPricing_UpgradesExistingDBWithSupplementals(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := newTestDB(t)
 
 	// Simulate a DB seeded by the pre-supplemental binary: meta holds
 	// the bare snapshot version and the alias rows are absent.
-	require.NoError(database.SetPricingMeta("_fallback_version", pricing.FallbackVersion))
+	require.NoError(t, database.SetPricingMeta("_fallback_version", pricing.FallbackVersion))
 
-	require.NoError(pricingrefresh.SeedFallback(database))
+	require.NoError(t, pricingrefresh.SeedFallback(database))
 
 	for _, model := range []string{
 		"k3",
@@ -52,20 +49,20 @@ func TestSeedFallbackPricing_UpgradesExistingDBWithSupplementals(t *testing.T) {
 		"moonshot/kimi-k3",
 	} {
 		row, err := database.GetModelPricing(model)
-		require.NoError(err)
-		require.NotNil(row, "supplemental %q must be seeded", model)
-		assert.Equal(money.MustParseDollars("3.00"), row.InputPerMTok,
+		require.NoError(t, err)
+		require.NotNil(t, row, "supplemental %q must be seeded", model)
+		assert.Equal(t, money.MustParseDollars("3.00"), row.InputPerMTok,
 			"%s input rate", model)
-		assert.Equal(money.MustParseDollars("15.00"), row.OutputPerMTok,
+		assert.Equal(t, money.MustParseDollars("15.00"), row.OutputPerMTok,
 			"%s output rate", model)
-		assert.Zero(row.CacheCreationPerMTok, "%s cache creation rate", model)
-		assert.Equal(money.MustParseDollars("0.30"), row.CacheReadPerMTok,
+		assert.Zero(t, row.CacheCreationPerMTok, "%s cache creation rate", model)
+		assert.Equal(t, money.MustParseDollars("0.30"), row.CacheReadPerMTok,
 			"%s cache read rate", model)
 	}
 
 	meta, err := database.GetPricingMeta("_fallback_version")
-	require.NoError(err)
-	assert.Equal(pricing.SeedVersion, meta)
+	require.NoError(t, err)
+	assert.Equal(t, pricing.SeedVersion, meta)
 }
 
 // TestSeedFallbackPricing_DeletesStaleDateAliasRows proves the
@@ -73,9 +70,6 @@ func TestSeedFallbackPricing_UpgradesExistingDBWithSupplementals(t *testing.T) {
 // seeded for the date-ambiguous aliases: an exact-match row would
 // otherwise shadow the date-based CanonicalModelForDate pricing path.
 func TestSeedFallbackPricing_DeletesStaleDateAliasRows(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := newTestDB(t)
 
 	// Simulate a DB seeded by the supplemental-v1 binary: meta holds
@@ -101,30 +95,30 @@ func TestSeedFallbackPricing_DeletesStaleDateAliasRows(t *testing.T) {
 			CacheReadPerMTok: money.MustParseDollars("0.16"),
 		},
 	})
-	require.NoError(database.SetPricingMeta("_fallback_version",
+	require.NoError(t, database.SetPricingMeta("_fallback_version",
 		pricing.FallbackVersion+"+supplemental-1"))
 
-	require.NoError(pricingrefresh.SeedFallback(database))
+	require.NoError(t, pricingrefresh.SeedFallback(database))
 
 	for _, model := range pricing.DateAliasedModels() {
 		row, err := database.GetModelPricing(model)
-		require.NoError(err)
-		assert.Nil(row,
+		require.NoError(t, err)
+		assert.Nil(t, row,
 			"stale flat row for date-ambiguous %q must be deleted", model)
 	}
 
 	// The new static K3 rows arrive in the same seed.
 	for _, model := range []string{"k3", "k3-agent", "kimi-k3", "moonshot/kimi-k3"} {
 		row, err := database.GetModelPricing(model)
-		require.NoError(err)
-		require.NotNil(row, "supplemental %q must be seeded", model)
-		assert.Equal(money.MustParseDollars("3.00"), row.InputPerMTok,
+		require.NoError(t, err)
+		require.NotNil(t, row, "supplemental %q must be seeded", model)
+		assert.Equal(t, money.MustParseDollars("3.00"), row.InputPerMTok,
 			"%s input rate", model)
 	}
 
 	meta, err := database.GetPricingMeta("_fallback_version")
-	require.NoError(err)
-	assert.Equal(pricing.SeedVersion, meta)
+	require.NoError(t, err)
+	assert.Equal(t, pricing.SeedVersion, meta)
 }
 
 // TestSeedFallbackPricing_SkipsWhenSeedVersionCurrent proves the gate
@@ -132,11 +126,8 @@ func TestSeedFallbackPricing_DeletesStaleDateAliasRows(t *testing.T) {
 // matches SeedVersion, the seed is a no-op and must not overwrite rows
 // a refresh has since updated.
 func TestSeedFallbackPricing_SkipsWhenSeedVersionCurrent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := newTestDB(t)
-	require.NoError(pricingrefresh.SeedFallback(database))
+	require.NoError(t, pricingrefresh.SeedFallback(database))
 
 	// Simulate a LiteLLM refresh overwriting the alias with real rates.
 	upsertPricingForTest(t, database, []pricing.ModelPricing{{
@@ -145,25 +136,22 @@ func TestSeedFallbackPricing_SkipsWhenSeedVersionCurrent(t *testing.T) {
 		OutputPerMTok: money.MustParseDollars("99.9"),
 	}})
 
-	require.NoError(pricingrefresh.SeedFallback(database))
+	require.NoError(t, pricingrefresh.SeedFallback(database))
 
 	row, err := database.GetModelPricing("kimi-k3")
-	require.NoError(err)
-	require.NotNil(row)
-	assert.Equal(money.MustParseDollars("9.9"), row.InputPerMTok,
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	assert.Equal(t, money.MustParseDollars("9.9"), row.InputPerMTok,
 		"seed must not overwrite refreshed rates when SeedVersion is current")
-	assert.Equal(money.MustParseDollars("99.9"), row.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("99.9"), row.OutputPerMTok)
 }
 
 // TestSeedFallbackPricing_RefreshOverwritesSupplementals documents that
 // supplemental aliases are not pinned: a later LiteLLM upsert replaces
 // them if upstream ever lists the real models.
 func TestSeedFallbackPricing_RefreshOverwritesSupplementals(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	database := newTestDB(t)
-	require.NoError(pricingrefresh.SeedFallback(database))
+	require.NoError(t, pricingrefresh.SeedFallback(database))
 
 	upsertPricingForTest(t, database, []pricing.ModelPricing{{
 		ModelPattern:         "kimi-k3",
@@ -174,10 +162,10 @@ func TestSeedFallbackPricing_RefreshOverwritesSupplementals(t *testing.T) {
 	}})
 
 	row, err := database.GetModelPricing("kimi-k3")
-	require.NoError(err)
-	require.NotNil(row)
-	assert.Equal(money.MustParseDollars("1.5"), row.InputPerMTok)
-	assert.Equal(money.MustParseDollars("6.0"), row.OutputPerMTok)
-	assert.Equal(money.MustParseDollars("0.5"), row.CacheCreationPerMTok)
-	assert.Equal(money.MustParseDollars("0.05"), row.CacheReadPerMTok)
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	assert.Equal(t, money.MustParseDollars("1.5"), row.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("6.0"), row.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("0.5"), row.CacheCreationPerMTok)
+	assert.Equal(t, money.MustParseDollars("0.05"), row.CacheReadPerMTok)
 }

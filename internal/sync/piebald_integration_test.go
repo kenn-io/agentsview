@@ -90,7 +90,7 @@ func createPiebaldDB(t *testing.T, dir string) *piebaldTestDB {
 	path := filepath.Join(dir, "app.db")
 	copySQLiteSchemaTemplate(
 		t, path, "piebald", &piebaldSchemaOnce,
-		&piebaldSchemaBytes, &piebaldSchemaErr,
+		&piebaldSchemaBytes, &errPiebaldSchema,
 		piebaldTestSchema,
 	)
 	d, err := sql.Open("sqlite3", path)
@@ -190,7 +190,6 @@ func (p *piebaldTestDB) addChatWithFork(t *testing.T, chatID int64) {
 }
 
 func TestSyncPiebaldSingleBulkAndIncremental(t *testing.T) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
 	piebald := createPiebaldDB(t, env.piebaldDir)
 	piebald.addChatWithFork(t, 42)
@@ -204,7 +203,7 @@ func TestSyncPiebaldSingleBulkAndIncremental(t *testing.T) {
 		assertSessionMessageCount(t, env.db, "piebald:42-200", 2)
 		assertSessionMessageCount(t, env.db, "piebald:42", 4)
 
-		src := env.engine.FindSourceFile("piebald:42-200")
+		src := env.engine.FindSourceFile(t.Context(), "piebald:42-200")
 		// Piebald is a provider-authoritative DB-backed provider. A fork session
 		// resolves to its base chat virtual <db>#<chatID> path, matching the
 		// stored session file_path the provider re-parses.
@@ -218,32 +217,29 @@ func TestSyncPiebaldSingleBulkAndIncremental(t *testing.T) {
 	t.Run("unknown fork", func(t *testing.T) {
 		err := env.engine.SyncSingleSession("piebald:42-999")
 		require.Error(t, err, "SyncSingleSession(piebald:42-999) returned nil; want not-found error")
-		src := env.engine.FindSourceFile("piebald:42-999")
+		src := env.engine.FindSourceFile(t.Context(), "piebald:42-999")
 		assert.Empty(t, src, "FindSourceFile(piebald:42-999)")
 		mtime := env.engine.SourceMtime(t.Context(), "piebald:42-999")
 		assert.Zero(t, mtime, "SourceMtime(piebald:42-999)")
 	})
 
 	t.Run("chat", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
-		require.NoError(env.engine.SyncSingleSession("piebald:7"), "SyncSingleSession")
+		require.NoError(t, env.engine.SyncSingleSession("piebald:7"), "SyncSingleSession")
 		assertSessionProject(t, env.db, "piebald:7", "app")
 		assertSessionMessageCount(t, env.db, "piebald:7", 2)
 
-		src := env.engine.FindSourceFile("piebald:7")
+		src := env.engine.FindSourceFile(t.Context(), "piebald:7")
 		// Piebald resolves the per-session virtual <db>#<chatID> path the provider
 		// parses, matching the stored session file_path.
 		wantSrc := filepath.Join(env.piebaldDir, "app.db") + "#7"
-		assert.Equal(wantSrc, src)
+		assert.Equal(t, wantSrc, src)
 
 		mtime := env.engine.SourceMtime(t.Context(), "piebald:7")
-		require.NotZero(mtime, "SourceMtime returned zero")
+		require.NotZero(t, mtime, "SourceMtime returned zero")
 
-		_, storedMtime, ok := env.db.GetSessionFileInfo("piebald:7")
-		require.True(ok, "session file info not found")
-		assert.Equal(mtime, storedMtime)
+		_, storedMtime, ok := env.db.GetSessionFileInfo(t.Context(), "piebald:7")
+		require.True(t, ok, "session file info not found")
+		assert.Equal(t, mtime, storedMtime)
 	})
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 3, Synced: 3, Skipped: 0})
@@ -253,7 +249,7 @@ func TestSyncPiebaldSingleBulkAndIncremental(t *testing.T) {
 	assertToolCallCount(t, env.db, "piebald:100", 1)
 	assertMessageContent(t, env.db, "piebald:100", "Please add Piebald support.", "Added Piebald support.")
 
-	_, storedMtimeA, okA := env.db.GetSessionFileInfo("piebald:301")
+	_, storedMtimeA, okA := env.db.GetSessionFileInfo(t.Context(), "piebald:301")
 	require.True(t, okA, "session A file info not found after initial sync")
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 0, Synced: 0, Skipped: 0})
@@ -263,7 +259,7 @@ func TestSyncPiebaldSingleBulkAndIncremental(t *testing.T) {
 	)
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1, Synced: 1, Skipped: 0})
-	_, storedMtimeA2, okA2 := env.db.GetSessionFileInfo("piebald:301")
+	_, storedMtimeA2, okA2 := env.db.GetSessionFileInfo(t.Context(), "piebald:301")
 	require.True(t, okA2, "session A file info not found after partial sync")
 	assert.Equal(t, storedMtimeA, storedMtimeA2, "A's stored mtime changed")
 }

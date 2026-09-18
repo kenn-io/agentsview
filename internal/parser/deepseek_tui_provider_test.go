@@ -12,9 +12,6 @@ import (
 )
 
 func TestDeepSeekTUIProviderSourceMethods(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "session_123.json")
 	writeSourceFile(t, sourcePath, deepSeekTUIProviderFixture())
@@ -26,42 +23,39 @@ func TestDeepSeekTUIProviderSourceMethods(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(AgentDeepSeekTUI, discovered[0].Provider)
-	assert.Equal(sourcePath, discovered[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, AgentDeepSeekTUI, discovered[0].Provider)
+	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~deepseek-tui:session_123",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(sourcePath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, found.DisplayPath)
 
 	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		FingerprintKey: sourcePath,
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(sourcePath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, found.DisplayPath)
 
-	require.NoError(os.Remove(sourcePath))
+	require.NoError(t, os.Remove(sourcePath))
 	changed, err := provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(sourcePath, changed[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 }
 
 func TestDeepSeekTUIProviderSourceMethodsFollowSymlinkedSessionFile(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	targetDir := t.TempDir()
 	targetPath := filepath.Join(targetDir, "session_123.json")
@@ -75,33 +69,30 @@ func TestDeepSeekTUIProviderSourceMethodsFollowSymlinkedSessionFile(t *testing.T
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 
 	discovered, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(discovered, 1)
-	assert.Equal(sourcePath, discovered[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~deepseek-tui:session_123",
 	})
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(sourcePath, found.DisplayPath)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, found.DisplayPath)
 
 	changed, err := provider.SourcesForChangedPath(
 		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "write", WatchRoot: root},
 	)
-	require.NoError(err)
-	require.Len(changed, 1)
-	assert.Equal(sourcePath, changed[0].DisplayPath)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 }
 
 func TestDeepSeekTUIProviderParse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "session_123.json")
 	content := deepSeekTUIProviderFixture()
@@ -111,29 +102,29 @@ func TestDeepSeekTUIProviderParse(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(ok)
+	require.True(t, ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(err)
-	require.Len(sources, 1)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 
 	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
-	require.NoError(err)
+	require.NoError(t, err)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fingerprint,
 	})
-	require.NoError(err)
-	require.True(outcome.ResultSetComplete)
-	require.Len(outcome.Results, 1)
-	assert.Equal(DataVersionCurrent, outcome.Results[0].DataVersion)
-	assert.Equal("deepseek-tui:session_123", outcome.Results[0].Result.Session.ID)
-	assert.Equal("sample_project", outcome.Results[0].Result.Session.Project)
-	assert.Equal("devbox", outcome.Results[0].Result.Session.Machine)
-	assert.Equal(fmt.Sprintf("%x", sha256.Sum256([]byte(content))),
+	require.NoError(t, err)
+	require.True(t, outcome.ResultSetComplete)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, DataVersionCurrent, outcome.Results[0].DataVersion)
+	assert.Equal(t, "deepseek-tui:session_123", outcome.Results[0].Result.Session.ID)
+	assert.Equal(t, "sample_project", outcome.Results[0].Result.Session.Project)
+	assert.Equal(t, "devbox", outcome.Results[0].Result.Session.Machine)
+	assert.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(content))),
 		outcome.Results[0].Result.Session.File.Hash,
 	)
-	assert.Len(outcome.Results[0].Result.Messages, 2)
+	assert.Len(t, outcome.Results[0].Result.Messages, 2)
 }
 
 func deepSeekTUIProviderFixture() string {

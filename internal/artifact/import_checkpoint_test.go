@@ -38,8 +38,7 @@ func TestReadVerifiedImportArtifactByteBoundaries(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
+			t.Parallel()
 
 			body := make([]byte, tc.limit)
 			identity := Identity{
@@ -59,17 +58,17 @@ func TestReadVerifiedImportArtifactByteBoundaries(t *testing.T) {
 			got, err := readVerifiedImportArtifact(
 				t.Context(), store, store.entry, tc.limit,
 			)
-			require.NoError(err)
-			assert.Len(got, int(tc.limit))
-			assert.Equal(1, store.opens)
+			require.NoError(t, err)
+			assert.Len(t, got, int(tc.limit))
+			assert.Equal(t, 1, store.opens)
 
 			oversize := store.entry
 			oversize.Identity.Size++
 			_, err = readVerifiedImportArtifact(
 				t.Context(), store, oversize, tc.limit,
 			)
-			require.ErrorIs(err, ErrArtifactInvalid)
-			assert.Equal(1, store.opens)
+			require.ErrorIs(t, err, ErrArtifactInvalid)
+			assert.Equal(t, 1, store.opens)
 		})
 	}
 }
@@ -78,23 +77,19 @@ func TestFutureArtifactVersionErrorsIdentifyDependencyKind(t *testing.T) {
 	t.Parallel()
 
 	t.Run("manifest", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		_, err := decodeManifestWithLimits(
 			[]byte(`{"origin":"contract-a1b2c3","v":5}`),
 			productionArtifactLimits(),
 		)
-		require.ErrorIs(err, errFutureArtifactVersion)
+		require.ErrorIs(t, err, errFutureArtifactVersion)
 		var future *futureArtifactVersionError
-		require.ErrorAs(err, &future)
-		assert.Equal(Kind(KindManifests), future.Kind)
-		assert.Equal(5, future.Version)
+		require.ErrorAs(t, err, &future)
+		assert.Equal(t, Kind(KindManifests), future.Kind)
+		assert.Equal(t, 5, future.Version)
 	})
 
 	t.Run("segment", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
+		t.Parallel()
 
 		_, err := decodeSegmentWithLimits(
 			[]byte(fmt.Sprintf(
@@ -103,18 +98,15 @@ func TestFutureArtifactVersionErrorsIdentifyDependencyKind(t *testing.T) {
 			)),
 			productionArtifactLimits(),
 		)
-		require.ErrorIs(err, errFutureArtifactVersion)
+		require.ErrorIs(t, err, errFutureArtifactVersion)
 		var future *futureArtifactVersionError
-		require.ErrorAs(err, &future)
-		assert.Equal(Kind(KindSegments), future.Kind)
-		assert.Equal(messageSegmentFormatVersion+1, future.Version)
+		require.ErrorAs(t, err, &future)
+		assert.Equal(t, Kind(KindSegments), future.Kind)
+		assert.Equal(t, messageSegmentFormatVersion+1, future.Version)
 	})
 }
 
 func TestFutureSegmentVersionPrecedesCurrentRecordLimit(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	var body strings.Builder
@@ -128,11 +120,11 @@ func TestFutureSegmentVersionPrecedesCurrentRecordLimit(t *testing.T) {
 	_, err := decodeSegmentWithLimits(
 		[]byte(body.String()), productionArtifactLimits(),
 	)
-	require.ErrorIs(err, errFutureArtifactVersion)
+	require.ErrorIs(t, err, errFutureArtifactVersion)
 	var future *futureArtifactVersionError
-	require.ErrorAs(err, &future)
-	assert.Equal(Kind(KindSegments), future.Kind)
-	assert.Equal(messageSegmentFormatVersion+1, future.Version)
+	require.ErrorAs(t, err, &future)
+	assert.Equal(t, Kind(KindSegments), future.Kind)
+	assert.Equal(t, messageSegmentFormatVersion+1, future.Version)
 }
 
 func TestCurrentSegmentRecordLimitPrecedesLaterRecordDecode(t *testing.T) {
@@ -154,27 +146,23 @@ func TestImportCollectionBoundaries(t *testing.T) {
 	t.Parallel()
 
 	t.Run("manifest usage events", func(t *testing.T) {
-		require := require.New(t)
-
 		limits := productionArtifactLimits()
 		limits.manifestUsageEvents = 2
 		m := importTestManifest("session")
 		m.UsageEvents = make([]artifactUsageEvent, 2)
 		body, err := canonicalJSON(m)
-		require.NoError(err)
+		require.NoError(t, err)
 		_, err = decodeManifestWithLimits(body, limits)
-		require.NoError(err)
+		require.NoError(t, err)
 
 		m.UsageEvents = append(m.UsageEvents, artifactUsageEvent{})
 		body, err = canonicalJSON(m)
-		require.NoError(err)
+		require.NoError(t, err)
 		_, err = decodeManifestWithLimits(body, limits)
-		require.Error(err)
+		require.Error(t, err)
 	})
 
 	t.Run("manifest segments", func(t *testing.T) {
-		require := require.New(t)
-
 		limits := productionArtifactLimits()
 		limits.manifestSegments = 2
 		m := importTestManifest("session")
@@ -183,20 +171,18 @@ func TestImportCollectionBoundaries(t *testing.T) {
 			strings.Repeat("b", 64),
 		}
 		body, err := canonicalJSON(m)
-		require.NoError(err)
+		require.NoError(t, err)
 		_, err = decodeManifestWithLimits(body, limits)
-		require.NoError(err)
+		require.NoError(t, err)
 
 		m.Segments = append(m.Segments, strings.Repeat("c", 64))
 		body, err = canonicalJSON(m)
-		require.NoError(err)
+		require.NoError(t, err)
 		_, err = decodeManifestWithLimits(body, limits)
-		require.Error(err)
+		require.Error(t, err)
 	})
 
 	t.Run("segment messages", func(t *testing.T) {
-		require := require.New(t)
-
 		limits := productionArtifactLimits()
 		limits.segmentMessages = 2
 		messages := []db.Message{
@@ -204,15 +190,15 @@ func TestImportCollectionBoundaries(t *testing.T) {
 			{Ordinal: 1, Role: "assistant"},
 		}
 		body, err := encodeSegment(messages)
-		require.NoError(err)
+		require.NoError(t, err)
 		_, err = decodeSegmentWithLimits(body, limits)
-		require.NoError(err)
+		require.NoError(t, err)
 
 		messages = append(messages, db.Message{Ordinal: 2, Role: "user"})
 		body, err = encodeSegment(messages)
-		require.NoError(err)
+		require.NoError(t, err)
 		_, err = decodeSegmentWithLimits(body, limits)
-		require.Error(err)
+		require.Error(t, err)
 	})
 
 	tests := []struct {
@@ -251,19 +237,17 @@ func TestImportCollectionBoundaries(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			require := require.New(t)
-
 			limits := productionArtifactLimits()
 			tc.configure(&limits)
 			body, err := encodeSegment([]db.Message{tc.message(2)})
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = decodeSegmentWithLimits(body, limits)
-			require.NoError(err)
+			require.NoError(t, err)
 
 			body, err = encodeSegment([]db.Message{tc.message(3)})
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = decodeSegmentWithLimits(body, limits)
-			require.Error(err)
+			require.Error(t, err)
 		})
 	}
 
@@ -309,19 +293,19 @@ func TestImportCollectionBoundaries(t *testing.T) {
 	}
 	for _, tc := range aggregateTests {
 		t.Run(tc.name, func(t *testing.T) {
-			require := require.New(t)
+			t.Parallel()
 
 			limits := productionArtifactLimits()
 			tc.configure(&limits)
 			body, err := encodeSegment(tc.message(2))
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = decodeSegmentWithLimits(body, limits)
-			require.NoError(err)
+			require.NoError(t, err)
 
 			body, err = encodeSegment(tc.message(3))
-			require.NoError(err)
+			require.NoError(t, err)
 			_, err = decodeSegmentWithLimits(body, limits)
-			require.Error(err)
+			require.Error(t, err)
 		})
 	}
 }
@@ -365,6 +349,7 @@ func TestDecodeImportCheckpointAcceptsSemanticCurrentJSON(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := decodeImportCheckpoint(
 				[]byte(tc.body), contractOrigin, "cp-0000000007.json",
 			)
@@ -375,9 +360,6 @@ func TestDecodeImportCheckpointAcceptsSemanticCurrentJSON(t *testing.T) {
 }
 
 func TestDecodeImportCheckpointStreamsBoundedSessionPages(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	const sessionCount = 300
@@ -396,8 +378,8 @@ func TestDecodeImportCheckpointStreamsBoundedSessionPages(t *testing.T) {
 	header, sessions, err := decodeImportCheckpointHeader(
 		[]byte(body.String()), contractOrigin, "cp-0000000007.json",
 	)
-	require.NoError(err)
-	assert.Equal(7, header.Sequence)
+	require.NoError(t, err)
+	assert.Equal(t, 7, header.Sequence)
 	var pageSizes []int
 	count, err := streamImportCheckpointSessions(
 		sessions, contractOrigin, 128,
@@ -406,15 +388,12 @@ func TestDecodeImportCheckpointStreamsBoundedSessionPages(t *testing.T) {
 			return nil
 		},
 	)
-	require.NoError(err)
-	assert.Equal(sessionCount, count)
-	assert.Equal([]int{128, 128, 44}, pageSizes)
+	require.NoError(t, err)
+	assert.Equal(t, sessionCount, count)
+	assert.Equal(t, []int{128, 128, 44}, pageSizes)
 }
 
 func TestDecodeImportCheckpointDefersSessionValidationToPages(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	var body strings.Builder
@@ -434,13 +413,13 @@ func TestDecodeImportCheckpointDefersSessionValidationToPages(t *testing.T) {
 	_, sessions, err := decodeImportCheckpointHeader(
 		[]byte(body.String()), contractOrigin, "cp-0000000007.json",
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	page, _, done, err := decodeImportCheckpointSessionPage(
 		sessions, contractOrigin, 0, 128,
 	)
-	require.NoError(err)
-	assert.Len(page, 128)
-	assert.False(done)
+	require.NoError(t, err)
+	assert.Len(t, page, 128)
+	assert.False(t, done)
 }
 
 func TestDecodeImportCheckpointRejectsInvalidCurrentJSON(t *testing.T) {
@@ -511,6 +490,7 @@ func TestDecodeImportCheckpointRejectsInvalidCurrentJSON(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			_, err := decodeImportCheckpoint(
 				[]byte(tc.body), contractOrigin, tc.file,
 			)
@@ -521,9 +501,6 @@ func TestDecodeImportCheckpointRejectsInvalidCurrentJSON(t *testing.T) {
 }
 
 func TestDecodeImportCheckpointBoundsTopLevelFieldState(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	t.Parallel()
 
 	var body strings.Builder
@@ -538,15 +515,15 @@ func TestDecodeImportCheckpointBoundsTopLevelFieldState(t *testing.T) {
 	data := []byte(body.String())
 
 	fields, version, future, err := decodeImportCheckpointFields(data)
-	require.NoError(err)
-	assert.Empty(fields)
-	assert.Equal(2, version)
-	assert.True(future)
+	require.NoError(t, err)
+	assert.Empty(t, fields)
+	assert.Equal(t, 2, version)
+	assert.True(t, future)
 
 	_, err = decodeImportCheckpoint(
 		data, contractOrigin, "cp-0000000007.json",
 	)
-	require.ErrorIs(err, errFutureArtifactVersion)
+	require.ErrorIs(t, err, errFutureArtifactVersion)
 }
 
 func TestDecodeImportCheckpointRejectsCurrentExtraFieldBeforeItsValue(
@@ -583,17 +560,16 @@ func TestDecodeImportCheckpointDefersExtensibleFutureJSON(t *testing.T) {
 	}
 	for _, body := range tests {
 		t.Run(body, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
+			t.Parallel()
 
 			_, err := decodeImportCheckpoint(
 				[]byte(body), contractOrigin, "cp-0000000007.json",
 			)
-			require.ErrorIs(err, errFutureArtifactVersion)
+			require.ErrorIs(t, err, errFutureArtifactVersion)
 			var future *futureArtifactVersionError
-			require.ErrorAs(err, &future)
-			assert.Equal(Kind(KindCheckpoints), future.Kind)
-			assert.Greater(future.Version, checkpointFormatVersion)
+			require.ErrorAs(t, err, &future)
+			assert.Equal(t, Kind(KindCheckpoints), future.Kind)
+			assert.Greater(t, future.Version, checkpointFormatVersion)
 		})
 	}
 }

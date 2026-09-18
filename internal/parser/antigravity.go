@@ -1,8 +1,7 @@
 package parser
 
-import "context"
-
 import (
+	"context"
 	"database/sql"
 	"encoding/binary"
 	"fmt"
@@ -484,9 +483,11 @@ func loadAntigravityGenerationMetadata(ctx context.Context,
 		}
 		generation.stepIndices,
 			generation.hasStepIndices,
-			generation.stepIndicesValid =
-			extractAntigravityStepIndices(generation.data)
+			generation.stepIndicesValid = extractAntigravityStepIndices(generation.data)
 		generations = append(generations, generation)
+	}
+	if rows.Err() != nil {
+		return nil
 	}
 	return generations
 }
@@ -510,6 +511,9 @@ func loadAntigravityExecutorMetadata(ctx context.Context,
 		if ok {
 			executors = append(executors, executor)
 		}
+	}
+	if rows.Err() != nil {
+		return nil
 	}
 	sort.SliceStable(executors, func(i, j int) bool {
 		return executors[i].lastStepIndex < executors[j].lastStepIndex
@@ -939,8 +943,7 @@ func extractModelNameFromFields(
 func resolveAntigravityGenerationModel(
 	data []byte, executorModel string,
 ) string {
-	generationModel, hasDisplayLabel :=
-		extractAntigravityGenerationModel(data)
+	generationModel, hasDisplayLabel := extractAntigravityGenerationModel(data)
 	return resolveAntigravityModelName(
 		generationModel, executorModel, hasDisplayLabel,
 	)

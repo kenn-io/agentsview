@@ -164,9 +164,6 @@ func TestFallbackPricing_IncludesSupplementals(t *testing.T) {
 // TestFallbackPricing_AliasTargetsResolvable proves every canonical model
 // runtime aliases map onto exists in the fallback set.
 func TestFallbackPricing_AliasTargetsResolvable(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	byPattern := make(map[string]ModelPricing)
 	for _, p := range requireEmbeddedFallbackPricing(t) {
 		byPattern[p.ModelPattern] = p
@@ -181,18 +178,18 @@ func TestFallbackPricing_AliasTargetsResolvable(t *testing.T) {
 		GPT6AstraCanonical,
 	} {
 		_, ok := byPattern[model]
-		require.True(ok,
+		require.True(t, ok,
 			"alias target %q missing from FallbackPricing", model)
 	}
 
 	astra := byPattern[GPT6AstraCanonical]
-	assert.Equal(money.MustParseDollars("11"), astra.InputPerMTok)
-	assert.Equal(money.MustParseDollars("55"), astra.OutputPerMTok)
-	assert.Equal(money.MustParseDollars("13.75"),
+	assert.Equal(t, money.MustParseDollars("11"), astra.InputPerMTok)
+	assert.Equal(t, money.MustParseDollars("55"), astra.OutputPerMTok)
+	assert.Equal(t, money.MustParseDollars("13.75"),
 		astra.CacheCreationPerMTok)
-	assert.Equal(money.MustParseDollars("1.1"), astra.CacheReadPerMTok)
-	require.Len(astra.Bands, 1)
-	assert.Equal(PricingBand{
+	assert.Equal(t, money.MustParseDollars("1.1"), astra.CacheReadPerMTok)
+	require.Len(t, astra.Bands, 1)
+	assert.Equal(t, PricingBand{
 		AboveInputTokens:     272_000,
 		InputPerMTok:         money.MustParseDollars("22"),
 		OutputPerMTok:        money.MustParseDollars("82.5"),
@@ -226,8 +223,7 @@ func TestFallbackPricing_SupplementalsDoNotCollideWithSnapshot(t *testing.T) {
 func TestSeedVersion_FoldsInSupplementalVersion(t *testing.T) {
 	snapshot := requireEmbeddedFallbackSnapshot(t)
 	assert.Equal(t, snapshot.Version, FallbackVersion)
-	assert.True(t,
-		strings.HasPrefix(SeedVersion, FallbackVersion+"+supplemental-"),
+	assert.True(t, strings.HasPrefix(SeedVersion, FallbackVersion+"+supplemental-"),
 		"SeedVersion %q must be FallbackVersion plus a supplemental suffix",
 		SeedVersion)
 	assert.NotEqual(t, FallbackVersion, SeedVersion,
@@ -243,11 +239,8 @@ func TestFixedPricingAliasesReturnsCopy(t *testing.T) {
 }
 
 func TestSupplementalPricing_ReturnsCopy(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	first := SupplementalPricing()
-	require.NotEmpty(first)
+	require.NotEmpty(t, first)
 	var astra *ModelPricing
 	for i := range first {
 		if first[i].ModelPattern == GPT6AstraCanonical {
@@ -255,8 +248,8 @@ func TestSupplementalPricing_ReturnsCopy(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(astra)
-	require.NotEmpty(astra.Bands)
+	require.NotNil(t, astra)
+	require.NotEmpty(t, astra.Bands)
 	astra.InputPerMTok = money.Money{Microdollars: -1}
 	astra.Bands[0].AboveInputTokens = 1
 
@@ -268,11 +261,11 @@ func TestSupplementalPricing_ReturnsCopy(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(secondAstra)
-	assert.NotEqual(money.Money{Microdollars: -1},
+	require.NotNil(t, secondAstra)
+	assert.NotEqual(t, money.Money{Microdollars: -1},
 		secondAstra.InputPerMTok,
 		"SupplementalPricing must return an independent copy")
-	assert.NotEqual(1,
+	assert.NotEqual(t, 1,
 		secondAstra.Bands[0].AboveInputTokens,
 		"SupplementalPricing bands must be independently copied")
 }

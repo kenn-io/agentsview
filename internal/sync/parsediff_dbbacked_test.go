@@ -94,14 +94,14 @@ func (w *warpTestDB) addConversation(
 
 func createWindsurfWorkspaceDB(t *testing.T, root, payload string) string {
 	t.Helper()
+
 	workspaceDir := filepath.Join(root, "workspaceStorage", "workspace-hash")
 	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
-	require.NoError(t,
-		os.WriteFile(
-			filepath.Join(workspaceDir, "workspace.json"),
-			[]byte(`{"folder":"file:///work/demo"}`),
-			0o644,
-		),
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workspaceDir, "workspace.json"),
+		[]byte(`{"folder":"file:///work/demo"}`),
+		0o644,
+	),
 	)
 	dbPath := filepath.Join(workspaceDir, "state.vscdb")
 	conn, err := sql.Open("sqlite3", dbPath)
@@ -120,6 +120,7 @@ func createWindsurfWorkspaceDB(t *testing.T, root, payload string) string {
 
 func createTraeStateDB(t *testing.T, root string, sessions []any) string {
 	t.Helper()
+
 	storageDir := filepath.Join(root, "globalStorage")
 	require.NoError(t, os.MkdirAll(storageDir, 0o755))
 	dbPath := filepath.Join(storageDir, "state.vscdb")
@@ -220,8 +221,6 @@ func TestParseDiffCoversWarp(t *testing.T) {
 // the change (the virtual DB source is held out of the guard, so it keeps its
 // real changed verdict).
 func TestParseDiffForgeDetectsStoredDrift(t *testing.T) {
-	assert := assert.New(t)
-
 	env := setupSingleAgentTestEnv(t, parser.AgentForge)
 	forge := createForgeDB(t, env.forgeDir)
 	forge.addConversation(
@@ -241,17 +240,17 @@ func TestParseDiffForgeDetectsStoredDrift(t *testing.T) {
 	report := runParseDiff(t, env, sync.ParseDiffOptions{
 		Agents: []parser.AgentType{parser.AgentForge},
 	})
-	assert.Equal(sync.ParseDiffTotals{Examined: 1, Changed: 1},
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 1, Changed: 1},
 		report.Totals, "forge drift must be detected as changed")
 
 	sd := findSessionDiff(report, "forge:forge-drift-1")
 	require.NotNil(t, sd, "drifted forge session must be listed")
-	assert.Equal(sync.DiffChanged, sd.Class, "class")
-	assert.ElementsMatch([]string{sync.FieldFirstMessage},
+	assert.Equal(t, sync.DiffChanged, sd.Class, "class")
+	assert.ElementsMatch(t, []string{sync.FieldFirstMessage},
 		sessionDiffFieldNames(sd, false), "non-informational fields")
-	assert.Equal(1, report.FieldCounts[sync.FieldFirstMessage],
+	assert.Equal(t, 1, report.FieldCounts[sync.FieldFirstMessage],
 		"FieldCounts[first_message]")
-	assert.True(report.HasFailures(), "drift must trip --fail-on-change")
+	assert.True(t, report.HasFailures(), "drift must trip --fail-on-change")
 }
 
 // TestParseDiffDBBackedLimitScopesPerSession is the per-session-keying acid
@@ -263,8 +262,6 @@ func TestParseDiffForgeDetectsStoredDrift(t *testing.T) {
 // "database-backed agent" (which the pre-relaxation sweep would produce for a
 // FileBased=false agent). Totals.Changed must stay 0.
 func TestParseDiffDBBackedLimitScopesPerSession(t *testing.T) {
-	assert := assert.New(t)
-
 	env := setupSingleAgentTestEnv(t, parser.AgentForge)
 	forge := createForgeDB(t, env.forgeDir)
 	forge.addConversation(
@@ -286,14 +283,14 @@ func TestParseDiffDBBackedLimitScopesPerSession(t *testing.T) {
 		Limit:  1,
 	})
 
-	assert.True(report.FilesLimited, "files limited")
-	assert.Equal(sync.ParseDiffTotals{
+	assert.True(t, report.FilesLimited, "files limited")
+	assert.Equal(t, sync.ParseDiffTotals{
 		Examined: 1, Identical: 1, Skipped: 1,
 	}, report.Totals, "one conversation sampled, one cut")
 	// The cut conversation must never be counted as parser drift.
-	assert.Zero(report.Totals.Changed,
+	assert.Zero(t, report.Totals.Changed,
 		"cut sibling conversation must not become a presence change")
-	assert.Empty(report.FieldCounts,
+	assert.Empty(t, report.FieldCounts,
 		"no field drift from an unsampled sibling")
 
 	// Exactly one session is listed: the cut one, as a not-sampled skip.
@@ -304,7 +301,7 @@ func TestParseDiffDBBackedLimitScopesPerSession(t *testing.T) {
 		}
 	}
 	require.Len(t, skipped, 1, "exactly one skipped session listed")
-	assert.Contains(skipped[0].Reason, "limit",
+	assert.Contains(t, skipped[0].Reason, "limit",
 		"cut DB-backed session must read as not-sampled, "+
 			"not 'database-backed agent'")
 }
@@ -319,8 +316,6 @@ func TestParseDiffDBBackedLimitScopesPerSession(t *testing.T) {
 // and the newer forge-b is dropped -- so this asserted skip would be
 // "forge:forge-b" and the test would fail.
 func TestParseDiffDBBackedLimitOrdersByPerSessionMtime(t *testing.T) {
-	assert := assert.New(t)
-
 	env := setupSingleAgentTestEnv(t, parser.AgentForge)
 	forge := createForgeDB(t, env.forgeDir)
 	// forge-a: sorts first by path, older updated_at.
@@ -344,8 +339,8 @@ func TestParseDiffDBBackedLimitOrdersByPerSessionMtime(t *testing.T) {
 		Limit:  1,
 	})
 
-	assert.True(report.FilesLimited, "files limited")
-	assert.Equal(sync.ParseDiffTotals{
+	assert.True(t, report.FilesLimited, "files limited")
+	assert.Equal(t, sync.ParseDiffTotals{
 		Examined: 1, Identical: 1, Skipped: 1,
 	}, report.Totals, "the newer conversation is sampled, the older cut")
 
@@ -359,15 +354,13 @@ func TestParseDiffDBBackedLimitOrdersByPerSessionMtime(t *testing.T) {
 		}
 	}
 	require.Len(t, skipped, 1, "exactly one skipped session listed")
-	assert.Equal("forge:forge-a", skipped[0].SessionID,
+	assert.Equal(t, "forge:forge-a", skipped[0].SessionID,
 		"the older conversation must be the one cut by --limit")
-	assert.Contains(skipped[0].Reason, "limit",
+	assert.Contains(t, skipped[0].Reason, "limit",
 		"cut session reads as not-sampled")
 }
 
 func TestParseDiffWindsurfLimitScopesPerSession(t *testing.T) {
-	assert := assert.New(t)
-
 	env := setupSingleAgentTestEnv(t, parser.AgentWindsurf)
 	createWindsurfWorkspaceDB(t, env.windsurfDir, `{
 		"tabs": [
@@ -396,13 +389,13 @@ func TestParseDiffWindsurfLimitScopesPerSession(t *testing.T) {
 		Limit:  1,
 	})
 
-	assert.True(report.FilesLimited, "files limited")
-	assert.Equal(sync.ParseDiffTotals{
+	assert.True(t, report.FilesLimited, "files limited")
+	assert.Equal(t, sync.ParseDiffTotals{
 		Examined: 1, Identical: 1, Skipped: 1,
 	}, report.Totals, "one Windsurf tab sampled, one cut")
-	assert.Zero(report.Totals.Changed,
+	assert.Zero(t, report.Totals.Changed,
 		"cut Windsurf sibling must not become a presence change")
-	assert.Empty(report.FieldCounts,
+	assert.Empty(t, report.FieldCounts,
 		"no field drift from an unsampled Windsurf sibling")
 
 	var skipped []sync.SessionDiff
@@ -412,14 +405,11 @@ func TestParseDiffWindsurfLimitScopesPerSession(t *testing.T) {
 		}
 	}
 	require.Len(t, skipped, 1, "exactly one skipped Windsurf session listed")
-	assert.Contains(skipped[0].Reason, "limit",
+	assert.Contains(t, skipped[0].Reason, "limit",
 		"cut Windsurf session reads as not-sampled")
 }
 
 func TestParseDiffTraePartialRemovalUsesContainerPresenceSweep(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	env := setupSingleAgentTestEnv(t, parser.AgentTrae)
 	dbPath := createTraeStateDB(t, env.traeDir, []any{
 		traeParseDiffSession("trae-a", "Answer A."),
@@ -428,31 +418,31 @@ func TestParseDiffTraePartialRemovalUsesContainerPresenceSweep(t *testing.T) {
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1, Synced: 2})
 
 	conn, err := sql.Open("sqlite3", dbPath)
-	require.NoError(err)
+	require.NoError(t, err)
 	defer conn.Close()
 	value, err := json.Marshal(map[string]any{
 		"list": []any{traeParseDiffSession("trae-a", "Answer A.")},
 	})
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(),
 		`UPDATE ItemTable SET value = ? WHERE key = ?`,
 		string(value), "memento/icube-ai-agent-storage",
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 
 	report := runParseDiff(t, env, sync.ParseDiffOptions{
 		Agents: []parser.AgentType{parser.AgentTrae},
 	})
 
-	assert.Equal(1, report.FilesExamined, "Trae parses one container source")
-	assert.Equal(sync.ParseDiffTotals{
+	assert.Equal(t, 1, report.FilesExamined, "Trae parses one container source")
+	assert.Equal(t, sync.ParseDiffTotals{
 		Examined: 2, Identical: 1, Changed: 1,
 	}, report.Totals)
 	sd := findSessionDiff(report, "trae:trae-b")
-	require.NotNil(sd, "removed Trae sibling must be listed")
-	assert.Equal(sync.DiffChanged, sd.Class)
-	assert.ElementsMatch([]string{sync.FieldPresence},
+	require.NotNil(t, sd, "removed Trae sibling must be listed")
+	assert.Equal(t, sync.DiffChanged, sd.Class)
+	assert.ElementsMatch(t, []string{sync.FieldPresence},
 		sessionDiffFieldNames(sd, false))
-	assert.True(report.HasFailures(),
+	assert.True(t, report.HasFailures(),
 		"partial Trae removal must trip --fail-on-change")
 }

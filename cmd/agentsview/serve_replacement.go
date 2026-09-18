@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -36,7 +37,7 @@ type serveReplacementDecision struct {
 
 var foregroundServeLaunchLocks sync.Map
 
-func prepareForegroundServeDaemon(
+func prepareForegroundServeDaemon(ctx context.Context,
 	cfg *config.Config, opts serveReplacementOptions,
 ) (bool, func(), error) {
 	noRelease := func() {}
@@ -67,7 +68,7 @@ func prepareForegroundServeDaemon(
 		}
 		return false, noRelease, nil
 	case serveReplacementAuto, serveReplacementExplicit:
-		if err := checkForegroundReplacementDataVersion(
+		if err := checkForegroundReplacementDataVersion(ctx,
 			*cfg, decision,
 		); err != nil {
 			return false, noRelease, err
@@ -91,7 +92,7 @@ func prepareForegroundServeDaemon(
 		if !opts.NoSyncExplicit {
 			adoptDaemonRuntimeLaunchOptions(cfg, decision.Runtime)
 		}
-		if err := stopDaemonRuntimeForUpgrade(*cfg, decision.Runtime); err != nil {
+		if err := stopDaemonRuntimeForUpgrade(ctx, *cfg, decision.Runtime); err != nil {
 			if acquiredStartLock {
 				UnmarkDaemonStarting(cfg.DataDir)
 			}
@@ -134,7 +135,7 @@ func ownsForegroundServeLaunchLock(dataDir string) bool {
 	return ok
 }
 
-func checkForegroundReplacementDataVersion(
+func checkForegroundReplacementDataVersion(ctx context.Context,
 	cfg config.Config, decision serveReplacementDecision,
 ) error {
 	if cfg.DBPath == "" {
@@ -145,7 +146,7 @@ func checkForegroundReplacementDataVersion(
 	default:
 		return nil
 	}
-	return db.CheckDataVersion(cfg.DBPath)
+	return db.CheckDataVersion(ctx, cfg.DBPath)
 }
 
 func decideServeDaemonReplacement(

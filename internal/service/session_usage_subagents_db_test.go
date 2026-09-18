@@ -109,9 +109,6 @@ func usageMessage(
 func TestSessionUsageWithRequiredSubagentsRequiresPerSessionContextCoverage(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := dbtest.OpenTestDB(t)
 	ctx := t.Context()
 	parent := subagentParentID
@@ -143,89 +140,83 @@ func TestSessionUsageWithRequiredSubagentsRequiresPerSessionContextCoverage(
 
 	got, _, err := service.SessionUsageWithRequiredSubagents(
 		ctx, d, subagentParentID, []string{subagentChildAID}, true)
-	require.NoError(err)
-	require.NotNil(got)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 
 	_, complete, err := service.SessionUsageTokenTotals(ctx, got)
-	require.NoError(err)
-	assert.False(complete,
+	require.NoError(t, err)
+	assert.False(t, complete,
 		"the parent's context must not cover the child's missing context categories")
-	assert.False(got.HasCost,
+	assert.False(t, got.HasCost,
 		"computed cost must not omit the child's uncovered context categories")
-	assert.Zero(got.Cost)
-	assert.Nil(got.CostUSD)
+	assert.Zero(t, got.Cost)
+	assert.Nil(t, got.CostUSD)
 }
 
 func TestSessionUsageWithSubagentsOverSQLiteCombinesAndDedupes(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := dbtest.OpenTestDB(t)
 	ctx := t.Context()
 	seedSubagentUsageFixture(t, d)
 
 	own, err := d.GetSessionUsage(ctx, subagentParentID, true)
-	require.NoError(err)
-	require.NotNil(own)
-	require.Equal(money.MustParseDollars(subagentParentCost), own.Cost,
+	require.NoError(t, err)
+	require.NotNil(t, own)
+	require.Equal(t, money.MustParseDollars(subagentParentCost), own.Cost,
 		"the own-session path must keep reporting only the parent's rows")
-	require.Equal(500, own.TotalOutputTokens)
-	require.Zero(own.SubagentCount)
+	require.Equal(t, 500, own.TotalOutputTokens)
+	require.Zero(t, own.SubagentCount)
 
 	got, err := service.SessionUsageWithSubagents(
 		ctx, d, subagentParentID, true)
-	require.NoError(err)
-	require.NotNil(got)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 
-	assert.Equal(subagentParentID, got.SessionID)
-	assert.Equal(2, got.SubagentCount)
-	assert.True(got.HasCost)
-	assert.Equal(money.MustParseDollars(subagentTotalCost), got.Cost,
+	assert.Equal(t, subagentParentID, got.SessionID)
+	assert.Equal(t, 2, got.SubagentCount)
+	assert.True(t, got.HasCost)
+	assert.Equal(t, money.MustParseDollars(subagentTotalCost), got.Cost,
 		"the shared row must be counted once, not once per transcript")
-	assert.Equal(3, got.BreakdownCount)
+	assert.Equal(t, 3, got.BreakdownCount)
 
 	// The echoed row must be deduplicated out of every figure in the
 	// document, not just cost. Summing the stored per-transcript
 	// aggregates (500 + 1500 + 100) would report it twice.
-	assert.Equal(subagentTotalOutput, got.TotalOutputTokens,
+	assert.Equal(t, subagentTotalOutput, got.TotalOutputTokens,
 		"output tokens must be deduplicated like cost is")
-	assert.NotEqual(subagentNaiveOutput, got.TotalOutputTokens,
+	assert.NotEqual(t, subagentNaiveOutput, got.TotalOutputTokens,
 		"the stored per-session aggregates must not be summed naively")
-	assert.True(got.HasTokenData)
+	assert.True(t, got.HasTokenData)
 
-	require.Len(got.Breakdown, 3)
-	assert.Equal([]string{subagentChildAID, subagentChildAID, subagentChildBID},
+	require.Len(t, got.Breakdown, 3)
+	assert.Equal(t, []string{subagentChildAID, subagentChildAID, subagentChildBID},
 		[]string{
 			got.Breakdown[0].SubagentSessionID,
 			got.Breakdown[1].SubagentSessionID,
 			got.Breakdown[2].SubagentSessionID,
 		}, "rows are ordered by timestamp and tagged with their session")
-	assert.Equal([]int{1, 2, 3}, []int{
+	assert.Equal(t, []int{1, 2, 3}, []int{
 		got.Breakdown[0].Ordinal,
 		got.Breakdown[1].Ordinal,
 		got.Breakdown[2].Ordinal,
 	})
-	assert.Equal("message", got.Breakdown[1].Source)
-	assert.Equal(money.MustParseDollars(subagentChildACost),
+	assert.Equal(t, "message", got.Breakdown[1].Source)
+	assert.Equal(t, money.MustParseDollars(subagentChildACost),
 		got.Breakdown[0].Cost)
-	assert.Equal(money.MustParseDollars(subagentParentCost),
+	assert.Equal(t, money.MustParseDollars(subagentParentCost),
 		got.Breakdown[1].Cost)
-	assert.Equal(money.MustParseDollars(subagentChildBCost),
+	assert.Equal(t, money.MustParseDollars(subagentChildBCost),
 		got.Breakdown[2].Cost)
-	assert.Equal(2000, got.Breakdown[0].InputTokens)
-	assert.Equal(1000, got.Breakdown[0].OutputTokens)
+	assert.Equal(t, 2000, got.Breakdown[0].InputTokens)
+	assert.Equal(t, 1000, got.Breakdown[0].OutputTokens)
 }
 
 func TestSessionUsageWithSubagentsDoesNotRestoreDedupedOnlyChildTokens(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := dbtest.OpenTestDB(t)
 	ctx := t.Context()
 
-	require.NoError(d.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
 		InputPerMTok:  money.MustParseDollars("2.0"),
 		OutputPerMTok: money.MustParseDollars("10.0"),
@@ -242,26 +233,23 @@ func TestSessionUsageWithSubagentsDoesNotRestoreDedupedOnlyChildTokens(
 	)
 
 	got, err := service.SessionUsageWithSubagents(ctx, d, parentID, true)
-	require.NoError(err)
-	require.NotNil(got)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 
-	assert.Equal(1, got.SubagentCount)
-	assert.Equal(1, got.BreakdownCount)
-	assert.Equal(500, got.TotalOutputTokens,
+	assert.Equal(t, 1, got.SubagentCount)
+	assert.Equal(t, 1, got.BreakdownCount)
+	assert.Equal(t, 500, got.TotalOutputTokens,
 		"a child whose only usage row was deduplicated must contribute zero")
-	assert.True(got.HasCost,
+	assert.True(t, got.HasCost,
 		"a contributing deduplicated row still covers the child's token data")
 }
 
 func TestSessionUsageWithSubagentsPreservesOutputOnlyTokensAcrossSnapshots(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := dbtest.OpenTestDB(t)
 	ctx := t.Context()
-	require.NoError(d.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
 		InputPerMTok:  money.MustParseDollars("2.0"),
 		OutputPerMTok: money.MustParseDollars("10.0"),
@@ -284,29 +272,26 @@ func TestSessionUsageWithSubagentsPreservesOutputOnlyTokensAcrossSnapshots(
 	)
 
 	got, err := service.SessionUsageWithSubagents(ctx, d, parentID, true)
-	require.NoError(err)
-	require.NotNil(got)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 
-	assert.Equal(731, got.TotalOutputTokens,
+	assert.Equal(t, 731, got.TotalOutputTokens,
 		"the complete snapshot and parent's output-only tokens both count")
-	assert.False(got.HasCost,
+	assert.False(t, got.HasCost,
 		"the output-only residual has no usage row with complete cost coverage")
-	assert.Zero(got.Cost)
-	require.Len(got.Breakdown, 1)
-	assert.Equal(631, got.Breakdown[0].OutputTokens)
-	assert.Equal(childID, got.Breakdown[0].SubagentSessionID,
+	assert.Zero(t, got.Cost)
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, 631, got.Breakdown[0].OutputTokens)
+	assert.Equal(t, childID, got.Breakdown[0].SubagentSessionID,
 		"the breakdown identifies the transcript that supplied the snapshot")
 }
 
 func TestSessionUsageRollupRecognizesChildSourcedAttributedSnapshot(
 	t *testing.T,
 ) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := dbtest.OpenTestDB(t)
 	ctx := t.Context()
-	require.NoError(d.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
 		InputPerMTok:  money.MustParseDollars("2.0"),
 		OutputPerMTok: money.MustParseDollars("10.0"),
@@ -323,22 +308,19 @@ func TestSessionUsageRollupRecognizesChildSourcedAttributedSnapshot(
 	)
 
 	got, err := service.GetSessionUsageRollup(ctx, d, parentID, false)
-	require.NoError(err)
-	require.NotNil(got)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 
-	assert.True(got.HasCost,
+	assert.True(t, got.HasCost,
 		"a surviving row sourced from the child makes the rollup billable")
-	assert.Equal(money.MustParseDollars("0.00831"), got.Cost)
+	assert.Equal(t, money.MustParseDollars("0.00831"), got.Cost)
 }
 
 func TestSessionUsageWithSubagentsPreservesOutputWithoutUsageRows(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := dbtest.OpenTestDB(t)
 	ctx := t.Context()
 
-	require.NoError(d.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
 		InputPerMTok:  money.MustParseDollars("2.0"),
 		OutputPerMTok: money.MustParseDollars("10.0"),
@@ -355,24 +337,21 @@ func TestSessionUsageWithSubagentsPreservesOutputWithoutUsageRows(t *testing.T) 
 	)
 
 	got, err := service.SessionUsageWithSubagents(ctx, d, parentID, true)
-	require.NoError(err)
-	require.NotNil(got)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 
-	assert.Equal(1, got.BreakdownCount)
-	assert.Equal(700, got.TotalOutputTokens,
+	assert.Equal(t, 1, got.BreakdownCount)
+	assert.Equal(t, 700, got.TotalOutputTokens,
 		"a rowless subagent's stored output remains in the combined total")
-	assert.False(got.HasCost,
+	assert.False(t, got.HasCost,
 		"priced rows do not cover the rowless subagent's stored output")
 }
 
 func TestSessionUsageWithSubagentsMarksRowlessContextIncomplete(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := dbtest.OpenTestDB(t)
 	ctx := t.Context()
 
-	require.NoError(d.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
 		InputPerMTok:  money.MustParseDollars("2.0"),
 		OutputPerMTok: money.MustParseDollars("10.0"),
@@ -398,31 +377,28 @@ func TestSessionUsageWithSubagentsMarksRowlessContextIncomplete(t *testing.T) {
 
 	got, _, err := service.SessionUsageWithRequiredSubagents(
 		ctx, d, parentID, []string{childID}, true)
-	require.NoError(err)
-	require.NotNil(got)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 
-	assert.Equal(1, got.BreakdownCount)
-	assert.Equal(500, got.TotalOutputTokens)
-	assert.Equal(1_000, got.PeakContextTokens,
+	assert.Equal(t, 1, got.BreakdownCount)
+	assert.Equal(t, 500, got.TotalOutputTokens)
+	assert.Equal(t, 1_000, got.PeakContextTokens,
 		"the rowless subagent's context high-water mark remains visible")
-	assert.True(got.HasTokenData)
-	assert.False(got.HasCost,
+	assert.True(t, got.HasTokenData)
+	assert.False(t, got.HasCost,
 		"priced parent rows do not cover a rowless subagent's context tokens")
 	totals, complete, err := service.SessionUsageTokenTotals(ctx, got)
-	require.NoError(err)
-	assert.False(complete,
+	require.NoError(t, err)
+	assert.False(t, complete,
 		"parent rows do not prove the required subagent's input and cache usage")
-	assert.Equal(1_000, totals.InputTokens)
+	assert.Equal(t, 1_000, totals.InputTokens)
 }
 
 func TestSessionUsageWithSubagentsAllowsExplicitZeroValuedSubagent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := dbtest.OpenTestDB(t)
 	ctx := t.Context()
 
-	require.NoError(d.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
 		InputPerMTok:  money.MustParseDollars("2.0"),
 		OutputPerMTok: money.MustParseDollars("10.0"),
@@ -447,15 +423,15 @@ func TestSessionUsageWithSubagentsAllowsExplicitZeroValuedSubagent(t *testing.T)
 	)
 
 	got, err := service.SessionUsageWithSubagents(ctx, d, parentID, true)
-	require.NoError(err)
-	require.NotNil(got)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 
-	assert.Equal(1, got.SubagentCount)
-	assert.True(got.HasTokenData,
+	assert.Equal(t, 1, got.SubagentCount)
+	assert.True(t, got.HasTokenData,
 		"explicit zero-valued token metadata remains present")
-	assert.True(got.HasCost,
+	assert.True(t, got.HasCost,
 		"zero-valued child metadata does not make parent cost incomplete")
-	assert.Equal(money.MustParseDollars("0.007"), got.Cost)
+	assert.Equal(t, money.MustParseDollars("0.007"), got.Cost)
 }
 
 func TestSessionUsageWithSubagentsIgnoresZeroRowForContextCoverage(t *testing.T) {
@@ -468,12 +444,9 @@ func TestSessionUsageWithSubagentsIgnoresZeroRowForContextCoverage(t *testing.T)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			d := dbtest.OpenTestDB(t)
 			ctx := t.Context()
-			require.NoError(d.UpsertModelPricing([]db.ModelPricing{{
+			require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 				ModelPattern:  "test-opus",
 				InputPerMTok:  money.MustParseDollars("2.0"),
 				OutputPerMTok: money.MustParseDollars("10.0"),
@@ -501,26 +474,23 @@ func TestSessionUsageWithSubagentsIgnoresZeroRowForContextCoverage(t *testing.T)
 
 			got, err := service.SessionUsageWithSubagents(
 				ctx, d, parentID, true)
-			require.NoError(err)
-			require.NotNil(got)
+			require.NoError(t, err)
+			require.NotNil(t, got)
 
-			assert.Equal(1, got.BreakdownCount,
+			assert.Equal(t, 1, got.BreakdownCount,
 				"the zero-token row must not contribute a breakdown entry")
-			assert.Equal(2_000, got.PeakContextTokens)
-			assert.False(got.HasCost,
+			assert.Equal(t, 2_000, got.PeakContextTokens)
+			assert.False(t, got.HasCost,
 				"a zero-token row does not cover stored context tokens")
 		})
 	}
 }
 
 func TestSessionUsageWithSubagentsDeductsStreamingSnapshotsOnce(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := dbtest.OpenTestDB(t)
 	ctx := t.Context()
 
-	require.NoError(d.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
 		InputPerMTok:  money.MustParseDollars("2.0"),
 		OutputPerMTok: money.MustParseDollars("10.0"),
@@ -551,15 +521,15 @@ func TestSessionUsageWithSubagentsDeductsStreamingSnapshotsOnce(t *testing.T) {
 	)
 
 	own, err := d.GetSessionUsage(ctx, parentID, true)
-	require.NoError(err)
-	require.NotNil(own)
-	assert.Equal(700, own.TotalOutputTokens,
+	require.NoError(t, err)
+	require.NotNil(t, own)
+	assert.Equal(t, 700, own.TotalOutputTokens,
 		"the own-session query removes the partial snapshot once")
 
 	got, err := service.SessionUsageWithSubagents(ctx, d, parentID, true)
-	require.NoError(err)
-	require.NotNil(got)
-	assert.Equal(800, got.TotalOutputTokens,
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, 800, got.TotalOutputTokens,
 		"combined output keeps the complete snapshot, output-only tokens, "+
 			"and child output without deducting the partial snapshot twice")
 }
@@ -568,18 +538,15 @@ func TestSessionUsageWithSubagentsDeductsStreamingSnapshotsOnce(t *testing.T) {
 // queried directly still reports its own rows: the rollup is a parent-side
 // view, not a relabeling of the archive.
 func TestSessionUsageWithSubagentsIsQueriedFromTheChildToo(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := dbtest.OpenTestDB(t)
 	ctx := t.Context()
 	seedSubagentUsageFixture(t, d)
 
 	got, err := service.SessionUsageWithSubagents(ctx, d, subagentChildBID, true)
-	require.NoError(err)
-	require.NotNil(got)
-	assert.Zero(got.SubagentCount)
-	assert.Equal(money.MustParseDollars(subagentChildBCost), got.Cost)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Zero(t, got.SubagentCount)
+	assert.Equal(t, money.MustParseDollars(subagentChildBCost), got.Cost)
 }
 
 // TestSubagentRollupLeavesDayAggregatesUnchanged is the invariant that keeps
@@ -588,9 +555,6 @@ func TestSessionUsageWithSubagentsIsQueriedFromTheChildToo(t *testing.T) {
 // total as the combined session view and must not move when that view is
 // computed.
 func TestSubagentRollupLeavesDayAggregatesUnchanged(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := dbtest.OpenTestDB(t)
 	ctx := t.Context()
 	seedSubagentUsageFixture(t, d)
@@ -601,27 +565,27 @@ func TestSubagentRollupLeavesDayAggregatesUnchanged(t *testing.T) {
 		Timezone: "UTC",
 	}
 	before, err := d.GetDailyUsage(ctx, filter)
-	require.NoError(err)
-	assert.Equal(money.MustParseDollars(subagentTotalCost),
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars(subagentTotalCost),
 		before.Totals.TotalCost,
 		"the day total already includes subagent spend, deduplicated")
-	assert.Equal(3500, before.Totals.InputTokens)
-	assert.Equal(subagentTotalOutput, before.Totals.OutputTokens)
-	assert.Equal(3, before.SessionCounts.Total,
+	assert.Equal(t, 3500, before.Totals.InputTokens)
+	assert.Equal(t, subagentTotalOutput, before.Totals.OutputTokens)
+	assert.Equal(t, 3, before.SessionCounts.Total,
 		"subagent sessions stay first-class rows in the day aggregate")
 
 	combined, err := service.SessionUsageWithSubagents(
 		ctx, d, subagentParentID, true)
-	require.NoError(err)
-	require.NotNil(combined)
+	require.NoError(t, err)
+	require.NotNil(t, combined)
 
 	after, err := d.GetDailyUsage(ctx, filter)
-	require.NoError(err)
-	assert.Equal(before, after,
+	require.NoError(t, err)
+	assert.Equal(t, before, after,
 		"combining usage for presentation must not persist or duplicate rows")
-	assert.Equal(before.Totals.TotalCost, combined.Cost,
+	assert.Equal(t, before.Totals.TotalCost, combined.Cost,
 		"the parent's combined cost is the same money the day total counts")
-	assert.Equal(before.Totals.OutputTokens, combined.TotalOutputTokens,
+	assert.Equal(t, before.Totals.OutputTokens, combined.TotalOutputTokens,
 		"the two views must agree on output tokens, not just on cost")
 }
 
@@ -629,13 +593,10 @@ func TestSubagentRollupLeavesDayAggregatesUnchanged(t *testing.T) {
 // code contract: a parent whose only usage lives in its subagents must look
 // like it has data in the ordinary archive view.
 func TestSessionUsageWithSubagentsReportsTokenDataForEmptyParent(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	d := dbtest.OpenTestDB(t)
 	ctx := t.Context()
 
-	require.NoError(d.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
 		InputPerMTok:  money.MustParseDollars("2.0"),
 		OutputPerMTok: money.MustParseDollars("10.0"),
@@ -661,18 +622,18 @@ func TestSessionUsageWithSubagentsReportsTokenDataForEmptyParent(t *testing.T) {
 		usageMessage("agent-only", 0, "10:00:00", "m-9", 1000, 500))
 
 	own, err := d.GetSessionUsage(ctx, "claude:empty-parent", true)
-	require.NoError(err)
-	require.NotNil(own)
-	require.False(own.HasTokenData)
-	require.False(own.HasCost)
+	require.NoError(t, err)
+	require.NotNil(t, own)
+	require.False(t, own.HasTokenData)
+	require.False(t, own.HasCost)
 
 	got, err := service.SessionUsageWithSubagents(
 		ctx, d, "claude:empty-parent", true)
-	require.NoError(err)
-	require.NotNil(got)
-	assert.True(got.HasTokenData)
-	assert.True(got.HasCost)
-	assert.Equal(money.MustParseDollars(subagentParentCost), got.Cost)
-	assert.Equal(500, got.TotalOutputTokens)
-	assert.Equal(1, got.SubagentCount)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.True(t, got.HasTokenData)
+	assert.True(t, got.HasCost)
+	assert.Equal(t, money.MustParseDollars(subagentParentCost), got.Cost)
+	assert.Equal(t, 500, got.TotalOutputTokens)
+	assert.Equal(t, 1, got.SubagentCount)
 }

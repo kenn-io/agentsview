@@ -44,45 +44,39 @@ func checkpointCodexInitial() string {
 }
 
 func TestCodexCheckpointFullParsePersistsCheckpoint(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	env := setupTestEnv(t)
 	initial := checkpointCodexInitial()
 	writeCheckpointCodexSession(t, env, initial)
 
 	env.engine.SyncAll(t.Context(), nil)
 
-	cp, ok, err := env.db.GetParserCheckpoint("codex:" + checkpointTestUUID)
-	require.NoError(err)
-	require.True(ok, "a full Codex parse must persist a checkpoint")
-	blobs, ok, err := env.db.GetParserCheckpointBlobs("codex:" + checkpointTestUUID)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(int64(len(initial)), cp.Offset)
-	assert.NotEmpty(blobs.Cursor)
-	assert.NotEmpty(blobs.HashState)
-	assert.NotEmpty(cp.Hash)
-	assert.NotEmpty(cp.TailAnchorDigest)
-	assert.Equal(2, cp.NextOrdinal)
-	assert.Equal(db.ParserCheckpointVersion, cp.Version)
+	cp, ok, err := env.db.GetParserCheckpoint(t.Context(), "codex:"+checkpointTestUUID)
+	require.NoError(t, err)
+	require.True(t, ok, "a full Codex parse must persist a checkpoint")
+	blobs, ok, err := env.db.GetParserCheckpointBlobs(t.Context(), "codex:"+checkpointTestUUID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, int64(len(initial)), cp.Offset)
+	assert.NotEmpty(t, blobs.Cursor)
+	assert.NotEmpty(t, blobs.HashState)
+	assert.NotEmpty(t, cp.Hash)
+	assert.NotEmpty(t, cp.TailAnchorDigest)
+	assert.Equal(t, 2, cp.NextOrdinal)
+	assert.Equal(t, db.ParserCheckpointVersion, cp.Version)
 }
 
 func TestCodexCheckpointIncrementalResumeAdvancesCheckpoint(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	env := setupTestEnv(t)
 	ctx := t.Context()
 	initial := checkpointCodexInitial()
 	path := writeCheckpointCodexSession(t, env, initial)
 	env.engine.SyncAll(ctx, nil)
-	before, ok, err := env.db.GetParserCheckpoint("codex:" + checkpointTestUUID)
-	require.NoError(err)
-	require.True(ok)
-	beforeBlobs, ok, err := env.db.GetParserCheckpointBlobs("codex:" + checkpointTestUUID)
-	require.NoError(err)
-	require.True(ok)
+	before, ok, err := env.db.GetParserCheckpoint(ctx, "codex:"+checkpointTestUUID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	beforeBlobs, ok, err := env.db.GetParserCheckpointBlobs(ctx, "codex:"+checkpointTestUUID)
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	appended := testjsonl.JoinJSONL(
 		testjsonl.CodexFunctionCallOutputJSON(
@@ -93,85 +87,80 @@ func TestCodexCheckpointIncrementalResumeAdvancesCheckpoint(t *testing.T) {
 		),
 	)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(err)
+	require.NoError(t, err)
 	_, err = f.WriteString(appended)
-	require.NoError(err)
-	require.NoError(f.Close())
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 
 	stats := env.engine.SyncAll(ctx, nil)
-	require.Equal(1, stats.Synced)
+	require.Equal(t, 1, stats.Synced)
 
 	sess, err := env.db.GetSessionFull(ctx, "codex:"+checkpointTestUUID)
-	require.NoError(err)
-	require.NotNil(sess)
-	assert.True(sess.LastWriteIncremental,
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.True(t, sess.LastWriteIncremental,
 		"a checkpoint-resumed append must stay incremental")
 
 	msgs := fetchMessages(t, env.db, "codex:"+checkpointTestUUID)
-	require.Len(msgs, 2)
-	require.Len(msgs[1].ToolCalls, 1)
-	assert.Equal("done", msgs[1].ToolCalls[0].ResultContent)
-	require.Len(msgs[1].ToolCalls[0].ResultEvents, 1)
-	assert.Equal(100_000, msgs[1].ContextTokens)
-	assert.Equal(250, msgs[1].OutputTokens)
-	assert.NotEmpty(msgs[1].TokenUsage,
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "done", msgs[1].ToolCalls[0].ResultContent)
+	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, 100_000, msgs[1].ContextTokens)
+	assert.Equal(t, 250, msgs[1].OutputTokens)
+	assert.NotEmpty(t, msgs[1].TokenUsage,
 		"the token_count following a late result must update the committed assistant")
 
-	after, ok, err := env.db.GetParserCheckpoint("codex:" + checkpointTestUUID)
-	require.NoError(err)
-	require.True(ok)
-	afterBlobs, ok, err := env.db.GetParserCheckpointBlobs("codex:" + checkpointTestUUID)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(before.Offset+int64(len(appended)), after.Offset)
-	assert.NotEqual(beforeBlobs.Cursor, afterBlobs.Cursor)
-	assert.NotEqual(beforeBlobs.HashState, afterBlobs.HashState)
-	assert.NotEqual(before.Hash, after.Hash,
+	after, ok, err := env.db.GetParserCheckpoint(ctx, "codex:"+checkpointTestUUID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	afterBlobs, ok, err := env.db.GetParserCheckpointBlobs(ctx, "codex:"+checkpointTestUUID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, before.Offset+int64(len(appended)), after.Offset)
+	assert.NotEqual(t, beforeBlobs.Cursor, afterBlobs.Cursor)
+	assert.NotEqual(t, beforeBlobs.HashState, afterBlobs.HashState)
+	assert.NotEqual(t, before.Hash, after.Hash,
 		"the checkpointed hash must advance to the new full-file hash")
-	require.NotNil(sess.FileHash)
-	assert.Equal(after.Hash, *sess.FileHash,
+	require.NotNil(t, sess.FileHash)
+	assert.Equal(t, after.Hash, *sess.FileHash,
 		"stored hash must equal the checkpointed full-file hash")
 }
 
 func TestCodexCheckpointTruncationFallsBackToFullParse(t *testing.T) {
-	require := require.New(t)
-
 	env := setupTestEnv(t)
 	ctx := t.Context()
 	initial := checkpointCodexInitial()
 	path := writeCheckpointCodexSession(t, env, initial)
 	env.engine.SyncAll(ctx, nil)
-	_, ok, err := env.db.GetParserCheckpoint("codex:" + checkpointTestUUID)
-	require.NoError(err)
-	require.True(ok)
+	_, ok, err := env.db.GetParserCheckpoint(ctx, "codex:"+checkpointTestUUID)
+	require.NoError(t, err)
+	require.True(t, ok)
 
 	// Truncate at a safe line boundary (drop the final function_call line,
 	// keeping the newline-terminated user message) so the rebuilt checkpoint
 	// is a legal resume offset.
 	truncated := int64(strings.LastIndex(initial, "\n") + 1)
-	require.NoError(os.Truncate(path, truncated))
+	require.NoError(t, os.Truncate(path, truncated))
 
 	stats := env.engine.SyncAll(ctx, nil)
-	require.Equal(1, stats.Synced,
+	require.Equal(t, 1, stats.Synced,
 		"a truncated transcript must be authoritatively reparsed")
-	cp, ok, err := env.db.GetParserCheckpoint("codex:" + checkpointTestUUID)
-	require.NoError(err)
-	require.True(ok)
+	cp, ok, err := env.db.GetParserCheckpoint(ctx, "codex:"+checkpointTestUUID)
+	require.NoError(t, err)
+	require.True(t, ok)
 	assert.Equal(t, truncated, cp.Offset,
 		"the checkpoint must be rebuilt for the truncated file")
 }
 
 func TestCodexCheckpointAnchorMismatchFallsBackToFullParse(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	env := setupTestEnv(t)
 	ctx := t.Context()
 	initial := checkpointCodexInitial()
 	path := writeCheckpointCodexSession(t, env, initial)
 	env.engine.SyncAll(ctx, nil)
 	info, err := os.Stat(path)
-	require.NoError(err)
+	require.NoError(t, err)
 	origMtime := info.ModTime()
 
 	// Corrupt one byte inside the anchor region while keeping the JSON valid
@@ -179,39 +168,36 @@ func TestCodexCheckpointAnchorMismatchFallsBackToFullParse(t *testing.T) {
 	// EOF stays a safe boundary. Restoring the mtime isolates the anchor
 	// check: stat and identity look safe, the anchor must not.
 	raw, err := os.ReadFile(path)
-	require.NoError(err)
+	require.NoError(t, err)
 	idx := bytes.Index(raw, []byte(`"call_cp"`))
-	require.Positive(idx)
+	require.Positive(t, idx)
 	raw[idx+7] = 'X'
 	raw = append(raw, []byte(testjsonl.JoinJSONL(testjsonl.CodexMsgJSON(
 		"user", "after corruption", "2024-01-01T10:00:04Z",
 	)))...)
-	require.NoError(os.WriteFile(path, raw, 0o644))
-	require.NoError(os.Chtimes(path, time.Now(), origMtime))
+	require.NoError(t, os.WriteFile(path, raw, 0o644))
+	require.NoError(t, os.Chtimes(path, time.Now(), origMtime))
 
 	env.engine.SyncPaths([]string{path})
-	cp, ok, err := env.db.GetParserCheckpoint("codex:" + checkpointTestUUID)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(int64(len(raw)), cp.Offset)
+	cp, ok, err := env.db.GetParserCheckpoint(ctx, "codex:"+checkpointTestUUID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, int64(len(raw)), cp.Offset)
 	msgs := fetchMessages(t, env.db, "codex:"+checkpointTestUUID)
-	require.Len(msgs, 3)
-	require.Len(msgs[1].ToolCalls, 1)
-	assert.Equal("call_cX", msgs[1].ToolCalls[0].ToolUseID,
+	require.Len(t, msgs, 3)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "call_cX", msgs[1].ToolCalls[0].ToolUseID,
 		"the corrupted call id must come from the authoritative full parse")
 }
 
 func TestCodexCheckpointInPlaceRewriteSameSizeSameMtimeIsRejected(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	env := setupTestEnv(t)
 	ctx := t.Context()
 	initial := checkpointCodexInitial()
 	path := writeCheckpointCodexSession(t, env, initial)
 	env.engine.SyncAll(ctx, nil)
 	info, err := os.Stat(path)
-	require.NoError(err)
+	require.NoError(t, err)
 	origMtime := info.ModTime()
 
 	// In-place rewrite with restored size and mtime: the stored
@@ -219,24 +205,24 @@ func TestCodexCheckpointInPlaceRewriteSameSizeSameMtimeIsRejected(t *testing.T) 
 	// decline and the engine must re-parse the rewritten bytes instead of
 	// trusting the stale checkpoint.
 	raw, err := os.ReadFile(path)
-	require.NoError(err)
+	require.NoError(t, err)
 	// Flip the final character of the user message's text so the JSON
 	// stays valid and the re-parse must produce different content.
 	textEnd := bytes.Index(raw, []byte("run command")) + len("run command")
-	require.Greater(textEnd, len("run command"))
+	require.Greater(t, textEnd, len("run command"))
 	raw[textEnd-1] ^= 0x01
-	require.NoError(os.WriteFile(path, raw, 0o644))
-	require.NoError(os.Chtimes(path, time.Now(), origMtime))
+	require.NoError(t, os.WriteFile(path, raw, 0o644))
+	require.NoError(t, os.Chtimes(path, time.Now(), origMtime))
 
 	env.engine.SyncPaths([]string{path})
 
 	msgs := fetchMessages(t, env.db, "codex:"+checkpointTestUUID)
-	require.Len(msgs, 2)
-	assert.NotEqual("run command", msgs[0].Content,
+	require.Len(t, msgs, 2)
+	assert.NotEqual(t, "run command", msgs[0].Content,
 		"a same-stat rewrite must be re-parsed, not trusted")
-	cp, ok, err := env.db.GetParserCheckpoint("codex:" + checkpointTestUUID)
-	require.NoError(err)
-	require.True(ok)
-	assert.Equal(int64(len(initial)), cp.Offset,
+	cp, ok, err := env.db.GetParserCheckpoint(ctx, "codex:"+checkpointTestUUID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, int64(len(initial)), cp.Offset,
 		"the rewritten bytes are the same length, so the checkpoint offset stays")
 }

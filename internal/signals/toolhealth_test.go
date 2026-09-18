@@ -517,8 +517,6 @@ func TestExtractFilePath(t *testing.T) {
 }
 
 func TestComputeToolHealth_Combined(t *testing.T) {
-	assert := assert.New(t)
-
 	calls := []ToolCallRow{
 		// 3 retries of same bash command (all fail)
 		{
@@ -568,8 +566,8 @@ func TestComputeToolHealth_Combined(t *testing.T) {
 
 	got := ComputeToolHealth(calls)
 
-	assert.Equal(3, got.FailureSignalCount)
-	assert.Equal(2, got.RetryCount)
-	assert.Equal(1, got.EditChurnCount)
-	assert.Equal(3, got.ConsecutiveFailureMax)
+	assert.Equal(t, 3, got.FailureSignalCount)
+	assert.Equal(t, 2, got.RetryCount)
+	assert.Equal(t, 1, got.EditChurnCount)
+	assert.Equal(t, 3, got.ConsecutiveFailureMax)
 }

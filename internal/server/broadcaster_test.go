@@ -130,8 +130,6 @@ func TestBroadcaster_LeadingEdgeEmitsImmediately(t *testing.T) {
 
 func TestBroadcaster_CoalescesWithinWindow(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		require := require.New(t)
-
 		const interval = 100 * time.Millisecond
 		b := NewBroadcaster(interval)
 		sub, unsub := b.Subscribe()
@@ -142,7 +140,7 @@ func TestBroadcaster_CoalescesWithinWindow(t *testing.T) {
 		select {
 		case <-sub:
 		default:
-			require.Fail("leading-edge emit did not broadcast immediately")
+			require.Fail(t, "leading-edge emit did not broadcast immediately")
 		}
 
 		// Bursts within the window are coalesced; no broadcast yet.
@@ -153,7 +151,7 @@ func TestBroadcaster_CoalescesWithinWindow(t *testing.T) {
 		synctest.Sleep(interval / 2)
 		select {
 		case ev := <-sub:
-			require.Fail("got early broadcast during rate-limit window", "ev=%v", ev)
+			require.Fail(t, "got early broadcast during rate-limit window", "ev=%v", ev)
 		default:
 		}
 
@@ -164,14 +162,14 @@ func TestBroadcaster_CoalescesWithinWindow(t *testing.T) {
 		case ev := <-sub:
 			assert.Equal(t, "sessions", ev.Scope, "trailing scope")
 		default:
-			require.Fail("trailing broadcast never arrived")
+			require.Fail(t, "trailing broadcast never arrived")
 		}
 
 		// The three coalesced emits produce exactly one trailing broadcast.
 		synctest.Sleep(interval)
 		select {
 		case ev := <-sub:
-			require.Fail("got duplicate broadcast after trailing fire", "ev=%v", ev)
+			require.Fail(t, "got duplicate broadcast after trailing fire", "ev=%v", ev)
 		default:
 		}
 	})
@@ -179,8 +177,6 @@ func TestBroadcaster_CoalescesWithinWindow(t *testing.T) {
 
 func TestBroadcaster_LeadingEdgeCancelsPendingTrailing(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		require := require.New(t)
-
 		const interval = 50 * time.Millisecond
 		b := NewBroadcaster(interval)
 		sub, unsub := b.Subscribe()
@@ -191,7 +187,7 @@ func TestBroadcaster_LeadingEdgeCancelsPendingTrailing(t *testing.T) {
 		select {
 		case <-sub:
 		default:
-			require.Fail("leading emit did not broadcast")
+			require.Fail(t, "leading emit did not broadcast")
 		}
 
 		// Rate-limited emit schedules a trailing broadcast of "b".
@@ -211,7 +207,7 @@ func TestBroadcaster_LeadingEdgeCancelsPendingTrailing(t *testing.T) {
 		case ev := <-sub:
 			assert.Equal(t, "c", ev.Scope, "leading broadcast scope")
 		default:
-			require.Fail("second leading emit did not broadcast")
+			require.Fail(t, "second leading emit did not broadcast")
 		}
 
 		// The pre-existing trailing timer for "b" may still fire. If the
@@ -221,7 +217,7 @@ func TestBroadcaster_LeadingEdgeCancelsPendingTrailing(t *testing.T) {
 		synctest.Sleep(2 * interval)
 		select {
 		case ev := <-sub:
-			require.Fail("stale trailing broadcast after leading edge", "ev=%v", ev)
+			require.Fail(t, "stale trailing broadcast after leading edge", "ev=%v", ev)
 		default:
 		}
 	})
@@ -229,8 +225,6 @@ func TestBroadcaster_LeadingEdgeCancelsPendingTrailing(t *testing.T) {
 
 func TestBroadcaster_StaleTrailingCallbackDoesNotConsumeNewerPending(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		require := require.New(t)
-
 		// Narrow race: a trailing callback whose timer already fired is
 		// waiting for b.mu; a leading-edge Emit runs first and a follow-up
 		// rate-limited Emit installs a new pending+timer. Without a
@@ -246,7 +240,7 @@ func TestBroadcaster_StaleTrailingCallbackDoesNotConsumeNewerPending(t *testing.
 		select {
 		case <-sub:
 		default:
-			require.Fail("leading emit did not broadcast")
+			require.Fail(t, "leading emit did not broadcast")
 		}
 
 		// Rate-limited emit schedules a timer; capture the generation
@@ -265,7 +259,7 @@ func TestBroadcaster_StaleTrailingCallbackDoesNotConsumeNewerPending(t *testing.
 		select {
 		case <-sub:
 		default:
-			require.Fail("second leading emit did not broadcast")
+			require.Fail(t, "second leading emit did not broadcast")
 		}
 
 		// Rate-limited emit after the leading edge installs a fresh
@@ -283,7 +277,7 @@ func TestBroadcaster_StaleTrailingCallbackDoesNotConsumeNewerPending(t *testing.
 		synctest.Sleep(interval / 2)
 		select {
 		case ev := <-sub:
-			require.Fail("stale callback consumed newer pending", "ev=%v", ev)
+			require.Fail(t, "stale callback consumed newer pending", "ev=%v", ev)
 		default:
 		}
 
@@ -297,7 +291,7 @@ func TestBroadcaster_StaleTrailingCallbackDoesNotConsumeNewerPending(t *testing.
 		case ev := <-sub:
 			assert.Equal(t, "d", ev.Scope)
 		default:
-			require.Fail("new trailing timer did not fire with pending scope")
+			require.Fail(t, "new trailing timer did not fire with pending scope")
 		}
 	})
 }

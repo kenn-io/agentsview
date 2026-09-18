@@ -1,8 +1,7 @@
 package parser
 
-import "context"
-
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"

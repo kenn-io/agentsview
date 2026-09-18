@@ -51,16 +51,14 @@ func (notReadyVectorSource) BeginExport(
 // the vector phase into a clean skip — not an error, and not a push over a
 // partial local view that would evict valid PG vectors.
 func TestPushVectorsSkipsWhenSourceNotReady(t *testing.T) {
-	assert := assert.New(t)
-
 	sync := &Sync{vectorSource: notReadyVectorSource{}}
 
 	res, err := sync.pushVectors(t.Context(), false, nil, 0, nil, nil)
 
 	require.NoError(t, err)
-	assert.True(res.Skipped)
-	assert.Contains(res.SkippedReason, "not fully embedded")
-	assert.Contains(res.SkippedReason, "7 document(s) pending")
+	assert.True(t, res.Skipped)
+	assert.Contains(t, res.SkippedReason, "not fully embedded")
+	assert.Contains(t, res.SkippedReason, "7 document(s) pending")
 }
 
 // spyVectorSource fails the test on any call: an empty change scope must
@@ -68,7 +66,7 @@ func TestPushVectorsSkipsWhenSourceNotReady(t *testing.T) {
 type spyVectorSource struct{ t *testing.T }
 
 func (s spyVectorSource) BeginExport(context.Context, []string) (VectorExport, bool, error) {
-	s.t.Fatal("BeginExport must not be called for an empty scope")
+	require.FailNow(s.t, "BeginExport must not be called for an empty scope")
 	return nil, false, nil
 }
 
@@ -77,8 +75,6 @@ func (s spyVectorSource) BeginExport(context.Context, []string) (VectorExport, b
 // marker (an empty scope is a successful no-op, not a degraded phase, so the
 // watch loop keeps scoping subsequent change pushes).
 func TestPushVectorsEmptyScopeReadsNothing(t *testing.T) {
-	assert := assert.New(t)
-
 	sync := &Sync{vectorSource: spyVectorSource{t: t}}
 
 	res, err := sync.pushVectors(
@@ -86,7 +82,7 @@ func TestPushVectorsEmptyScopeReadsNothing(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	assert.False(res.Skipped)
-	assert.Zero(res.SessionsPushed)
-	assert.Zero(res.SessionsEvicted)
+	assert.False(t, res.Skipped)
+	assert.Zero(t, res.SessionsPushed)
+	assert.Zero(t, res.SessionsEvicted)
 }

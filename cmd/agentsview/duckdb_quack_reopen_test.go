@@ -21,13 +21,11 @@ import (
 // end-to-end by the duckdbtest-gated quack serve tests instead.
 
 func TestWaitForReplacementOrShutdownDetectsReplacement(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	path := filepath.Join(dir, "m.duckdb")
-	require.NoError(os.WriteFile(path, []byte("v1"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte("v1"), 0o644))
 	info, err := os.Stat(path)
-	require.NoError(err)
+	require.NoError(t, err)
 	// Prime while the path still points at the original, per the
 	// PrimeFileIdentity contract. The replacement below deliberately has
 	// the SAME size, and on Windows both writes can land in the same
@@ -43,14 +41,14 @@ func TestWaitForReplacementOrShutdownDetectsReplacement(t *testing.T) {
 	}()
 
 	replacement := filepath.Join(dir, "next.duckdb")
-	require.NoError(os.WriteFile(replacement, []byte("v2"), 0o644))
-	require.NoError(os.Rename(replacement, path))
+	require.NoError(t, os.WriteFile(replacement, []byte("v2"), 0o644))
+	require.NoError(t, os.Rename(replacement, path))
 
 	select {
 	case replaced := <-done:
 		assert.True(t, replaced, "a file-identity change must report replaced=true")
 	case <-time.After(30 * time.Second):
-		t.Fatal("waitForReplacementOrShutdown did not observe the replacement")
+		require.FailNow(t, "waitForReplacementOrShutdown did not observe the replacement")
 	}
 }
 
@@ -72,19 +70,17 @@ func TestWaitForReplacementOrShutdownReturnsFalseOnShutdown(t *testing.T) {
 	case replaced := <-done:
 		assert.False(t, replaced, "ctx cancellation must report replaced=false")
 	case <-time.After(30 * time.Second):
-		t.Fatal("waitForReplacementOrShutdown did not observe ctx cancellation")
+		require.FailNow(t, "waitForReplacementOrShutdown did not observe ctx cancellation")
 	}
 }
 
 func TestWaitForReplacementOrShutdownTreatsMissingFileAsNoChangeYet(t *testing.T) {
-	require := require.New(t)
-
 	dir := t.TempDir()
 	path := filepath.Join(dir, "m.duckdb")
-	require.NoError(os.WriteFile(path, []byte("v1"), 0o644))
+	require.NoError(t, os.WriteFile(path, []byte("v1"), 0o644))
 	info, err := os.Stat(path)
-	require.NoError(err)
-	require.NoError(os.Remove(path))
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(path))
 
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
@@ -180,15 +176,13 @@ func TestDuckDBMirrorProbeFailureReason(t *testing.T) {
 			}
 			assert.Contains(t, got, tt.want)
 			t.Run("serve error remedy", func(t *testing.T) {
-				assert := assert.New(t)
-
 				err := duckDBMirrorServeProbeError(tt.probe)
 				require.Error(t, err)
 				if tt.probe.LockConflict {
-					assert.Contains(err.Error(), "holds the mirror read-write")
-					assert.NotContains(err.Error(), "push --full")
+					assert.Contains(t, err.Error(), "holds the mirror read-write")
+					assert.NotContains(t, err.Error(), "push --full")
 				} else {
-					assert.Contains(err.Error(), "push --full")
+					assert.Contains(t, err.Error(), "push --full")
 				}
 			})
 		})
@@ -204,13 +198,11 @@ func TestProbeDuckDBMirrorForServeMissingFileIsActionable(t *testing.T) {
 }
 
 func TestProbeDuckDBMirrorForServeAcceptsCompatibleMirror(t *testing.T) {
-	require := require.New(t)
-
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	conn, err := duckdbsync.Open(path)
-	require.NoError(err)
-	require.NoError(duckdbsync.EnsureSchema(t.Context(), conn))
-	require.NoError(conn.Close())
+	conn, err := duckdbsync.Open(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, duckdbsync.EnsureSchema(t.Context(), conn))
+	require.NoError(t, conn.Close())
 
 	assert.NoError(t, probeDuckDBMirrorForServe(t.Context(), path))
 }

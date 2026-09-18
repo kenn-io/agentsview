@@ -339,6 +339,7 @@ func evaluateWorktreeMappingsTx(
 			"querying sessions for worktree mapping evaluation: %w", err,
 		)
 	}
+	defer rows.Close()
 	var sessions []worktreeMappingSessionRow
 	for rows.Next() {
 		var row worktreeMappingSessionRow

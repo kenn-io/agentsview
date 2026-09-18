@@ -34,9 +34,9 @@ type ParseDiffOptions struct {
 // state) and arms the engine's force-parse mode so every discovered
 // file is fully re-parsed regardless of stored size/mtime/data_version
 // state.
-func NewDiffEngine(database *db.DB, cfg EngineConfig) *Engine {
+func NewDiffEngine(ctx context.Context, database *db.DB, cfg EngineConfig) *Engine {
 	cfg.Ephemeral = true
-	e := NewEngine(database, cfg)
+	e := NewEngine(ctx, database, cfg)
 	e.forceParse = true
 	return e
 }
@@ -871,6 +871,8 @@ func (e *Engine) parseDiffCollectFile(
 		}
 
 		switch class {
+		case DiffParseError:
+			// Parse failures are recorded before session classification.
 		case DiffNeedsRetry:
 			report.Totals.NeedsRetry++
 			report.Sessions = append(report.Sessions, entry)

@@ -39,7 +39,7 @@ func newUsageCursorCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.EmailChanged = cmd.Flags().Changed("email")
 			cfg.UserIDChanged = cmd.Flags().Changed("user-id")
-			return runUsageCursor(cfg)
+			return runUsageCursor(cmd.Context(), cfg)
 		},
 	}
 	cmd.Flags().StringVar(&cfg.Since, "since", "", "Start date (YYYY-MM-DD)")
@@ -51,7 +51,7 @@ func newUsageCursorCommand() *cobra.Command {
 	return cmd
 }
 
-func runUsageCursor(cfg UsageCursorConfig) error {
+func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		return err
@@ -125,7 +125,7 @@ func runUsageCursor(cfg UsageCursorConfig) error {
 			IsHeadless:       ev.IsHeadless,
 		})
 	}
-	if err := database.InsertCursorUsageEvents(rows); err != nil {
+	if err := database.InsertCursorUsageEvents(ctx, rows); err != nil {
 		return err
 	}
 

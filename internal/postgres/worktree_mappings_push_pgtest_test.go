@@ -283,8 +283,8 @@ func TestMappingCursorNotAdvancedOnFailure(t *testing.T) {
 
 	databaseGeneration, err := localDB.GetDatabaseID(ctx)
 	require.NoError(t, err, "GetDatabaseID")
-	cursor, err := localDB.GetSyncState(
-		worktreeMappingPublicationStateKey + ":" + databaseGeneration)
+	cursor, err := localDB.GetSyncState(t.Context(),
+		worktreeMappingPublicationStateKey+":"+databaseGeneration)
 	require.NoError(t, err, "GetSyncState")
 	assert.Empty(t, cursor,
 		"failed push must not advance the mapping publication cursor")

@@ -777,34 +777,41 @@ func upsertPGModelPricing(
 	defaultUpdatedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	baseChanged := make(map[string]struct{}, len(prices))
 	for i := 0; i < len(prices); i += pricingUpsertBatch {
-		end := min(i+pricingUpsertBatch, len(prices))
-		query, args := pgPricingUpsertStatement(
-			prices[i:end], defaultUpdatedAt,
-		)
-		rows, err := tx.QueryContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf(
-				"upserting pg pricing batch starting at %d: %w",
-				i, err,
+		if err := func() error {
+			end := min(i+pricingUpsertBatch, len(prices))
+			query, args := pgPricingUpsertStatement(
+				prices[i:end], defaultUpdatedAt,
 			)
-		}
-		for rows.Next() {
-			var modelPattern string
-			if err := rows.Scan(&modelPattern); err != nil {
+			rows, err := tx.QueryContext(ctx, query, args...)
+			if err != nil {
+				return fmt.Errorf(
+					"upserting pg pricing batch starting at %d: %w",
+					i, err,
+				)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var modelPattern string
+				if err := rows.Scan(&modelPattern); err != nil {
+					rows.Close()
+					return fmt.Errorf(
+						"scanning changed pg pricing at batch %d: %w", i, err)
+				}
+				baseChanged[modelPattern] = struct{}{}
+			}
+			if err := rows.Err(); err != nil {
 				rows.Close()
 				return fmt.Errorf(
-					"scanning changed pg pricing at batch %d: %w", i, err)
+					"iterating changed pg pricing at batch %d: %w", i, err)
 			}
-			baseChanged[modelPattern] = struct{}{}
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return fmt.Errorf(
-				"iterating changed pg pricing at batch %d: %w", i, err)
-		}
-		if err := rows.Close(); err != nil {
-			return fmt.Errorf(
-				"closing changed pg pricing at batch %d: %w", i, err)
+			if err := rows.Close(); err != nil {
+				return fmt.Errorf(
+					"closing changed pg pricing at batch %d: %w", i, err)
+			}
+
+			return nil
+		}(); err != nil {
+			return err
 		}
 	}
 	bandOnlyPrices := make([]db.ModelPricing, 0, len(prices))

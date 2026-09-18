@@ -30,24 +30,21 @@ var (
 )
 
 func TestSessionFormatSourcesCoverRegistry(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	_, testFile, _, ok := runtime.Caller(0)
-	require.True(ok, "resolve format inventory test path")
+	require.True(t, ok, "resolve format inventory test path")
 
 	inventoryPath := filepath.Join(
 		filepath.Dir(testFile), "..", "..", "docs", "internal",
 		"session-format-sources.md",
 	)
 	raw, err := os.ReadFile(inventoryPath)
-	require.NoError(err)
-	assert.Empty(validateFormatSourceInventory(raw))
+	require.NoError(t, err)
+	assert.Empty(t, validateFormatSourceInventory(raw))
 
 	documented := make(map[AgentType]bool)
 	for _, match := range formatSourceHeadingRE.FindAllSubmatch(raw, -1) {
 		agent := AgentType(match[1])
-		assert.Falsef(documented[agent],
+		assert.Falsef(t, documented[agent],
 			"provider %q documented more than once", agent)
 		documented[agent] = true
 	}
@@ -58,11 +55,11 @@ func TestSessionFormatSourcesCoverRegistry(t *testing.T) {
 	}
 
 	for agent := range documented {
-		assert.Truef(expected[agent],
+		assert.Truef(t, expected[agent],
 			"inventory documents unknown or excluded provider %q", agent)
 	}
 	for agent := range expected {
-		assert.Truef(documented[agent],
+		assert.Truef(t, documented[agent],
 			"provider %q missing from format inventory", agent)
 	}
 }

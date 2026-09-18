@@ -32,7 +32,8 @@ func BenchmarkReportingJointDay(b *testing.B) {
 				for i := range sessions {
 					id := fmt.Sprintf("synthetic-%d", i)
 					at := start.Add(time.Duration(i%55) * time.Minute)
-					require.NoError(b, d.UpsertSession(Session{ID: id,
+					require.NoError(b, d.UpsertSession(b.Context(), Session{
+						ID:      id,
 						Project: fmt.Sprintf("project-%d", i%projects), Agent: fmt.Sprintf("agent-%d", i%3),
 						Machine: "synthetic", MessageCount: 3, IsAutomated: i%2 == 0,
 						StartedAt: Ptr(at.Format(time.RFC3339)), EndedAt: Ptr(at.Add(4 * time.Minute).Format(time.RFC3339)),
@@ -41,12 +42,16 @@ func BenchmarkReportingJointDay(b *testing.B) {
 						SessionID: id, Project: fmt.Sprintf("project-%d", i%projects), Machine: "synthetic",
 						GitRemote: fmt.Sprintf("https://example.com/team/project-%d.git", i%projects), ObservedAt: at,
 					}))
-					require.NoError(b, d.InsertMessages([]Message{
+					require.NoError(b, d.InsertMessages(b.Context(), []Message{
 						{SessionID: id, Ordinal: 0, Role: "user", Timestamp: at.Format(time.RFC3339)},
-						{SessionID: id, Ordinal: 1, Role: "assistant", Timestamp: at.Add(2 * time.Minute).Format(time.RFC3339),
-							Model: fmt.Sprintf("model-%d", i%8), TokenUsage: jsontext.Value(`{"output_tokens":100}`)},
-						{SessionID: id, Ordinal: 2, Role: "assistant", Timestamp: at.Add(4 * time.Minute).Format(time.RFC3339),
-							Model: fmt.Sprintf("model-%d", (i+1)%8), TokenUsage: jsontext.Value(`{"output_tokens":200}`)},
+						{
+							SessionID: id, Ordinal: 1, Role: "assistant", Timestamp: at.Add(2 * time.Minute).Format(time.RFC3339),
+							Model: fmt.Sprintf("model-%d", i%8), TokenUsage: jsontext.Value(`{"output_tokens":100}`),
+						},
+						{
+							SessionID: id, Ordinal: 2, Role: "assistant", Timestamp: at.Add(4 * time.Minute).Format(time.RFC3339),
+							Model: fmt.Sprintf("model-%d", (i+1)%8), TokenUsage: jsontext.Value(`{"output_tokens":200}`),
+						},
 					}))
 				}
 				opts := ReportingExportOptions{Date: start.Truncate(24 * time.Hour), Now: start.Add(24 * time.Hour), SchemaVersion: variant.version, Bucket: variant.bucket}

@@ -78,6 +78,7 @@ func openSchemaDB(
 	t *testing.T, path string, userVersion int, stmts ...string,
 ) *sql.DB {
 	t.Helper()
+
 	build, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "open for build")
 	for _, stmt := range stmts {
@@ -250,8 +251,6 @@ func TestAntigravitySchemaFingerprintCases(t *testing.T) {
 	}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			path := filepath.Join(dir, itoa(i)+".db")
 			db := openSchemaDB(t, path, tt.userVersion, tt.stmts...)
 			defer db.Close()
@@ -261,12 +260,12 @@ func TestAntigravitySchemaFingerprintCases(t *testing.T) {
 			label := antigravitySchemaLabel(fp)
 
 			if tt.wantLabel != "" {
-				assert.Equal(tt.wantLabel, label)
+				assert.Equal(t, tt.wantLabel, label)
 			} else {
-				assert.True(strings.HasPrefix(label, antigravitySchemaUnknownPrefix),
+				assert.True(t, strings.HasPrefix(label, antigravitySchemaUnknownPrefix),
 					"mutated schema should produce unknown marker, got %q",
 					label)
-				assert.NotEqual(agyBaselineFullFingerprint, fp,
+				assert.NotEqual(t, agyBaselineFullFingerprint, fp,
 					"mutated schema must not reuse baseline fingerprint")
 			}
 		})

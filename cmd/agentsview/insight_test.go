@@ -72,31 +72,25 @@ func insightSSEEvent(t *testing.T, event string, value any) string {
 }
 
 func TestNewInsightCommand_RegistersSubcommands(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	root := newRootCommand()
 	insight, _, err := root.Find([]string{"insight"})
-	require.NoError(err)
-	require.NotNil(insight)
-	assert.Equal("insight", insight.Name())
+	require.NoError(t, err)
+	require.NotNil(t, insight)
+	assert.Equal(t, "insight", insight.Name())
 
 	for _, name := range []string{"list", "get", "generate"} {
 		child, _, err := root.Find([]string{"insight", name})
-		require.NoError(err)
-		assert.Equal(name, child.Name())
+		require.NoError(t, err)
+		assert.Equal(t, name, child.Name())
 	}
 	for _, name := range []string{
 		"format", "json", "server", "server-token-file",
 	} {
-		assert.NotNil(insight.PersistentFlags().Lookup(name), name)
+		assert.NotNil(t, insight.PersistentFlags().Lookup(name), name)
 	}
 }
 
 func TestInsightListCommand_ForwardsFiltersAndFormats(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	first := testInsight(7)
 	second := testInsight(8)
 	var requestCount int
@@ -104,9 +98,9 @@ func TestInsightListCommand_ForwardsFiltersAndFormats(t *testing.T) {
 		w http.ResponseWriter, r *http.Request,
 	) {
 		requestCount++
-		assert.Equal(http.MethodGet, r.Method)
-		assert.Equal("/api/v1/insights", r.URL.Path)
-		assert.Equal("Bearer file-token", r.Header.Get("Authorization"))
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/api/v1/insights", r.URL.Path)
+		assert.Equal(t, "Bearer file-token", r.Header.Get("Authorization"))
 		if r.URL.Query().Get("type") == "empty" {
 			writeInsightJSON(t, w, insightListResponse{Insights: []db.Insight{}})
 			return
@@ -118,18 +112,18 @@ func TestInsightListCommand_ForwardsFiltersAndFormats(t *testing.T) {
 			})
 			return
 		}
-		assert.Equal("daily_activity", query.Get("type"))
-		assert.Equal("project with space", query.Get("project"))
-		assert.Equal("2026-09-01", query.Get("date_from"))
-		assert.Equal("2026-09-15", query.Get("date_to"))
-		assert.Contains(r.URL.RawQuery, "project=project+with+space")
+		assert.Equal(t, "daily_activity", query.Get("type"))
+		assert.Equal(t, "project with space", query.Get("project"))
+		assert.Equal(t, "2026-09-01", query.Get("date_from"))
+		assert.Equal(t, "2026-09-15", query.Get("date_to"))
+		assert.Contains(t, r.URL.RawQuery, "project=project+with+space")
 		writeInsightJSON(t, w, insightListResponse{
 			Insights: []db.Insight{first, second},
 		})
 	}))
 	t.Cleanup(ts.Close)
 	tokenPath := filepath.Join(t.TempDir(), "token")
-	require.NoError(os.WriteFile(tokenPath, []byte("file-token\n"), 0o600))
+	require.NoError(t, os.WriteFile(tokenPath, []byte("file-token\n"), 0o600))
 
 	stdout, stderr, err := runInsightCommand(t,
 		"insight", "list", "--server", ts.URL,
@@ -137,51 +131,48 @@ func TestInsightListCommand_ForwardsFiltersAndFormats(t *testing.T) {
 		"--type", "daily_activity", "--project", "project with space",
 		"--date-from", "2026-09-01", "--date-to", "2026-09-15",
 	)
-	require.NoError(err)
-	assert.Empty(stderr)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
 	var got insightListResponse
-	require.NoError(json.Unmarshal([]byte(stdout), &got))
-	assert.Equal([]db.Insight{first, second}, got.Insights)
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got))
+	assert.Equal(t, []db.Insight{first, second}, got.Insights)
 
 	stdout, stderr, err = runInsightCommand(t,
 		"insight", "list", "--server", ts.URL,
 		"--server-token-file", tokenPath,
 	)
-	require.NoError(err)
-	assert.Empty(stderr)
-	assert.Contains(stdout, "ID")
-	assert.Contains(stdout, "7")
-	assert.Contains(stdout, "8")
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+	assert.Contains(t, stdout, "ID")
+	assert.Contains(t, stdout, "7")
+	assert.Contains(t, stdout, "8")
 
 	stdout, stderr, err = runInsightCommand(t,
 		"insight", "list", "--server", ts.URL,
 		"--server-token-file", tokenPath, "--type", "empty",
 	)
-	require.NoError(err)
-	assert.Empty(stderr)
-	assert.Equal("(no insights)\n", stdout)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+	assert.Equal(t, "(no insights)\n", stdout)
 
 	stdout, _, err = runInsightCommand(t,
 		"insight", "list", "--server", ts.URL,
 		"--server-token-file", tokenPath, "--json", "--type", "empty",
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	var empty insightListResponse
-	require.NoError(json.Unmarshal([]byte(stdout), &empty))
-	assert.NotNil(empty.Insights)
-	assert.Empty(empty.Insights)
-	assert.Equal(4, requestCount)
+	require.NoError(t, json.Unmarshal([]byte(stdout), &empty))
+	assert.NotNil(t, empty.Insights)
+	assert.Empty(t, empty.Insights)
+	assert.Equal(t, 4, requestCount)
 }
 
 func TestInsightGetCommand_FoundAndMissing(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	want := testInsight(42)
 	ts := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter, r *http.Request,
 	) {
-		assert.Equal(http.MethodGet, r.Method)
+		assert.Equal(t, http.MethodGet, r.Method)
 		switch r.URL.Path {
 		case "/api/v1/insights/42":
 			writeInsightJSON(t, w, want)
@@ -199,45 +190,44 @@ func TestInsightGetCommand_FoundAndMissing(t *testing.T) {
 	stdout, stderr, err := runInsightCommand(t,
 		"insight", "get", "42", "--server", ts.URL, "--json",
 	)
-	require.NoError(err)
-	assert.Empty(stderr)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
 	var got db.Insight
-	require.NoError(json.Unmarshal([]byte(stdout), &got))
-	assert.Equal(want, got)
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got))
+	assert.Equal(t, want, got)
 
 	stdout, _, err = runInsightCommand(t,
 		"insight", "get", "not-an-id", "--server", ts.URL,
 	)
-	require.Error(err)
-	assert.Contains(err.Error(), "invalid insight ID")
-	assert.Empty(stdout)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid insight ID")
+	assert.Empty(t, stdout)
 
 	stdout, _, err = runInsightCommand(t,
 		"insight", "get", "404", "--server", ts.URL,
 	)
-	require.Error(err)
-	assert.Equal("insight 404 not found", err.Error())
-	assert.Empty(stdout)
+	require.Error(t, err)
+	assert.Equal(t, "insight 404 not found", err.Error())
+	assert.Empty(t, stdout)
 }
 
 func TestInsightGenerateCommand_StreamsAndSaves(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	want := testInsight(99)
 	var ts *httptest.Server
 	ts = httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter, r *http.Request,
 	) {
-		assert.Equal(http.MethodPost, r.Method)
-		assert.Equal("/prefix/path/api/v1/insights/generate", r.URL.Path)
-		assert.Empty(r.URL.RawQuery)
-		assert.Equal("application/json", r.Header.Get("Content-Type"))
-		assert.Equal("text/event-stream", r.Header.Get("Accept"))
-		assert.Equal(ts.URL, r.Header.Get("Origin"))
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/prefix/path/api/v1/insights/generate", r.URL.Path)
+		assert.Empty(t, r.URL.RawQuery)
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, "text/event-stream", r.Header.Get("Accept"))
+		assert.Equal(t, ts.URL, r.Header.Get("Origin"))
 		var body map[string]jsontext.Value
-		require.NoError(json.UnmarshalRead(r.Body, &body))
-		assert.Len(body, 9)
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+			return
+		}
+		assert.Len(t, body, 9)
 		for key, value := range map[string]string{
 			"type":            "agent_analysis",
 			"date_from":       "2026-09-01",
@@ -250,8 +240,10 @@ func TestInsightGenerateCommand_StreamsAndSaves(t *testing.T) {
 			"timezone":        "America/New_York",
 		} {
 			var got string
-			require.NoError(json.Unmarshal(body[key], &got), key)
-			assert.Equal(value, got, key)
+			if !assert.NoError(t, json.Unmarshal(body[key], &got), key) {
+				return
+			}
+			assert.Equal(t, value, got, key)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, err := io.WriteString(w,
@@ -266,7 +258,9 @@ func TestInsightGenerateCommand_StreamsAndSaves(t *testing.T) {
 				})+
 				insightSSEEvent(t, "done", want),
 		)
-		require.NoError(err)
+		if !assert.NoError(t, err) {
+			return
+		}
 	}))
 	t.Cleanup(ts.Close)
 	explicitServerURL := ts.URL + "/prefix/path/?ignored=yes#fragment"
@@ -279,23 +273,21 @@ func TestInsightGenerateCommand_StreamsAndSaves(t *testing.T) {
 		"--agent", "codex", "--automated-scope", "all",
 		"--timezone", "America/New_York",
 	)
-	require.NoError(err)
+	require.NoError(t, err)
 	var got db.Insight
-	require.NoError(json.Unmarshal([]byte(stdout), &got))
-	assert.Equal(want, got)
-	assert.Contains(stderr, "generating")
-	assert.Contains(stderr, "agent started")
-	assert.Contains(stderr, "agent finished")
-	assert.NotContains(stdout, "agent started")
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got))
+	assert.Equal(t, want, got)
+	assert.Contains(t, stderr, "generating")
+	assert.Contains(t, stderr, "agent started")
+	assert.Contains(t, stderr, "agent finished")
+	assert.NotContains(t, stdout, "agent started")
 }
 
 func TestInsightGenerateCommand_ErrorEvent(t *testing.T) {
-	assert := assert.New(t)
-
 	ts := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter, r *http.Request,
 	) {
-		assert.Equal(http.MethodPost, r.Method)
+		assert.Equal(t, http.MethodPost, r.Method)
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, err := io.WriteString(w,
 			insightSSEEvent(t, "status", map[string]string{
@@ -305,7 +297,9 @@ func TestInsightGenerateCommand_ErrorEvent(t *testing.T) {
 					"message": "agent returned empty content",
 				}),
 		)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 	}))
 	t.Cleanup(ts.Close)
 
@@ -313,9 +307,9 @@ func TestInsightGenerateCommand_ErrorEvent(t *testing.T) {
 		"insight", "generate", "--server", ts.URL, "--json",
 	)
 	require.Error(t, err)
-	assert.Contains(err.Error(), "agent returned empty content")
-	assert.Empty(stdout)
-	assert.Contains(stderr, "generating")
+	assert.Contains(t, err.Error(), "agent returned empty content")
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "generating")
 }
 
 type insightReadError struct{ err error }
@@ -324,13 +318,10 @@ func (r insightReadError) Read([]byte) (int, error) { return 0, r.err }
 
 func TestConsumeInsightGenerateSSE_Boundaries(t *testing.T) {
 	t.Run("framing and large final frame", func(t *testing.T) {
-		assert := assert.New(t)
-		require := require.New(t)
-
 		want := testInsight(123)
 		want.Content = strings.Repeat("x", 70*1024)
 		done, err := json.Marshal(want)
-		require.NoError(err)
+		require.NoError(t, err)
 		stream := ": ignored\r\n" +
 			"event: progress\r\n" +
 			"data: malformed unknown payload\r\n\r\n" +
@@ -343,10 +334,10 @@ func TestConsumeInsightGenerateSSE_Boundaries(t *testing.T) {
 		got, err := consumeInsightGenerateSSE(
 			strings.NewReader(stream), &progress,
 		)
-		require.NoError(err)
-		require.NotNil(got)
-		assert.Equal(want, *got)
-		assert.Equal("generating\n", progress.String())
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		assert.Equal(t, want, *got)
+		assert.Equal(t, "generating\n", progress.String())
 	})
 
 	tests := []struct {
@@ -424,7 +415,9 @@ func TestInsightGenerateCommand_RejectsCompletionWithoutOutput(t *testing.T) {
 				assert.Equal(t, http.MethodPost, r.Method)
 				w.Header().Set("Content-Type", "text/event-stream")
 				_, err := io.WriteString(w, tc.body)
-				require.NoError(t, err)
+				if !assert.NoError(t, err) {
+					return
+				}
 			}))
 			t.Cleanup(ts.Close)
 
@@ -444,9 +437,6 @@ func TestInsightTransportModes(t *testing.T) {
 			name = "postgres-capable-readonly-runtime"
 		}
 		t.Run(name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			dataDir := t.TempDir()
 			t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 			var listRequests, generateRequests int
@@ -467,21 +457,23 @@ func TestInsightTransportModes(t *testing.T) {
 					_, err := io.WriteString(w, insightSSEEvent(
 						t, "done", testInsight(5),
 					))
-					require.NoError(err)
+					if !assert.NoError(t, err) {
+						return
+					}
 				},
 			})
 			registerTestRuntime(t, dataDir, ts.URL, readOnly)
 
 			stdout, _, err := runInsightCommand(t, "insight", "list", "--json")
-			require.NoError(err)
-			assert.Contains(stdout, "insights")
+			require.NoError(t, err)
+			assert.Contains(t, stdout, "insights")
 			stdout, _, err = runInsightCommand(t,
 				"insight", "generate", "--json",
 			)
-			require.NoError(err)
-			assert.Contains(stdout, "\"id\":5")
-			assert.Equal(1, listRequests)
-			assert.Equal(1, generateRequests)
+			require.NoError(t, err)
+			assert.Contains(t, stdout, "\"id\":5")
+			assert.Equal(t, 1, listRequests)
+			assert.Equal(t, 1, generateRequests)
 		})
 	}
 
@@ -517,15 +509,13 @@ func TestInsightTransportModes(t *testing.T) {
 func TestInsightCommandsDiscoverBasePathDaemon(t *testing.T) {
 	for _, token := range []string{"", "test-token"} {
 		t.Run(token, func(t *testing.T) {
-			require := require.New(t)
-
 			dataDir := t.TempDir()
 			t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 			t.Setenv("AGENTSVIEW_AUTH_TOKEN", token)
 			t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 			database := dbtest.OpenTestDB(t)
-			id, err := database.InsertInsight(testInsight(0))
-			require.NoError(err)
+			id, err := database.InsertInsight(t.Context(), testInsight(0))
+			require.NoError(t, err)
 			ts := httptest.NewUnstartedServer(nil)
 			host, port := splitTestServerURL(t, "http://"+ts.Listener.Addr().String())
 			srv := server.New(config.Config{
@@ -542,7 +532,7 @@ func TestInsightCommandsDiscoverBasePathDaemon(t *testing.T) {
 			_, err = WriteDaemonRuntimeWithAuth(
 				dataDir, host, port, "test", ts.URL+"/viewer", true, token != "",
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 
 			for _, args := range [][]string{
 				{"insight", "list", "--json"},
@@ -550,7 +540,7 @@ func TestInsightCommandsDiscoverBasePathDaemon(t *testing.T) {
 				{"insight", "generate", "--date-from", "2026-09-15", "--date-to", "2026-09-15", "--json"},
 			} {
 				stdout, _, err := runInsightCommand(t, args...)
-				require.NoError(err)
+				require.NoError(t, err)
 				assert.Contains(t, stdout, "Activity summary.")
 			}
 		})
@@ -558,9 +548,6 @@ func TestInsightCommandsDiscoverBasePathDaemon(t *testing.T) {
 }
 
 func TestInsightCredentials(t *testing.T) {
-	assert := assert.New(t)
-	require := require.New(t)
-
 	var seen []string
 	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
 		"/api/v1/insights": func(w http.ResponseWriter, r *http.Request) {
@@ -573,7 +560,7 @@ func TestInsightCredentials(t *testing.T) {
 	t.Setenv("AGENTSVIEW_AUTH_TOKEN", "local-token")
 	t.Setenv("AGENTSVIEW_SERVER_TOKEN", "environment-token")
 	tokenPath := filepath.Join(t.TempDir(), "server-token")
-	require.NoError(os.WriteFile(
+	require.NoError(t, os.WriteFile(
 		tokenPath, []byte("file-token\n"), 0o600,
 	))
 
@@ -581,28 +568,28 @@ func TestInsightCredentials(t *testing.T) {
 		"insight", "list", "--server", ts.URL,
 		"--server-token-file", tokenPath, "--json",
 	)
-	require.NoError(err)
-	assert.Contains(stdout, `"insights"`)
-	assert.Empty(stderr)
-	assert.Equal([]string{"Bearer file-token"}, seen)
+	require.NoError(t, err)
+	assert.Contains(t, stdout, `"insights"`)
+	assert.Empty(t, stderr)
+	assert.Equal(t, []string{"Bearer file-token"}, seen)
 
 	_, _, err = runInsightCommand(t,
 		"insight", "list", "--server", ts.URL, "--json",
 	)
-	require.NoError(err)
-	assert.Equal("Bearer environment-token", seen[1])
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer environment-token", seen[1])
 
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	registerTestRuntime(t, dataDir, ts.URL, false)
 	stdout, stderr, err = runInsightCommand(t, "insight", "list", "--json")
-	require.NoError(err)
-	assert.Equal("Bearer local-token", seen[2])
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer local-token", seen[2])
 	for _, value := range []string{
 		"local-token", "environment-token", "file-token",
 	} {
-		assert.NotContains(stdout, value)
-		assert.NotContains(stderr, value)
+		assert.NotContains(t, stdout, value)
+		assert.NotContains(t, stderr, value)
 	}
 }
 
@@ -624,26 +611,27 @@ func TestInsightHTTPErrorPreservesServerMessage(t *testing.T) {
 func TestInsightContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err := doInsightRequest(
+	response, err := doInsightRequest(
 		ctx, transport{Mode: transportHTTP, URL: "http://127.0.0.1:1"},
 		"", http.MethodGet, "/api/v1/insights", nil, nil,
 	)
+	if response != nil {
+		defer response.Body.Close()
+	}
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestInsightHumanOutputSanitizesStoredFields(t *testing.T) {
-	assert := assert.New(t)
-
 	value := testInsight(17)
 	value.Project = new("project\x1b[31m")
 	value.Content = "safe\r\x1b[2Jcontent"
 	var out bytes.Buffer
 	require.NoError(t, printInsightHuman(&out, &value))
-	assert.NotContains(out.String(), "\x1b")
-	assert.NotContains(out.String(), "\r")
-	assert.Contains(out.String(), "project[31m")
-	assert.Contains(out.String(), "safe[2Jcontent")
+	assert.NotContains(t, out.String(), "\x1b")
+	assert.NotContains(t, out.String(), "\r")
+	assert.Contains(t, out.String(), "project[31m")
+	assert.Contains(t, out.String(), "safe[2Jcontent")
 }
 
 func TestInsightHumanOutputOmitsNilAndEmptyModelPrompt(t *testing.T) {
@@ -657,16 +645,14 @@ func TestInsightHumanOutputOmitsNilAndEmptyModelPrompt(t *testing.T) {
 		{name: "empty", model: &empty, prompt: &empty},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-
 			value := testInsight(18)
 			value.Model = tc.model
 			value.Prompt = tc.prompt
 			var out bytes.Buffer
 			require.NoError(t, printInsightHuman(&out, &value))
-			assert.NotContains(out.String(), "Model:")
-			assert.NotContains(out.String(), "Prompt:")
-			assert.Contains(out.String(), value.Content)
+			assert.NotContains(t, out.String(), "Model:")
+			assert.NotContains(t, out.String(), "Prompt:")
+			assert.Contains(t, out.String(), value.Content)
 		})
 	}
 }
@@ -676,15 +662,13 @@ func TestInsightGenerateRequestJSONTags(t *testing.T) {
 		Type: "daily_activity", DateFrom: "2026-09-15", DateTo: "2026-09-15",
 	})
 	require.NoError(t, err)
-	assert.JSONEq(t,
+	assert.Equal(t,
 		`{"type":"daily_activity","date_from":"2026-09-15","date_to":"2026-09-15"}`,
 		string(data),
 	)
 }
 
 func TestInsightCommandHelpListsScope(t *testing.T) {
-	assert := assert.New(t)
-
 	cmd := newInsightCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
@@ -696,9 +680,9 @@ func TestInsightCommandHelpListsScope(t *testing.T) {
 		"--type", "--date-from", "--date-to", "--project", "--prompt",
 		"--session-id", "--agent", "--automated-scope", "--timezone",
 	} {
-		assert.Contains(out.String(), flag)
+		assert.Contains(t, out.String(), flag)
 	}
-	assert.NotContains(out.String(), "--kind")
-	assert.NotContains(out.String(), "--force-refresh")
-	assert.NotContains(out.String(), "--llm-opt-in")
+	assert.NotContains(t, out.String(), "--kind")
+	assert.NotContains(t, out.String(), "--force-refresh")
+	assert.NotContains(t, out.String(), "--llm-opt-in")
 }

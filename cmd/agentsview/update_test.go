@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net"
 	"os"
@@ -18,14 +19,14 @@ func TestPerformUpdateWithDaemonLifecycleRestartsStoppedDaemon(t *testing.T) {
 	cfg := config.Config{DataDir: t.TempDir()}
 	var calls []string
 
-	err := performUpdateWithDaemonLifecycle(
+	err := performUpdateWithDaemonLifecycle(t.Context(),
 		&update.UpdateInfo{},
 		nil,
 		func() (config.Config, error) {
 			calls = append(calls, "load")
 			return cfg, nil
 		},
-		func(got config.Config) (updateDaemonStopResult, error) {
+		func(ctx context.Context, got config.Config) (updateDaemonStopResult, error) {
 			calls = append(calls, "stop")
 			assert.Equal(t, cfg.DataDir, got.DataDir)
 			return updateDaemonStopResult{
@@ -36,11 +37,11 @@ func TestPerformUpdateWithDaemonLifecycleRestartsStoppedDaemon(t *testing.T) {
 				RequireAuthKnown: true,
 			}, nil
 		},
-		func(_ *update.UpdateInfo, _ func(int64, int64)) error {
+		func(ctx context.Context, _ *update.UpdateInfo, _ func(int64, int64)) error {
 			calls = append(calls, "perform")
 			return nil
 		},
-		func(got config.Config, stop updateDaemonStopResult) error {
+		func(ctx context.Context, got config.Config, stop updateDaemonStopResult) error {
 			calls = append(calls, "restart")
 			assert.Equal(t, cfg.DataDir, got.DataDir)
 			assert.Equal(t, "127.0.0.1", stop.Host)
@@ -60,22 +61,22 @@ func TestPerformUpdateWithDaemonLifecycleRestartsAfterInstallFailure(t *testing.
 	installErr := errors.New("install failed")
 	var calls []string
 
-	err := performUpdateWithDaemonLifecycle(
+	err := performUpdateWithDaemonLifecycle(t.Context(),
 		&update.UpdateInfo{},
 		nil,
 		func() (config.Config, error) {
 			calls = append(calls, "load")
 			return cfg, nil
 		},
-		func(config.Config) (updateDaemonStopResult, error) {
+		func(context.Context, config.Config) (updateDaemonStopResult, error) {
 			calls = append(calls, "stop")
 			return updateDaemonStopResult{Stopped: true}, nil
 		},
-		func(_ *update.UpdateInfo, _ func(int64, int64)) error {
+		func(ctx context.Context, _ *update.UpdateInfo, _ func(int64, int64)) error {
 			calls = append(calls, "perform")
 			return installErr
 		},
-		func(config.Config, updateDaemonStopResult) error {
+		func(context.Context, config.Config, updateDaemonStopResult) error {
 			calls = append(calls, "restart")
 			return nil
 		},
@@ -91,22 +92,21 @@ func TestPerformUpdateWithDaemonLifecycleRestartsAfterPartialStopFailure(t *test
 	stopErr := errors.New("second daemon failed to stop")
 	var calls []string
 
-	err := performUpdateWithDaemonLifecycle(
+	err := performUpdateWithDaemonLifecycle(t.Context(),
 		&update.UpdateInfo{},
 		nil,
 		func() (config.Config, error) {
 			calls = append(calls, "load")
 			return cfg, nil
 		},
-		func(config.Config) (updateDaemonStopResult, error) {
+		func(context.Context, config.Config) (updateDaemonStopResult, error) {
 			calls = append(calls, "stop")
 			return updateDaemonStopResult{Stopped: true}, stopErr
 		},
-		func(_ *update.UpdateInfo, _ func(int64, int64)) error {
-			t.Fatal("install must not run after stop failure")
-			return nil
+		func(ctx context.Context, _ *update.UpdateInfo, _ func(int64, int64)) error {
+			return errors.New("install must not run after stop failure")
 		},
-		func(config.Config, updateDaemonStopResult) error {
+		func(context.Context, config.Config, updateDaemonStopResult) error {
 			calls = append(calls, "restart")
 			return nil
 		},
@@ -120,24 +120,23 @@ func TestPerformUpdateWithDaemonLifecycleRestartsAfterPartialStopFailure(t *test
 func TestPerformUpdateWithDaemonLifecycleDoesNotRestartWhenNoneStopped(t *testing.T) {
 	var calls []string
 
-	err := performUpdateWithDaemonLifecycle(
+	err := performUpdateWithDaemonLifecycle(t.Context(),
 		&update.UpdateInfo{},
 		nil,
 		func() (config.Config, error) {
 			calls = append(calls, "load")
 			return config.Config{DataDir: t.TempDir()}, nil
 		},
-		func(config.Config) (updateDaemonStopResult, error) {
+		func(context.Context, config.Config) (updateDaemonStopResult, error) {
 			calls = append(calls, "stop")
 			return updateDaemonStopResult{}, nil
 		},
-		func(_ *update.UpdateInfo, _ func(int64, int64)) error {
+		func(ctx context.Context, _ *update.UpdateInfo, _ func(int64, int64)) error {
 			calls = append(calls, "perform")
 			return nil
 		},
-		func(config.Config, updateDaemonStopResult) error {
-			t.Fatal("restart must not run when no daemon was stopped")
-			return nil
+		func(context.Context, config.Config, updateDaemonStopResult) error {
+			return errors.New("restart must not run when no daemon was stopped")
 		},
 	)
 
@@ -171,64 +170,61 @@ func TestUpdateRestartPreservesPortChoice(t *testing.T) {
 		{name: "explicit zero keeps automatic selection", ephemeral: true, occupied: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			assert := assert.New(t)
-			require := require.New(t)
-
 			dir := testDataDir(t)
-			require.NoError(os.WriteFile(filepath.Join(dir, "config.toml"), []byte(
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(
 				"port = 8080\npublic_url = \"http://viewer.example.test:8080\"\n"+
 					"public_origins = [\"http://viewer.example.test:8080\"]\n",
 			), 0o600))
 			listener, port := heldLoopbackPort(t)
-			require.NoError(listener.Close())
+			require.NoError(t, listener.Close())
 			if tt.ephemeral {
 				port = 0
 			}
 			cmd := newServeCommand()
-			require.NoError(cmd.Flags().Parse([]string{"--port", strconv.Itoa(port)}))
+			require.NoError(t, cmd.Flags().Parse([]string{"--port", strconv.Itoa(port)}))
 			cfg, err := config.LoadPFlags(cmd.Flags())
-			require.NoError(err)
-			first, _, err := prepareRunServeRuntimeConfig(cfg, 0, nil)
-			require.NoError(err)
-			require.Equal("http://viewer.example.test:8080", first.PublicURL)
+			require.NoError(t, err)
+			first, _, err := prepareRunServeRuntimeConfig(cmd.Context(), cfg, 0, nil)
+			require.NoError(t, err)
+			require.Equal(t, "http://viewer.example.test:8080", first.PublicURL)
 			_, err = WriteDaemonRuntimeWithAuthAndNoSync(
 				dir, first.Host, first.Port, "test", first.PublicURL, false, false, false, new(port),
 			)
-			require.NoError(err)
+			require.NoError(t, err)
 			oldStop := stopDaemonRuntimeForUpgrade
-			stopDaemonRuntimeForUpgrade = func(_ config.Config, rt *DaemonRuntime) error {
-				require.Equal(first.Port, rt.Port)
+			stopDaemonRuntimeForUpgrade = func(ctx context.Context, _ config.Config, rt *DaemonRuntime) error {
+				require.Equal(t, first.Port, rt.Port)
 				return nil
 			}
 			t.Cleanup(func() { stopDaemonRuntimeForUpgrade = oldStop })
-			stopped, err := stopWritableDaemonsForUpdate(config.Config{DataDir: dir})
-			require.NoError(err)
-			require.True(stopped.Stopped)
+			stopped, err := stopWritableDaemonsForUpdate(cmd.Context(), config.Config{DataDir: dir})
+			require.NoError(t, err)
+			require.True(t, stopped.Stopped)
 			if tt.occupied {
 				listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", net.JoinHostPort(first.Host, strconv.Itoa(first.Port)))
-				require.NoError(err)
+				require.NoError(t, err)
 				t.Cleanup(func() { listener.Close() })
 			}
 			args := serveBackgroundChildArgs(restartDaemonAfterUpdateArgs(config.Config{}, stopped))
 			cmd = newServeCommand()
-			require.NoError(cmd.Flags().Parse(args[1:]))
+			require.NoError(t, cmd.Flags().Parse(args[1:]))
 			cfg, err = config.LoadPFlags(cmd.Flags())
-			require.NoError(err)
+			require.NoError(t, err)
 			restartPort, err := cmd.Flags().GetInt("restart-port")
-			require.NoError(err)
-			restarted, _, err := prepareRunServeRuntimeConfig(cfg, restartPort, nil)
+			require.NoError(t, err)
+			restarted, _, err := prepareRunServeRuntimeConfig(cmd.Context(), cfg, restartPort, nil)
 			if tt.occupied && !tt.ephemeral {
-				require.ErrorContains(err, "requested port")
+				require.ErrorContains(t, err, "requested port")
 				return
 			}
-			require.NoError(err)
-			assert.Equal("http://viewer.example.test:8080", restarted.PublicURL)
-			assert.Equal([]string{"http://viewer.example.test:8080"}, restarted.PublicOrigins)
+			require.NoError(t, err)
+			assert.Equal(t, "http://viewer.example.test:8080", restarted.PublicURL)
+			assert.Equal(t, []string{"http://viewer.example.test:8080"}, restarted.PublicOrigins)
 			if tt.ephemeral {
-				assert.Positive(restarted.Port)
-				assert.NotEqual(first.Port, restarted.Port)
+				assert.Positive(t, restarted.Port)
+				assert.NotEqual(t, first.Port, restarted.Port)
 			} else {
-				assert.Equal(first.Port, restarted.Port)
+				assert.Equal(t, first.Port, restarted.Port)
 			}
 		})
 	}

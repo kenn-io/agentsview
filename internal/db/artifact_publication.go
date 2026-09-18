@@ -879,15 +879,15 @@ func (db *DB) ArtifactLocalMachines(ctx context.Context) ([]string, error) {
 // ConfigureArtifactLocalMachine persists the current installation identity and
 // requeues active-origin publications when it changes. Archive adoption must
 // run first so historical local rows already use this installation identity.
-func (db *DB) ConfigureArtifactLocalMachine(machine string) error {
+func (db *DB) ConfigureArtifactLocalMachine(ctx context.Context, machine string) error {
 	if strings.TrimSpace(machine) == "" {
 		return errors.New("artifact local installation identity is required")
 	}
-	return db.Update(func(tx *sql.Tx) error {
-		if err := lockArtifactPublicationTx(context.Background(), tx); err != nil {
+	return db.Update(ctx, func(tx *sql.Tx) error {
+		if err := lockArtifactPublicationTx(ctx, tx); err != nil {
 			return err
 		}
-		return configureArtifactLocalMachineTx(context.Background(), tx, machine)
+		return configureArtifactLocalMachineTx(ctx, tx, machine)
 	})
 }
 
@@ -923,7 +923,7 @@ func configureArtifactLocalMachineTx(ctx context.Context, tx *sql.Tx, machine st
 	if origin == "" {
 		return nil
 	}
-	return populateArtifactOriginQueueTx(tx, origin, true)
+	return populateArtifactOriginQueueTx(ctx, tx, origin, true)
 }
 
 func artifactExportGenerationTx(
