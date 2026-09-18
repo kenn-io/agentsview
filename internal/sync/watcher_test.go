@@ -1598,6 +1598,52 @@ func TestWatcherOrdinaryWakeDoesNotClearRetainedRetryBackoff(t *testing.T) {
 	})
 }
 
+func TestWatcherImmediateWakeDuringFailedCallbackBypassesBackoff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		backend := newFakeWatchBackend()
+		started := make(chan struct{})
+		release := make(chan struct{})
+		starts := make(chan time.Time, 3)
+		var watcher *Watcher
+		var attempts atomic.Int32
+		w, err := newWatcherWithBackend(
+			0, 20*time.Millisecond,
+			func(_ context.Context, _ WatchBatch) error {
+				starts <- time.Now()
+				if attempts.Add(1) == 2 {
+					close(started)
+					<-release
+				}
+				if attempts.Load() <= 2 {
+					return retryScopedWatchError{retry: WatchBatch{
+						Paths: []string{"/retained"},
+					}}
+				}
+				return nil
+			},
+			backend, 8, 100_000,
+		)
+		require.NoError(t, err)
+		watcher = w
+		w.Start()
+		defer w.Stop()
+
+		backend.sendEvent(t, "/initial")
+		requireReceiveWithin(t, starts, time.Second)
+		requireReceiveWithin(t, started, time.Second)
+		second := requireReceiveWithin(t, starts, time.Second)
+		w.QueueRetryBatch(WatchBatch{Paths: []string{"/immediate"}})
+		synctest.Wait()
+		assert.True(t, watcher.eventSink.immediatePending())
+		close(release)
+		third := requireReceiveWithin(t, starts, time.Second)
+
+		assert.GreaterOrEqual(t, third.Sub(second), 20*time.Millisecond)
+		assert.Less(t, third.Sub(second), 40*time.Millisecond,
+			"an immediate wake observed during the callback must bypass retry backoff")
+	})
+}
+
 func TestWatcherSuccessfulCallbackWithConcurrentEventsKeepsBatchDelay(t *testing.T) {
 	for _, tc := range []struct {
 		name string

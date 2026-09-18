@@ -651,11 +651,17 @@ func (s *watchEventSink) takeImmediateWake() bool {
 	defer s.mu.Unlock()
 	s.absorbHandoff()
 	immediate := s.pending.immediate
-	s.pending.immediate = false
 	if s.pending.Empty() {
 		return false
 	}
 	return immediate
+}
+
+func (s *watchEventSink) immediatePending() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.absorbHandoff()
+	return s.pending.immediate && !s.pending.Empty()
 }
 
 // Watcher schedules backend changes into serialized callbacks with short-burst
@@ -1135,6 +1141,7 @@ func (w *Watcher) loop() {
 	var timer *time.Timer
 	var timerC <-chan time.Time
 	callbackBusy := false
+	immediatePending := false
 
 	stopTimer := func() {
 		if timer != nil {
@@ -1181,6 +1188,7 @@ func (w *Watcher) loop() {
 		}
 		firstPendingAt = time.Time{}
 		pendingDelay = w.batchDelay
+		immediatePending = false
 		callbackBusy = true
 		batches <- batch
 		return true
@@ -1215,6 +1223,7 @@ func (w *Watcher) loop() {
 
 		case <-w.eventSink.wake:
 			immediate := w.eventSink.takeImmediateWake()
+			immediatePending = immediatePending || immediate
 			if w.eventSink.Empty() {
 				continue
 			}
@@ -1294,11 +1303,17 @@ func (w *Watcher) loop() {
 				}
 				switch {
 				case retryRetained:
-					// Concurrent events must not bypass the retained retry's backoff.
+					immediatePending = immediatePending ||
+						w.eventSink.immediatePending()
 					firstPendingAt = time.Now()
-					pendingDelay = watcherRetryDelay(
-						max(w.batchDelay, w.minInterval), consecutiveFailures,
-					)
+					if immediatePending {
+						pendingDelay = 0
+					} else {
+						// Concurrent events must not bypass the retained retry's backoff.
+						pendingDelay = watcherRetryDelay(
+							max(w.batchDelay, w.minInterval), consecutiveFailures,
+						)
+					}
 				case wasEmpty && !w.eventSink.Empty():
 					firstPendingAt = time.Now()
 					pendingDelay = 0
