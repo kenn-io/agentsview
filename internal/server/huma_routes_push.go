@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
@@ -92,6 +93,9 @@ func (s *Server) registerPushRoutes() {
 	s.stream(group, http.MethodPost, "/duckdb",
 		"Push to DuckDB", s.humaDuckDBPush, streamJSONResponse(),
 	)
+	s.stream(group, http.MethodPost, "/clickhouse",
+		"Push to ClickHouse", s.humaClickHousePush, streamJSONResponse(),
+	)
 }
 
 // runPushStream executes run once and writes its outcome to the client: SSE
@@ -149,13 +153,14 @@ type daemonPushInput struct {
 }
 
 type daemonPushRequest struct {
-	Full                   bool                 `json:"full"`
-	Projects               []string             `json:"projects,omitempty"`
-	ExcludeProjects        []string             `json:"exclude_projects,omitempty"`
-	PG                     *config.PGConfig     `json:"pg,omitempty"`
-	DuckDB                 *config.DuckDBConfig `json:"duckdb,omitempty"`
-	SyncStateTarget        string               `json:"sync_state_target,omitempty"`
-	MigrateLegacySyncState bool                 `json:"migrate_legacy_sync_state,omitzero"`
+	Full                   bool                     `json:"full"`
+	Projects               []string                 `json:"projects,omitempty"`
+	ExcludeProjects        []string                 `json:"exclude_projects,omitempty"`
+	PG                     *config.PGConfig         `json:"pg,omitempty"`
+	DuckDB                 *config.DuckDBConfig     `json:"duckdb,omitempty"`
+	ClickHouse             *config.ClickHouseConfig `json:"clickhouse,omitempty"`
+	SyncStateTarget        string                   `json:"sync_state_target,omitempty"`
+	MigrateLegacySyncState bool                     `json:"migrate_legacy_sync_state,omitzero"`
 	// NoVectors carries the CLI --no-vectors flag, which has no daemon-side
 	// flag of its own, into the push handler's vector-source gate.
 	NoVectors bool `json:"no_vectors,omitzero"`
@@ -213,6 +218,34 @@ func (s *Server) pgPushConfig(req daemonPushRequest) (config.PGConfig, error) {
 		return *req.PG, nil
 	}
 	return s.cfg.ResolvePG()
+}
+
+func (s *Server) clickHousePushConfig(req daemonPushRequest) (config.ClickHouseConfig, error) {
+	if req.ClickHouse != nil {
+		return *req.ClickHouse, nil
+	}
+	return s.cfg.ResolveClickHouse()
+}
+
+func newClickHousePushProgressLogger() func(clickhouse.PushProgress) {
+	var last time.Time
+	return func(p clickhouse.PushProgress) {
+		if time.Since(last) < pushProgressLogInterval {
+			return
+		}
+		last = time.Now()
+		if p.Phase == "preparing" {
+			if p.SessionsTotal == 0 {
+				log.Printf("clickhouse push: preparing (metadata, fingerprints)")
+				return
+			}
+			log.Printf("clickhouse push: preparing %d/%d session(s)",
+				p.SessionsDone, p.SessionsTotal)
+			return
+		}
+		log.Printf("clickhouse push: %d/%d session(s), %d messages",
+			p.SessionsDone, p.SessionsTotal, p.MessagesDone)
+	}
 }
 
 // duckDBPushConfig resolves the DuckDB config a daemon push writes to. The
@@ -547,6 +580,87 @@ func (s *Server) humaPGPush(
 							ScopeVectorsToChangedSessions,
 						LastReconciledVectorGeneration: body.
 							LastReconciledVectorGeneration,
+					}, onProgress)
+					return err
+				},
+			)
+			return result, err
+		})
+	}}, nil
+}
+
+func (s *Server) humaClickHousePush(
+	ctx context.Context,
+	in *daemonPushInput,
+) (*huma.StreamResponse, error) {
+	if err := clickhouse.ValidateProjectFilters(
+		in.Body.Projects,
+		in.Body.ExcludeProjects,
+	); err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
+	local, err := s.localPushTarget()
+	if err != nil {
+		return nil, err
+	}
+	if local.WriterClosed() {
+		return nil, writerClosedError()
+	}
+	chCfg, err := s.clickHousePushConfig(in.Body)
+	if err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
+	if chCfg.URL == "" {
+		return nil, apiError(http.StatusBadRequest, "clickhouse push: url not configured")
+	}
+	if err := clickhouse.CheckTransportSecurity(chCfg.URL, chCfg.AllowInsecure); err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
+	if err := validatePushWatchScope(ctx, in.Body, s.ingestionConfig()); err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
+
+	engine := s.syncEngineForLocal(local)
+	body := in.Body
+	return &huma.StreamResponse{Body: func(hctx huma.Context) {
+		runPushStream(hctx, func(
+			streamProgress func(clickhouse.PushProgress),
+		) (any, error) {
+			onProgress := composePushProgress(
+				newClickHousePushProgressLogger(), streamProgress,
+			)
+			var result clickhouse.PushResult
+			err := s.syncThenRunForPush(
+				ctx, engine, local, body.Full, body.WatchBatch, body.WatchRecovery,
+				func(forceFull bool) error {
+					if refreshErr := s.ensurePricing(ctx, local); refreshErr != nil {
+						if ctxErr := ctx.Err(); ctxErr != nil {
+							return ctxErr
+						}
+						log.Printf("pricing refresh: %v", refreshErr)
+					}
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						return ctxErr
+					}
+					syncer, err := clickhouse.New(
+						ctx,
+						clickhouse.Target{URL: chCfg.URL, Database: chCfg.Database},
+						local,
+						chCfg.MachineName,
+						clickhouse.SyncOptions{
+							Projects:        body.Projects,
+							ExcludeProjects: body.ExcludeProjects,
+						},
+					)
+					if err != nil {
+						return err
+					}
+					defer syncer.Close()
+					if err := syncer.EnsureSchema(ctx); err != nil {
+						return err
+					}
+					result, err = syncer.PushWithOptions(ctx, clickhouse.PushOptions{
+						Full: forceFull,
 					}, onProgress)
 					return err
 				},

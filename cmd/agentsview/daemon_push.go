@@ -18,6 +18,7 @@ type daemonPushTarget int
 const (
 	daemonPushPG daemonPushTarget = iota
 	daemonPushDuckDB
+	daemonPushClickHouse
 	daemonStartupSync
 )
 
@@ -54,6 +55,12 @@ func postDaemonPush[T, P any](
 			resp, payload, stream = response.HTTPResponse, response.Body, response.Stream200
 		case daemonPushDuckDB:
 			response, requestErr := api.PostAPIV1PushDuckdbStreamWithResponse(ctx, &apiclient.PostAPIV1PushDuckdbRequestOptions{Body: &body})
+			if response == nil {
+				return zero, requestErr
+			}
+			resp, payload, stream = response.HTTPResponse, response.Body, response.Stream200
+		case daemonPushClickHouse:
+			response, requestErr := api.PostAPIV1PushClickhouseStreamWithResponse(ctx, &apiclient.PostAPIV1PushClickhouseRequestOptions{Body: &body})
 			if response == nil {
 				return zero, requestErr
 			}

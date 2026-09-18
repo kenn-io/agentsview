@@ -15,7 +15,7 @@ import (
 
 func TestBuildServiceSpec_RequiresURL(t *testing.T) {
 	t.Setenv("AGENTSVIEW_PG_URL", "")
-	_, err := buildServiceSpec(config.Config{})
+	_, err := buildServiceSpec(config.Config{}, pgServiceKind)
 	require.Error(t, err, "expected error when pg.url is not configured")
 	assert.Contains(t, err.Error(), "default_pg-selected [pg.NAME].url")
 }
@@ -29,7 +29,7 @@ func TestBuildServiceSpec_PopulatesFields(t *testing.T) {
 			URL:         "postgres://u:p@localhost/db?sslmode=disable",
 			MachineName: "box1",
 		},
-	})
+	}, pgServiceKind)
 	if err != nil {
 		t.Fatalf("buildServiceSpec: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestBuildServiceSpec_UsesNamedDefaultTarget(t *testing.T) {
 				MachineName: "archivebox",
 			},
 		},
-	})
+	}, pgServiceKind)
 	require.NoError(t, err)
 	assert.Equal(t, dataDir, spec.DataDir)
 	assert.Equal(t, filepath.Join(dataDir, "pg-watch.log"), spec.LogPath)
@@ -76,7 +76,7 @@ func TestBuildServiceSpec_RejectsEnvPGURL(t *testing.T) {
 			URL:         "postgres://from-env",
 			MachineName: "box1",
 		},
-	})
+	}, pgServiceKind)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "AGENTSVIEW_PG_URL")
 	assert.Contains(t, err.Error(), "literal PostgreSQL URL")
@@ -92,7 +92,7 @@ func TestBuildServiceSpec_RejectsExpandedPGURL(t *testing.T) {
 			URL:         "${PGURL}",
 			MachineName: "box1",
 		},
-	})
+	}, pgServiceKind)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "environment variable expansion")
 	assert.Contains(t, err.Error(), "literal PostgreSQL URL")
@@ -103,7 +103,7 @@ func TestBuildServiceSpec_RejectsExpandedPGURL(t *testing.T) {
 			URL:         "$PGURL",
 			MachineName: "box1",
 		},
-	})
+	}, pgServiceKind)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "environment variable expansion")
 	assert.Contains(t, err.Error(), "default_pg-selected [pg.NAME].url")
@@ -166,7 +166,7 @@ func TestBuildServiceSpec_RejectsUnsafeDataDir(t *testing.T) {
 			URL:         "postgres://u:p@localhost/db?sslmode=disable",
 			MachineName: "box1",
 		},
-	})
+	}, pgServiceKind)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsafe character")
 }
@@ -187,7 +187,7 @@ func TestSetEnvVarsAffectingService(t *testing.T) {
 		v, ok := env[name]
 		return v, ok
 	}
-	got := setEnvVarsAffectingService(lookup)
+	got := setEnvVarsAffectingService(pgServiceKind, lookup)
 	assert.Contains(t, got, "AGENTSVIEW_PG_SCHEMA")
 	assert.Contains(t, got, "CLAUDE_CONFIG_DIR")
 	assert.Contains(t, got, "CLAUDE_PROJECTS_DIR")
@@ -198,7 +198,7 @@ func TestSetEnvVarsAffectingService(t *testing.T) {
 		"set-but-empty env vars should not be reported")
 
 	// Nothing set -> empty result.
-	none := setEnvVarsAffectingService(func(string) (string, bool) {
+	none := setEnvVarsAffectingService(pgServiceKind, func(string) (string, bool) {
 		return "", false
 	})
 	assert.Empty(t, none)
@@ -231,7 +231,7 @@ func TestReadServiceLastPush_UsesDefaultTargetScope(t *testing.T) {
 		"2026-03-11T12:34:56.123Z",
 	))
 
-	lastPush, err := readServiceLastPush(config.Config{
+	lastPush, err := readServiceLastPush(pgServiceKind, config.Config{
 		DefaultPG: "work",
 		PGTargets: map[string]config.PGConfig{
 			"work": {URL: "postgres://work"},
@@ -249,7 +249,7 @@ func TestReadServiceLastPush_ReadsLegacyDefaultStateWithoutMigration(t *testing.
 		"2026-03-11T12:34:56.123Z",
 	))
 
-	lastPush, err := readServiceLastPush(config.Config{
+	lastPush, err := readServiceLastPush(pgServiceKind, config.Config{
 		DefaultPG: "work",
 		PGTargets: map[string]config.PGConfig{
 			"work": {URL: "postgres://work"},
@@ -319,9 +319,40 @@ func (r *recordingRunner) sawContains(sub string) bool {
 	return false
 }
 
-func TestLaunchdRender(t *testing.T) {
-	m := &launchdManager{uid: 501, home: "/Users/me", run: nil}
+func TestLaunchdRender_ClickHouseKind(t *testing.T) {
+	m := &launchdManager{kind: clickHouseServiceKind, uid: 501, home: "/Users/me"}
 	spec := serviceSpec{
+		Kind:    clickHouseServiceKind,
+		BinPath: "/usr/local/bin/agentsview",
+		DataDir: "/Users/me/.agentsview",
+		LogPath: "/Users/me/.agentsview/clickhouse-watch.log",
+	}
+	got := m.render(spec)
+	assert.Contains(t, got, `<string>agentsview.clickhouse-watch</string>`)
+	assert.Contains(t, got, `<string>clickhouse</string>`)
+	assert.Contains(t, got, `<string>push</string>`)
+	assert.Contains(t, got, `<string>--watch</string>`)
+	assert.Contains(t, got, `<string>/Users/me/.agentsview/clickhouse-watch.log</string>`)
+}
+
+func TestSystemdRender_ClickHouseKind(t *testing.T) {
+	m := &systemdManager{kind: clickHouseServiceKind, user: "me", home: "/home/me"}
+	spec := serviceSpec{
+		Kind:    clickHouseServiceKind,
+		BinPath: "/usr/local/bin/agentsview",
+		DataDir: "/home/me/.agentsview",
+		LogPath: "/home/me/.agentsview/clickhouse-watch.log",
+	}
+	got := m.render(spec)
+	assert.Contains(t, got, "Description=agentsview ClickHouse auto-push")
+	assert.Contains(t, got, `ExecStart="/usr/local/bin/agentsview" clickhouse push --watch`)
+	assert.Contains(t, got, "clickhouse-watch.log")
+}
+
+func TestLaunchdRender(t *testing.T) {
+	m := &launchdManager{kind: pgServiceKind, uid: 501, home: "/Users/me", run: nil}
+	spec := serviceSpec{
+		Kind:    pgServiceKind,
 		BinPath: "/usr/local/bin/agentsview",
 		DataDir: "/Users/me/.agentsview",
 		LogPath: "/Users/me/.agentsview/pg-watch.log",
@@ -354,7 +385,7 @@ func TestLaunchdRender(t *testing.T) {
 }
 
 func TestLaunchdUnitPath(t *testing.T) {
-	m := &launchdManager{uid: 501, home: "/Users/me"}
+	m := &launchdManager{kind: pgServiceKind, uid: 501, home: "/Users/me"}
 	want := filepath.Join(
 		"/Users/me", "Library", "LaunchAgents", "agentsview.pg-watch.plist",
 	)
@@ -366,7 +397,7 @@ func TestLaunchdUnitPath(t *testing.T) {
 func TestLaunchdInstall_WritesAndBootstraps(t *testing.T) {
 	home := t.TempDir()
 	rr := &recordingRunner{}
-	m := &launchdManager{uid: 501, home: home, run: rr.run}
+	m := &launchdManager{kind: pgServiceKind, uid: 501, home: home, run: rr.run}
 	spec := serviceSpec{
 		BinPath: "/usr/local/bin/agentsview",
 		DataDir: home,
@@ -385,7 +416,7 @@ func TestLaunchdInstall_WritesAndBootstraps(t *testing.T) {
 
 func TestLaunchdStart_BootstrapsAfterBootout(t *testing.T) {
 	rr := &recordingRunner{}
-	m := &launchdManager{uid: 501, home: t.TempDir(), run: rr.run}
+	m := &launchdManager{kind: pgServiceKind, uid: 501, home: t.TempDir(), run: rr.run}
 	if err := m.start(context.Background()); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -396,7 +427,7 @@ func TestLaunchdStart_BootstrapsAfterBootout(t *testing.T) {
 
 func TestLaunchdStop_BootsOut(t *testing.T) {
 	rr := &recordingRunner{}
-	m := &launchdManager{uid: 501, home: t.TempDir(), run: rr.run}
+	m := &launchdManager{kind: pgServiceKind, uid: 501, home: t.TempDir(), run: rr.run}
 	if err := m.stop(context.Background()); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
@@ -408,7 +439,7 @@ func TestLaunchdStop_BootsOut(t *testing.T) {
 func TestLaunchdUninstall_RemovesPlist(t *testing.T) {
 	home := t.TempDir()
 	rr := &recordingRunner{}
-	m := &launchdManager{uid: 501, home: home, run: rr.run}
+	m := &launchdManager{kind: pgServiceKind, uid: 501, home: home, run: rr.run}
 	spec := serviceSpec{
 		BinPath: "/usr/local/bin/agentsview",
 		DataDir: home,
@@ -429,7 +460,7 @@ func TestLaunchdUninstall_RemovesPlist(t *testing.T) {
 }
 
 func TestSystemdRender_Golden(t *testing.T) {
-	m := &systemdManager{user: "me", home: "/home/me"}
+	m := &systemdManager{kind: pgServiceKind, user: "me", home: "/home/me"}
 	spec := serviceSpec{
 		BinPath: "/usr/local/bin/agentsview",
 		DataDir: "/home/me/.agentsview",
@@ -459,7 +490,7 @@ WantedBy=default.target
 }
 
 func TestSystemdUnitPath(t *testing.T) {
-	m := &systemdManager{user: "me", home: "/home/me"}
+	m := &systemdManager{kind: pgServiceKind, user: "me", home: "/home/me"}
 	want := filepath.Join(
 		"/home/me", ".config", "systemd", "user", "agentsview-pg-watch.service",
 	)
@@ -472,14 +503,14 @@ func TestSystemdLingerDetection(t *testing.T) {
 	yes := &recordingRunner{outputs: map[string]string{
 		"loginctl show-user me --property=Linger": "Linger=yes\n",
 	}}
-	m := &systemdManager{user: "me", home: "/home/me", run: yes.run}
+	m := &systemdManager{kind: pgServiceKind, user: "me", home: "/home/me", run: yes.run}
 	if !m.lingerEnabled(context.Background()) {
 		t.Error("expected linger enabled")
 	}
 	no := &recordingRunner{outputs: map[string]string{
 		"loginctl show-user me --property=Linger": "Linger=no\n",
 	}}
-	m2 := &systemdManager{user: "me", home: "/home/me", run: no.run}
+	m2 := &systemdManager{kind: pgServiceKind, user: "me", home: "/home/me", run: no.run}
 	if m2.lingerEnabled(context.Background()) {
 		t.Error("expected linger disabled")
 	}
@@ -488,7 +519,7 @@ func TestSystemdLingerDetection(t *testing.T) {
 func TestSystemdInstall_ReloadsAndEnables(t *testing.T) {
 	home := t.TempDir()
 	rr := &recordingRunner{}
-	m := &systemdManager{user: "me", home: home, run: rr.run}
+	m := &systemdManager{kind: pgServiceKind, user: "me", home: home, run: rr.run}
 	spec := serviceSpec{
 		BinPath: "/usr/local/bin/agentsview",
 		DataDir: home,
@@ -510,7 +541,7 @@ func TestSystemdInstall_ReloadsAndEnables(t *testing.T) {
 
 func TestSystemdStart_CallsStart(t *testing.T) {
 	rr := &recordingRunner{}
-	m := &systemdManager{user: "me", home: t.TempDir(), run: rr.run}
+	m := &systemdManager{kind: pgServiceKind, user: "me", home: t.TempDir(), run: rr.run}
 	if err := m.start(context.Background()); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -521,7 +552,7 @@ func TestSystemdStart_CallsStart(t *testing.T) {
 
 func TestSystemdStop_CallsStop(t *testing.T) {
 	rr := &recordingRunner{}
-	m := &systemdManager{user: "me", home: t.TempDir(), run: rr.run}
+	m := &systemdManager{kind: pgServiceKind, user: "me", home: t.TempDir(), run: rr.run}
 	if err := m.stop(context.Background()); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
@@ -533,7 +564,7 @@ func TestSystemdStop_CallsStop(t *testing.T) {
 func TestSystemdUninstall_DisablesAndRemoves(t *testing.T) {
 	home := t.TempDir()
 	rr := &recordingRunner{}
-	m := &systemdManager{user: "me", home: home, run: rr.run}
+	m := &systemdManager{kind: pgServiceKind, user: "me", home: home, run: rr.run}
 	spec := serviceSpec{
 		BinPath: "/usr/local/bin/agentsview",
 		DataDir: home,

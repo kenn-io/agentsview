@@ -214,6 +214,38 @@ func TestPGPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {
 	assert.Equal(t, "laptop", got.MachineName)
 }
 
+func TestClickHousePushConfigRequestOverride(t *testing.T) {
+	s := testServerWithConfig(config.Config{
+		ClickHouse: config.ClickHouseConfig{URL: "clickhouse://from-config"},
+	})
+	got, err := s.clickHousePushConfig(daemonPushRequest{
+		ClickHouse: &config.ClickHouseConfig{
+			URL:         "clickhouse://from-request",
+			Database:    "mirrordb",
+			MachineName: "laptop",
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "clickhouse://from-request", got.URL)
+	assert.Equal(t, "mirrordb", got.Database)
+	assert.Equal(t, "laptop", got.MachineName)
+}
+
+func TestClickHousePushRejectsIncludeAndExcludeProjects(t *testing.T) {
+	s := testServerWithConfig(config.Config{})
+	_, err := s.humaClickHousePush(context.Background(), &daemonPushInput{
+		Body: daemonPushRequest{
+			Projects:        []string{"alpha"},
+			ExcludeProjects: []string{"beta"},
+		},
+	})
+	require.Error(t, err)
+	var statusErr interface{ GetStatus() int }
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
+	assert.Contains(t, err.Error(), "projects and exclude_projects cannot both be set")
+}
+
 func TestPGPushRejectsIncludeAndExcludeProjects(t *testing.T) {
 	s := testServerWithConfig(config.Config{})
 

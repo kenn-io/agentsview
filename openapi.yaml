@@ -586,6 +586,31 @@ components:
         - priorTotalCost
         - deltaPct
       type: object
+    ConfigClickHouseConfig:
+      additionalProperties: false
+      properties:
+        allow_insecure:
+          type: boolean
+        database:
+          type: string
+        exclude_projects:
+          items:
+            type: string
+          type: array
+        machine_name:
+          type: string
+        projects:
+          items:
+            type: string
+          type: array
+        url:
+          type: string
+      required:
+        - url
+        - database
+        - machine_name
+        - allow_insecure
+      type: object
     ConfigDuckDBConfig:
       additionalProperties: false
       properties:
@@ -668,6 +693,8 @@ components:
       properties:
         automatic:
           type: boolean
+        clickhouse:
+          $ref: "#/components/schemas/ConfigClickHouseConfig"
         duckdb:
           $ref: "#/components/schemas/ConfigDuckDBConfig"
         exclude_projects:
@@ -13402,6 +13429,94 @@ paths:
       summary: List projects
       tags:
         - Metadata
+  /api/v1/push/clickhouse:
+    post:
+      operationId: post-api-v1-push-clickhouse
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DaemonPushRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+            text/event-stream:
+              schema:
+                type: string
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Push to ClickHouse
+      tags:
+        - Push
   /api/v1/push/duckdb:
     post:
       operationId: post-api-v1-push-duckdb

@@ -14,10 +14,9 @@ var (
 	_ lingerChecker  = (*systemdManager)(nil)
 )
 
-const systemdUnitName = "agentsview-pg-watch.service"
-
 // systemdManager manages a per-user systemd unit (systemctl --user).
 type systemdManager struct {
+	kind serviceKind
 	user string
 	home string
 	run  cmdRunner
@@ -25,7 +24,7 @@ type systemdManager struct {
 
 func (m *systemdManager) unitPath() string {
 	return filepath.Join(
-		m.home, ".config", "systemd", "user", systemdUnitName,
+		m.home, ".config", "systemd", "user", m.kind.UnitName,
 	)
 }
 
@@ -36,14 +35,18 @@ func (m *systemdManager) unitPath() string {
 // messages would go to journald and the tailed file would omit the very
 // crash reason a user runs "logs" to find.
 func (m *systemdManager) render(spec serviceSpec) string {
+	kind := spec.Kind
+	if kind.UnitName == "" {
+		kind = m.kind
+	}
 	return fmt.Sprintf(`[Unit]
-Description=agentsview PostgreSQL auto-push
+Description=%s
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart="%s" pg push --watch
+ExecStart="%s" %s
 Environment=AGENTSVIEW_DATA_DIR="%s"
 StandardOutput=append:%s
 StandardError=append:%s
@@ -52,7 +55,7 @@ RestartSec=10
 
 [Install]
 WantedBy=default.target
-`, spec.BinPath, spec.DataDir, spec.LogPath, spec.LogPath)
+`, kind.Description, spec.BinPath, strings.Join(kind.Args, " "), spec.DataDir, spec.LogPath, spec.LogPath)
 }
 
 func (m *systemdManager) lingerEnabled(ctx context.Context) bool {
@@ -86,7 +89,7 @@ func (m *systemdManager) install(
 		return fmt.Errorf("systemctl daemon-reload: %v: %s", err, out)
 	}
 	if out, err := m.run(
-		ctx, "systemctl", "--user", "enable", "--now", systemdUnitName,
+		ctx, "systemctl", "--user", "enable", "--now", m.kind.UnitName,
 	); err != nil {
 		return fmt.Errorf("systemctl enable: %v: %s", err, out)
 	}
@@ -95,7 +98,7 @@ func (m *systemdManager) install(
 
 func (m *systemdManager) uninstall(ctx context.Context) error {
 	_, _ = m.run(
-		ctx, "systemctl", "--user", "disable", "--now", systemdUnitName,
+		ctx, "systemctl", "--user", "disable", "--now", m.kind.UnitName,
 	)
 	if err := os.Remove(m.unitPath()); err != nil && !os.IsNotExist(err) {
 		return err
@@ -106,7 +109,7 @@ func (m *systemdManager) uninstall(ctx context.Context) error {
 
 func (m *systemdManager) start(ctx context.Context) error {
 	if out, err := m.run(
-		ctx, "systemctl", "--user", "start", systemdUnitName,
+		ctx, "systemctl", "--user", "start", m.kind.UnitName,
 	); err != nil {
 		return fmt.Errorf("systemctl start: %v: %s", err, out)
 	}
@@ -115,7 +118,7 @@ func (m *systemdManager) start(ctx context.Context) error {
 
 func (m *systemdManager) stop(ctx context.Context) error {
 	if out, err := m.run(
-		ctx, "systemctl", "--user", "stop", systemdUnitName,
+		ctx, "systemctl", "--user", "stop", m.kind.UnitName,
 	); err != nil {
 		return fmt.Errorf("systemctl stop: %v: %s", err, out)
 	}
@@ -123,6 +126,6 @@ func (m *systemdManager) stop(ctx context.Context) error {
 }
 
 func (m *systemdManager) status(ctx context.Context) (string, error) {
-	out, _ := m.run(ctx, "systemctl", "--user", "status", systemdUnitName)
+	out, _ := m.run(ctx, "systemctl", "--user", "status", m.kind.UnitName)
 	return out, nil
 }
