@@ -1070,10 +1070,14 @@ type directStreamingProvider struct {
 	fingerprintErr   error
 	parseOutcome     parser.ParseOutcome
 	fingerprint      parser.SourceFingerprint
+	allowDiscover    bool
 }
 
 func (provider *directStreamingProvider) Discover(context.Context) ([]parser.SourceRef, error) {
 	provider.discoverCalls.Add(1)
+	if provider.allowDiscover && provider.source != nil {
+		return []parser.SourceRef{*provider.source}, nil
+	}
 	return nil, errors.New("collecting discovery must not run")
 }
 

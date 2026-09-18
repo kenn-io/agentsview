@@ -45,6 +45,99 @@ func newResyncSplitEngine(t *testing.T) (*Engine, *db.DB, string) {
 	return engine, database, root
 }
 
+func newResyncFailureEngine(t *testing.T) (
+	*Engine, *db.DB, *directStreamingProvider, string, string,
+) {
+	t.Helper()
+	root := t.TempDir()
+	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	path := filepath.Join(root, "source.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("source"), 0o600))
+	const agent parser.AgentType = "resync-failure"
+	source := parser.SourceRef{
+		Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path,
+	}
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	started := time.Unix(1704067200, 0)
+	provider := &directStreamingProvider{
+		Def: parser.AgentDef{Type: agent, FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:    parser.CapabilitySupported,
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+		}},
+		source:        &source,
+		fingerprint:   parser.SourceFingerprint{Key: path, MTimeNS: info.ModTime().UnixNano()},
+		allowDiscover: true,
+		parseOutcome: parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{{
+				Result: parser.ParseResult{Session: parser.ParsedSession{
+					ID: "resync-failure", Agent: agent,
+					Project: "project", Machine: "local",
+					StartedAt: started, EndedAt: started,
+					File: parser.FileInfo{Path: path},
+				}},
+				DataVersion: parser.DataVersionCurrent,
+			}},
+			ResultSetComplete: true,
+		},
+	}
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{agent: {root}},
+		Machine:   "local",
+		ProviderFactories: []parser.ProviderFactory{
+			directStreamingFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			agent: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	return engine, database, provider, root, path
+}
+
+func TestAbortedResyncPreservesFailureSkipCache(t *testing.T) {
+	for _, useBuild := range []bool{false, true} {
+		t.Run(map[bool]string{false: "resync-all", true: "resync-build"}[useBuild], func(t *testing.T) {
+			engine, database, provider, root, path := newResyncFailureEngine(t)
+			ordinaryPath := filepath.Join(root, "ordinary-skip.jsonl")
+			engine.cacheSkip(ordinaryPath, 42)
+			require.Equal(t, 1, engine.persistSkipCache())
+			provider.parseErr = errors.New("malformed source")
+
+			var stats SyncStats
+			if useBuild {
+				_, buildStats, err := engine.ResyncBuild(context.Background(), nil)
+				require.NoError(t, err)
+				stats = buildStats
+			} else {
+				stats = engine.ResyncAll(context.Background(), nil)
+			}
+			require.True(t, stats.Aborted)
+
+			failureKey := providerAgentSkipCacheKey(path, provider.Def.Type)
+			persisted, err := database.LoadSkippedFiles()
+			require.NoError(t, err)
+			assert.Equal(t, int64(42), persisted[ordinaryPath])
+			value, ok := persisted[failureKey]
+			require.True(t, ok, "failure marker missing for %s", path)
+			_, failure := decodeSkipFailureMtime(value)
+			assert.True(t, failure)
+
+			restarted := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{provider.Def.Type: {root}},
+				Machine:   "local",
+			})
+			t.Cleanup(restarted.Close)
+			assert.Equal(t, value, restarted.SnapshotSkipCache()[failureKey])
+		})
+	}
+}
+
 // TestResyncBuildThenSwapMatchesResyncAll drives the split resync path
 // end-to-end: build the replacement, swap it in, reset caches. It must preserve
 // an orphan session whose source file was deleted, clean up the temp file, and

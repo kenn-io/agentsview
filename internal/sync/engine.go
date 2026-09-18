@@ -776,6 +776,20 @@ func decodeSkipFailureMtime(value int64) (int64, bool) {
 	return int64(bits &^ skipCacheFailureFlag), true
 }
 
+func mergeFailureSkipCache(
+	destination, source map[string]int64,
+) int {
+	merged := 0
+	for path, value := range source {
+		if _, failure := decodeSkipFailureMtime(value); !failure {
+			continue
+		}
+		destination[path] = value
+		merged++
+	}
+	return merged
+}
+
 // ReconciliationResult is the structured acknowledgement for the most recent
 // watcher-forced reconciliation attempt.
 type ReconciliationResult struct {
@@ -2928,11 +2942,18 @@ func (e *Engine) resyncAllWithOptionsLocked(
 			// replacement's skip entries and its tombstone count. A
 			// post-install failure keeps both: the replacement is the live
 			// archive there.
+			merged := 0
 			e.skipMu.Lock()
+			if ctx.Err() == nil {
+				merged = mergeFailureSkipCache(preBuildSkipCache, e.skipCache)
+			}
 			e.skipCache = preBuildSkipCache
 			e.skipCacheDirty = true
 			e.skipHashKeys = preBuildSkipHashKeys
 			e.skipMu.Unlock()
+			if merged > 0 && ctx.Err() == nil {
+				e.persistFailureSkipCache()
+			}
 			stats.Tombstoned = 0
 		}
 		e.setLastSyncStats(stats)
@@ -3084,11 +3105,28 @@ func (e *Engine) resyncBuildLocked(
 	e.skipMu.Unlock()
 
 	restoreSkipCache := func() {
+		merged := 0
 		e.skipMu.Lock()
+		if ctx.Err() == nil {
+			merged = mergeFailureSkipCache(savedSkipCache, e.skipCache)
+		}
 		e.skipCache = savedSkipCache
 		e.skipCacheDirty = true
 		e.skipHashKeys = savedSkipHashKeys
 		e.skipMu.Unlock()
+		if merged == 0 || ctx.Err() != nil {
+			return
+		}
+		if origDB.WriterClosed() {
+			if !restoreActiveWriterOnAbort {
+				return
+			}
+			if err := origDB.ReopenWriter(); err != nil {
+				log.Printf("resync: reopen writer for failure cache: %v", err)
+				return
+			}
+		}
+		e.persistFailureSkipCache()
 	}
 
 	// 2. Open a fresh DB at the temp path.
