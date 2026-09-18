@@ -230,6 +230,11 @@ func readServiceLastPush(
 		if err != nil {
 			return "", err
 		}
+		if err := clickhouse.CheckTransportSecurity(
+			target.Config.URL, target.Config.AllowInsecure,
+		); err != nil {
+			return "", err
+		}
 		ctx := context.Background()
 		archiveID, err := database.GetArchiveID(ctx)
 		if err != nil {

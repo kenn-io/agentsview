@@ -185,15 +185,11 @@ func Open(ctx context.Context, t Target) (*sql.DB, error) {
 	return openDatabase(ctx, t.URL, database)
 }
 
-// OpenForAdmin connects with the database named in the DSN path (or the
-// server default) so EnsureSchema can create the mirror database before the
-// first regular connection.
+// OpenForAdmin connects to a database that already exists on the server so
+// EnsureSchema can CREATE the mirror database. The DSN path is often the
+// not-yet-created mirror, so the bootstrap database is `default`.
 func OpenForAdmin(ctx context.Context, t Target) (*sql.DB, error) {
-	opt, err := parseDSN(t.URL)
-	if err != nil {
-		return nil, fmt.Errorf("parsing clickhouse url: %w", err)
-	}
-	return openDatabase(ctx, t.URL, opt.Auth.Database)
+	return openDatabase(ctx, t.URL, "default")
 }
 
 func openDatabase(ctx context.Context, dsn, database string) (*sql.DB, error) {

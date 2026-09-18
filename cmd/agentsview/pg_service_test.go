@@ -223,6 +223,18 @@ func TestWarnUninheritedServiceEnv(t *testing.T) {
 	assert.Contains(t, out, "config.toml")
 }
 
+func TestReadServiceLastPush_ClickHouseRejectsInsecureRemote(t *testing.T) {
+	local := dbtest.OpenTestDB(t)
+	_, err := readServiceLastPush(clickHouseServiceKind, config.Config{
+		ClickHouse: config.ClickHouseConfig{
+			URL: "clickhouse://user:pw@ch.example.internal:9000/agentsview",
+		},
+	}, local)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not use TLS")
+	assert.NotContains(t, err.Error(), "pw")
+}
+
 func TestReadServiceLastPush_UsesDefaultTargetScope(t *testing.T) {
 	local := dbtest.OpenTestDB(t)
 

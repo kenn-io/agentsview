@@ -5,6 +5,7 @@ package clickhouse
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,6 +14,15 @@ import (
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"go.kenn.io/agentsview/internal/db"
 )
+
+func TestEnsureSchemaCreatesMissingDatabase(t *testing.T) {
+	ctx := context.Background()
+	dsn := chtest.ServerURL(t)
+	database := "agentsview_boot_" + strings.ReplaceAll(t.Name(), "/", "_")
+	require.NoError(t, EnsureSchema(ctx, Target{URL: dsn, Database: database}))
+	conn := chtest.Open(t, dsn, database)
+	assert.Equal(t, 0, chtest.Count(t, conn, "sessions", ""))
+}
 
 func TestPushMirrorsEveryTableAndSkipsUnchanged(t *testing.T) {
 	ctx := context.Background()

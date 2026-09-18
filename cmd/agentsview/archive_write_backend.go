@@ -557,6 +557,8 @@ func (b daemonArchiveWriteBackend) ClickHousePush(
 				Projects:        target.Config.Projects,
 				ExcludeProjects: target.Config.ExcludeProjects,
 			},
+			WatchBatch:    generatedWatchBatch(cfg.WatchBatch),
+			WatchRecovery: generatedWatchRecovery(cfg.WatchRecovery),
 		},
 		onProgress,
 	)
@@ -579,10 +581,12 @@ func (b daemonArchiveWriteBackend) ClickHousePushWatch(
 	}
 	push := func(
 		pctx context.Context, reason pushReason, full bool,
-		_ *syncpkg.WatchBatch,
+		batch *syncpkg.WatchBatch,
 	) error {
 		pushCfg := cfg
 		pushCfg.Full = full
+		pushCfg.WatchBatch = batch
+		pushCfg.WatchRecovery = watchRecoveryForBatch(b.appCfg, batch)
 		var res clickhouse.PushResult
 		var err error
 		backend := archiveWriteBackend(b)

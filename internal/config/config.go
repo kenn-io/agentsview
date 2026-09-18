@@ -3222,12 +3222,30 @@ func (c *Config) resolveClickHouseConfig(
 		ch.URL = expanded
 	}
 	if ch.Database == "" {
-		ch.Database = "agentsview"
+		if name := clickHouseURLDatabase(ch.URL); name != "" {
+			ch.Database = name
+		} else {
+			ch.Database = "agentsview"
+		}
 	}
 	if ch.MachineName == "" {
 		ch.MachineName = c.InstallationID
 	}
 	return ch, nil
+}
+
+// clickHouseURLDatabase returns the database name from a clickhouse-go DSN
+// path, or empty when the URL has no path.
+func clickHouseURLDatabase(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	name := strings.Trim(u.Path, "/")
+	if i := strings.IndexByte(name, '/'); i >= 0 {
+		name = name[:i]
+	}
+	return name
 }
 
 func (c *Config) ResolveClickHouse() (ClickHouseConfig, error) {

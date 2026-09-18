@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 type ClickHousePushConfig struct {
@@ -28,6 +29,10 @@ type ClickHousePushConfig struct {
 	Watch           bool
 	Debounce        time.Duration
 	Interval        time.Duration
+	// WatchBatch and WatchRecovery are internal watch-loop scope. Explicit
+	// pushes leave them nil and retain the historical unscoped sync.
+	WatchBatch    *syncpkg.WatchBatch
+	WatchRecovery *syncpkg.WatchRecoveryScope
 }
 
 type ClickHouseStatusConfig struct {

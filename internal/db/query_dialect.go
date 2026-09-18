@@ -213,7 +213,11 @@ func ClickHouseQueryDialect() QueryDialect {
 			return idExpr + " IN (SELECT session_id FROM starred_sessions)"
 		},
 		orphanPredicate: func(sessionAlias, _ string) string {
-			return sessionAlias + ".parent_session_id NOT IN (SELECT id FROM sessions)"
+			// NULL NOT IN (...) is unknown in SQL, so a child whose parent
+			// id is NULL would drop out of the sidebar. NOT EXISTS treats
+			// that row as an orphan; the IS NULL arm matches that.
+			return "(" + sessionAlias + ".parent_session_id IS NULL OR " +
+				sessionAlias + ".parent_session_id NOT IN (SELECT id FROM sessions))"
 		},
 	}
 }

@@ -49,7 +49,7 @@ func TestClickHouseDialectRendersUncorrelatedFilters(t *testing.T) {
 		"root_session.id IN (SELECT session_id FROM starred_sessions)")
 	assert.NotContains(t, normalized, "EXISTS (")
 	assert.Contains(t, normalized,
-		"root_session.parent_session_id NOT IN (SELECT id FROM sessions)")
+		"(root_session.parent_session_id IS NULL OR root_session.parent_session_id NOT IN (SELECT id FROM sessions))")
 	assert.Contains(t, normalized,
 		"COALESCE(root_session.started_at, root_session.created_at) < parseDateTime64BestEffort(?, 6, 'UTC')")
 	assert.Equal(t, []any{"p", "2026-07-01T00:00:00Z"}, args)

@@ -119,6 +119,22 @@ func TestResolveClickHouseTarget_NamedTargets(t *testing.T) {
 	assert.Equal(t, "agentsview", archiveTarget.Database)
 }
 
+func TestResolveClickHouse_UsesURLPathDatabase(t *testing.T) {
+	cfg := Config{
+		ClickHouse: ClickHouseConfig{
+			URL: "clickhouse://localhost:9000/mirror_from_url",
+		},
+	}
+	resolved, err := cfg.ResolveClickHouse()
+	require.NoError(t, err)
+	assert.Equal(t, "mirror_from_url", resolved.Database)
+
+	cfg.ClickHouse.Database = "explicit_db"
+	resolved, err = cfg.ResolveClickHouse()
+	require.NoError(t, err)
+	assert.Equal(t, "explicit_db", resolved.Database)
+}
+
 func TestResolveClickHouseTargets_DefaultFirst(t *testing.T) {
 	cfg := Config{
 		DefaultClickHouse: "work",

@@ -2374,7 +2374,9 @@ func (s *Store) GetAnalyticsTopSessions(
 		limitClause = ""
 	}
 	query := `
-		SELECT s.id, s.project, s.first_message, s.message_count,
+		SELECT s.id, s.project, s.first_message,
+			COALESCE(s.display_name, s.session_name) AS display_name,
+			s.message_count,
 			s.total_output_tokens, ` + durationSelectExpr + ` AS duration_min,
 			` + activeDurationSelectExpr + ` AS active_duration_min,
 			s.started_at, s.ended_at, s.termination_status
@@ -2413,7 +2415,8 @@ func (s *Store) GetAnalyticsTopSessions(
 		var row db.TopSession
 		var startedRaw, endedRaw any
 		if err := rows.Scan(
-			&row.ID, &row.Project, &row.FirstMessage, &row.MessageCount,
+			&row.ID, &row.Project, &row.FirstMessage, &row.DisplayName,
+			&row.MessageCount,
 			&row.OutputTokens, &row.DurationMin, &row.ActiveDurationMin,
 			&startedRaw, &endedRaw,
 			&row.TerminationStatus,

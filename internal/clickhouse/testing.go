@@ -42,6 +42,8 @@ func seedFixture(t *testing.T) (*db.DB, Target) {
 	alpha := fixtureSession(fixtureAlphaID, "alpha", "alpha first", "2026-01-10T00:00:00.000Z", 2)
 	alpha.FilePath = &alphaPath
 	alpha.GitBranch = "main"
+	alphaTitle := "Alpha Saved Title"
+	alpha.SessionName = &alphaTitle
 	child := fixtureSession(fixtureChildID, "alpha", "child first", "2026-01-10T00:05:00.000Z", 1)
 	parent := fixtureAlphaID
 	child.ParentSessionID = &parent

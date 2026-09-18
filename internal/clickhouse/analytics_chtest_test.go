@@ -80,6 +80,8 @@ func TestStoreAnalyticsReads(t *testing.T) {
 		assert.Equal(t, fixtureBetaID, top.Sessions[1].ID)
 		assert.Equal(t, 2, top.Sessions[0].MessageCount)
 		assert.Equal(t, 1, top.Sessions[1].MessageCount)
+		require.NotNil(t, top.Sessions[0].DisplayName)
+		assert.Equal(t, "Alpha Saved Title", *top.Sessions[0].DisplayName)
 	})
 
 	t.Run("signals_aggregate", func(t *testing.T) {

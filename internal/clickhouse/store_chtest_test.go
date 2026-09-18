@@ -33,6 +33,33 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		assert.Equal(t, 2, next.Total)
 	})
 
+	t.Run("orphan_subagent_with_null_parent_is_sidebar_root", func(t *testing.T) {
+		store, syncer, local := newPushedStore(t)
+		orphanID := "ch-orphan-child"
+		orphan := fixtureSession(orphanID, "alpha", "orphan first", "2026-01-10T00:06:00.000Z", 1)
+		orphan.RelationshipType = "subagent"
+		orphan.ParentSessionID = nil
+		_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+			Session: orphan,
+			Messages: []db.Message{
+				fixtureMessage(orphanID, 0, "user", "orphan first", "2026-01-10T00:06:00.000Z"),
+			},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		}})
+		require.NoError(t, err)
+		_, err = syncer.Push(ctx, false, nil)
+		require.NoError(t, err)
+
+		index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{Project: "alpha"})
+		require.NoError(t, err)
+		ids := make([]string, len(index.Sessions))
+		for i, row := range index.Sessions {
+			ids[i] = row.ID
+		}
+		assert.Contains(t, ids, orphanID)
+	})
+
 	t.Run("sidebar_includes_child_under_parent", func(t *testing.T) {
 		index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{Project: "alpha"})
 		require.NoError(t, err)
@@ -185,6 +212,23 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		_, err = store.InsertInsight(db.Insight{})
 		require.ErrorIs(t, err, db.ErrReadOnly)
 	})
+}
+
+func TestSearchTreatsUnderscoreAsLiteral(t *testing.T) {
+	store, syncer, local := newPushedStore(t)
+	ctx := context.Background()
+	appendMessage(t, local, fixtureAlphaID, "hello_world unique token", "2026-01-10T00:04:00.000Z")
+	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	literal, err := store.Search(ctx, db.SearchFilter{Query: "hello_world", Limit: 5})
+	require.NoError(t, err)
+	require.Len(t, literal.Results, 1, "literal underscore in the query must match hello_world")
+
+	wildcard, err := store.Search(ctx, db.SearchFilter{Query: "helloXworld", Limit: 5})
+	require.NoError(t, err)
+	assert.Empty(t, wildcard.Results,
+		"underscore is not a single-character wildcard in ClickHouse search")
 }
 
 func TestStoreGetSessionHidesTrash(t *testing.T) {
