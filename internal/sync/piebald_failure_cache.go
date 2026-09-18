@@ -213,6 +213,19 @@ func (e *Engine) prunePiebaldFailures(
 	}
 }
 
+func piebaldAuthoritativeRoots(
+	roots []string, stat func(string) (os.FileInfo, error),
+) []string {
+	authoritative := make([]string, 0, len(roots))
+	for _, root := range roots {
+		_, err := stat(filepath.Join(root, parser.PiebaldDBFilename))
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			authoritative = append(authoritative, root)
+		}
+	}
+	return authoritative
+}
+
 func piebaldPathWithinRoots(path string, roots []string) bool {
 	path = filepath.Clean(path)
 	for _, root := range roots {

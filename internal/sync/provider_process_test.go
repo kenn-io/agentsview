@@ -775,6 +775,25 @@ func TestPrunePiebaldFailuresAfterAuthoritativeDiscovery(t *testing.T) {
 	assert.Contains(t, engine.piebaldFailureMemo, otherKey)
 }
 
+func TestPiebaldAuthoritativeRootsSkipUnverifiedStats(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	present := filepath.Join(t.TempDir(), "present")
+	stats := map[string]error{
+		filepath.Join(missing, parser.PiebaldDBFilename): os.ErrNotExist,
+		filepath.Join(blocked, parser.PiebaldDBFilename): errors.New("permission denied"),
+		filepath.Join(present, parser.PiebaldDBFilename): nil,
+	}
+	stat := func(path string) (os.FileInfo, error) {
+		return nil, stats[path]
+	}
+
+	assert.Equal(t,
+		[]string{missing, present},
+		piebaldAuthoritativeRoots([]string{missing, blocked, present}, stat),
+	)
+}
+
 func TestPiebaldTransientFailureClassesAreNotMemoized(t *testing.T) {
 	root := t.TempDir()
 	dbPath, _ := writeProcessProviderSource(t, root, "app.db")
