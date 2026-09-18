@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"os"
 	"os/exec"
 	"time"
@@ -495,9 +496,7 @@ func mergeWorkerFailureSkipCache(
 	if result.FailureSkipCache == nil {
 		result.FailureSkipCache = make(map[string]int64, len(entries))
 	}
-	for key, value := range entries {
-		result.FailureSkipCache[key] = value
-	}
+	maps.Copy(result.FailureSkipCache, entries)
 }
 
 // syncWorkerChildArgs builds the child argv for the sync worker. It always
