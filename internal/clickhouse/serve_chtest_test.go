@@ -1,6 +1,6 @@
 //go:build chtest
 
-package clickhouse
+package clickhouse_test
 
 import (
 	"encoding/json/v2"
@@ -11,13 +11,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
 )
 
 func TestServeSessionsMessagesAndSearch(t *testing.T) {
-	store, _, _ := newPushedStore(t)
+	store, _, _ := clickhouse.TestingNewPushedStore(t)
 	cfg := config.Config{Host: "127.0.0.1", DataDir: t.TempDir()}
 	handler := server.New(cfg, store, nil, server.WithVersion(server.VersionInfo{ReadOnly: true})).Handler()
 
@@ -38,17 +39,17 @@ func TestServeSessionsMessagesAndSearch(t *testing.T) {
 	for i, sess := range page.Sessions {
 		ids[i] = sess.ID
 	}
-	assert.Contains(t, ids, fixtureAlphaID)
-	assert.Contains(t, ids, fixtureBetaID)
+	assert.Contains(t, ids, clickhouse.TestingAlphaID)
+	assert.Contains(t, ids, clickhouse.TestingBetaID)
 
-	w = get("/api/v1/sessions/" + fixtureAlphaID)
+	w = get("/api/v1/sessions/" + clickhouse.TestingAlphaID)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	var sess db.Session
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &sess))
-	assert.Equal(t, fixtureAlphaID, sess.ID)
+	assert.Equal(t, clickhouse.TestingAlphaID, sess.ID)
 	assert.Equal(t, "alpha", sess.Project)
 
-	w = get("/api/v1/sessions/" + fixtureAlphaID + "/messages")
+	w = get("/api/v1/sessions/" + clickhouse.TestingAlphaID + "/messages")
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	var msgs struct {
 		Messages []db.Message `json:"messages"`
@@ -66,7 +67,7 @@ func TestServeSessionsMessagesAndSearch(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &search))
 	require.NotEmpty(t, search.Results)
-	assert.Equal(t, fixtureAlphaID, search.Results[0].SessionID)
+	assert.Equal(t, clickhouse.TestingAlphaID, search.Results[0].SessionID)
 
 	w = get("/api/v1/settings")
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())

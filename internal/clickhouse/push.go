@@ -62,6 +62,8 @@ func (s *Sync) PushWithOptions(
 		s.archiveKey(lastPushCutoffKeyBase),
 		s.archiveKey(pushScopeKeyBase),
 		s.archiveKey(deletionRevisionKeyBase),
+		s.archiveKey(identityRevisionKeyBase),
+		s.archiveKey(mappingRevisionKeyBase),
 	)
 	if err != nil {
 		return result, err
@@ -69,6 +71,8 @@ func (s *Sync) PushWithOptions(
 	storedCutoff := meta[s.archiveKey(lastPushCutoffKeyBase)]
 	storedScope := meta[s.archiveKey(pushScopeKeyBase)]
 	storedDeletion, _ := strconv.ParseInt(meta[s.archiveKey(deletionRevisionKeyBase)], 10, 64)
+	storedIdentity, _ := strconv.ParseInt(meta[s.archiveKey(identityRevisionKeyBase)], 10, 64)
+	storedMapping, _ := strconv.ParseInt(meta[s.archiveKey(mappingRevisionKeyBase)], 10, 64)
 
 	full, reason := s.decideFull(opts, storedCutoff, storedScope)
 	localDeletion, err := s.local.SessionDeletionPublicationRevision(ctx)
@@ -84,6 +88,12 @@ func (s *Sync) PushWithOptions(
 	}
 
 	if err := s.syncMachineMetadata(ctx, version); err != nil {
+		return result, err
+	}
+	if err := s.syncModelPricing(ctx); err != nil {
+		return result, err
+	}
+	if err := s.syncCursorUsageEvents(ctx); err != nil {
 		return result, err
 	}
 	if !full {
@@ -137,6 +147,26 @@ func (s *Sync) PushWithOptions(
 		return result, err
 	}
 
+	identityRevision := storedIdentity
+	mappingRevision := storedMapping
+	if result.Errors == 0 {
+		identityRevision, err = s.syncProjectIdentityObservations(
+			ctx, storedIdentity, full, sessionIDs(changed),
+		)
+		if err != nil {
+			return result, err
+		}
+		mappingRevision, err = s.syncWorktreeMappings(ctx, storedMapping, full)
+		if err != nil {
+			return result, err
+		}
+	} else {
+		log.Printf(
+			"clickhouse push: skipping identity and mapping refresh after %d session push errors",
+			result.Errors,
+		)
+	}
+
 	if result.Errors == 0 {
 		if err := writeMetadata(ctx, conn, map[string]string{
 			s.archiveKey(lastPushCutoffKeyBase):   cutoff,
@@ -144,6 +174,8 @@ func (s *Sync) PushWithOptions(
 			s.archiveKey(lastPushMachineKeyBase):  s.machine,
 			s.archiveKey(pushScopeKeyBase):        s.scopeString(),
 			s.archiveKey(deletionRevisionKeyBase): strconv.FormatInt(localDeletion, 10),
+			s.archiveKey(identityRevisionKeyBase): strconv.FormatInt(identityRevision, 10),
+			s.archiveKey(mappingRevisionKeyBase):  strconv.FormatInt(mappingRevision, 10),
 			schemaVersionKey:                      strconv.Itoa(SchemaVersion),
 			sourceDataVersionKey:                  strconv.Itoa(db.CurrentDataVersion()),
 		}); err != nil {

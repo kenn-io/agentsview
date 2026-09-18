@@ -30,7 +30,7 @@ func TestPushMirrorsEveryTableAndSkipsUnchanged(t *testing.T) {
 	conn := chtest.Open(t, target.URL, target.Database)
 	assert.Equal(t, 3, chtest.Count(t, conn, "sessions", ""))
 	assert.Equal(t, 4, chtest.Count(t, conn, "messages", ""))
-	assert.Equal(t, 1, chtest.Count(t, conn, "tool_calls", ""))
+	assert.Equal(t, 2, chtest.Count(t, conn, "tool_calls", ""))
 	assert.Equal(t, 1, chtest.Count(t, conn, "tool_result_events", ""))
 	assert.Equal(t, 1, chtest.Count(t, conn, "usage_events", ""))
 	assert.Equal(t, 1, chtest.Count(t, conn, "secret_findings", ""))

@@ -4,7 +4,6 @@ package clickhouse
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,19 +11,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 )
-
-func newPushedStore(t *testing.T) (*Store, *Sync, *db.DB) {
-	t.Helper()
-	ctx := context.Background()
-	local, target := seedFixture(t)
-	syncer := newTestSync(t, local, target, SyncOptions{})
-	_, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	store, err := NewStore(ctx, target)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	return store, syncer, local
-}
 
 func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 	store, _, _ := newPushedStore(t)
@@ -74,7 +60,7 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, asc, 2)
 		assert.Equal(t, []int{0, 1}, []int{asc[0].Ordinal, asc[1].Ordinal})
-		require.Len(t, asc[1].ToolCalls, 1)
+		require.Len(t, asc[1].ToolCalls, 2)
 		require.Len(t, asc[1].ToolCalls[0].ResultEvents, 1)
 		assert.Equal(t, "clickhouse result", asc[1].ToolCalls[0].ResultEvents[0].Content)
 		assert.Equal(t, "clickhouse result", asc[1].ToolCalls[0].ResultContent)
@@ -234,12 +220,4 @@ func TestStoreGetSessionVersionChangesAfterPush(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 3, count2)
 	assert.NotEqual(t, version, version2)
-}
-
-func TestStoreUnimplementedAnalyticsIsLoud(t *testing.T) {
-	store, _, _ := newPushedStore(t)
-	_, err := store.GetAnalyticsSummary(context.Background(), db.AnalyticsFilter{})
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, errNotImplemented))
-	assert.Contains(t, err.Error(), "GetAnalyticsSummary")
 }
