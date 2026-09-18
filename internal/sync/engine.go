@@ -5495,7 +5495,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			}
 		}
 	}
-	if retErr != nil && !passEpilogueDeferred(ctx) {
+	if retErr != nil && ctx.Err() == nil && !passEpilogueDeferred(ctx) {
 		e.persistFailureSkipCache()
 	}
 	metrics = mergeMetrics(spool.Metrics())

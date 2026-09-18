@@ -2918,6 +2918,7 @@ func TestReconcileWatchRootsCancellationDuringLaterSpoolPage(t *testing.T) {
 		},
 	})
 	t.Cleanup(engine.Close)
+	engine.cacheFailure(filepath.Join(root, "seeded-failure.jsonl"), 42)
 	ctx, cancel := context.WithCancel(t.Context())
 	engine.reconciliationSpoolFactory = func(path string) (reconciliationSpoolStore, error) {
 		spool, err := newReconciliationSpool(path)
@@ -2933,6 +2934,10 @@ func TestReconcileWatchRootsCancellationDuringLaterSpoolPage(t *testing.T) {
 	result := engine.LastReconciliationResult()
 	assert.True(t, result.Aborted)
 	assert.Equal(t, reconciliationPageSize, result.Metrics.MaxSpoolPageRows)
+	skipped, loadErr := database.LoadSkippedFiles()
+	require.NoError(t, loadErr)
+	assert.Empty(t, skipped,
+		"a canceled direct pass must not persist the archive-sized skip cache")
 }
 
 func TestReconcileWatchRootsPartialSecondPageArchiveWriteFailure(t *testing.T) {
