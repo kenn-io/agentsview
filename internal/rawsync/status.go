@@ -1,7 +1,6 @@
 package rawsync
 
 import (
-	"context"
 	"time"
 
 	"go.kenn.io/agentsview/internal/parser"
@@ -57,9 +56,4 @@ type OpenUploadStatus struct {
 	_         struct{}  `json:"-" nullable:"true"`
 	UploadID  string    `json:"upload_id"`
 	CreatedAt time.Time `json:"created_at"`
-}
-
-// StatusStore reads tenant-scoped raw-sync status.
-type StatusStore interface {
-	ReadRawSyncStatus(context.Context, AuthIdentity) (Status, error)
 }

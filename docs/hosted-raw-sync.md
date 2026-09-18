@@ -43,7 +43,7 @@ The tracked delivery sequence and production acceptance criteria live in
 | ---------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Raw custody            | Available     | Validated objects, canonical manifests, durable receipts, source-head fencing, and parse-job creation                        |
 | Device authentication  | Available     | Credential exchange, scoped short-lived tokens, server-derived identity, and revocation; enrollment remains operator-managed |
-| HTTP raw transport     | Available     | Missing-object negotiation, resumable upload, manifest commit, and authenticated status reporting                           |
+| HTTP raw transport     | Available     | Missing-object negotiation, resumable upload, manifest commit, and authenticated status reporting                            |
 | Laptop capture         | Available     | Watching, bounded audits, safe SQLite snapshots, durable spooling, checkpoints, retries, and local status                    |
 | Server derivation      | Not available | Accepted generations are not yet parsed into PostgreSQL sessions or embeddings                                               |
 | Operations and cutover | Not available | Retention, garbage collection, disaster rebuilds, and migration from `pg push` remain future work                            |
@@ -112,7 +112,7 @@ The implemented routes are:
 | Route                                   | Authentication                          | Operation                               |
 | --------------------------------------- | --------------------------------------- | --------------------------------------- |
 | `POST /api/v1/raw-sync/tokens`          | Device credential and device ID         | Issue a 15-minute scoped access token   |
-| `GET /api/v1/raw-sync/status`            | Access token with the `status` scope    | Read tenant-scoped raw custody metadata |
+| `GET /api/v1/raw-sync/status`           | Access token with the `status` scope    | Read tenant-scoped raw custody metadata |
 | `POST /api/v1/raw-sync/objects/missing` | Access token with the `negotiate` scope | Return object references not in custody |
 | `POST /api/v1/raw-sync/uploads`         | Access token with the `upload` scope    | Start or resume an object upload        |
 | `HEAD /api/v1/raw-sync/uploads/{id}`    | Access token with the `upload` scope    | Read the accepted upload offset         |
@@ -122,7 +122,10 @@ The implemented routes are:
 These machine routes use their own device credentials and scoped tokens. They do
 not accept the shared bearer token that can protect the rest of a remote
 AgentsView server. The token endpoint accepts the fixed `negotiate`, `upload`,
-`commit`, and `status` scope names.
+`commit`, and `status` scope names. To read hosted status, request
+`{"scopes":["status"]}` from `POST /api/v1/raw-sync/tokens`, then send the
+returned token as `Authorization: Bearer <token>` to
+`GET /api/v1/raw-sync/status`.
 
 `GET /api/v1/raw-sync/status` returns five groups for the authenticated tenant:
 
@@ -134,7 +137,8 @@ AgentsView server. The token endpoint accepts the fixed `negotiate`, `upload`,
 - `active_device_count` and `devices` report unrevoked devices. Each device's
   `last_seen_at` is its latest token issuance, or `null` when it has no token.
 - `uploads` reports stored-open upload count, remaining bytes, and the oldest
-  open upload. `oldest_open_session` is `null` when no stored-open upload exists.
+  open upload. `oldest_open_session` is `null` when no stored-open upload
+  exists.
 
 Empty `source_heads` and `devices` values are `[]`. A generation-zero head has a
 `null` `last_accepted_at` and false parse flags. Status reads use one read-only

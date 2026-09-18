@@ -62,7 +62,7 @@ func TestPreparePGRawSyncServicesWiresRuntimeStatusRoute(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer legacy-shared-token")
 	srv.Handler().ServeHTTP(recorder, request)
 
-	assert.NotEqual(t, http.StatusNotFound, recorder.Code, recorder.Body.String())
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code, recorder.Body.String())
 }
 
 func TestPreparePGRawSyncServicesSkipsReadOnlySchema(t *testing.T) {

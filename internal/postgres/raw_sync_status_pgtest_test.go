@@ -6,13 +6,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,7 +28,7 @@ import (
 )
 
 func TestRawSyncStatusPostgresHTTP(t *testing.T) {
-	pg := newRawStatusTestDatabase(t, "agentsview_raw_status_http_test")
+	pg, _ := newPGE2ETestDatabase(t)
 	ctx := t.Context()
 	metadata, err := postgres.NewRawIngestStore(pg)
 	require.NoError(t, err)
@@ -48,28 +48,64 @@ func TestRawSyncStatusPostgresHTTP(t *testing.T) {
 
 	firstIdentity := first.Identity
 	otherIdentity := other.Identity
-	object := rawStatusObject(t)
+	object, err := rawsync.NewObjectRef(
+		"98627d5753b568650fce01e540e4b7d3a394cb56a4d922dc19ca4d0439771c98", 17,
+	)
+	require.NoError(t, err)
 	require.NoError(t, metadata.RecordVerifiedObject(ctx, firstIdentity, object))
 	firstCommit := commitRawStatusGeneration(
-		t, metadata, firstIdentity, object, "capture-one", "", "2026-09-01T00:00:00Z",
+		t, metadata, firstIdentity, object, rawsync.Manifest{
+			CaptureID:  "capture-one",
+			CapturedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+		},
 	)
 	secondCommit := commitRawStatusGeneration(
-		t, metadata, firstIdentity, object, "capture-two", firstCommit.Receipt,
-		"2026-09-02T00:00:00Z",
+		t, metadata, firstIdentity, object, rawsync.Manifest{
+			CaptureID:             "capture-two",
+			ExpectedParentReceipt: firstCommit.Receipt,
+			CapturedAt:            time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC),
+		},
 	)
 	require.NoError(t, metadata.RecordVerifiedObject(ctx, other.Identity, object))
 	otherCommit := commitRawStatusGeneration(
-		t, metadata, otherIdentity, object, "other-capture", "", "2026-09-03T00:00:00Z",
+		t, metadata, otherIdentity, object, rawsync.Manifest{
+			CaptureID:  "other-capture",
+			CapturedAt: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC),
+		},
 	)
 
-	insertRawStatusHead(t, pg, firstIdentity, parser.AgentClaude, "root-zero", "zero.jsonl", 0)
-	insertRawStatusHead(t, pg, otherIdentity, parser.AgentClaude, "root-other", "other.jsonl", 0)
+	for _, head := range []struct {
+		identity  rawsync.AuthIdentity
+		root, key string
+		digest    string
+	}{
+		{
+			firstIdentity, "root-zero", "zero.jsonl",
+			"b6c74c2ec57f6feb02d16fd167a327849a93b4e5617a4fa1ac48fb23df99e5d5",
+		},
+		{
+			otherIdentity, "root-other", "other.jsonl",
+			"9a3bc4527dfb421f6eaaa4bb005aa24bb699e5fe372470a88d93be5914f65563",
+		},
+	} {
+		_, err := pg.ExecContext(ctx, `
+			INSERT INTO raw_source_heads (
+				tenant_id, device_id, provider, configured_root_id, source_key,
+				source_key_sha256, generation
+			) VALUES ($1, $2, 'claude', $3, $4, $5, 0)`,
+			head.identity.TenantID, head.identity.DeviceID, head.root, head.key, head.digest)
+		require.NoError(t, err)
+	}
 	insertRawStatusJobs(t, pg, firstIdentity.TenantID, secondCommit.ManifestID)
 	insertRawStatusJobs(t, pg, otherIdentity.TenantID, otherCommit.ManifestID)
 
-	statusToken, err := auth.IssueToken(ctx, first.Identity.DeviceID, first.Credential, rawsync.ScopeStatus)
+	statusToken, err := auth.IssueToken(
+		ctx, first.Identity.DeviceID, first.Credential, rawsync.ScopeStatus,
+	)
 	require.NoError(t, err)
-	secondStatusToken, err := auth.IssueToken(ctx, first.Identity.DeviceID, first.Credential, rawsync.ScopeStatus)
+	secondStatusToken, err := auth.IssueToken(
+		ctx, first.Identity.DeviceID, first.Credential, rawsync.ScopeStatus,
+	)
 	require.NoError(t, err)
 	firstIssuedAt := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	secondIssuedAt := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
@@ -83,13 +119,14 @@ func TestRawSyncStatusPostgresHTTP(t *testing.T) {
 		tokenDigest(statusToken.Token), firstIssuedAt,
 		tokenDigest(secondStatusToken.Token), secondIssuedAt)
 	require.NoError(t, err)
-	revokedToken, err := auth.IssueToken(ctx, revoked.Identity.DeviceID, revoked.Credential, rawsync.ScopeStatus)
+	revokedToken, err := auth.IssueToken(
+		ctx, revoked.Identity.DeviceID, revoked.Credential, rawsync.ScopeStatus,
+	)
 	require.NoError(t, err)
 	_, err = auth.RevokeDevice(ctx, revoked.Identity)
 	require.NoError(t, err)
-	otherToken, err := auth.IssueToken(ctx, other.Identity.DeviceID, other.Credential, rawsync.ScopeStatus)
+	_, err = auth.IssueToken(ctx, other.Identity.DeviceID, other.Credential, rawsync.ScopeStatus)
 	require.NoError(t, err)
-	_ = otherToken
 
 	insertRawStatusUploads(t, pg, firstIdentity, otherIdentity)
 	before := readRawStatusPersistence(t, pg)
@@ -118,7 +155,7 @@ func TestRawSyncStatusPostgresHTTP(t *testing.T) {
 	assert.Equal(t, "root-a", current.ConfiguredRootID)
 	assert.Equal(t, parser.AgentCodex, current.Provider)
 	assert.Equal(t, int64(2), current.Generation)
-	assert.NotNil(t, current.LastAcceptedAt)
+	require.NotNil(t, current.LastAcceptedAt)
 	var wantAcceptedAt time.Time
 	require.NoError(t, pg.QueryRowContext(ctx, `
 		SELECT accepted_at FROM raw_manifests
@@ -146,13 +183,8 @@ func TestRawSyncStatusPostgresHTTP(t *testing.T) {
 	}
 	require.Contains(t, devices, first.Identity.DeviceID)
 	require.Contains(t, devices, second.Identity.DeviceID)
-	assert.NotNil(t, devices[first.Identity.DeviceID].LastSeenAt)
-	var wantLastSeenAt time.Time
-	require.NoError(t, pg.QueryRowContext(ctx, `
-		SELECT MAX(issued_at) FROM raw_device_tokens
-		WHERE tenant_id = $1 AND device_id = $2`,
-		firstIdentity.TenantID, firstIdentity.DeviceID).Scan(&wantLastSeenAt))
-	assert.Equal(t, wantLastSeenAt.UTC(), devices[first.Identity.DeviceID].LastSeenAt.UTC())
+	require.NotNil(t, devices[first.Identity.DeviceID].LastSeenAt)
+	assert.Equal(t, secondIssuedAt, *devices[first.Identity.DeviceID].LastSeenAt)
 	assert.Nil(t, devices[second.Identity.DeviceID].LastSeenAt)
 	assert.NotContains(t, devices, revoked.Identity.DeviceID)
 
@@ -166,14 +198,44 @@ func TestRawSyncStatusPostgresHTTP(t *testing.T) {
 	after := readRawStatusPersistence(t, pg)
 	assert.Equal(t, before, after, "status reads must not mutate raw metadata")
 
-	wrongScope, err := auth.IssueToken(ctx, first.Identity.DeviceID, first.Credential, rawsync.ScopeCommit)
+	for _, tc := range []struct {
+		state                   string
+		pending, leased, failed bool
+	}{
+		{state: "ready", pending: true},
+		{state: "retrying", pending: true},
+		{state: "leased", leased: true},
+		{state: "failed", failed: true},
+		{state: "complete"},
+		{state: "superseded"},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			_, err := pg.ExecContext(t.Context(), `
+				UPDATE raw_ingest_jobs SET state = $1
+				WHERE tenant_id = $2 AND manifest_id = $3`,
+				tc.state, firstIdentity.TenantID, secondCommit.ManifestID)
+			require.NoError(t, err)
+			status, err := metadata.ReadRawSyncStatus(t.Context(), firstIdentity)
+			require.NoError(t, err)
+			head := findRawStatusHead(t, status.SourceHeads, "current.jsonl")
+			assert.Equal(t, tc.pending, head.ParsePending)
+			assert.Equal(t, tc.leased, head.ParseLeased)
+			assert.Equal(t, tc.failed, head.ParseFailed)
+		})
+	}
+
+	wrongScope, err := auth.IssueToken(
+		ctx, first.Identity.DeviceID, first.Credential, rawsync.ScopeCommit,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusUnauthorized,
 		rawStatusHTTPGet(t, httpServer.URL, wrongScope.Token).StatusCode)
 	assert.Equal(t, http.StatusUnauthorized,
 		rawStatusHTTPGet(t, httpServer.URL, revokedToken.Token).StatusCode)
 
-	expired, err := auth.IssueToken(ctx, first.Identity.DeviceID, first.Credential, rawsync.ScopeStatus)
+	expired, err := auth.IssueToken(
+		ctx, first.Identity.DeviceID, first.Credential, rawsync.ScopeStatus,
+	)
 	require.NoError(t, err)
 	issuedAt := time.Now().UTC().Add(-2 * time.Hour)
 	_, err = pg.ExecContext(ctx, `
@@ -186,7 +248,7 @@ func TestRawSyncStatusPostgresHTTP(t *testing.T) {
 }
 
 func TestRawSyncStatusPostgresEmptyHTTP(t *testing.T) {
-	pg := newRawStatusTestDatabase(t, "agentsview_raw_status_empty_test")
+	pg, _ := newPGE2ETestDatabase(t)
 	ctx := t.Context()
 	metadata, err := postgres.NewRawIngestStore(pg)
 	require.NoError(t, err)
@@ -225,7 +287,7 @@ func TestRawSyncStatusPostgresEmptyHTTP(t *testing.T) {
 }
 
 func TestRawSyncStatusRollsBackAfterQueryFailure(t *testing.T) {
-	pg := newRawStatusTestDatabase(t, "agentsview_raw_status_failure_test")
+	pg, _ := newPGE2ETestDatabase(t)
 	pg.SetMaxOpenConns(1)
 	metadata, err := postgres.NewRawIngestStore(pg)
 	require.NoError(t, err)
@@ -247,38 +309,7 @@ func TestRawSyncStatusRollsBackAfterQueryFailure(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, status.SourceHeads)
 	assert.Empty(t, status.Devices)
-}
-
-func newRawStatusTestDatabase(t *testing.T, schema string) *sql.DB {
-	t.Helper()
-	pgURL := os.Getenv("TEST_PG_URL")
-	if pgURL == "" {
-		t.Skip("TEST_PG_URL not set; skipping PG tests")
-	}
-	dropRawStatusSchema(t, pgURL, schema)
-	pg, err := postgres.Open(pgURL, schema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { dropRawStatusSchema(t, pgURL, schema) })
-	t.Cleanup(func() { require.NoError(t, pg.Close()) })
-	require.NoError(t, postgres.EnsureSchema(t.Context(), pg, schema))
-	return pg
-}
-
-func dropRawStatusSchema(t *testing.T, pgURL, schema string) {
-	t.Helper()
-	pg, err := sql.Open("pgx", pgURL)
-	require.NoError(t, err)
-	defer pg.Close()
-	_, err = pg.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
-	require.NoError(t, err)
-}
-
-func rawStatusObject(t *testing.T) rawsync.ObjectRef {
-	t.Helper()
-	digest := sha256.Sum256([]byte("raw status object"))
-	object, err := rawsync.NewObjectRef(hex.EncodeToString(digest[:]), 17)
-	require.NoError(t, err)
-	return object
+	assert.Zero(t, status.ActiveDeviceCount)
 }
 
 func commitRawStatusGeneration(
@@ -286,50 +317,25 @@ func commitRawStatusGeneration(
 	store *postgres.RawIngestStore,
 	identity rawsync.AuthIdentity,
 	object rawsync.ObjectRef,
-	captureID string,
-	parentReceipt string,
-	capturedAt string,
+	manifest rawsync.Manifest,
 ) rawsync.CommitResult {
 	t.Helper()
-	captured, err := time.Parse(time.RFC3339, capturedAt)
+	manifest.SchemaVersion = rawsync.ManifestSchemaVersion
+	manifest.Provider = parser.AgentCodex
+	manifest.ConfiguredRootID = "root-a"
+	manifest.SourceKey = "current.jsonl"
+	manifest.Kind = rawsync.ManifestSnapshot
+	manifest.Entries = []rawsync.Entry{{
+		Path: "current.jsonl", Type: "file", Length: object.Length,
+		Objects: []rawsync.ObjectRef{object},
+	}}
+	canonical, err := rawsync.ValidateAndCanonicalize(
+		identity, manifest, rawsync.DefaultManifestLimits(),
+	)
 	require.NoError(t, err)
-	manifest, err := rawsync.ValidateAndCanonicalize(identity, rawsync.Manifest{
-		SchemaVersion:         rawsync.ManifestSchemaVersion,
-		Provider:              parser.AgentCodex,
-		ConfiguredRootID:      "root-a",
-		SourceKey:             "current.jsonl",
-		ExpectedParentReceipt: parentReceipt,
-		CaptureID:             captureID,
-		CapturedAt:            captured,
-		Kind:                  rawsync.ManifestSnapshot,
-		Entries: []rawsync.Entry{{
-			Path: "current.jsonl", Type: "file", Length: object.Length,
-			Objects: []rawsync.ObjectRef{object},
-		}},
-	}, rawsync.DefaultManifestLimits())
-	require.NoError(t, err)
-	result, err := store.CommitManifest(t.Context(), manifest, "status-test-version")
+	result, err := store.CommitManifest(t.Context(), canonical, "status-test-version")
 	require.NoError(t, err)
 	return result
-}
-
-func insertRawStatusHead(
-	t *testing.T,
-	pg *sql.DB,
-	identity rawsync.AuthIdentity,
-	provider parser.AgentType,
-	rootID, sourceKey string,
-	generation int64,
-) {
-	t.Helper()
-	_, err := pg.ExecContext(t.Context(), `
-		INSERT INTO raw_source_heads (
-			tenant_id, device_id, provider, configured_root_id, source_key,
-			source_key_sha256, generation
-		) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		identity.TenantID, identity.DeviceID, provider, rootID, sourceKey,
-		rawStatusSourceKeyDigest(sourceKey), generation)
-	require.NoError(t, err)
 }
 
 func insertRawStatusJobs(t *testing.T, pg *sql.DB, tenantID, manifestID string) {
@@ -360,31 +366,47 @@ func insertRawStatusUploads(
 ) {
 	t.Helper()
 	created := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	insert := func(
-		id string,
-		owner rawsync.AuthIdentity,
-		size, offset int64,
-		state string,
-		createdAt, expiresAt time.Time,
-		completedAt *time.Time,
-	) {
-		t.Helper()
+	completedAt := created.Add(4 * time.Hour)
+	for _, upload := range []struct {
+		id           string
+		owner        rawsync.AuthIdentity
+		size, offset int64
+		state        string
+		createdAt    time.Time
+		completedAt  *time.Time
+	}{
+		{
+			id: "upload-tie-b", owner: identity, size: 10, offset: 2,
+			state: "open", createdAt: created,
+		},
+		{
+			id: "upload-tie-a", owner: identity, size: 20, offset: 5,
+			state: "open", createdAt: created,
+		},
+		{
+			id: "upload-expired", owner: identity, size: 12, offset: 5,
+			state: "open", createdAt: created.Add(time.Hour),
+		},
+		{
+			id: "upload-complete", owner: identity, size: 10, offset: 10,
+			state: "complete", createdAt: created.Add(3 * time.Hour), completedAt: &completedAt,
+		},
+		{
+			id: "other-upload", owner: other, size: 100,
+			state: "open", createdAt: created,
+		},
+	} {
 		_, err := pg.ExecContext(t.Context(), `
 			INSERT INTO raw_upload_sessions (
 				upload_id, tenant_id, device_id, provider, sha256, size_bytes,
 				offset_bytes, generation, state, created_at, updated_at,
 				expires_at, completed_at
 			) VALUES ($1, $2, $3, 'codex', $4, $5, $6, 0, $7, $8, $8, $9, $10)`,
-			id, owner.TenantID, owner.DeviceID, strings.Repeat("a", 64),
-			size, offset, state, createdAt, expiresAt, completedAt)
+			upload.id, upload.owner.TenantID, upload.owner.DeviceID, strings.Repeat("a", 64),
+			upload.size, upload.offset, upload.state, upload.createdAt,
+			upload.createdAt.Add(time.Hour), upload.completedAt)
 		require.NoError(t, err)
 	}
-	insert("upload-tie-b", identity, 10, 2, "open", created, created.Add(time.Hour), nil)
-	insert("upload-tie-a", identity, 20, 5, "open", created, created.Add(time.Hour), nil)
-	insert("upload-expired", identity, 12, 5, "open", created.Add(time.Hour), created.Add(2*time.Hour), nil)
-	completedAt := created.Add(4 * time.Hour)
-	insert("upload-complete", identity, 10, 10, "complete", created.Add(3*time.Hour), created.Add(4*time.Hour), &completedAt)
-	insert("other-upload", other, 100, 0, "open", created, created.Add(time.Hour), nil)
 }
 
 type rawStatusPersistence struct {
@@ -421,6 +443,7 @@ func rawStatusHTTPGet(t *testing.T, baseURL, token string) *http.Response {
 	request.Header.Set("Authorization", "Bearer "+token)
 	response, err := http.DefaultClient.Do(request)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, response.Body.Close()) })
 	return response
 }
 
@@ -430,16 +453,8 @@ func assertRawStatusJSONShape(t *testing.T, body []byte) {
 	require.NoError(t, json.Unmarshal(body, &object))
 	assert.ElementsMatch(t,
 		[]string{"source_heads", "parse_jobs", "active_device_count", "devices", "uploads"},
-		mapKeys(object),
+		slices.Collect(maps.Keys(object)),
 	)
-}
-
-func mapKeys(values map[string]json.RawMessage) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	return keys
 }
 
 func findRawStatusHead(
@@ -455,11 +470,6 @@ func findRawStatusHead(
 	}
 	require.FailNow(t, "source head not found", sourceKey)
 	return rawsync.SourceHeadStatus{}
-}
-
-func rawStatusSourceKeyDigest(sourceKey string) string {
-	digest := sha256.Sum256([]byte(sourceKey))
-	return hex.EncodeToString(digest[:])
 }
 
 func tokenDigest(token string) []byte {

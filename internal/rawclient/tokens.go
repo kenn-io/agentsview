@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// tokenScopes is the exact scope set the transport needs; the status scope
-// has no server route yet and is not requested.
+// tokenScopes covers this client's upload operations. Hosted status callers
+// request the status scope separately through the token endpoint.
 var tokenScopes = []string{"negotiate", "upload", "commit"}
 
 // tokenProvider caches one live device token and refreshes it with

@@ -43,7 +43,7 @@ func TestRawSyncTokenExchangeBypassesLegacyBearerAndUsesNamedScopes(t *testing.T
 		) (rawsync.IssuedDeviceToken, error) {
 			assert.Equal(t, "dev_test", deviceID)
 			assert.Equal(t, "avdc_test", credential)
-			assert.Equal(t, rawsync.ScopeNegotiate|rawsync.ScopeCommit, scopes)
+			assert.Equal(t, rawsync.ScopeNegotiate|rawsync.ScopeCommit|rawsync.ScopeStatus, scopes)
 			return rawsync.IssuedDeviceToken{
 				Token: "avdt_test",
 				Identity: rawsync.AuthIdentity{
@@ -59,7 +59,7 @@ func TestRawSyncTokenExchangeBypassesLegacyBearerAndUsesNamedScopes(t *testing.T
 
 	recorder := serveRawSyncJSON(
 		t, srv, http.MethodPost, "/api/v1/raw-sync/tokens",
-		`{"scopes":["commit","negotiate"]}`,
+		`{"scopes":["commit","negotiate","status"]}`,
 		"avdc_test", "dev_test",
 	)
 
@@ -73,7 +73,7 @@ func TestRawSyncTokenExchangeBypassesLegacyBearerAndUsesNamedScopes(t *testing.T
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
 	assert.Equal(t, "avdt_test", response.Token)
 	assert.Equal(t, "dev_test", response.DeviceID)
-	assert.Equal(t, []string{"negotiate", "commit"}, response.Scopes)
+	assert.Equal(t, []string{"negotiate", "commit", "status"}, response.Scopes)
 	assert.Equal(t, expiresAt, response.ExpiresAt)
 	assert.Equal(t, 1, auth.issueCalls)
 }

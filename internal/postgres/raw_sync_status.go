@@ -27,12 +27,7 @@ func (s *RawIngestStore) ReadRawSyncStatus(
 	if err != nil {
 		return rawsync.Status{}, fmt.Errorf("beginning raw sync status read: %w", err)
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
+	defer func() { _ = tx.Rollback() }()
 
 	status := rawsync.Status{
 		SourceHeads: make([]rawsync.SourceHeadStatus, 0),
@@ -50,10 +45,6 @@ func (s *RawIngestStore) ReadRawSyncStatus(
 	if err := readRawSyncStatusUploads(ctx, tx, identity.TenantID, &status); err != nil {
 		return rawsync.Status{}, err
 	}
-	if err := tx.Commit(); err != nil {
-		return rawsync.Status{}, fmt.Errorf("committing raw sync status read: %w", err)
-	}
-	committed = true
 	return status, nil
 }
 
@@ -66,34 +57,21 @@ func readRawSyncStatusHeads(
 	rows, err := tx.QueryContext(ctx, `
 		SELECT head.device_id, head.configured_root_id, head.provider,
 			head.source_key, head.generation, manifest.accepted_at,
-			EXISTS (
-				SELECT 1
-				FROM raw_ingest_jobs AS job
-				WHERE job.tenant_id = head.tenant_id
-					AND job.manifest_id = head.manifest_id
-					AND job.stage = 'parse'
-					AND job.state IN ('ready', 'retrying')
-			) AS parse_pending,
-			EXISTS (
-				SELECT 1
-				FROM raw_ingest_jobs AS job
-				WHERE job.tenant_id = head.tenant_id
-					AND job.manifest_id = head.manifest_id
-					AND job.stage = 'parse'
-					AND job.state = 'leased'
-			) AS parse_leased,
-			EXISTS (
-				SELECT 1
-				FROM raw_ingest_jobs AS job
-				WHERE job.tenant_id = head.tenant_id
-					AND job.manifest_id = head.manifest_id
-					AND job.stage = 'parse'
-					AND job.state = 'failed'
-			) AS parse_failed
+			jobs.parse_pending, jobs.parse_leased, jobs.parse_failed
 		FROM raw_source_heads AS head
 		LEFT JOIN raw_manifests AS manifest
 			ON manifest.tenant_id = head.tenant_id
 			AND manifest.manifest_id = head.manifest_id
+		CROSS JOIN LATERAL (
+			SELECT
+				COALESCE(BOOL_OR(state IN ('ready', 'retrying')), false) AS parse_pending,
+				COALESCE(BOOL_OR(state = 'leased'), false) AS parse_leased,
+				COALESCE(BOOL_OR(state = 'failed'), false) AS parse_failed
+			FROM raw_ingest_jobs AS job
+			WHERE job.tenant_id = head.tenant_id
+				AND job.manifest_id = head.manifest_id
+				AND job.stage = 'parse'
+		) AS jobs
 		WHERE head.tenant_id = $1
 		ORDER BY head.device_id, head.provider,
 			head.configured_root_id, head.source_key`, tenantID)
@@ -165,7 +143,7 @@ func readRawSyncStatusDevices(
 	status *rawsync.Status,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT devices.device_id, MAX(tokens.issued_at), COUNT(*) OVER ()
+		SELECT devices.device_id, MAX(tokens.issued_at)
 		FROM raw_devices AS devices
 		LEFT JOIN raw_device_tokens AS tokens
 			ON tokens.tenant_id = devices.tenant_id
@@ -178,11 +156,10 @@ func readRawSyncStatusDevices(
 	}
 	for rows.Next() {
 		var (
-			device            rawsync.DeviceStatus
-			lastSeenAt        *time.Time
-			activeDeviceCount int64
+			device     rawsync.DeviceStatus
+			lastSeenAt *time.Time
 		)
-		if err := rows.Scan(&device.DeviceID, &lastSeenAt, &activeDeviceCount); err != nil {
+		if err := rows.Scan(&device.DeviceID, &lastSeenAt); err != nil {
 			return fmt.Errorf(
 				"scanning raw device activity: %w",
 				finishRawSyncStatusRows(rows, err),
@@ -192,12 +169,12 @@ func readRawSyncStatusDevices(
 			seenAt := lastSeenAt.UTC()
 			device.LastSeenAt = &seenAt
 		}
-		status.ActiveDeviceCount = activeDeviceCount
 		status.Devices = append(status.Devices, device)
 	}
 	if err := finishRawSyncStatusRows(rows, nil); err != nil {
 		return fmt.Errorf("finishing raw device activity query: %w", err)
 	}
+	status.ActiveDeviceCount = int64(len(status.Devices))
 	return nil
 }
 
@@ -207,52 +184,36 @@ func readRawSyncStatusUploads(
 	tenantID string,
 	status *rawsync.Status,
 ) error {
-	var (
-		oldestID      sql.NullString
-		oldestCreated sql.NullTime
-	)
 	err := tx.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*),
-			COALESCE(SUM(size_bytes - offset_bytes), 0),
-			(
-				SELECT upload_id
-				FROM raw_upload_sessions
-				WHERE tenant_id = $1 AND state = 'open'
-				ORDER BY created_at, upload_id
-				LIMIT 1
-			),
-			(
-				SELECT created_at
-				FROM raw_upload_sessions
-				WHERE tenant_id = $1 AND state = 'open'
-				ORDER BY created_at, upload_id
-				LIMIT 1
-			)
+			COALESCE(SUM(size_bytes - offset_bytes), 0)
 		FROM raw_upload_sessions
 		WHERE tenant_id = $1 AND state = 'open'`, tenantID).Scan(
 		&status.Uploads.OpenCount,
 		&status.Uploads.PendingBytes,
-		&oldestID,
-		&oldestCreated,
 	)
 	if err != nil {
 		return fmt.Errorf("querying raw upload backlog: %w", err)
 	}
-	if oldestID.Valid {
-		if !oldestCreated.Valid {
-			return errors.New("querying raw upload backlog: oldest upload has no creation time")
-		}
-		status.Uploads.OldestOpenSession = &rawsync.OpenUploadStatus{
-			UploadID:  oldestID.String,
-			CreatedAt: oldestCreated.Time.UTC(),
-		}
+	var oldest rawsync.OpenUploadStatus
+	err = tx.QueryRowContext(ctx, `
+		SELECT upload_id, created_at
+		FROM raw_upload_sessions
+		WHERE tenant_id = $1 AND state = 'open'
+		ORDER BY created_at, upload_id
+		LIMIT 1`, tenantID).Scan(&oldest.UploadID, &oldest.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
 	}
+	if err != nil {
+		return fmt.Errorf("querying oldest raw upload: %w", err)
+	}
+	oldest.CreatedAt = oldest.CreatedAt.UTC()
+	status.Uploads.OldestOpenSession = &oldest
 	return nil
 }
 
 func finishRawSyncStatusRows(rows *sql.Rows, err error) error {
 	return errors.Join(err, rows.Err(), rows.Close())
 }
-
-var _ rawsync.StatusStore = (*RawIngestStore)(nil)
