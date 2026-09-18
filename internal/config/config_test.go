@@ -711,6 +711,7 @@ func TestPortExplicitProvenance(t *testing.T) {
 		}{
 			{name: "pg", fn: LoadPGServePFlags},
 			{name: "duckdb", fn: LoadDuckDBServePFlags},
+			{name: "clickhouse", fn: LoadClickHouseServePFlags},
 		} {
 			t.Run(load.name, func(t *testing.T) {
 				setupTestEnv(t)
