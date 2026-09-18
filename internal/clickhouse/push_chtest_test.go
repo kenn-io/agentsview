@@ -5,6 +5,7 @@ package clickhouse
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -19,8 +20,17 @@ func TestEnsureSchemaCreatesMissingDatabase(t *testing.T) {
 	ctx := context.Background()
 	dsn := chtest.ServerURL(t)
 	database := "agentsview_boot_" + strings.ReplaceAll(t.Name(), "/", "_")
-	require.NoError(t, EnsureSchema(ctx, Target{URL: dsn, Database: database}))
-	conn := chtest.Open(t, dsn, database)
+	parsed, err := url.Parse(dsn)
+	require.NoError(t, err)
+	parsed.Path = "/" + database
+	missingDSN := parsed.String()
+	admin := chtest.Open(t, dsn, "default")
+	require.NoError(t, EnsureSchema(ctx, Target{URL: missingDSN}))
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(),
+			"DROP DATABASE IF EXISTS "+database+" SYNC")
+	})
+	conn := chtest.Open(t, missingDSN, database)
 	assert.Equal(t, 0, chtest.Count(t, conn, "sessions", ""))
 }
 

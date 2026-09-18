@@ -218,17 +218,15 @@ func TestSearchTreatsUnderscoreAsLiteral(t *testing.T) {
 	store, syncer, local := newPushedStore(t)
 	ctx := context.Background()
 	appendMessage(t, local, fixtureAlphaID, "hello_world unique token", "2026-01-10T00:04:00.000Z")
+	appendMessage(t, local, fixtureBetaID, "helloXworld unique token", "2026-01-11T00:04:00.000Z")
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 
 	literal, err := store.Search(ctx, db.SearchFilter{Query: "hello_world", Limit: 5})
 	require.NoError(t, err)
-	require.Len(t, literal.Results, 1, "literal underscore in the query must match hello_world")
-
-	wildcard, err := store.Search(ctx, db.SearchFilter{Query: "helloXworld", Limit: 5})
-	require.NoError(t, err)
-	assert.Empty(t, wildcard.Results,
-		"underscore is not a single-character wildcard in ClickHouse search")
+	require.Len(t, literal.Results, 1,
+		"hello_world must match the underscore session and not helloXworld")
+	assert.Equal(t, fixtureAlphaID, literal.Results[0].SessionID)
 }
 
 func TestStoreGetSessionHidesTrash(t *testing.T) {
