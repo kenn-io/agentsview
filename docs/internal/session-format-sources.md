@@ -680,6 +680,44 @@ add an archived or maintained mirror without replacing the original identity.
   unmarked-notification shape, so the archive curation user-row removal that
   covers Codex and TraeX also covers `augure-code`.
 
+## Augure Desktop v3 (`augure-desktop`)
+
+- **Format:** Hermes Agent state.db schema at `~/.augure-desktop/state.db`
+  (`sessions`, `messages`, `messages_fts*`, `session_model_usage`,
+  `session_turn_leases`, `gateway_routing`, `async_delegations`,
+  `compression_locks`, `system_prompts`, `state_meta`, `schema_version`) plus
+  the `sessions/` transcript sibling. Timestamps are REAL epoch seconds;
+  observed rows carry `source = "desktop"`. Hermes-style (`20260910_075655_ca54ab`)
+  and UUID session ids coexist in one store.
+- **Evidence:** `no-public-source`.
+- **Upstream:** The app is closed and publishes no producer source; it was
+  checked 2026-09-11. Its `install-stamp.json` names branch
+  `release/desktop-v3-candidate`, commit `d419438f`, built 2026-09-09 (Augure
+  Desktop 3.0.0-beta.7). The data root comes from the bundled
+  `hermes_constants.py`: `DEFAULT_HERMES_HOME_DIRNAME = ".augure-desktop"`,
+  `DEFAULT_HERMES_HOME_DIRNAME_WINDOWS = "augure-desktop"`,
+  `LEGACY_HERMES_HOME_DIRNAME = ".hermes"`, plus a 340-file `hermes_*` Python
+  runtime in the app bundle, identifying a Hermes Agent fork. The fork's
+  `schema_version` was 26 the same day stock `~/.hermes/state.db` measured 30:
+  same table family, independent version lines. The fork marker is the
+  store's own root name (`.augure-desktop` / `%LOCALAPPDATA%\augure-desktop`),
+  never the schema shape or `schema_version` number.
+- **Usage and cost:** the state DB's own authoritative session columns
+  (`input_tokens`, `output_tokens`, cache columns, `reasoning_tokens`,
+  `estimated_cost_usd`, `actual_cost_usd`, `cost_status`, `cost_source`),
+  decoded exactly like stock Hermes: `actual_cost_usd` 0 (SQL 0, not NULL) is
+  a present-zero, estimated 0 does not masquerade as $0. Models observed are
+  proprietary Augure slugs (`ossington-5`), absent from the pricing catalog,
+  so their events price as unpriced until catalog coverage appears.
+- **Agentsview:** `internal/parser/augure_desktop.go` relabels the shared
+  Hermes provider (`internal/parser/hermes.go`,
+  `internal/parser/hermes_provider.go`) onto the `augure-desktop:` ID prefix
+  through the `hermesProviderSpec` seam; `internal/sync` treats it like Hermes
+  for fingerprint-hash freshness and provider fingerprint file info. The
+  provider declines roots without the fork marker so a stock Hermes-shaped
+  store stays with Hermes. Remote sync is excluded for the same
+  raw-state.db/WAL reasons the registry entry documents.
+
 ## GitHub Copilot CLI (`copilot`)
 
 - **Format:** Flat session JSONL or a session directory containing
