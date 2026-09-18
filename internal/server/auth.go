@@ -225,6 +225,9 @@ func (s *Server) isRawSyncOwnAuthPath(path string) bool {
 	if path == "/api/v1/raw-sync/tokens" {
 		return true
 	}
+	if s.rawSyncJobHealth != nil && path == "/api/v1/raw-sync/health" {
+		return true
+	}
 	if s.rawSyncCustody == nil {
 		return false
 	}
@@ -254,6 +257,13 @@ func (s *Server) authenticateRawSyncRequest(
 	case "/api/v1/raw-sync/manifests":
 		return s.rawSyncDeviceAuth.AuthenticateToken(
 			r.Context(), secret, rawsync.ScopeCommit,
+		)
+	case "/api/v1/raw-sync/health":
+		if s.rawSyncJobHealth == nil {
+			return rawsync.AuthIdentity{}, rawsync.ErrUnauthorized
+		}
+		return s.rawSyncDeviceAuth.AuthenticateToken(
+			r.Context(), secret, rawsync.ScopeStatus,
 		)
 	default:
 		if s.rawSyncUploads != nil && isRawSyncUploadPath(r.URL.Path) {
