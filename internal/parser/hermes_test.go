@@ -2075,6 +2075,9 @@ func TestHermesToolTaxonomy(t *testing.T) {
 		{"delegate_task", "Task"},
 		{"browser_navigate", "Tool"},
 		{"browser_click", "Tool"},
+		// Augure Desktop v3's browser automation tool shares the Hermes
+		// provider's taxonomy; it must bucket as a tool, not a shell.
+		{"browser_exec", "Tool"},
 		{"todo", "Tool"},
 		{"memory", "Tool"},
 		{"skill_view", "Tool"},
