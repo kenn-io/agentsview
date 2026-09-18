@@ -151,6 +151,11 @@ type openRequest struct {
 }
 
 func launchOpener(ctx context.Context, o Opener, dir string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// The opened application belongs to the user after this request returns.
+	ctx = context.WithoutCancel(ctx)
 	var cmd *exec.Cmd
 
 	switch o.Kind {

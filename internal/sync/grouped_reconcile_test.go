@@ -165,12 +165,12 @@ func TestReconcileProviderRootsGroupedSkipsEpilogueOnCancellation(t *testing.T) 
 	defer cancel()
 	defaultFactory := engine.reconciliationSpoolFactory
 	spoolCalls := 0
-	engine.reconciliationSpoolFactory = func(path string) (reconciliationSpoolStore, error) {
+	engine.reconciliationSpoolFactory = func(ctx context.Context, path string) (reconciliationSpoolStore, error) {
 		spoolCalls++
 		if spoolCalls == 2 {
 			cancel()
 		}
-		return defaultFactory(path)
+		return defaultFactory(ctx, path)
 	}
 
 	err := engine.ReconcileProviderRootsGrouped(ctx,
@@ -398,8 +398,8 @@ func TestReconcileProviderRootsGroupedRunsEpilogueDespiteTombstoneFailure(t *tes
 	require.NoError(t, err)
 
 	defaultFactory := engine.reconciliationSpoolFactory
-	engine.reconciliationSpoolFactory = func(path string) (reconciliationSpoolStore, error) {
-		spool, err := defaultFactory(path)
+	engine.reconciliationSpoolFactory = func(ctx context.Context, path string) (reconciliationSpoolStore, error) {
+		spool, err := defaultFactory(ctx, path)
 		if err != nil {
 			return nil, err
 		}
@@ -448,12 +448,12 @@ func TestReconcileProviderRootsGroupedAttemptsEveryGroupAfterFailure(t *testing.
 	// the second group runs normally.
 	defaultFactory := engine.reconciliationSpoolFactory
 	failures := 0
-	engine.reconciliationSpoolFactory = func(path string) (reconciliationSpoolStore, error) {
+	engine.reconciliationSpoolFactory = func(ctx context.Context, path string) (reconciliationSpoolStore, error) {
 		if failures == 0 {
 			failures++
 			return nil, errors.New("spool unavailable")
 		}
-		return defaultFactory(path)
+		return defaultFactory(ctx, path)
 	}
 
 	err := engine.ReconcileProviderRootsGrouped(t.Context(),

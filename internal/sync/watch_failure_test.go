@@ -683,8 +683,8 @@ func TestReconcileWatchRootsJoinsProviderAndLaterProcessingFailures(t *testing.T
 		},
 	})
 	t.Cleanup(engine.Close)
-	engine.reconciliationSpoolFactory = func(path string) (reconciliationSpoolStore, error) {
-		spool, err := newReconciliationSpool(t.Context(), path)
+	engine.reconciliationSpoolFactory = func(ctx context.Context, path string) (reconciliationSpoolStore, error) {
+		spool, err := newReconciliationSpool(ctx, path)
 		if err != nil {
 			return nil, err
 		}

@@ -1,9 +1,11 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -512,4 +514,24 @@ func TestOpenReadOnlyEmptyDBFailsWithoutMigrating(t *testing.T) {
 	info, statErr := os.Stat(path)
 	require.NoError(t, statErr)
 	assert.Zero(t, info.Size())
+}
+
+func TestReadOnlySchemaAfterInitialCancellation(t *testing.T) {
+	// A separate process ensures no earlier open has initialized the schema cache.
+	if os.Getenv("AGENTSVIEW_TEST_SCHEMA_CANCELLATION") != "1" {
+		exe, err := os.Executable()
+		require.NoError(t, err)
+		cmd := exec.CommandContext(t.Context(), exe, "-test.run=^TestReadOnlySchemaAfterInitialCancellation$")
+		cmd.Env = append(os.Environ(), "AGENTSVIEW_TEST_SCHEMA_CANCELLATION=1")
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+		return
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := readOnlyRequiredSchema(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	required, err := readOnlyRequiredSchema(t.Context())
+	require.NoError(t, err)
+	assert.Contains(t, required["sessions"], "id")
 }

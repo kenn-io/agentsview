@@ -6,6 +6,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -2700,4 +2701,47 @@ func requireConfiguredServeBackgroundSysProcAttr(t *testing.T) *syscall.SysProcA
 	configureServeBackgroundCommand(cmd)
 	require.NotNil(t, cmd.SysProcAttr)
 	return cmd.SysProcAttr
+}
+
+func TestStartServeBackgroundProcessSurvivesLauncherCancellation(t *testing.T) {
+	const childAddress = "AGENTSVIEW_TEST_BACKGROUND_ADDRESS"
+	if address := os.Getenv(childAddress); address != "" {
+		var dialer net.Dialer
+		conn, err := dialer.DialContext(t.Context(), "tcp", address)
+		require.NoError(t, err)
+		defer conn.Close()
+		require.NoError(t, conn.SetDeadline(time.Now().Add(10*time.Second)))
+		var message [1]byte
+		_, err = conn.Read(message[:])
+		require.NoError(t, err)
+		_, err = conn.Write(message[:])
+		require.NoError(t, err)
+		return
+	}
+	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer listener.Close()
+	require.NoError(t, listener.SetDeadline(time.Now().Add(10*time.Second)))
+	t.Setenv(childAddress, listener.Addr().String())
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	child, _, err := startServeBackgroundProcess(ctx, config.Config{DataDir: t.TempDir()},
+		[]string{"-test.run=^TestStartServeBackgroundProcessSurvivesLauncherCancellation$"})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = child.Process.Kill()
+		_ = child.Wait()
+	})
+	cancel()
+	conn, err := listener.AcceptTCP()
+	require.NoError(t, err)
+	defer conn.Close()
+	require.NoError(t, conn.SetDeadline(time.Now().Add(10*time.Second)))
+	_, err = conn.Write([]byte("x"))
+	require.NoError(t, err)
+	var reply [1]byte
+	_, err = conn.Read(reply[:])
+	require.NoError(t, err)
+	assert.Equal(t, byte('x'), reply[0])
+	require.NoError(t, child.Wait())
 }

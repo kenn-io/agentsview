@@ -878,6 +878,9 @@ func startServeBackgroundProcess(ctx context.Context,
 	args []string,
 ) (*exec.Cmd, string, error) {
 	logPath := serveLogPath(cfg.DataDir)
+	if err := ctx.Err(); err != nil {
+		return nil, logPath, err
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, logPath, fmt.Errorf("finding executable: %w", err)
@@ -907,7 +910,8 @@ func startServeBackgroundProcess(ctx context.Context,
 	defer devNull.Close()
 
 	childArgs := serveBackgroundChildArgs(args)
-	cmd := exec.CommandContext(ctx, exe, childArgs...)
+	// The daemon outlives the launcher; readiness still uses the caller context.
+	cmd := exec.CommandContext(context.WithoutCancel(ctx), exe, childArgs...)
 	cmd.Env = append(os.Environ(), backgroundChildEnvVar+"=1")
 	if cfg.DataDir != "" {
 		cmd.Env = append(cmd.Env, "AGENTSVIEW_DATA_DIR="+cfg.DataDir)

@@ -245,10 +245,10 @@ func TestReconcileProviderRootsUnresolvedRootsAreBoundedNoOp(t *testing.T) {
 	var spools atomic.Int32
 	factory := engine.reconciliationSpoolFactory
 	engine.reconciliationSpoolFactory = func(
-		path string,
+		ctx context.Context, path string,
 	) (reconciliationSpoolStore, error) {
 		spools.Add(1)
-		return factory(path)
+		return factory(ctx, path)
 	}
 
 	for _, tc := range []struct {

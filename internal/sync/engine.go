@@ -750,7 +750,7 @@ type Engine struct {
 
 	reconciliationMu           gosync.RWMutex
 	lastReconciliation         ReconciliationResult
-	reconciliationSpoolFactory func(string) (reconciliationSpoolStore, error)
+	reconciliationSpoolFactory func(context.Context, string) (reconciliationSpoolStore, error)
 }
 
 // forceParseRequested centralizes the parse modes that require complete source
@@ -1001,7 +1001,7 @@ func NewEngine(ctx context.Context,
 		startupAttemptReady:     make(chan struct{}),
 		onStartupReconciled:     cfg.OnStartupReconciled,
 		progressStallAfter:      progressStallAfter,
-		reconciliationSpoolFactory: func(path string) (reconciliationSpoolStore, error) {
+		reconciliationSpoolFactory: func(ctx context.Context, path string) (reconciliationSpoolStore, error) {
 			return newReconciliationSpool(ctx, path)
 		},
 	}
@@ -5197,7 +5197,7 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 		return runtimeMetrics.snapshot(spoolMetrics)
 	}
 
-	spool, err := e.reconciliationSpoolFactory(e.db.Path())
+	spool, err := e.reconciliationSpoolFactory(ctx, e.db.Path())
 	if err != nil {
 		stats.Aborted = true
 		return stats, metrics, 0, eligibility, err
@@ -7485,7 +7485,7 @@ func (e *Engine) buildReconciliationReplacementIndex(
 	if err != nil {
 		return nil, err
 	}
-	spool, err := e.reconciliationSpoolFactory(e.db.Path())
+	spool, err := e.reconciliationSpoolFactory(ctx, e.db.Path())
 	if err != nil {
 		return nil, err
 	}

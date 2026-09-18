@@ -2867,7 +2867,7 @@ func TestReconcileWatchRootsCancellationAfterSpoolCreationCleansSpool(t *testing
 	t.Cleanup(engine.Close)
 	ctx, cancel := context.WithCancel(t.Context())
 	var scratchPath string
-	engine.reconciliationSpoolFactory = func(path string) (reconciliationSpoolStore, error) {
+	engine.reconciliationSpoolFactory = func(ctx context.Context, path string) (reconciliationSpoolStore, error) {
 		spool, err := newReconciliationSpool(ctx, path)
 		if err != nil {
 			return nil, err
@@ -2916,7 +2916,7 @@ func TestReconcileWatchRootsCancellationDuringLaterSpoolPage(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 	ctx, cancel := context.WithCancel(t.Context())
-	engine.reconciliationSpoolFactory = func(path string) (reconciliationSpoolStore, error) {
+	engine.reconciliationSpoolFactory = func(ctx context.Context, path string) (reconciliationSpoolStore, error) {
 		spool, err := newReconciliationSpool(ctx, path)
 		if err != nil {
 			return nil, err
@@ -3050,7 +3050,7 @@ func TestReconcileWatchRootsRemoteOnlyIncrementalScopeIsBoundedNoOp(t *testing.T
 		Machine: "local",
 	})
 	t.Cleanup(engine.Close)
-	engine.reconciliationSpoolFactory = func(string) (reconciliationSpoolStore, error) {
+	engine.reconciliationSpoolFactory = func(context.Context, string) (reconciliationSpoolStore, error) {
 		require.FailNow(t, "remote-only incremental reconciliation enumerated local sources")
 		return nil, nil
 	}
@@ -3189,8 +3189,8 @@ func TestReconcileWatchRootsSpoolErrorsAbortAndCleanScratchFiles(t *testing.T) {
 			t.Cleanup(engine.Close)
 			injected := errors.New("injected spool " + tc.name + " failure")
 			var scratchPath string
-			engine.reconciliationSpoolFactory = func(path string) (reconciliationSpoolStore, error) {
-				spool, err := newReconciliationSpool(t.Context(), path)
+			engine.reconciliationSpoolFactory = func(ctx context.Context, path string) (reconciliationSpoolStore, error) {
+				spool, err := newReconciliationSpool(ctx, path)
 				if err != nil {
 					return nil, err
 				}
@@ -3244,8 +3244,8 @@ func TestReconciliationReplacementIndexReportsDiscoveryAndCleanupErrors(t *testi
 	}
 	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
 	t.Cleanup(engine.Close)
-	engine.reconciliationSpoolFactory = func(path string) (reconciliationSpoolStore, error) {
-		spool, err := newReconciliationSpool(t.Context(), path)
+	engine.reconciliationSpoolFactory = func(ctx context.Context, path string) (reconciliationSpoolStore, error) {
+		spool, err := newReconciliationSpool(ctx, path)
 		if err != nil {
 			return nil, err
 		}
@@ -12087,4 +12087,19 @@ func TestOpenCodeUsageOnlyPreservesModelWithoutTokens(t *testing.T) {
 	assert.True(t, openCodeUsageOnlyArchiveLooksIncomplete(parsed, stored))
 	parsed[0].Model = "model-b"
 	assert.False(t, openCodeUsageOnlyArchiveLooksIncomplete(parsed, stored), "a complete model correction remains allowed")
+}
+
+func TestReconcileWatchRootsAfterConstructorCancellation(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	engine := NewEngine(ctx, database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	cancel()
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
+	assert.True(t, engine.LastReconciliationResult().Complete)
 }

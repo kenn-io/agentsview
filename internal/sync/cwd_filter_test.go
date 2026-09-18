@@ -773,9 +773,9 @@ func TestReconcileWatchRootsRevokesRejectedBaselineOnSpoolFailure(
 			t.Cleanup(fx.engine.Close)
 			injected := errors.New("injected non-authoritative spool failure")
 			fx.engine.reconciliationSpoolFactory = func(
-				path string,
+				ctx context.Context, path string,
 			) (reconciliationSpoolStore, error) {
-				spool, err := newReconciliationSpool(t.Context(), path)
+				spool, err := newReconciliationSpool(ctx, path)
 				if err != nil {
 					return nil, err
 				}
@@ -843,9 +843,9 @@ func TestReconcileWatchRootsRevokesSourceWideRejectedBaselineOnSpoolFailure(
 			defaultFactory := fx.engine.reconciliationSpoolFactory
 			injected := errors.New("injected non-authoritative spool failure")
 			fx.engine.reconciliationSpoolFactory = func(
-				path string,
+				ctx context.Context, path string,
 			) (reconciliationSpoolStore, error) {
-				spool, err := defaultFactory(path)
+				spool, err := defaultFactory(ctx, path)
 				if err != nil {
 					return nil, err
 				}
