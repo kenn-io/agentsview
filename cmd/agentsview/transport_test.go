@@ -1060,15 +1060,16 @@ func TestBackgroundLaunchWaitReportsProgressAndExtendsWhileWorking(t *testing.T)
 	released := make(chan error, 1)
 	go func() {
 		for i := range 5 {
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
 			state.SetPhase(fmt.Sprintf("Preparing archive batch %d", i+1))
 		}
+		time.Sleep(100 * time.Millisecond)
 		released <- launchLock.Unlock()
 	}()
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	output := captureStderr(t, func() {
-		waited, err := waitForBackgroundLaunchBeforeArchiveWrite(ctx, dir, 150*time.Millisecond)
+		waited, err := waitForBackgroundLaunchBeforeArchiveWrite(ctx, dir, 300*time.Millisecond)
 		require.True(t, waited)
 		require.NoError(t, err, "advancing startup must extend the wait")
 	})
