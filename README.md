@@ -650,8 +650,9 @@ configuration.
 
 ## ClickHouse Sync
 
-Push session data to a ClickHouse instance. SQLite stays the archive; ClickHouse
-is a one-way remote mirror, the same operator story as PostgreSQL:
+Push session data to a ClickHouse instance. `clickhouse push` writes the copy;
+`clickhouse serve` queries it. SQLite stays the archive, the same operator story
+as PostgreSQL:
 
 ```bash
 agentsview clickhouse push             # push local data to the default target

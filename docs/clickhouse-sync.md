@@ -3,21 +3,19 @@ title: ClickHouse Sync
 description: Push the SQLite archive into ClickHouse and serve a read-only web UI from it
 ---
 
-AgentsView stores sessions locally in SQLite. ClickHouse sync lets you push
-those sessions from one or more machines into a shared ClickHouse database, keep
-that database current with an optional auto-push watcher or OS service, then
-serve a read-only web UI from it.
+AgentsView stores sessions locally in SQLite. `agentsview clickhouse push`
+copies those sessions into ClickHouse. `agentsview clickhouse serve` runs the
+web UI by querying that copy. Keep the copy current with `push --watch` or
+`clickhouse service`.
 
-The sync direction is one-way: SQLite to ClickHouse. Each machine pushes its own
-sessions; `clickhouse serve` reads from the shared database. SQLite stays the
-archive. ClickHouse is a remote mirror, the same operator story as
-[PostgreSQL sync](/docs/pg-sync/), not a disposable local file like
-[DuckDB](/docs/duckdb/).
+Each machine pushes its own sessions. SQLite stays the archive. ClickHouse is a
+remote copy, the same operator story as [PostgreSQL sync](/docs/pg-sync/), not a
+disposable local file like [DuckDB](/docs/duckdb/).
 
-The resulting UI includes the session browser, search, analytics, usage,
-activity, recent edits, and project inventory. Writes (rename, trash, insights,
-stars, pins) stay on the SQLite archive. Semantic search vectors and hosted raw
-sync are not part of the ClickHouse path.
+The UI includes the session browser, search, analytics, usage, activity, recent
+edits, and project inventory. Rename, trash, insights, stars, and pins stay on
+the SQLite archive; the ClickHouse UI does not write them. Semantic search
+vectors and hosted raw sync are not part of this path.
 
 ## Quick Start
 

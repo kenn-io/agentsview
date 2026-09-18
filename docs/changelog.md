@@ -12,10 +12,9 @@ The latest published release is
 
 - Push the local SQLite archive into ClickHouse and serve the read-only web UI
     from it. Configure `[clickhouse]` or named `[clickhouse.NAME]` targets, then
-    run `agentsview clickhouse push`, `status`, `serve`, or `service`. The
-    session browser, search, analytics, usage, activity, and project inventory
-    all read from the mirror. SQLite stays the archive; ClickHouse is a one-way
-    copy. See [ClickHouse Sync](/docs/clickhouse-sync/).
+    run `agentsview clickhouse push`, `status`, `serve`, or `service`. Push
+    writes the copy; serve queries it. Rename, trash, and similar stay on
+    SQLite. See [ClickHouse Sync](/docs/clickhouse-sync/).
 
 ## 0.43.0
 
