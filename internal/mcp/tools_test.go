@@ -1322,11 +1322,7 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 	var requests []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
-		automated := query.Get("include_automated")
-		if automated == "" {
-			automated = "false"
-		}
-		requests = append(requests, r.URL.RawQuery+" include_automated="+automated)
+		requests = append(requests, r.URL.RawQuery)
 		assert.Equal(t, "/api/v1/search/content", r.URL.Path)
 		assert.Equal(t, "substring", query.Get("mode"))
 		assert.Equal(t, "pi", query.Get("agent"))
@@ -1408,7 +1404,9 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 	assert.Contains(t, requests[0], "mode=substring")
 	assert.Contains(t, requests[0], "agent=pi")
 	assert.Contains(t, requests[0], "include_one_shot=true")
-	assert.Contains(t, requests[0], "include_automated=false")
+	for _, request := range requests {
+		assert.NotContains(t, request, "include_automated=")
+	}
 }
 
 // fakeContentSearchService captures the ContentSearchRequest a tool builds
