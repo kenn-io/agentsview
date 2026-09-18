@@ -17,8 +17,7 @@ use std::time::{Duration, Instant};
 
 use tauri::async_runtime::Receiver;
 use tauri::menu::{
-    MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder, HELP_SUBMENU_ID,
-    WINDOW_SUBMENU_ID,
+    MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder, WINDOW_SUBMENU_ID,
 };
 use tauri::plugin::Builder as PluginBuilder;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -2349,22 +2348,18 @@ fn setup_menu(app: &mut App) -> Result<(), DynError> {
         .item(&PredefinedMenuItem::maximize(app, None)?)
         .build()?;
 
-    let help_submenu = SubmenuBuilder::with_id(app, HELP_SUBMENU_ID, "Help").build()?;
-
     #[cfg(target_os = "macos")]
     let menu = MenuBuilder::new(app)
         .item(&app_submenu)
         .item(&file_submenu)
         .item(&edit_submenu)
         .item(&window_submenu)
-        .item(&help_submenu)
         .build()?;
 
     #[cfg(not(target_os = "macos"))]
     let menu = MenuBuilder::new(app)
         .item(&file_submenu)
         .item(&edit_submenu)
-        .item(&help_submenu)
         .build()?;
     app.set_menu(menu)?;
     Ok(())
