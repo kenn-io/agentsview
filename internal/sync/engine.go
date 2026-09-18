@@ -9439,6 +9439,10 @@ func (e *Engine) syncProviderDBBacked(
 
 	discovered, sourceFailures := 0, 0
 	piebaldDiscovered := make(map[string]struct{})
+	piebaldPruneRoots := roots
+	if agent == parser.AgentPiebald {
+		piebaldPruneRoots = piebaldAuthoritativeRoots(roots, os.Stat)
+	}
 	err := discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
 		discovered++
 		if agent == parser.AgentPiebald {
@@ -9526,7 +9530,7 @@ func (e *Engine) syncProviderDBBacked(
 		return discovered, sourceFailures, err
 	}
 	if agent == parser.AgentPiebald {
-		e.prunePiebaldFailures(roots, piebaldDiscovered)
+		e.prunePiebaldFailures(piebaldPruneRoots, piebaldDiscovered)
 	}
 	return discovered, sourceFailures, nil
 }
