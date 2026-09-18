@@ -1806,7 +1806,9 @@ func (e *Engine) applyChangedPathSyncLocked(
 		syncWriteDefault,
 	)
 	e.anomalies.applyTo(&stats)
-	e.persistSkipCache()
+	if ctx.Err() == nil {
+		e.persistSkipCache()
+	}
 	complete := prepared.classificationErr == nil && ctx.Err() == nil &&
 		stats.ProcessingComplete()
 	tombstoned := 0

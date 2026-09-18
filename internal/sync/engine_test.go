@@ -1331,6 +1331,37 @@ func seedActiveBaselineSource(
 	require.NoError(t, database.SetSessionDataVersion(id, db.CurrentDataVersion()))
 }
 
+func TestChangedPathSyncCancellationDoesNotPersistSkipCache(t *testing.T) {
+	const agent parser.AgentType = "changed-path-cancel"
+
+	database, engine, provider, _, path := newChangedPathOutcomeEngine(
+		t, agent, func(string) parser.ParseOutcome { return parser.ParseOutcome{} },
+	)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	provider.fingerprint = parser.SourceFingerprint{
+		Key: path, MTimeNS: info.ModTime().UnixNano(),
+	}
+	failureKey := providerAgentSkipCacheKey(path, agent)
+	engine.cacheFailure(failureKey, info.ModTime().UnixNano())
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	engine.syncMu.Lock()
+	_, _, err = engine.applyChangedPathSyncLocked(ctx, preparedChangedPathSync{
+		files: []parser.DiscoveredFile{{
+			Path: path, Agent: agent,
+			ProviderSource: provider.source, ProviderProcess: true,
+		}},
+	})
+	engine.syncMu.Unlock()
+	require.Error(t, err)
+
+	persisted, err := database.LoadSkippedFiles()
+	require.NoError(t, err)
+	assert.Empty(t, persisted)
+}
+
 func TestSyncPathsWriteFailureDoesNotBaselineExistingActiveSource(t *testing.T) {
 	const agent parser.AgentType = "baseline-write-failure"
 	const sessionID = "existing-write-failure"
