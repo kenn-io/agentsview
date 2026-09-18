@@ -2535,12 +2535,14 @@ func claudeSubagentHelperLines(sessionID, cwd string) ([]string, []string) {
 		"timestamp": "2026-08-16T10:00:02Z", "cwd": cwd,
 		"message": map[string]any{"role": "user", "content": "inspect"},
 	}
-	return []string{
+	rootLines := []string{
 		marshal(rootUser), marshal(rootTool), marshal(rootResult),
 		marshal(shared(sessionID, "a2", "u2")),
-	}, []string{
+	}
+	childLines := []string{
 		marshal(childUser), marshal(shared(sessionID, "ca1", "cu1")),
 	}
+	return rootLines, childLines
 }
 
 func testLimits() Limits {

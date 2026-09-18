@@ -5,4 +5,4 @@ plugins:
     version: "v0.0.0-20260808063849-8649a03c818a"
   - module: "go.kenn.io/kit"
     import: "go.kenn.io/kit/lint/gclplugin"
-    version: "v0.25.1-0.20260918125623-3403aa33e0b6"
+    version: "v0.25.1-0.20260918202731-04a175847323"

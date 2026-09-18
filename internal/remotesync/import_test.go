@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -230,13 +231,16 @@ func TestPreparedHTTPSyncRebuildRetirementFailureRecordsDuration(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
 	prepared.commitReady = true
-	prepared.retireJournal = func(string) error {
-		return errors.New("retirement sentinel")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		prepared.retireJournal = func(string) error {
+			time.Sleep(time.Second)
+			return errors.New("retirement sentinel")
+		}
 
-	require.ErrorContains(t, prepared.Commit(), "retirement sentinel")
-	assert.Equal(t, JournalRetirementFailed, prepared.mirrorImport.outcome)
-	assert.Positive(t, prepared.mirrorImport.pending.Stats.RetirementDuration)
+		require.ErrorContains(t, prepared.Commit(), "retirement sentinel")
+		assert.Equal(t, JournalRetirementFailed, prepared.mirrorImport.outcome)
+		assert.Equal(t, time.Second, prepared.mirrorImport.pending.Stats.RetirementDuration)
+	})
 }
 
 func TestPreparedHTTPSyncImportActiveImportsPreparedRoot(t *testing.T) {

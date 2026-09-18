@@ -678,9 +678,11 @@ func (q *quackClient) queryRemote(
 ) (*sql.Rows, error) {
 	query := "SELECT * FROM " + quackAttachmentName + ".query(?)"
 	rows, err := q.duck.QueryContext(ctx, query, sqlText)
-	if err == nil || !retryStale || !isStaleQuackConnectionError(err) ||
-		ctx.Err() != nil {
-		return rows, err
+	if err == nil {
+		return rows, nil
+	}
+	if !retryStale || !isStaleQuackConnectionError(err) || ctx.Err() != nil {
+		return nil, err
 	}
 	q.reattachMu.Lock()
 	defer q.reattachMu.Unlock()

@@ -824,10 +824,10 @@ func TestSearchContent_SessionClassOptIns(t *testing.T) {
 				if session.users > 1 {
 					messages = append(messages, dbtest.AsstMsg(session.id, 1, "reply"))
 				}
-				require.NoError(t, d.InsertMessages(messages))
+				require.NoError(t, d.InsertMessages(t.Context(), messages))
 			}
 
-			_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 				Pattern: "shared class marker", Mode: "substring",
 				IncludeOneShot: tc.includeOneShot, IncludeAutomated: tc.automated,
 			})
@@ -848,18 +848,18 @@ func TestSearchContent_OneShotOptInKeepsActiveGuard(t *testing.T) {
 		s.UserMessageCount = 1
 		s.EndedAt = new("2024-06-15T11:59:00Z")
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("active-one", 0, "active one-shot marker"),
 	}))
 
-	_, excluded, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, excluded, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "active one-shot marker", Mode: "substring", IncludeOneShot: true,
 	})
 	require.NoError(t, err)
 	assert.Empty(t, excluded.Matches)
 	assert.Equal(t, 1, excluded.ExcludedActive)
 
-	_, included, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, included, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "active one-shot marker", Mode: "substring",
 		IncludeOneShot: true, IncludeActive: true,
 	})
@@ -1344,7 +1344,7 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 		require.NoError(t, st.Wait())
 	}()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	withOneShot, err := ct.CallTool(ctx, callParams(ToolSearchContent, map[string]any{
 		"pattern": "wire one-shot marker", "mode": "substring", "agent": "pi",
 		"include_active": true, "include_one_shot": true,

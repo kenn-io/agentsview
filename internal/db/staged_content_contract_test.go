@@ -140,10 +140,11 @@ func TestStagedPublishWithoutSignalsInvalidatesChangedTranscript(t *testing.T) {
 	}}
 	require.NoError(t, d.ReplaceSessionContentStaged(t.Context(), "s1", msgs, staged, nil,
 		func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
-			return SessionSignalUpdate{
+			signals := SessionSignalUpdate{
 				QualitySignals:  QualitySignals{Version: CurrentQualitySignalVersion},
 				SecretLeakCount: 1, SecretsRulesVersion: "test-rules",
-			}, []SecretFinding{{
+			}
+			return signals, []SecretFinding{{
 				SessionID: "s1", RuleName: "test-secret", Confidence: "definite",
 				LocationKind: "message", MessageOrdinal: 0, MatchEnd: 4,
 				RedactedMatch: "****", RulesVersion: "test-rules",

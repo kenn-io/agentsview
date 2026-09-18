@@ -196,6 +196,10 @@ func isLocalhostContext(ctx context.Context) bool {
 }
 
 func agentsViewSchemaNamer(t reflect.Type, hint string) string {
+	if schemaNamedType(t) == reflect.TypeFor[apiResponseError]() {
+		// Keep the published schema name independent of the Go error type name.
+		return "ApiErrorResponse"
+	}
 	name := huma.DefaultSchemaNamer(t, hint)
 	base := schemaNamedType(t)
 	pkgPath := base.PkgPath()

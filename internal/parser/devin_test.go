@@ -736,14 +736,14 @@ func TestDevinMessageNodeSourceUUIDIsSessionScoped(t *testing.T) {
 		devinSyntheticMessageNodeRow{SessionID: "sess-b", NodeID: 2, ParentNodeID: new(int64(1)), ChatMessage: `{"role":"assistant","content":"answer b","metadata":{"metrics":{"input_tokens":4,"output_tokens":6}}}`, CreatedAt: 1704103305},
 	)
 
-	_, msgsA, err := parseDevinSession(fixture.DBPath, "sess-a", "local")
+	_, msgsA, err := parseDevinSession(t.Context(), fixture.DBPath, "sess-a", "local")
 	require.NoError(t, err)
 	require.Len(t, msgsA, 2)
 	assert.Equal(t, "sess-a:1", msgsA[0].SourceUUID)
 	assert.Equal(t, "sess-a:2", msgsA[1].SourceUUID)
 	assert.Equal(t, "sess-a:1", msgsA[1].SourceParentUUID)
 
-	_, msgsB, err := parseDevinSession(fixture.DBPath, "sess-b", "local")
+	_, msgsB, err := parseDevinSession(t.Context(), fixture.DBPath, "sess-b", "local")
 	require.NoError(t, err)
 	require.Len(t, msgsB, 2)
 	assert.Equal(t, "sess-b:1", msgsB[0].SourceUUID)
@@ -769,7 +769,7 @@ func TestDevinTranscriptStepSourceUUIDIsSessionScoped(t *testing.T) {
 		]
 	}`)
 
-	_, msgs, err := parseDevinSession(dbPath, sessionID, "local")
+	_, msgs, err := parseDevinSession(t.Context(), dbPath, sessionID, "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "sess-step-uuid:1", msgs[0].SourceUUID)

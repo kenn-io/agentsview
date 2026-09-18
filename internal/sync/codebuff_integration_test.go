@@ -1344,20 +1344,21 @@ func TestSyncCodebuffIncrementalCutoffDetectsCtimeDrift(t *testing.T) {
 	// rewrite ctime: the ctime-inclusive cutoff must see the source
 	// as fresh even though mtime alone would not.
 	cutoff := time.Now()
-	var rewrittenSourceMtime int64
-	sourceID := "codebuff:" +
-		filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(runStatePath)))) +
-		":" + filepath.Base(filepath.Dir(runStatePath))
-	for range 10_000 {
-		require.NoError(t, os.WriteFile(runStatePath, replacement, 0o644))
-		require.NoError(t, os.Chtimes(runStatePath, originalMtime, originalMtime))
-		rewrittenSourceMtime = engine.SourceMtime(t.Context(), sourceID)
-		if rewrittenSourceMtime > cutoff.UnixNano() {
-			break
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		if !assert.NoError(c, os.WriteFile(runStatePath, replacement, 0o644)) {
+			return
 		}
-		runtime.Gosched()
-	}
-	require.Greater(t, rewrittenSourceMtime, cutoff.UnixNano(),
+		if !assert.NoError(c, os.Chtimes(runStatePath, originalMtime, originalMtime)) {
+			return
+		}
+		rewrittenInfo, statErr := os.Stat(runStatePath)
+		if !assert.NoError(c, statErr) {
+			return
+		}
+		changedAt, available := sync.FileChangeTime(runStatePath, rewrittenInfo)
+		assert.True(c, available, "fixture requires native file change time")
+		assert.Greater(c, changedAt, cutoff.UnixNano())
+	}, 5*time.Second, time.Millisecond,
 		"fixture rewrite must advance past the incremental cutoff")
 
 	stats := engine.SyncAllSince(t.Context(), cutoff, nil)

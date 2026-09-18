@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -181,6 +182,7 @@ func TestRawSyncStatusRejectsUnauthorizedBeforeReader(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			auth := &rawSyncAuthStub{
 				authenticateToken: func(
 					_ context.Context,
@@ -324,7 +326,7 @@ func TestRawSyncStatusErrorDoesNotLeakBackendDetail(t *testing.T) {
 			context.Context,
 			rawsync.AuthIdentity,
 		) (rawsync.Status, error) {
-			return rawsync.Status{}, fmt.Errorf("password=secret: database unavailable")
+			return rawsync.Status{}, errors.New("password=secret: database unavailable")
 		},
 	}
 	srv := newRawSyncHTTPTestServer(
@@ -978,6 +980,7 @@ func serveRawSyncStatusRequest(
 	srv *Server,
 	authorization string,
 ) *httptest.ResponseRecorder {
+	t.Helper()
 	return serveRawSyncStatusRequestPath(
 		t, srv, "/api/v1/raw-sync/status", authorization,
 	)
@@ -990,7 +993,7 @@ func serveRawSyncStatusRequestPath(
 	authorization string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
 	req.Host = "127.0.0.1:8080"
 	req.RemoteAddr = "192.0.2.10:54321"
 	if authorization != "" {
@@ -1148,6 +1151,8 @@ func (s *rawSyncCustodyStub) CommitManifest(
 	return s.commitManifest(ctx, identity, manifest)
 }
 
-var _ RawSyncDeviceAuth = (*rawSyncAuthStub)(nil)
-var _ RawSyncCustody = (*rawSyncCustodyStub)(nil)
-var _ RawSyncStatusReader = (*rawSyncStatusStub)(nil)
+var (
+	_ RawSyncDeviceAuth   = (*rawSyncAuthStub)(nil)
+	_ RawSyncCustody      = (*rawSyncCustodyStub)(nil)
+	_ RawSyncStatusReader = (*rawSyncStatusStub)(nil)
+)

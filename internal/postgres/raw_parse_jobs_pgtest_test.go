@@ -370,38 +370,6 @@ func TestClaimRawParseJobsRequiresCurrentHeadEvenWhenSupersedeMissed(t *testing.
 		"the current-head predicate must prevent every remaining stale row from leasing")
 }
 
-// loosenRawIngestJobStageCheck removes the raw_ingest_jobs stage CHECK
-// from this test's isolated per-test schema only, so tests can model job rows
-// from stages the production schema does not admit yet. The constraint is
-// discovered by definition rather than assumed name, and the schema itself
-// is dropped again when the test ends.
-func loosenRawIngestJobStageCheck(t *testing.T, pg *sql.DB) {
-	t.Helper()
-	rows, err := pg.QueryContext(t.Context(), `
-		SELECT format(
-			'ALTER TABLE %I.raw_ingest_jobs DROP CONSTRAINT %I',
-			$1::text, conname)
-		FROM pg_catalog.pg_constraint
-		WHERE conrelid = to_regclass(format('%I.raw_ingest_jobs', $1::text))
-			AND contype = 'c'
-			AND pg_get_constraintdef(oid) LIKE '%stage%'
-			AND pg_get_constraintdef(oid) LIKE '%parse%'`,
-		schemaTestSchema)
-	require.NoError(t, err)
-	defer rows.Close()
-	var drops []string
-	for rows.Next() {
-		var ddl string
-		require.NoError(t, rows.Scan(&ddl))
-		drops = append(drops, ddl)
-	}
-	require.NoError(t, rows.Err())
-	require.Len(t, drops, 1,
-		"a fresh test schema must carry exactly one raw_ingest_jobs stage CHECK")
-	_, err = pg.ExecContext(t.Context(), drops[0])
-	require.NoError(t, err)
-}
-
 // TestClaimRawParseJobsLeasesAndSupersedesOnlyParseStageJobs proves the
 // claim and claim-path supersession queries stay scoped to parse jobs even
 // when the schema admits other stages: a future stage must never be leased
@@ -423,12 +391,8 @@ func TestClaimRawParseJobsLeasesAndSupersedesOnlyParseStageJobs(t *testing.T) {
 	)
 	_, err = store.CommitManifest(t.Context(), secondManifest, "parser-data-17")
 	require.NoError(t, err)
-	// The production schema only admits the parse stage today. Drop exactly
-	// that CHECK inside this test's isolated schema to model a future schema
-	// that also carries other stages, then seed eligible-looking derive jobs:
-	// one on the current head (claim bait) and one behind it (supersede
-	// bait).
-	loosenRawIngestJobStageCheck(t, pg)
+	// Seed derive jobs on the current and previous heads to verify that
+	// parse workers neither claim them nor supersede them.
 	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO raw_ingest_jobs (
 			tenant_id, manifest_id, stage, processing_version, state, available_at

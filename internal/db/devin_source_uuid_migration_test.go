@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -17,10 +16,10 @@ import (
 // values and non-Devin sessions are untouched, rewritten sessions get a
 // transcript revision bump, and a repeated stale open is a no-op.
 func TestOpenScopesLegacyDevinSourceUUIDs(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "test.db")
 
-	d, err := Open(path)
+	d, err := Open(t.Context(), path)
 	require.NoError(t, err, "initial open")
 	for _, id := range []string{
 		"devin:sess-a", "host~devin:sess-b", "host~other:sess-c",
@@ -49,14 +48,14 @@ func TestOpenScopesLegacyDevinSourceUUIDs(t *testing.T) {
 	for _, id := range []string{
 		"devin:sess-a", "host~devin:sess-b", "host~other:sess-c",
 	} {
-		_, err = d.getWriter().Exec(`
+		_, err = d.getWriter().Exec(t.Context(), `
 			INSERT INTO recall_entries (
 				id, type, scope, title, body, source_session_id
 			) VALUES (?, 'fact', 'project', 't', 'b', ?)`,
 			"entry-"+id, id,
 		)
 		require.NoError(t, err, "insert recall entry")
-		_, err = d.getWriter().Exec(`
+		_, err = d.getWriter().Exec(t.Context(), `
 			INSERT INTO recall_evidence (
 				entry_id, session_id, message_start_ordinal,
 				message_end_ordinal, message_start_source_uuid,
@@ -69,7 +68,7 @@ func TestOpenScopesLegacyDevinSourceUUIDs(t *testing.T) {
 	msgs, err := d.GetAllMessages(ctx, "devin:sess-a")
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
-	_, err = d.PinMessage("devin:sess-a", msgs[1].ID, nil)
+	_, err = d.PinMessage(t.Context(), "devin:sess-a", msgs[1].ID, nil)
 	require.NoError(t, err, "PinMessage")
 	revisionBefore := map[string]string{}
 	for _, id := range []string{
@@ -85,13 +84,13 @@ func TestOpenScopesLegacyDevinSourceUUIDs(t *testing.T) {
 	setUserVersion := func(v int) {
 		conn, err := sql.Open("sqlite3", path)
 		require.NoError(t, err, "raw open")
-		_, err = conn.Exec("PRAGMA user_version = " + itoa(v))
+		_, err = conn.ExecContext(t.Context(), "PRAGMA user_version = "+itoa(v))
 		require.NoError(t, err, "set version")
 		conn.Close()
 	}
 	setUserVersion(devinSourceUUIDScopeVersion - 1)
 
-	d, err = Open(path)
+	d, err = Open(t.Context(), path)
 	require.NoError(t, err, "stale reopen")
 	defer d.Close()
 
@@ -103,14 +102,21 @@ func TestOpenScopesLegacyDevinSourceUUIDs(t *testing.T) {
 		wantEnd    string
 		rewritten  bool
 	}{
-		{"devin:sess-a",
+		{
+			"devin:sess-a",
 			[]string{"sess-a:2", "sess-a:3", "sess-x:4"},
-			"sess-a:2", "sess-a:2", "sess-a:3", true},
-		{"host~devin:sess-b",
+			"sess-a:2", "sess-a:2", "sess-a:3", true,
+		},
+		{
+			"host~devin:sess-b",
 			[]string{"sess-b:2", "sess-b:3", "sess-x:4"},
-			"sess-b:2", "sess-b:2", "sess-b:3", true},
-		{"host~other:sess-c",
-			[]string{"2", "3", "sess-x:4"}, "2", "2", "3", false},
+			"sess-b:2", "sess-b:2", "sess-b:3", true,
+		},
+		{
+			"host~other:sess-c",
+			[]string{"2", "3", "sess-x:4"},
+			"2", "2", "3", false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.sessionID, func(t *testing.T) {
@@ -124,7 +130,7 @@ func TestOpenScopesLegacyDevinSourceUUIDs(t *testing.T) {
 			assert.Equal(t, tt.wantUUIDs, got)
 			assert.Equal(t, tt.wantParent, msgs[1].SourceParentUUID)
 			var startUUID, endUUID string
-			require.NoError(t, d.getReader().QueryRow(
+			require.NoError(t, d.getReader().QueryRow(t.Context(),
 				`SELECT message_start_source_uuid,
 					message_end_source_uuid
 				 FROM recall_evidence WHERE entry_id = ?`,
@@ -151,14 +157,20 @@ func TestOpenScopesLegacyDevinSourceUUIDs(t *testing.T) {
 	// The resync re-parse stores the same messages under scoped uuids.
 	// Because the archive already holds that form, the replace path keeps
 	// the pin attached without any identity translation.
-	require.NoError(t, d.ReplaceSessionMessages("devin:sess-a", []Message{
-		{SessionID: "devin:sess-a", Ordinal: 0, Role: "user",
-			Content: "task", Timestamp: tsZero, SourceUUID: "sess-a:2"},
-		{SessionID: "devin:sess-a", Ordinal: 1, Role: "assistant",
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "devin:sess-a", []Message{
+		{
+			SessionID: "devin:sess-a", Ordinal: 0, Role: "user",
+			Content: "task", Timestamp: tsZero, SourceUUID: "sess-a:2",
+		},
+		{
+			SessionID: "devin:sess-a", Ordinal: 1, Role: "assistant",
 			Content: "working", Timestamp: tsZero,
-			SourceUUID: "sess-a:3", SourceParentUUID: "sess-a:2"},
-		{SessionID: "devin:sess-a", Ordinal: 2, Role: "assistant",
-			Content: "done", Timestamp: tsZero, SourceUUID: "sess-x:4"},
+			SourceUUID: "sess-a:3", SourceParentUUID: "sess-a:2",
+		},
+		{
+			SessionID: "devin:sess-a", Ordinal: 2, Role: "assistant",
+			Content: "done", Timestamp: tsZero, SourceUUID: "sess-x:4",
+		},
 	}), "ReplaceSessionMessages")
 	pins, err := d.ListPinnedMessages(ctx, "devin:sess-a", "")
 	require.NoError(t, err)
@@ -171,7 +183,7 @@ func TestOpenScopesLegacyDevinSourceUUIDs(t *testing.T) {
 	require.NoError(t, err)
 	revisionAfter := *s.TranscriptRevision
 	d.Close()
-	d, err = Open(path)
+	d, err = Open(t.Context(), path)
 	require.NoError(t, err, "second stale reopen")
 	defer d.Close()
 	s, err = d.GetSession(ctx, "host~devin:sess-b")

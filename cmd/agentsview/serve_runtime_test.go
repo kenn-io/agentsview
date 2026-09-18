@@ -77,12 +77,13 @@ func TestPrepareServeRuntimeConfigPortPolicy(t *testing.T) {
 				publicURL := fmt.Sprintf(
 					"https://viewer.example.test:%d", port,
 				)
-				return config.Config{
+				cfg := config.Config{
 					Host:          "127.0.0.1",
 					Port:          port,
 					PublicURL:     publicURL,
 					PublicOrigins: []string{publicURL},
-				}, serveRuntimeOptions{RequestedPort: port}, func() {
+				}
+				return cfg, serveRuntimeOptions{RequestedPort: port}, func() {
 					_ = listener.Close()
 				}
 			},

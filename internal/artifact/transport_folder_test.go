@@ -260,11 +260,10 @@ func TestOpenFolderTransportRejectsProtectedRootOverlap(t *testing.T) {
 func TestOpenFolderTransportRejectsMixedRelativeAndAbsoluteOverlap(
 	t *testing.T,
 ) {
-	t.Parallel()
-
+	root := t.TempDir()
+	t.Chdir(root)
 	workingDirectory, err := os.Getwd()
 	require.NoError(t, err)
-	root := t.TempDir()
 	protected := filepath.Join(root, "provider")
 	target := filepath.Join(protected, "share")
 	require.NoError(t, os.MkdirAll(target, 0o755))
@@ -291,7 +290,6 @@ func TestOpenFolderTransportRejectsMixedRelativeAndAbsoluteOverlap(
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
 			transport, err := OpenFolderTransport(
 				tt.target,
 				FolderTransportOptions{

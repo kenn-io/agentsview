@@ -247,7 +247,7 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 
 func TestGetSessionTiming_LegacyPrefixAndChildPrecedence(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	timingInsertSession(t, d, "prefix-child",
 		"2026-04-26T10:00:00Z", "2026-04-26T10:00:06Z")
 	timingInsertSession(t, d, "prefix-child-child",

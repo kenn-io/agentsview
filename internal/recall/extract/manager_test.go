@@ -2111,6 +2111,17 @@ func TestManagerChangedDoneSessionBlocksActivation(t *testing.T) {
 			"activate; its corpus does not cover the changed transcript")
 	}
 
+	// Coverage uses millisecond timestamps and treats equal stamps as stale.
+	// Wait for the read clock to pass the persisted write before re-extraction.
+	session, err := d.GetSessionFull(ctx, "sess-1")
+	require.NoError(t, err)
+	require.NotNil(t, session.LocalModifiedAt)
+	modifiedAt, err := time.Parse(time.RFC3339Nano, *session.LocalModifiedAt)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return time.Now().Truncate(time.Millisecond).After(modifiedAt)
+	}, time.Second, time.Millisecond)
+
 	result, err = m.RunPass(ctx, PassOptions{Full: true})
 	if err != nil {
 		require.FailNowf(t, "test failed", "RunPass full: %v", err)

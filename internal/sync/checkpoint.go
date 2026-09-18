@@ -406,7 +406,7 @@ func buildCodexCheckpoint(
 	nextOrdinal int,
 	anchorDigest string,
 ) (*db.ParserCheckpoint, db.ParserCheckpointBlobs) {
-	return &db.ParserCheckpoint{
+	checkpoint := &db.ParserCheckpoint{
 		SessionID:        sessionID,
 		FileChangeTime:   changeTime,
 		Agent:            agent,
@@ -419,7 +419,8 @@ func buildCodexCheckpoint(
 		Hash:             hash,
 		NextOrdinal:      nextOrdinal,
 		Version:          codexCheckpointVersion,
-	}, db.ParserCheckpointBlobs{
+	}
+	return checkpoint, db.ParserCheckpointBlobs{
 		SessionID: sessionID,
 		Cursor:    cursor,
 		HashState: hashState,

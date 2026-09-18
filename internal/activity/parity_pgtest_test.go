@@ -268,7 +268,7 @@ func parityFixture() []parityFixtureSession {
 // would push.
 func seedParitySQLite(t *testing.T) *db.DB {
 	t.Helper()
-	local, err := db.Open(filepath.Join(t.TempDir(), "parity.sqlite"))
+	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "parity.sqlite"))
 	require.NoError(t, err, "opening sqlite fixture")
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 
@@ -289,7 +289,7 @@ func seedParitySQLite(t *testing.T) *db.DB {
 	for _, fs := range parityFixture() {
 		writes = append(writes, paritySessionWrite(fs))
 	}
-	_, err = local.WriteSessionBatchAtomic(writes)
+	_, err = local.WriteSessionBatchAtomic(t.Context(), writes)
 	require.NoError(t, err, "writing fixture sessions")
 	return local
 }
@@ -446,7 +446,7 @@ func pushParityDuckDB(
 	require.Equal(t, len(parityFixture()), res.SessionsPushed,
 		"duckdb sessions pushed")
 
-	store, err := duckdbstore.NewStore(target)
+	store, err := duckdbstore.NewStore(ctx, target)
 	require.NoError(t, err, "opening duckdb store")
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	return store

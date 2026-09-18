@@ -1427,8 +1427,8 @@ func TestPushRestoresDevinPinAcrossSourceUUIDRescope(t *testing.T) {
 				MessageCount: 2,
 				CreatedAt:    "2026-05-01T00:00:00Z",
 			}
-			require.NoError(t, local.UpsertSession(sess), "UpsertSession old")
-			require.NoError(t, local.InsertMessages([]db.Message{
+			require.NoError(t, local.UpsertSession(t.Context(), sess), "UpsertSession old")
+			require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 				{
 					SessionID: tt.sessionID, Ordinal: 0,
 					Role: "user", Content: "task",
@@ -1446,13 +1446,13 @@ func TestPushRestoresDevinPinAcrossSourceUUIDRescope(t *testing.T) {
 			store, err := NewStore(pgURL, "agentsview", true)
 			require.NoError(t, err, "NewStore")
 			defer store.Close()
-			_, err = store.PinMessage(tt.sessionID, 1, nil)
+			_, err = store.PinMessage(t.Context(), tt.sessionID, 1, nil)
 			require.NoError(t, err, "PinMessage")
 
 			// The re-parse stores the same messages under
 			// session-scoped uuids; the changed uuid forces the full
 			// replace path that snapshots and restores pins.
-			require.NoError(t, local.ReplaceSessionMessages(
+			require.NoError(t, local.ReplaceSessionMessages(t.Context(),
 				tt.sessionID, []db.Message{
 					{
 						SessionID: tt.sessionID, Ordinal: 0,
@@ -1515,8 +1515,8 @@ func TestPushDropsDevinPinWhenBareAndScopedUUIDsCoexist(t *testing.T) {
 		MessageCount: 2,
 		CreatedAt:    "2026-05-01T00:00:00Z",
 	}
-	require.NoError(t, local.UpsertSession(sess), "UpsertSession old")
-	require.NoError(t, local.InsertMessages([]db.Message{
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "UpsertSession old")
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID: sessionID, Ordinal: 0,
 			Role: "user", Content: "task",
@@ -1534,14 +1534,14 @@ func TestPushDropsDevinPinWhenBareAndScopedUUIDsCoexist(t *testing.T) {
 	store, err := NewStore(pgURL, "agentsview", true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
-	_, err = store.PinMessage(sessionID, 1, nil)
+	_, err = store.PinMessage(t.Context(), sessionID, 1, nil)
 	require.NoError(t, err, "PinMessage")
 
 	// The replacement keeps a stale bare-uuid row — as an older remote
 	// writer could leave behind — alongside the scoped restamp of the
 	// pinned message; both carry the pinned row's role and content, so
 	// only the combined candidate count exposes the ambiguity.
-	require.NoError(t, local.ReplaceSessionMessages(
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(),
 		sessionID, []db.Message{
 			{
 				SessionID: sessionID, Ordinal: 0,

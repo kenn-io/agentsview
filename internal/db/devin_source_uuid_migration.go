@@ -56,7 +56,7 @@ func scopeLegacyDevinSourceUUIDsLocked(
 		return nil
 	}
 
-	tx, err := w.Begin()
+	tx, err := w.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning devin source uuid rewrite: %w", err)
 	}
@@ -67,8 +67,8 @@ func scopeLegacyDevinSourceUUIDsLocked(
 	const scoped = `substr(session_id, instr(session_id, 'devin:') + 6)
 		|| ':' || `
 
-	rows, err := tx.Query(`SELECT DISTINCT session_id FROM messages
-		WHERE session_id IN (` + devinSessions + `)
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT session_id FROM messages
+		WHERE session_id IN (`+devinSessions+`)
 		  AND (
 			(source_uuid != '' AND instr(source_uuid, ':') = 0)
 			OR (source_parent_uuid != ''
@@ -77,17 +77,16 @@ func scopeLegacyDevinSourceUUIDsLocked(
 	if err != nil {
 		return fmt.Errorf("finding legacy devin source uuids: %w", err)
 	}
+	defer rows.Close()
 	var sessionIDs []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
 			return fmt.Errorf("scanning devin session id: %w", err)
 		}
 		sessionIDs = append(sessionIDs, id)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
 		return fmt.Errorf("listing devin sessions: %w", err)
 	}
 	rows.Close()
@@ -95,34 +94,34 @@ func scopeLegacyDevinSourceUUIDsLocked(
 		return nil
 	}
 
-	if _, err := tx.Exec(`UPDATE messages
-		SET source_uuid = ` + scoped + `source_uuid
-		WHERE session_id IN (` + devinSessions + `)
+	if _, err := tx.ExecContext(ctx, `UPDATE messages
+		SET source_uuid = `+scoped+`source_uuid
+		WHERE session_id IN (`+devinSessions+`)
 		  AND source_uuid != '' AND instr(source_uuid, ':') = 0`,
 	); err != nil {
 		return fmt.Errorf("scoping devin source uuids: %w", err)
 	}
-	if _, err := tx.Exec(`UPDATE messages
-		SET source_parent_uuid = ` + scoped + `source_parent_uuid
-		WHERE session_id IN (` + devinSessions + `)
+	if _, err := tx.ExecContext(ctx, `UPDATE messages
+		SET source_parent_uuid = `+scoped+`source_parent_uuid
+		WHERE session_id IN (`+devinSessions+`)
 		  AND source_parent_uuid != ''
 		  AND instr(source_parent_uuid, ':') = 0`,
 	); err != nil {
 		return fmt.Errorf("scoping devin source parent uuids: %w", err)
 	}
-	if _, err := tx.Exec(`UPDATE recall_evidence
-		SET message_start_source_uuid = ` + scoped +
+	if _, err := tx.ExecContext(ctx, `UPDATE recall_evidence
+		SET message_start_source_uuid = `+scoped+
 		`message_start_source_uuid
-		WHERE session_id IN (` + devinSessions + `)
+		WHERE session_id IN (`+devinSessions+`)
 		  AND message_start_source_uuid != ''
 		  AND instr(message_start_source_uuid, ':') = 0`,
 	); err != nil {
 		return fmt.Errorf("scoping devin recall start uuids: %w", err)
 	}
-	if _, err := tx.Exec(`UPDATE recall_evidence
-		SET message_end_source_uuid = ` + scoped +
+	if _, err := tx.ExecContext(ctx, `UPDATE recall_evidence
+		SET message_end_source_uuid = `+scoped+
 		`message_end_source_uuid
-		WHERE session_id IN (` + devinSessions + `)
+		WHERE session_id IN (`+devinSessions+`)
 		  AND message_end_source_uuid != ''
 		  AND instr(message_end_source_uuid, ':') = 0`,
 	); err != nil {

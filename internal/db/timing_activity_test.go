@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"encoding/json/v2"
 	"testing"
 	"time"
@@ -21,7 +20,7 @@ func TestActivityTiming_MissingPhaseEvidenceStaysUnattributed(t *testing.T) {
 			timingInsertSession(t, d, "activity", "2026-04-26T10:00:00Z", "2026-04-26T10:00:06Z")
 			timingInsertMessage(t, d, "activity", 0, "user", "run", "2026-04-26T10:00:00Z", false)
 			timingInsertMessage(t, d, "activity", 1, "assistant", "considering the request", "2026-04-26T10:00:00.500Z", false)
-			_, err := d.getWriter().Exec(`UPDATE messages SET has_thinking = 1, thinking_text = 'considering the request' WHERE session_id = 'activity' AND ordinal = 1`)
+			_, err := d.getWriter().Exec(t.Context(), `UPDATE messages SET has_thinking = 1, thinking_text = 'considering the request' WHERE session_id = 'activity' AND ordinal = 1`)
 			require.NoError(t, err)
 			timingInsertMessage(t, d, "activity", 2, "assistant", "running", "2026-04-26T10:00:01Z", true)
 			timingInsertToolCall(t, d, "activity", timingMsgID(t, d, "activity", 2), "tool", "Bash", "Bash", "")
@@ -30,7 +29,7 @@ func TestActivityTiming_MissingPhaseEvidenceStaysUnattributed(t *testing.T) {
 				timingInsertToolResultEvent(t, d, "activity", 2, 0, "tool", "completed", "2026-04-26T10:00:04Z", 1)
 			}
 			timingInsertMessage(t, d, "activity", 3, "user", "next", "2026-04-26T10:00:06Z", false)
-			got, err := d.GetSessionTiming(context.Background(), "activity")
+			got, err := d.GetSessionTiming(t.Context(), "activity")
 			require.NoError(t, err)
 			require.Len(t, got.Turns, 1)
 			require.Len(t, got.Turns[0].Calls, 1)
@@ -230,9 +229,9 @@ func TestActivityTiming_StoredExecutionEvidence(t *testing.T) {
 			timingInsertToolCall(t, d, "evidence", timingMsgID(t, d, "evidence", 1), "task", "Agent", "Task", "child")
 			timingInsertToolResultEvent(t, d, "evidence", 1, 0, "task", "started", tc.start, 0)
 			timingInsertToolResultEvent(t, d, "evidence", 1, 0, "task", tc.status, tc.end, 1)
-			_, err := d.getWriter().Exec(`UPDATE tool_result_events SET source = ? WHERE session_id = 'evidence'`, tc.source)
+			_, err := d.getWriter().Exec(t.Context(), `UPDATE tool_result_events SET source = ? WHERE session_id = 'evidence'`, tc.source)
 			require.NoError(t, err)
-			got, err := d.GetSessionTiming(context.Background(), "evidence")
+			got, err := d.GetSessionTiming(t.Context(), "evidence")
 			require.NoError(t, err)
 			require.Len(t, got.Turns, 1)
 			require.Len(t, got.Turns[0].Calls, 1)
@@ -361,9 +360,9 @@ func TestActivityTiming_VisiblePrompts(t *testing.T) {
 				content = "carrier"
 			}
 			timingInsertMessage(t, d, "carriers", 1, tc.role, content, tc.timestamp, false)
-			_, err := d.getWriter().Exec(`UPDATE messages SET is_system = ?, source_subtype = ?, content_length = ? WHERE session_id = 'carriers' AND ordinal = 1`, tc.system, tc.subtype, tc.length)
+			_, err := d.getWriter().Exec(t.Context(), `UPDATE messages SET is_system = ?, source_subtype = ?, content_length = ? WHERE session_id = 'carriers' AND ordinal = 1`, tc.system, tc.subtype, tc.length)
 			require.NoError(t, err)
-			got, err := d.GetSessionTiming(context.Background(), "carriers")
+			got, err := d.GetSessionTiming(t.Context(), "carriers")
 			require.NoError(t, err)
 			require.Len(t, got.Activity, 1)
 			assert.Equal(t, 0, got.Activity[0].Ordinal)

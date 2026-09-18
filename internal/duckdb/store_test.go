@@ -4506,7 +4506,7 @@ func TestGetSessionTimingActivityTimingParity(t *testing.T) {
 		{name: "open execution", executions: []execution{{"Bash", "02", "", nil}}, wantDuration: 6000, wantUnattributed: 6000, wantCategories: []db.CategoryTotal{{Category: "Bash", CallCount: 1}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			local := newLocalDB(t)
 			const sessionID = "duck-timing-activity"
 			end := "2026-04-26T10:00:06Z"
@@ -4564,7 +4564,7 @@ func TestGetSessionTimingActivityTimingParity(t *testing.T) {
 				}
 				writes = append(writes, db.SessionBatchWrite{Session: child, DataVersion: 1, ReplaceMessages: true})
 			}
-			_, err := local.WriteSessionBatchAtomic(writes)
+			_, err := local.WriteSessionBatchAtomic(t.Context(), writes)
 			require.NoError(t, err)
 			syncer := newInMemoryTestSync(t, local, SyncOptions{})
 			require.NoError(t, createSchema(ctx, syncer.DB()))
@@ -4600,7 +4600,7 @@ func TestGetSessionTimingActivityTimingParity(t *testing.T) {
 				count = 1
 			}
 			require.Len(t, got.Activity, count)
-			assert.EqualValues(t, 0, got.Activity[0].Ordinal)
+			assert.Equal(t, 0, got.Activity[0].Ordinal)
 			assert.Equal(t, tc.wantDuration, got.Activity[0].DurationMs)
 			assert.Equal(t, tc.wantTool, got.Activity[0].ToolMs)
 			assert.Equal(t, tc.wantUnattributed, got.Activity[0].UnattributedMs)

@@ -2491,17 +2491,17 @@ func TestOpenReadOnlyDBRejectsStaleArchive(t *testing.T) {
 	require.NoError(t, writer.Close())
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = raw.Exec(fmt.Sprintf("PRAGMA user_version = %d", db.CurrentDataVersion()-1))
+	_, err = raw.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", db.CurrentDataVersion()-1))
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
 	// Recovery must still be able to read the archive to build its replacement.
-	recovery, err := db.OpenReadOnly(path)
+	recovery, err := db.OpenReadOnly(t.Context(), path)
 	require.NoError(t, err)
 	assert.True(t, recovery.NeedsResync())
 	require.NoError(t, recovery.Close())
 
-	reader, err := openReadOnlyDB(config.Config{DBPath: path})
+	reader, err := openReadOnlyDB(t.Context(), config.Config{DBPath: path})
 	if reader != nil {
 		t.Cleanup(func() { reader.Close() })
 	}

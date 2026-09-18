@@ -416,12 +416,13 @@ func resolveArchiveWriteBackend(
 	if err != nil {
 		return nil, nil, err
 	}
-	return &localArchiveWriteBackend{
-			appCfg:   appCfg,
-			database: database,
-		}, func() {
-			closeWriteDB(database, writeLock)
-		}, nil
+	backend := &localArchiveWriteBackend{
+		appCfg:   appCfg,
+		database: database,
+	}
+	return backend, func() {
+		closeWriteDB(database, writeLock)
+	}, nil
 }
 
 type daemonArchiveWriteBackend struct {
