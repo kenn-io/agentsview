@@ -7,7 +7,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/mattn/go-sqlite3"
 
@@ -229,9 +228,7 @@ func piebaldAuthoritativeRoots(
 func piebaldPathWithinRoots(path string, roots []string) bool {
 	path = filepath.Clean(path)
 	for _, root := range roots {
-		rel, err := filepath.Rel(filepath.Clean(root), path)
-		if err == nil && rel != ".." && !filepath.IsAbs(rel) &&
-			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if filepath.Clean(filepath.Join(root, parser.PiebaldDBFilename)) == path {
 			return true
 		}
 	}

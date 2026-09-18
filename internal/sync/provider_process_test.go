@@ -775,6 +775,21 @@ func TestPrunePiebaldFailuresAfterAuthoritativeDiscovery(t *testing.T) {
 	assert.Contains(t, engine.piebaldFailureMemo, otherKey)
 }
 
+func TestPrunePiebaldFailuresDoesNotCrossNestedRoots(t *testing.T) {
+	parent := t.TempDir()
+	child := filepath.Join(parent, "child")
+	require.NoError(t, os.Mkdir(child, 0o755))
+	childDB, _ := writeProcessProviderSource(t, child, "app.db")
+	childKey := parser.VirtualSourcePath(childDB, "42")
+	engine := &Engine{
+		piebaldFailureMemo: map[string]piebaldFailureMemoEntry{childKey: {}},
+	}
+
+	engine.prunePiebaldFailures([]string{parent}, map[string]struct{}{})
+
+	assert.Contains(t, engine.piebaldFailureMemo, childKey)
+}
+
 func TestPiebaldAuthoritativeRootsSkipUnverifiedStats(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing")
 	blocked := filepath.Join(t.TempDir(), "blocked")
