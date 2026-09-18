@@ -72,11 +72,11 @@ The same guide explains how to choose
 The desktop app and ordinary session CLI commands share a detached local daemon
 and start one when needed. Dedicated diagnostics such as
 `db adopt-machine --list` and `doctor sync` read the archive without starting
-it. Commands such as `sync`, `usage`, `token-use`, `pg push`, and `duckdb push`
-auto-start the daemon when needed. Daily usage reports read saved archive data;
-run `agentsview sync` first to include new source changes. The server remains
-running after these commands exit and also serves the web UI. For a one-shot
-sync with no background server, stop the daemon first and run
+it. Commands such as `sync`, `usage`, `token-use`, `pg push`, `duckdb push`, and
+`clickhouse push` auto-start the daemon when needed. Daily usage reports read
+saved archive data; run `agentsview sync` first to include new source changes.
+The server remains running after these commands exit and also serves the web UI.
+For a one-shot sync with no background server, stop the daemon first and run
 `AGENTSVIEW_NO_DAEMON=1 agentsview sync`.
 
 Use `agentsview daemon start` when you want to start the writable SQLite daemon
@@ -397,7 +397,7 @@ local Amp thread JSON files.
 | Trae                  | `%APPDATA%\\Trae\\User\\` (Windows), `~/Library/Application Support/Trae/User/` (macOS), `~/.config/Trae/User/` (Linux)                                                                                                                              |
 | TraeX (TRAE CLI)      | `~/.trae/cli/sessions/`, `~/.trae/cli/archived_sessions/`                                                                                                                                                                                            |
 | Warp                  | `~/.warp/` (platform-dependent)                                                                                                                                                                                                                      |
-| WorkBuddy             | `~/.workbuddy/projects/`                                                                                                                                                                                             |
+| WorkBuddy             | `~/.workbuddy/projects/`                                                                                                                                                                                                                             |
 | CodeBuddy             | `%LOCALAPPDATA%\\CodeBuddyExtension\\Data\\` (Windows), `~/Library/Application Support/CodeBuddyExtension/Data/` (macOS), `~/.config/CodeBuddyExtension/Data/` (Linux)                                                                               |
 | ZCode                 | `~/.zcode/cli/db/`, `~/.zcode/cli/`                                                                                                                                                                                                                  |
 | Zed                   | `~/Library/Application Support/Zed/` (macOS)                                                                                                                                                                                                         |
@@ -421,8 +421,8 @@ transcript content, thinking, tool calls and results, session relationships,
 models, and recorded session costs. The project registry lives at
 `~/.local/share/crush/projects.json` (macOS and Linux) or
 `%LOCALAPPDATA%\crush\projects.json` (Windows). Set `CRUSH_DIR` or
-`agents.crush.dirs` to one or more Crush data directories, `.crush`
-directories, or `crush.db` files.
+`agents.crush.dirs` to one or more Crush data directories, `.crush` directories,
+or `crush.db` files.
 
 Each directory can be overridden with an environment variable. See the
 [configuration docs](https://agentsview.io/configuration/) for details. Cursor
@@ -648,6 +648,56 @@ loginctl enable-linger "$USER"
 See [PostgreSQL docs](https://agentsview.io/postgresql/) for setup and
 configuration.
 
+## ClickHouse Sync
+
+Push session data to a shared ClickHouse instance for team dashboards. SQLite
+stays the archive; ClickHouse is a one-way remote mirror, the same operator
+story as PostgreSQL:
+
+```bash
+agentsview clickhouse push             # push local data to the default target
+agentsview clickhouse push archive     # push to one named target
+agentsview clickhouse push --all       # push every configured target sequentially
+agentsview clickhouse status           # show status for the default target
+agentsview clickhouse serve            # serve web UI from the default target (read-only)
+```
+
+Single-target configs use the legacy `[clickhouse]` block. To manage more than
+one destination, define named `[clickhouse.NAME]` blocks and set
+`default_clickhouse` when more than one target exists:
+
+```toml
+default_clickhouse = "work"
+
+[clickhouse.work]
+url = "clickhouse://user:pass@work-db:9440/agentsview?secure=true"
+
+[clickhouse.archive]
+url = "clickhouse://user:pass@archive-db:9440/agentsview?secure=true"
+exclude_projects = ["scratch"]
+```
+
+Named target names are normalized case-insensitively. `all`, `local`, and the
+legacy `[clickhouse]` field names `url`, `database`, `machine_name`,
+`allow_insecure`, `projects`, and `exclude_projects` cannot be used for
+`[clickhouse.NAME]`.
+
+`AGENTSVIEW_CLICKHOUSE_URL`, `AGENTSVIEW_CLICKHOUSE_DATABASE`, and
+`AGENTSVIEW_CLICKHOUSE_MACHINE` still work, but in named-target mode they apply
+only to the effective default target.
+
+```bash
+agentsview clickhouse push --watch                 # foreground, Ctrl-C to stop
+agentsview clickhouse service install              # launchd / systemd --user
+```
+
+`--all --watch` is rejected. `clickhouse serve` and `clickhouse service` always
+use the effective default target. Non-loopback URLs require TLS unless
+`allow_insecure = true`.
+
+See [ClickHouse docs](https://agentsview.io/docs/clickhouse-sync/) for setup and
+configuration.
+
 ## DuckDB Mirror and Quack
 
 DuckDB support is a mirror backend, not a replacement for the local SQLite
@@ -674,6 +724,7 @@ Backend modes:
 
 - SQLite: primary local archive, file sync, FTS5 search, and writable UI.
 - PostgreSQL: optional shared team backend; push from SQLite, serve read-only.
+- ClickHouse: optional shared team backend; push from SQLite, serve read-only.
 - DuckDB: optional mirror file or Quack endpoint; push from SQLite, serve
   read-only.
 

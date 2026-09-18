@@ -1,6 +1,7 @@
 # Docker Compose file for integration testing
 # Usage:
 #   make postgres-up / make test-postgres / make postgres-down
+#   make clickhouse-up / make test-clickhouse / make clickhouse-down
 #   make ssh-up / make test-ssh / make ssh-down
 
 services:
@@ -19,6 +20,21 @@ services:
       retries: 10
     tmpfs:
       - /var/lib/postgresql/data  # Use tmpfs for faster tests, no persistence needed
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+    ports:
+      - "18123:8123"
+      - "19000:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    tmpfs:
+      - /var/lib/clickhouse
 
   sshd:
     build:

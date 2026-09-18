@@ -35,7 +35,7 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-s3 postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help check-timing-budgets
+.PHONY: build build-release install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-s3 postgres-up postgres-down test-clickhouse test-clickhouse-ci clickhouse-up clickhouse-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help check-timing-budgets
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -415,6 +415,25 @@ test-postgres: pricing-snapshot ensure-embed-dir postgres-up
 test-postgres-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
 
+# Start test ClickHouse container (native 19000, HTTP 18123)
+clickhouse-up:
+	docker compose -f docker-compose.test.yml up -d --wait clickhouse
+
+# Stop test ClickHouse container
+clickhouse-down:
+	docker compose -f docker-compose.test.yml down clickhouse
+
+# Run ClickHouse integration tests (starts clickhouse automatically)
+test-clickhouse: pricing-snapshot ensure-embed-dir clickhouse-up
+	@echo "Waiting for clickhouse to be ready..."
+	@sleep 2
+	TEST_CLICKHOUSE_URL="clickhouse://localhost:19000/default" \
+		CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/clickhouse/... ./internal/activity/... -count=1 -timeout=20m
+
+# ClickHouse integration tests for CI (clickhouse already running as service)
+test-clickhouse-ci: pricing-snapshot ensure-embed-dir
+	CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/clickhouse/... ./internal/activity/... -count=1 -timeout=20m
+
 # S3 discovery integration tests. testcontainers starts and tears down a
 # rustfs (S3-compatible) container automatically, so only a working Docker
 # daemon is required.
@@ -683,9 +702,12 @@ help:
 	@echo "  bench-pg-usage - Run opt-in PostgreSQL usage benchmarks against PG16"
 	@echo "  bench-gate     - Run hot-path benchmarks for local comparison"
 	@echo "  test-postgres  - Run PostgreSQL integration tests"
+	@echo "  test-clickhouse - Run ClickHouse integration tests"
 	@echo "  test-s3        - Run S3 discovery integration tests (Docker)"
 	@echo "  postgres-up    - Start test PostgreSQL container"
 	@echo "  postgres-down  - Stop test PostgreSQL container"
+	@echo "  clickhouse-up  - Start test ClickHouse container"
+	@echo "  clickhouse-down - Stop test ClickHouse container"
 	@echo "  test-ssh       - Run SSH integration tests"
 	@echo "  ssh-up         - Start test SSH container"
 	@echo "  ssh-down       - Stop test SSH container"
