@@ -40,18 +40,20 @@ type resumeResponse struct {
 
 // resumeAgents maps agent type strings to their resume command templates.
 // The %s placeholder is replaced with the (quoted) session ID. TraeX ships the
-// traex, traecli, and trae-cli aliases; the shortest is used.
+// traex, traecli, and trae-cli aliases; the shortest is used. The Augure Code
+// agent's command is the vendor's own `augure resume` CLI, not the agent id.
 var resumeAgents = map[string]string{
-	"claude":   "claude --resume %s",
-	"codex":    "codex resume %s",
-	"traex":    "traex resume %s",
-	"copilot":  "copilot --resume=%s",
-	"cursor":   "cursor agent --resume %s",
-	"gemini":   "gemini --resume %s",
-	"opencode": "opencode --session %s",
-	"amp":      "amp --resume %s",
-	"kiro":     "kiro-cli chat --resume-id %s",
-	"pi":       "pi --session %s",
+	"claude":      "claude --resume %s",
+	"codex":       "codex resume %s",
+	"traex":       "traex resume %s",
+	"augure-code": "augure resume %s",
+	"copilot":     "copilot --resume=%s",
+	"cursor":      "cursor agent --resume %s",
+	"gemini":      "gemini --resume %s",
+	"opencode":    "opencode --session %s",
+	"amp":         "amp --resume %s",
+	"kiro":        "kiro-cli chat --resume-id %s",
+	"pi":          "pi --session %s",
 }
 
 const syntheticModel = "<synthetic>"
@@ -67,14 +69,15 @@ func resumeCommand(agent, tmpl, rawID, model string) string {
 	switch agent {
 	case "claude":
 		cmd += " --model " + shellQuote(model)
-	case "codex", "traex":
+	case "codex", "traex", "augure-code":
 		cmd += " -m " + shellQuote(model)
 	}
 	return cmd
 }
 
 func resumeAgentNeedsModel(agent string) bool {
-	return agent == "claude" || agent == "codex" || agent == "traex"
+	return agent == "claude" || agent == "codex" || agent == "traex" ||
+		agent == "augure-code"
 }
 
 func primaryResumeModel(counts []db.ModelCount) string {
