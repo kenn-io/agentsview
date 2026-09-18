@@ -204,8 +204,10 @@ Same policy as PostgreSQL's `CheckSSL`.
 
 ### D9. Schema lifecycle
 
-- `EnsureSchema` runs `CREATE DATABASE IF NOT EXISTS`,
-  `CREATE TABLE IF NOT EXISTS` for every table, and
+- `EnsureSchema` first connects with the database named in the URL path (or the
+  server default when the path is empty) and runs
+  `CREATE DATABASE IF NOT EXISTS <database>`. It then reconnects to that
+  database and runs `CREATE TABLE IF NOT EXISTS` for every table and
   `ALTER TABLE ADD COLUMN IF NOT EXISTS` for columns added after a table's
   first version. It records `agentsview_schema_version` in `sync_metadata`.
   Serve runs the same routine and tolerates permission errors so a read-only
