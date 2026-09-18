@@ -348,24 +348,27 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 	fullID := "hermes:" + sessionID
 
 	// Derive project from the session platform or default.
+	projectSynthesized := false
 	if project == "" {
 		if sessionPlatform != "" {
 			project = "hermes-" + sessionPlatform
 		} else {
 			project = "hermes"
 		}
+		projectSynthesized = true
 	}
 
 	sess := &ParsedSession{
-		ID:               fullID,
-		Project:          project,
-		Machine:          machine,
-		Agent:            AgentHermes,
-		FirstMessage:     firstMsg,
-		StartedAt:        startedAt,
-		EndedAt:          endedAt,
-		MessageCount:     len(messages),
-		UserMessageCount: realUserCount,
+		ID:                         fullID,
+		Project:                    project,
+		projectSynthesizedByHermes: projectSynthesized,
+		Machine:                    machine,
+		Agent:                      AgentHermes,
+		FirstMessage:               firstMsg,
+		StartedAt:                  startedAt,
+		EndedAt:                    endedAt,
+		MessageCount:               len(messages),
+		UserMessageCount:           realUserCount,
 		File: FileInfo{
 			Path:  path,
 			Size:  info.Size(),
@@ -535,24 +538,27 @@ func parseHermesJSONSession(path, project, machine string) (*ParsedSession, []Pa
 
 	fullID := "hermes:" + sessionID
 
+	projectSynthesized := false
 	if project == "" {
 		if sessionPlatform != "" {
 			project = "hermes-" + sessionPlatform
 		} else {
 			project = "hermes"
 		}
+		projectSynthesized = true
 	}
 
 	sess := &ParsedSession{
-		ID:               fullID,
-		Project:          project,
-		Machine:          machine,
-		Agent:            AgentHermes,
-		FirstMessage:     firstMsg,
-		StartedAt:        startedAt,
-		EndedAt:          endedAt,
-		MessageCount:     len(messages),
-		UserMessageCount: realUserCount,
+		ID:                         fullID,
+		Project:                    project,
+		projectSynthesizedByHermes: projectSynthesized,
+		Machine:                    machine,
+		Agent:                      AgentHermes,
+		FirstMessage:               firstMsg,
+		StartedAt:                  startedAt,
+		EndedAt:                    endedAt,
+		MessageCount:               len(messages),
+		UserMessageCount:           realUserCount,
 		File: FileInfo{
 			Path:  path,
 			Size:  info.Size(),
