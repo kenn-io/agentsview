@@ -278,6 +278,12 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"augure-code prefix",
+			"augure-code:some-uuid",
+			AgentAugureCode,
+			true,
+		},
+		{
 			"copilot prefix",
 			"copilot:sess-id",
 			AgentCopilot,
@@ -449,6 +455,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentCowork,
 		AgentCodex,
 		AgentTraeX,
+		AgentAugureCode,
 		AgentCopilot,
 		AgentGemini,
 		AgentGeminiApps,

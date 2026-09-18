@@ -30,10 +30,12 @@ var _ StreamingRawCaptureSourceProvider = (*codexProvider)(nil)
 type codexProviderSpec struct {
 	agent AgentType
 	// relabel rewrites a parsed Codex-format result onto this agent's
-	// identity, and is nil for Codex itself. The session is nil on the
+	// identity (session fields, message subagent links, and the incremental
+	// path's late tool-result updates) before anything is persisted.
+	// The session is nil on the
 	// incremental path, which keeps the stored session ID and only needs
 	// the appended message rows relabeled.
-	relabel func(*ParsedSession, []ParsedMessage)
+	relabel func(*ParsedSession, []ParsedMessage, []ParsedToolCallUpdate)
 }
 
 func codexProviderSpecForAgent(agent AgentType) codexProviderSpec {
@@ -42,6 +44,11 @@ func codexProviderSpecForAgent(agent AgentType) codexProviderSpec {
 		return codexProviderSpec{
 			agent:   AgentTraeX,
 			relabel: relabelCodexResultAsTraeX,
+		}
+	case AgentAugureCode:
+		return codexProviderSpec{
+			agent:   AgentAugureCode,
+			relabel: relabelCodexResultAsAugureCode,
 		}
 	default:
 		return codexProviderSpec{agent: AgentCodex}
@@ -70,6 +77,18 @@ func newTraeXProviderFactory(def AgentDef) ProviderFactory {
 	return &codexProviderFactory{
 		def:             cloneAgentDef(def),
 		spec:            codexProviderSpecForAgent(AgentTraeX),
+		cursorCache:     newProductionCodexCursorCache(),
+		parentTurnCache: newCodexProductionParentTurnCache(),
+	}
+}
+
+// newAugureCodeProviderFactory serves Augure Code's rollout archive with the
+// Codex provider, relabeling every parsed session onto the augure-code: ID
+// prefix.
+func newAugureCodeProviderFactory(def AgentDef) ProviderFactory {
+	return &codexProviderFactory{
+		def:             cloneAgentDef(def),
+		spec:            codexProviderSpecForAgent(AgentAugureCode),
 		cursorCache:     newProductionCodexCursorCache(),
 		parentTurnCache: newCodexProductionParentTurnCache(),
 	}
@@ -484,7 +503,7 @@ func (p *codexProvider) Parse(
 		}, nil
 	}
 	if p.spec.relabel != nil {
-		p.spec.relabel(sess, msgs)
+		p.spec.relabel(sess, msgs, nil)
 	}
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
@@ -699,7 +718,7 @@ func (p *codexProvider) ParseIncremental(
 	)
 
 	if p.spec.relabel != nil {
-		p.spec.relabel(nil, result.messages)
+		p.spec.relabel(nil, result.messages, result.toolCallUpdates)
 	}
 
 	totalOut, peakCtx, hasTotalOut, hasPeakCtx :=
