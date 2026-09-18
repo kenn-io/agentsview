@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -759,9 +760,8 @@ func TestUsageSummary_RequestsOneShotSessions(t *testing.T) {
 	assert.Equal(t, "claude", rec.lastUsage.Agent)
 }
 
-// search_content excludes one-shot sessions by default, matching the
-// standalone/REST behavior. (Tracked as a possible follow-up: expose an
-// include_one_shot opt-in so single-exchange sessions can be searched.)
+// search_content excludes one-shot and automated sessions by default, matching
+// the standalone/REST behavior. The opt-in behavior is covered separately.
 func TestSearchContent_ExcludesOneShotByDefault(t *testing.T) {
 	ts, d := newTestToolset(t)
 	// One-shot (UserMessageCount=1) with the marker.
@@ -790,6 +790,83 @@ func TestSearchContent_ExcludesOneShotByDefault(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Matches, 1, "one-shot session should be excluded")
 	assert.Equal(t, "multi", out.Matches[0].SessionID)
+}
+
+func TestSearchContent_SessionClassOptIns(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		includeOneShot, automated bool
+		want                      []string
+	}{
+		{name: "defaults", want: []string{"human-multi"}},
+		{name: "one-shot", includeOneShot: true, want: []string{"human-multi", "human-one"}},
+		{name: "automated", automated: true, want: []string{"human-multi", "automated-multi", "automated-one"}},
+		{name: "both", includeOneShot: true, automated: true, want: []string{"human-multi", "human-one", "automated-multi", "automated-one"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, d := newTestToolset(t)
+			for _, session := range []struct {
+				id, content string
+				users       int
+				automated   bool
+			}{
+				{id: "human-multi", content: "shared class marker", users: 2},
+				{id: "human-one", content: "shared class marker", users: 1},
+				{id: "automated-multi", content: "shared class marker", users: 2, automated: true},
+				{id: "automated-one", content: "shared class marker", users: 1, automated: true},
+			} {
+				dbtest.SeedSession(t, d, session.id, "proj", func(s *db.Session) {
+					s.MessageCount = session.users + 1
+					s.UserMessageCount = session.users
+					s.IsAutomated = session.automated
+					s.EndedAt = new("2024-06-15T10:00:00Z")
+				})
+				messages := []db.Message{dbtest.UserMsg(session.id, 0, session.content)}
+				if session.users > 1 {
+					messages = append(messages, dbtest.AsstMsg(session.id, 1, "reply"))
+				}
+				require.NoError(t, d.InsertMessages(messages))
+			}
+
+			_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+				Pattern: "shared class marker", Mode: "substring",
+				IncludeOneShot: tc.includeOneShot, IncludeAutomated: tc.automated,
+			})
+			require.NoError(t, err)
+			got := make([]string, 0, len(out.Matches))
+			for _, match := range out.Matches {
+				got = append(got, match.SessionID)
+			}
+			assert.ElementsMatch(t, tc.want, got)
+		})
+	}
+}
+
+func TestSearchContent_OneShotOptInKeepsActiveGuard(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "active-one", "proj", func(s *db.Session) {
+		s.MessageCount = 1
+		s.UserMessageCount = 1
+		s.EndedAt = new("2024-06-15T11:59:00Z")
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("active-one", 0, "active one-shot marker"),
+	}))
+
+	_, excluded, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "active one-shot marker", Mode: "substring", IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, excluded.Matches)
+	assert.Equal(t, 1, excluded.ExcludedActive)
+
+	_, included, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "active one-shot marker", Mode: "substring",
+		IncludeOneShot: true, IncludeActive: true,
+	})
+	require.NoError(t, err)
+	assert.Len(t, included.Matches, 1)
+	assert.Zero(t, included.ExcludedActive)
 }
 
 // search_content must surface the conversation-unit citation fields
@@ -1239,6 +1316,99 @@ func TestServer_EndToEnd(t *testing.T) {
 
 	require.NoError(t, ct.Close())
 	require.NoError(t, st.Wait())
+}
+
+func TestServer_SearchContentIncludeOneShot(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		automated := query.Get("include_automated")
+		if automated == "" {
+			automated = "false"
+		}
+		requests = append(requests, r.URL.RawQuery+" include_automated="+automated)
+		assert.Equal(t, "/api/v1/search/content", r.URL.Path)
+		assert.Equal(t, "substring", query.Get("mode"))
+		assert.Equal(t, "pi", query.Get("agent"))
+		w.Header().Set("Content-Type", "application/json")
+		if query.Get("include_one_shot") == "true" {
+			_, _ = w.Write([]byte(`{"matches":[{"session_id":"one-shot","agent":"pi","location":"message","role":"user","ordinal":0,"timestamp":"2024-06-15T10:00:00Z","snippet":"wire one-shot marker","ordinal_range":[0,0]}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"matches":[]}`))
+	}))
+	defer server.Close()
+
+	srv := newServer(ServeOptions{
+		Service: servicehttp.NewHTTPBackend(server.URL, "", false, ""),
+		Now:     func() time.Time { return fixedNow },
+	})
+	st, ct := newInMemoryPair(t, srv)
+	defer func() {
+		require.NoError(t, ct.Close())
+		require.NoError(t, st.Wait())
+	}()
+
+	ctx := context.Background()
+	withOneShot, err := ct.CallTool(ctx, callParams(ToolSearchContent, map[string]any{
+		"pattern": "wire one-shot marker", "mode": "substring", "agent": "pi",
+		"include_active": true, "include_one_shot": true,
+	}))
+	require.NoError(t, err)
+	require.False(t, withOneShot.IsError)
+	var included searchContentOut
+	raw, err := json.Marshal(withOneShot.StructuredContent)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &included))
+	require.Len(t, included.Matches, 1)
+	assert.Equal(t, "one-shot", included.Matches[0].SessionID)
+	assert.Contains(t, included.Matches[0].Snippet, "wire one-shot marker")
+
+	for _, args := range []map[string]any{
+		{"pattern": "wire one-shot marker", "mode": "substring", "agent": "pi", "include_active": true},
+		{"pattern": "wire one-shot marker", "mode": "substring", "agent": "pi", "include_active": true, "include_one_shot": false},
+	} {
+		result, err := ct.CallTool(ctx, callParams(ToolSearchContent, args))
+		require.NoError(t, err)
+		require.False(t, result.IsError)
+		var excluded searchContentOut
+		raw, err := json.Marshal(result.StructuredContent)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(raw, &excluded))
+		assert.Empty(t, excluded.Matches)
+	}
+
+	tools, err := ct.ListTools(ctx, nil)
+	require.NoError(t, err)
+	var searchTool *mcp.Tool
+	for _, tool := range tools.Tools {
+		if tool.Name == ToolSearchContent {
+			searchTool = tool
+			break
+		}
+	}
+	require.NotNil(t, searchTool)
+	var schema map[string]any
+	raw, err = json.Marshal(searchTool.InputSchema)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &schema))
+	properties, ok := schema["properties"].(map[string]any)
+	require.True(t, ok)
+	for _, name := range []string{"include_one_shot", "include_automated"} {
+		property, ok := properties[name].(map[string]any)
+		require.True(t, ok, name)
+		assert.Equal(t, "boolean", property["type"])
+	}
+	assert.NotContains(t, schema["required"], "include_one_shot")
+	assert.NotContains(t, schema["required"], "include_automated")
+	assert.Contains(t, searchTool.Description, "One-shot and automated sessions are excluded by default")
+	assert.Contains(t, searchTool.Description, "include_one_shot")
+	assert.Contains(t, searchTool.Description, "include_automated")
+	assert.Len(t, requests, 3)
+	assert.Contains(t, requests[0], "mode=substring")
+	assert.Contains(t, requests[0], "agent=pi")
+	assert.Contains(t, requests[0], "include_one_shot=true")
+	assert.Contains(t, requests[0], "include_automated=false")
 }
 
 // fakeContentSearchService captures the ContentSearchRequest a tool builds

@@ -132,7 +132,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"substring/regex for exact error messages, identifiers, and code fragments. " +
 			"The default mode remains substring. Set context to include N messages of " +
 			"surrounding conversation with each match. Matches from the last 10 minutes (including the " +
-			"current conversation) are excluded unless include_active is set.",
+			"current conversation) are excluded unless include_active is set. One-shot and automated " +
+			"sessions are excluded by default; set include_one_shot or include_automated to include them.",
 		Annotations: readOnly,
 	}, t.searchContent)
 

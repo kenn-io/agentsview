@@ -88,6 +88,10 @@ uses the existing `Get` path.
 minutes by default, including the current conversation. Set
 `include_active: true` when you need that recent work.
 
+`search_content` also excludes one-shot and automated sessions by default. Set
+`include_one_shot: true` or `include_automated: true` to include those classes.
+An empty result can therefore omit a matching one-shot or automated session.
+
 When a vector search index is configured, prefer `search_content` with
 `mode: "hybrid"` or `mode: "semantic"` for questions about prior work,
 especially when the exact wording is unknown. Hybrid combines semantic
