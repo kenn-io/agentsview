@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 
 use tauri::async_runtime::Receiver;
 use tauri::menu::{
-    MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder, WINDOW_SUBMENU_ID,
+    MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder, HELP_SUBMENU_ID,
+    WINDOW_SUBMENU_ID,
 };
 use tauri::plugin::Builder as PluginBuilder;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -57,6 +58,7 @@ const DEEP_LINK_SESSIONS_HOST: &str = "sessions";
 const ABOUT_MENU_ID: &str = "about";
 const CHECK_UPDATES_MENU_ID: &str = "check_updates";
 const OPEN_LOGS_FOLDER_MENU_ID: &str = "open_logs_folder";
+const DOCUMENTATION_MENU_ID: &str = "documentation";
 const SHOW_MAIN_WINDOW_MENU_ID: &str = "show_main_window";
 const QUIT_FROM_STATUS_ITEM_MENU_ID: &str = "quit_from_status_item";
 // Delay after navigating to the backend before probing whether the
@@ -179,6 +181,7 @@ enum DesktopMenuAction {
     About,
     CheckUpdates,
     OpenLogsFolder,
+    Documentation,
     Quit,
     ShowMainWindow,
 }
@@ -325,6 +328,7 @@ fn desktop_menu_action(id: &str) -> Option<DesktopMenuAction> {
         ABOUT_MENU_ID => Some(DesktopMenuAction::About),
         CHECK_UPDATES_MENU_ID => Some(DesktopMenuAction::CheckUpdates),
         OPEN_LOGS_FOLDER_MENU_ID => Some(DesktopMenuAction::OpenLogsFolder),
+        DOCUMENTATION_MENU_ID => Some(DesktopMenuAction::Documentation),
         QUIT_FROM_STATUS_ITEM_MENU_ID => Some(DesktopMenuAction::Quit),
         SHOW_MAIN_WINDOW_MENU_ID => Some(DesktopMenuAction::ShowMainWindow),
         _ => None,
@@ -345,6 +349,14 @@ fn handle_desktop_menu_event(handle: &AppHandle, id: &str) {
             });
         }
         Some(DesktopMenuAction::OpenLogsFolder) => open_logs_folder(handle),
+        Some(DesktopMenuAction::Documentation) => {
+            if let Err(err) = handle
+                .opener()
+                .open_url("https://agentsview.io/docs/", Option::<&str>::None)
+            {
+                eprintln!("[agentsview] failed to open documentation: {err}");
+            }
+        }
         Some(DesktopMenuAction::Quit) => handle.exit(0),
         Some(DesktopMenuAction::ShowMainWindow) => show_main_window(handle),
         None => {}
@@ -2348,18 +2360,26 @@ fn setup_menu(app: &mut App) -> Result<(), DynError> {
         .item(&PredefinedMenuItem::maximize(app, None)?)
         .build()?;
 
+    let documentation =
+        MenuItemBuilder::with_id(DOCUMENTATION_MENU_ID, "Documentation").build(app)?;
+    let help_submenu = SubmenuBuilder::with_id(app, HELP_SUBMENU_ID, "Help")
+        .item(&documentation)
+        .build()?;
+
     #[cfg(target_os = "macos")]
     let menu = MenuBuilder::new(app)
         .item(&app_submenu)
         .item(&file_submenu)
         .item(&edit_submenu)
         .item(&window_submenu)
+        .item(&help_submenu)
         .build()?;
 
     #[cfg(not(target_os = "macos"))]
     let menu = MenuBuilder::new(app)
         .item(&file_submenu)
         .item(&edit_submenu)
+        .item(&help_submenu)
         .build()?;
     app.set_menu(menu)?;
     Ok(())
