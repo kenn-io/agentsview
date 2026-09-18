@@ -650,9 +650,8 @@ configuration.
 
 ## ClickHouse Sync
 
-Push session data to a shared ClickHouse instance for team dashboards. SQLite
-stays the archive; ClickHouse is a one-way remote mirror, the same operator
-story as PostgreSQL:
+Push session data to a ClickHouse instance. SQLite stays the archive; ClickHouse
+is a one-way remote mirror, the same operator story as PostgreSQL:
 
 ```bash
 agentsview clickhouse push             # push local data to the default target
@@ -724,7 +723,7 @@ Backend modes:
 
 - SQLite: primary local archive, file sync, FTS5 search, and writable UI.
 - PostgreSQL: optional shared team backend; push from SQLite, serve read-only.
-- ClickHouse: optional shared team backend; push from SQLite, serve read-only.
+- ClickHouse: optional remote backend; push from SQLite, serve read-only.
 - DuckDB: optional mirror file or Quack endpoint; push from SQLite, serve
   read-only.
 
