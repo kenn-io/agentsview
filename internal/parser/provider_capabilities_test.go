@@ -59,9 +59,10 @@ func TestProviderCapabilitiesActivityHintsMatchConsumers(t *testing.T) {
 	for _, factory := range ProviderFactories() {
 		agent := factory.Definition().Type
 		got := factory.Capabilities().Source.ActivityHints
-		// TraeX and Augure Code write the same history.jsonl at the same
-		// position relative to their sessions roots, so they inherit the
-		// Codex hint reader.
+		// TraeX and Augure Code inherit the Codex hint reader through the
+		// shared provider. A fork that writes no history.jsonl (none has been
+		// observed for Augure) simply yields no hints; the capability claim
+		// itself must stay consistent with the shared factory.
 		if agent == AgentCodex || agent == AgentTraeX || agent == AgentAugureCode {
 			assert.Equal(t, CapabilitySupported, got)
 			provider := factory.NewProvider(ProviderConfig{
