@@ -252,6 +252,15 @@ func TestReportingDigestMatchesCapturedBaseline(t *testing.T) {
 	assert.Equal(t, reportingDigestDayFromDay(day), digest[0])
 }
 
+// Captured from the pre-range-loader v3 export of seedReportingSourceFixture
+// for 2026-07-28. Keep this baseline: day and digest exports now share a loader,
+// so comparing them alone cannot catch a regression in that shared code.
+// After reviewing an intentional output or fixture change, run:
+//
+//	CGO_ENABLED=1 go test -tags fts5 ./internal/db -run '^TestReportingDigestMatchesCapturedBaseline$' -count=1
+//
+// Update the constants from the actual values in the failed byte-count and
+// SHA-256 assertions, then rerun the test.
 const reportingBaselineByteCount = 98677
 const reportingBaselineSHA256 = "3a6a869c18380c2fdcab1165022968c761385737a3416dc26f98efdf40694f2e"
 
