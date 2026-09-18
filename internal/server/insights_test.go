@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -1756,6 +1757,9 @@ func TestGenerateInsight_LogDrainTimeoutReportsBufferedDrops(t *testing.T) {
 				Stream: "stdout",
 				Line:   fmt.Sprintf("slow-line-%d", i),
 			})
+			if i == 0 {
+				synctest.Wait()
+			}
 		}
 		return insight.Result{
 			Content: "# Insight",
@@ -1779,17 +1783,10 @@ func TestGenerateInsight_LogDrainTimeoutReportsBufferedDrops(t *testing.T) {
 		delay:            35 * time.Millisecond,
 	}
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
+	// Fake time keeps the first write between the drain and sender-stop deadlines.
+	synctest.Test(t, func(t *testing.T) {
 		te.handler.ServeHTTP(w, req)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		require.Fail(t, "timed out waiting for generate handler completion")
-	}
+	})
 
 	assertStatus(t, w.ResponseRecorder, http.StatusOK)
 	events := parseSSE(w.BodyString())
@@ -1822,8 +1819,8 @@ func TestGenerateInsight_LogDrainTimeoutReportsBufferedDrops(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		require.Positive(t, dropped,
-			"expected timeout drop summary to report at least one dropped log line (%q)", line.Line)
+		require.Equal(t, 299, dropped,
+			"expected every log after the first to be reported as dropped (%q)", line.Line)
 		foundDropSummary = true
 	}
 	require.True(t, foundTimeoutError,
